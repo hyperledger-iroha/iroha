@@ -915,7 +915,7 @@ impl Execute for EnableKagemushaRecursiveIssuanceV4 {
             highest_observed_tip_height: verified_liveness.highest_observed_tip_height(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Enabled(enabled);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Enabled(Box::new(enabled));
         state_transaction.world.smart_contract_state.insert(
             (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
             staged_policy_bytes,
@@ -994,7 +994,7 @@ impl Execute for CancelKagemushaRecursiveReleaseV4 {
             cancelled_at_unix_ms: state_transaction.block_unix_timestamp_ms(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(cancelled));
         next.validate()
             .map_err(|error| invalid(format!("invalid cancellation transition: {error}")))?;
         withdraw_cancelled_verifiers(&loaded.state, current_height, state_transaction);
@@ -1039,14 +1039,14 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
         }
         let marker = transition_marker(&deactivation.transition_id, state_transaction)?;
         let deactivated = KagemushaV4ReleaseDeactivatedV1 {
-            enabled: enabled.clone(),
+            enabled: enabled.as_ref().clone(),
             deactivation,
             deactivation_transaction_intent: current_transaction_intent(state_transaction)?,
             deactivated_at_height: state_transaction.block_height(),
             deactivated_at_unix_ms: state_transaction.block_unix_timestamp_ms(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(Box::new(deactivated));
         commit_transition(marker, loaded, next, state_transaction)
     }
 }
@@ -1054,18 +1054,26 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::World;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        NetworkId,
-        account::{MultisigMember, MultisigPolicy},
+        ChainId, NetworkId, Registrable,
+        account::{Account, MultisigMember, MultisigPolicy},
         block::BlockHeader,
+        isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
         offline::{
-            KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KagemushaV4ReleaseCancellationV1,
-            KagemushaV4ReleaseLifecycleReasonV1,
+            KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT, KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
+            KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1, KagemushaV4ReleaseCancellationV1,
+            KagemushaV4ReleaseDeactivationV1, KagemushaV4ReleaseLifecycleReasonV1,
         },
+        permission::{Permission, Permissions},
         transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
     };
+    use iroha_primitives::json::Json;
 
     fn cancellation(transition_byte: u8) -> CancelKagemushaRecursiveReleaseV4 {
         CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
@@ -1228,8 +1236,8 @@ mod tests {
             phase: KagemushaV4ReleaseLifecyclePhaseV1::Staged,
         };
         let predecessor = state.exact_bytes_digest().expect("valid staged lifecycle");
-        state.phase =
-            KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(KagemushaV4ReleaseCancelledV1 {
+        state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(
+            KagemushaV4ReleaseCancelledV1 {
                 cancellation: KagemushaV4ReleaseCancellationV1 {
                     schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
                     version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
@@ -1245,9 +1253,252 @@ mod tests {
                 )),
                 cancelled_at_height: 3,
                 cancelled_at_unix_ms: 1_800_000_000_001,
-            });
+            },
+        ));
         state.validate().expect("valid terminal lifecycle");
         (artifact_binding, state, device_attestation_policy)
+    }
+
+    /// Build one structurally valid staged lifecycle for production-path consensus tests.
+    pub(crate) fn staged_lifecycle_for_test(
+        runtime_effective_config_sha256: [u8; 32],
+        network_id: NetworkId,
+    ) -> KagemushaV4ReleaseLifecycleStateV1 {
+        let (_, mut lifecycle, _) = terminal_lifecycle_with_retained_policy();
+        lifecycle.phase = KagemushaV4ReleaseLifecyclePhaseV1::Staged;
+        lifecycle.runtime_effective_config_sha256 = runtime_effective_config_sha256;
+        lifecycle.promotion_binding.network_id = network_id;
+        lifecycle
+            .validate()
+            .expect("valid staged lifecycle test fixture");
+        lifecycle
+    }
+
+    fn lifecycle_governance_keys() -> Vec<KeyPair> {
+        (0_u8..3)
+            .map(|index| {
+                KeyPair::try_from_seed(vec![0x70 + index; 32], Algorithm::Ed25519)
+                    .expect("derive lifecycle governance member")
+            })
+            .collect()
+    }
+
+    fn lifecycle_transaction(
+        lifecycle: &KagemushaV4ReleaseLifecycleStateV1,
+        instruction: iroha_data_model::isi::InstructionBox,
+    ) -> SignedTransaction {
+        let keys = lifecycle_governance_keys();
+        let authority = AccountId::new_multisig(
+            MultisigPolicy::new(
+                3,
+                keys.iter()
+                    .map(|key| {
+                        MultisigMember::new(key.public_key().clone(), 1)
+                            .expect("valid lifecycle governance member")
+                    })
+                    .collect(),
+            )
+            .expect("valid lifecycle governance policy"),
+        );
+        assert_eq!(authority, lifecycle.governance_authority);
+        TransactionBuilder::new(
+            lifecycle.promotion_binding.network_id,
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .sign_multisig(keys.iter().map(KeyPair::private_key))
+    }
+
+    fn lifecycle_state(lifecycle: &KagemushaV4ReleaseLifecycleStateV1) -> State {
+        let authority = lifecycle.governance_authority.clone();
+        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let mut permissions = Permissions::new();
+        for name in [
+            CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION,
+            CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION,
+        ] {
+            permissions.insert(Permission::new(name.to_owned(), Json::new(())));
+        }
+        world.account_permissions.insert(authority, permissions);
+        world.smart_contract_state.insert(
+            lifecycle_key(&lifecycle.artifact_binding.manifest_sha256)
+                .expect("canonical lifecycle key"),
+            norito::encode_canonical(lifecycle).expect("canonical lifecycle fixture"),
+        );
+        State::new_with_chain_and_network_id_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("kagemusha-lifecycle-execution-test"),
+            lifecycle.promotion_binding.network_id,
+        )
+    }
+
+    fn enabled_lifecycle_for_test(network_id: NetworkId) -> KagemushaV4ReleaseLifecycleStateV1 {
+        let mut lifecycle = staged_lifecycle_for_test([0x55; 32], network_id);
+        let staged = lifecycle
+            .exact_bytes_digest()
+            .expect("valid staged lifecycle identity");
+        let mut validators = (0..KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT)
+            .map(|index| {
+                let seed = 0x90_u8
+                    .checked_add(u8::try_from(index).expect("validator fixture index fits u8"))
+                    .expect("validator fixture seed fits u8");
+                let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive lifecycle validator");
+                iroha_data_model::peer::PeerId::new(key.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+        validators.sort();
+        let validator_ids: [_; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT] = validators
+            .try_into()
+            .expect("exactly four lifecycle validators");
+        lifecycle.phase =
+            KagemushaV4ReleaseLifecyclePhaseV1::Enabled(Box::new(KagemushaV4ReleaseEnabledV1 {
+                expected_staged_lifecycle: staged,
+                transition_id: [0xA1; 32],
+                enable_witness_norito: KagemushaExactBytesDigestV1::from_bytes(b"enable witness")
+                    .expect("enable witness identity"),
+                enable_transaction_intent: HashOf::from_untyped_unchecked(Hash::new(
+                    b"enable transaction",
+                )),
+                enabled_at_height: 3,
+                enabled_at_unix_ms: 1_800_000_000_001,
+                validator_liveness_evidence: KagemushaExactBytesDigestV1::from_bytes(
+                    b"validator liveness",
+                )
+                .expect("liveness identity"),
+                canary_transaction_intent: HashOf::from_untyped_unchecked(Hash::new(
+                    b"canary transaction",
+                )),
+                canary_finalized_height: 2,
+                canary_finalized_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"canary block",
+                )),
+                endpoint_challenge: [0xA2; 32],
+                validator_ids,
+                observed_tip_heights: [2; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+                highest_observed_tip_height: 2,
+            }));
+        lifecycle
+            .validate()
+            .expect("valid enabled lifecycle test fixture");
+        lifecycle
+    }
+
+    #[test]
+    fn direct_ordinary_multisig_cancel_executes_exact_staged_transition() {
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagemusha-cancel-execution-network",
+            )));
+        let lifecycle = staged_lifecycle_for_test([0x55; 32], network_id);
+        let predecessor = lifecycle
+            .exact_bytes_digest()
+            .expect("staged lifecycle identity");
+        let instruction =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: lifecycle.promotion_binding.promotion_id,
+                manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
+                expected_predecessor_lifecycle: predecessor,
+                transition_id: [0xB1; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        let signed = lifecycle_transaction(&lifecycle, instruction.clone().into());
+        let state = lifecycle_state(&lifecycle);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(3).expect("nonzero lifecycle height"),
+            None,
+            None,
+            None,
+            1_800_000_000_002,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("authenticate direct lifecycle transaction");
+
+        instruction
+            .execute(&lifecycle.governance_authority, &mut transaction)
+            .expect("execute exact cancellation transition");
+
+        let stored = load_lifecycle_by_manifest(
+            &transaction.world,
+            &lifecycle.artifact_binding.manifest_sha256,
+        )
+        .expect("decode transitioned lifecycle")
+        .expect("transitioned lifecycle exists");
+        let KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled) = stored.state.phase else {
+            panic!("cancellation must publish the terminal cancelled phase");
+        };
+        assert_eq!(cancelled.cancellation_transaction_intent, signed.hash());
+        assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());
+    }
+
+    #[test]
+    fn direct_ordinary_multisig_deactivate_executes_exact_enabled_transition() {
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagemusha-deactivate-execution-network",
+            )));
+        let lifecycle = enabled_lifecycle_for_test(network_id);
+        let predecessor = lifecycle
+            .exact_bytes_digest()
+            .expect("enabled lifecycle identity");
+        let instruction =
+            DeactivateKagemushaRecursiveIssuanceV4::new(KagemushaV4ReleaseDeactivationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: lifecycle.promotion_binding.promotion_id,
+                manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
+                expected_predecessor_lifecycle: predecessor,
+                transition_id: [0xB2; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::EmergencyDeactivation,
+                evidence: None,
+            });
+        let signed = lifecycle_transaction(&lifecycle, instruction.clone().into());
+        let state = lifecycle_state(&lifecycle);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(4).expect("nonzero lifecycle height"),
+            None,
+            None,
+            None,
+            1_800_000_000_003,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("authenticate direct lifecycle transaction");
+
+        instruction
+            .execute(&lifecycle.governance_authority, &mut transaction)
+            .expect("execute exact deactivation transition");
+
+        let stored = load_lifecycle_by_manifest(
+            &transaction.world,
+            &lifecycle.artifact_binding.manifest_sha256,
+        )
+        .expect("decode transitioned lifecycle")
+        .expect("transitioned lifecycle exists");
+        let KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated) = stored.state.phase
+        else {
+            panic!("deactivation must publish the terminal deactivated phase");
+        };
+        assert_eq!(deactivated.deactivation_transaction_intent, signed.hash());
+        assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());
     }
 
     #[test]

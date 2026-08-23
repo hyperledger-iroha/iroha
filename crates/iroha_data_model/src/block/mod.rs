@@ -490,6 +490,11 @@ impl SignedBlock {
     ///
     /// The set must be attached before lane-finality statements are signed so
     /// Kura replay can reproduce nonce revocation for transient rotations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetLaneFinalityStatementsError::MissingTransactionResults`] when the block does
+    /// not yet carry a [`BlockResult`].
     #[cfg(feature = "transparent_api")]
     pub fn set_axt_transitioned_dataspaces(
         &mut self,
@@ -3986,7 +3991,7 @@ mod tests {
             .expect("the inner signed call hash must resolve to the outer reveal result");
         assert_eq!(
             positive.batch_transfer_outcomes_for(&first_outer_hash),
-            &[outcome.clone()]
+            std::slice::from_ref(&outcome)
         );
 
         let mut duplicate_assignment = positive.clone();
@@ -4002,7 +4007,7 @@ mod tests {
         );
         assert_eq!(
             duplicate_assignment.batch_transfer_outcomes_for(&first_outer_hash),
-            &[outcome.clone()],
+            std::slice::from_ref(&outcome),
             "a rejected reassignment must not mutate the prior result leaf"
         );
 

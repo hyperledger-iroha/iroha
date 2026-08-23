@@ -2050,7 +2050,7 @@ impl NativeTransactionIngressV1 {
         let hash =
             HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(transaction_hash));
         let entrypoint_hash =
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash.clone());
+            iroha_core::tx::external_entrypoint_hash_from_signed_hash(hash);
         let Some(height) = self.state.committed_entrypoint_height(&entrypoint_hash) else {
             return if self
                 .queue

@@ -1399,9 +1399,9 @@ impl Quantity {
         }
         debug_assert!(magnitude_len != 0, "canonical nonzero quantity");
 
-        // `num-bigint` builds one exactly-sized native-digit Vec from this trimmed byte slice.
-        // Charge that retained allocation before constructing it; `BigInt::from_inner` performs
-        // its signed-width check without another allocation.
+        // The exact-pinned `num-bigint` 0.4.6 builds one exactly-sized native-digit Vec from this
+        // trimmed byte slice. Charge that retained allocation before constructing it;
+        // `BigInt::from_inner` performs its signed-width check without another allocation.
         let allocation_bytes = magnitude_len
             .div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES)
             .checked_mul(UNBOUNDED_BIGINT_DIGIT_BYTES)

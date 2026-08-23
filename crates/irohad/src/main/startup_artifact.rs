@@ -29,6 +29,7 @@ pub fn read_genesis_manifest(path: &Path) -> ReportResult<RawGenesisTransaction,
     })
 }
 /// Read and decode one signed genesis artifact under fixed startup budgets.
+#[cfg(test)]
 pub fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     read_genesis_unlocked_with_bytes(path).map(|(genesis, _bytes)| genesis)
 }

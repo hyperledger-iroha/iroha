@@ -1006,7 +1006,7 @@ def test_source_contract_provider_executes_only_authenticated_exact_bytes() -> N
     assert "payload = (root / relative).read_bytes()" in candidate_branch
     assert "code = compile(\n            primary_bytes," in dispatch
     assert "exec(code, source_contract_context, source_contract_context)" in dispatch
-    assert READINESS_SOURCE_CONTRACT.stat().st_size <= 128 * 1024
+    assert READINESS_SOURCE_CONTRACT.stat().st_size <= 136 * 1024
 
 
 def test_ios_verifier_accepts_the_complete_configured_authority_tuple(

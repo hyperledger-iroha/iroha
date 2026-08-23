@@ -790,6 +790,31 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         ),
         "trusted promotion forwarding",
     )
+    require_pattern(
+        qualification_source,
+        qcomp,
+        errors,
+        (
+            r"fn evaluate_stock_launcher_unavailable_v1\(.*?"
+            r"try_build_kagemusha_validator_qualification_v1\(\s*"
+            r"sources,\s*None,\s*None,\s*genesis,\s*None,\s*validator_id,\s*"
+            r"Some\(validator_signer\),\s*\)\?.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Unavailable\(reason\)\s*=>\s*\{\s*"
+            r"require_expected_stock_launcher_unavailable_reason_v1\(reason\)\s*\}.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Signed\(_\)\s*=>\s*Err\(\s*"
+            r'"stock launcher unexpectedly signed a Kagemusha validator qualification '
+            r'without trusted promotion inputs"\s*\.to_owned\(\),\s*\),.*?'
+            r"fn require_expected_stock_launcher_unavailable_reason_v1\(.*?"
+            r"match reason\s*\{\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::SnapshotBootstrap\s*\|\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation\s*"
+            r"=>\s*\{\s*Ok\(\(\)\)\s*\}\s*"
+            r"reason\s*=>\s*Err\(format!\(\s*"
+            r'"stock launcher returned an unexpected Kagemusha qualification outcome: '
+            r'\{reason:\?\}"\s*\)\),'
+        ),
+        "stock-launcher fail-closed qualification outcome",
+    )
     check_config_branch = texts[NODE].split("if args.startup.check_config {", 1)[
         -1
     ].split("// Resolve deployment-owned executable providers", 1)[0]
@@ -849,7 +874,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
         "Self::Candidate => 17",
         "Self::Promoted => 18",
-        "if expected.len() != 18",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
+        "if inventory_state.includes_promotion_record() && expected.len() != 18",
         "ActivateKagemushaRecursiveReleaseV4::new(",
         "args.runtime_effective_config_sha256",
         r'instruction_count\":1',
@@ -862,10 +888,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"fn verify_exact_inventory_v4\(.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.*?"
-            r"if expected\.len\(\) != 18.*?"
+            r"if inventory_state\.includes_promotion_record\(\) && expected\.len\(\) != 18.*?"
             r"fn recursive_step_verifier_commitment_v4\("
         ),
-        "18-file verifier inventory",
+        "18-file verifier inventory with both validation receipts",
     )
     authenticated_controller = texts[AUTHENTICATED_TOOL_CONTROLLER]
     promotion_publisher = texts[KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT]
@@ -1178,7 +1204,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"let names = inventory_names\(&self\.directory\)\?;.*?"
             r"for name in names\s*\{\s*"
             r"let bounds = inventoried_member_bounds\(&name\)\?;\s*"
-            r"let hash_contents =\s*"
+            r"let hash_contents\s*=\s*"
             r"name == KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1;\s*"
             r"let \(_, identity\) = open_member\(&self\.directory, &name, bounds, hash_contents\)\?;\s*"
             r"current\.insert\(name, identity\);"
@@ -1994,6 +2020,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 18;",
         "fn final_release_inventory_v4() -> BTreeSet<String>",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
         "if expected.len() != FINAL_RELEASE_INVENTORY_COUNT_V4",
         "fn final_release_inventory_is_exact_and_includes_both_receipts()",
@@ -2008,7 +2035,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
             r"\]\).*?\.collect\(\).*?impl PublicationDirectory"
         ),
-        "function-scoped 18-file producer inventory including both receipts",
+        "function-scoped 18-file producer inventory including both validation receipts",
     )
     require_pattern(
         texts[MODEL],
@@ -2030,6 +2057,32 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"384 \* 1024;"
         ),
         "384 KiB absolute V4 proof-pair bound",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"FINAL_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",.*?'
+            r'"recursive-step-two-qualification-v4\.norito",.*?'
+            r'"promotion-record-v4\.norito",.*?'
+            r"\).*?MAX_RELEASE_INVENTORY_ENTRIES = len\(ARTIFACTS \+ FINAL_METADATA\).*?"
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES = 1024 \* 1024"
+        ),
+        "18-file readiness inventory with bounded internal-validation receipt",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"BOUNDED_AUTHENTICATED_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",\s*'
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,.*?"
+            r'\("promotion-record-v4\.norito", MAX_PROMOTION_RECORD_BYTES\),'
+        ),
+        "bounded opaque internal-validation receipt staging",
     )
     opaque_metadata_section = texts[READINESS].split(
         "BOUNDED_AUTHENTICATED_METADATA = (", 1
@@ -2074,7 +2127,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "inherited promotion gate differs from its reviewed SHA-256",
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
         'READINESS_SOURCE_CONTRACT = (',
-        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 128 * 1024",
+        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 136 * 1024",
         "authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}",
         "READINESS_SOURCE_PROVIDERS = (",
         "def pin_authenticated_reviewed_source_file(",

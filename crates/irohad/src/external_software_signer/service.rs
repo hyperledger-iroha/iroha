@@ -309,10 +309,6 @@ impl SoftwareSignerServiceV1 {
         state.ensure_available()?;
         state.provenance()
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the signing transaction keeps validation, journal commit, and response attestation in one auditable sequence"
-    )]
     pub(super) fn handle_sign_request(
         &self,
         request: &SignRequestV1,

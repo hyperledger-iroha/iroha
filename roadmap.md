@@ -5,10 +5,19 @@ Last updated: 2026-08-23
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## ZK algorithm release qualification
+
+- Once the in-progress Halo2 tree compiles, run the focused native-STARK and
+  FASTPQ regressions, then the full workspace test and strict all-target Clippy
+  matrices from one settled candidate.
+- On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
+  and archive direct-evaluation, CPU/GPU parity, FFT/LDE, and benchmark evidence
+  from the same immutable source revision.
+
 ## Inrou V1 secure launcher completion
 
-- Keep all first-release Inrou hosting and Taira capability advertisement disabled
-  until one mandatory internal launcher confines QEMU with private mount,
+- Keep all first-release Inrou hosting and Taira capability advertisement
+  disabled until one mandatory internal launcher confines QEMU with private mount,
   network, IPC, UTS, PID, and cgroup namespaces (or an equivalently strict
   attested MAC profile). Give the child a minimal pivot root containing only
   its KVM device, executable/runtime libraries, authenticated read-only inputs,
@@ -336,8 +345,8 @@ internal blockers below cannot be closed by collecting external evidence:
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
   4,500,000-line working target. The current mutable-tree checkpoint counts
-  4,964,649 lines, 424,649 above the hard ceiling, with all per-file ratchets
-  reconciled. Recompute the exact count and gap after source freeze; do not
+  4,975,825 lines, 435,825 above the hard ceiling, with 18 per-file findings
+  remaining. Recompute the exact count and gap after source freeze; do not
   redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
   security, consensus, SDK, or release-evidence behavior to close it. Keep
@@ -438,7 +447,7 @@ final-source enlarged-stack coordinator aggregate is 462/462. The production
 nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
 corridors, exact `iroha_core` test-target compile, reviewed include closure,
 and legacy-codec guard are green. Current merge reconciliation ratcheted five
-decreased-file baselines down and leaves 11 file-budget findings, including
+decreased-file baselines down and leaves 18 file-budget findings, including
 merged-tree Sumeragi growth; split work remains outstanding, and allowances
 must not increase. The include manifest contains 66 parents and 398 entries.
 The exact proof-ledger checker has only the separately
@@ -1301,10 +1310,12 @@ source validation.
   macOS hosts and under a Linux cgroup hard limit. Keep future reductions inside
   bounded modules and derive-family isolation rather than adding crates or
   feature fragmentation.
-- Move additional SDK/code-generation callers onto the focused
-  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
-  until every documented and CI caller has migrated, then remove only the
-  adapters whose replacement paths have parity evidence.
+- Keep Norito RPC fixture generation behind the sole create-only
+  `xtask norito-rpc-fixtures --output-root <absent-absolute-external-root>`
+  owner and its internal `norito_codegen_exporter` library, followed by the
+  sole `xtask norito-rpc-verify` checker. SDKs and CI are consumers of those
+  outputs; do not add SDK-local generators, generic exporter binaries,
+  compatibility commands, or migration adapters.
 
 ## Taira development networks
 
@@ -1611,9 +1622,9 @@ bounds passed after installing the checksum-pinned TLAPM standard library.
 That archived manifest does not attest the current generation-fencing source.
 `G-FORMAL` remains open pending strict TLAPS, pinned Verus, the remaining
 mutation matrices, and a clean aggregate release receipt. The current
-pinned-seed TLC witness and all eight
-production-reducer replay tests are fresh and green at exactly 100 normalized
-actions; that trace result alone does not promote a theorem. In particular,
+pinned-seed TLC witness contains exactly 100 normalized formal actions. It is a
+formal-only trace and does not claim production-reducer executions; that trace
+result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now have explicit
 source proof bodies. Their promoted target statuses are accepted for release
@@ -25220,13 +25231,12 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
-- Recover the independently archived original `Cargo.lock` and toolchain
-  provenance for the source-evidenced predecessor
-  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, then run its 33 comparable native
-  workloads and the candidate on the same controlled runner. The predecessor
-  contains no `Cargo.lock`; its workload hashes bind benchmark source only and
-  cannot replace the missing provenance. Until it is recovered, no
-  reproducible locked 5% comparison is claimed.
+- Run the candidate and the approved, source-and-lock-authenticated benchmark
+  baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
+  pinned runner and retain the workflow evidence for the `<=5%` threshold. The
+  unauthenticated July predecessor is not a V1 input and must not be recovered,
+  rebuilt, or reintroduced as compatibility evidence. Until the controlled
+  workflow completes, no reproducible 5% comparison is claimed.
 - Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
   .NET 8 environment; `dotnet` is unavailable on this host.
 

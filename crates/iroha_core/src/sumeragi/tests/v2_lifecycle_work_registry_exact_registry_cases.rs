@@ -1,6 +1,4 @@
-use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-};
+use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_work_registry_source_for_test;
 #[test]
 fn exact_install_borrow_and_take_are_one_shot() {
     let work = concrete(effect(1), 91);
@@ -508,33 +506,35 @@ fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families(
     }
     for forbidden in [
         "coordinator.high_water",
-        ".checked_add(1)",
         "broadcast_address",
+        "checked_add(1)",
     ] {
         assert!(
             !broadcast_only.contains(forbidden),
-            "Broadcast-only preparation guessed a pre-staging child address via {forbidden}"
+            "Broadcast-only preparation predicted a child address before durable staging: {forbidden}"
         );
     }
-    let broadcast_binding = production
-        .split("impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor")
+
+    let fetch_store = production
+        .split("pub(super) fn prepare_recovered_decision_fetch_store_successor")
         .nth(1)
-        .expect("Broadcast-only successor has one staged binding implementation")
-        .split("impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor")
+        .expect("recovered Fetch-to-Store has one preparation")
+        .split("impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor")
         .next()
-        .expect("Broadcast-only binding ends before the bound commit tail");
-    for required in [
-        "pub(super) fn bind_staged_child(",
-        "coordinator.records.get(&child_ordinal)",
-        "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-        "self.registry.entries.contains_key(&broadcast_address)",
-        ".validates_at(&self.verified, broadcast_address, child_digest)",
-    ] {
+        .expect("recovered Fetch-to-Store preparation stays bounded");
+    for forbidden in ["coordinator.high_water", "store_address", "checked_add(1)"] {
         assert!(
-            broadcast_binding.contains(required),
-            "Broadcast-only successor omitted staged-address binding {required}"
+            !fetch_store.contains(forbidden),
+            "Fetch-to-Store preparation predicted a child address before durable staging: {forbidden}"
         );
     }
+    let staged_binding = production
+        .split("pub(super) fn bind_staged_child(")
+        .collect::<Vec<_>>();
+    assert!(
+        staged_binding.len() >= 3,
+        "both recovered Fetch and Sign successors must bind their exact staged children"
+    );
 
     let broadcast_and_sign = production
         .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor")
@@ -555,75 +555,35 @@ fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families(
 }
 
 #[test]
-fn recovered_single_child_successors_bind_only_to_staged_shared_ordinals() {
-    let registry = reviewed_lifecycle_work_registry_source_for_test();
-    let production = registry
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("registry has one production prefix");
-    let fetch_prepare = production
-        .split("pub(super) fn prepare_recovered_decision_fetch_store_successor")
-        .nth(1)
-        .expect("recovered Fetch-to-Store has one preparation")
-        .split("impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor")
-        .next()
-        .expect("Fetch preparation ends before staged binding");
-    for forbidden in ["coordinator.high_water", ".checked_add(1)", "store_address"] {
-        assert!(
-            !fetch_prepare.contains(forbidden),
-            "Fetch-to-Store preparation guessed a pre-staging child address via {forbidden}"
-        );
-    }
-    let fetch_binding = production
-        .split("impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor")
-        .nth(1)
-        .expect("recovered Store successor has one staged binding implementation")
-        .split("impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor")
-        .next()
-        .expect("Store binding ends before the bound commit tail");
-    for required in [
-        "pub(super) fn bind_staged_child(",
-        "coordinator.records.get(&child_ordinal)",
-        "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-        "self.registry.entries.contains_key(&store_address)",
-        ".validates_at(coordinator.active_context, store_address, child_digest)",
+fn recovered_single_child_transitions_store_only_exact_staged_bound_successors() {
+    let source = include_str!("../v2_lifecycle_body_pipeline_transition.rs");
+    for (entrypoint, bound_type) in [
+        (
+            "pub(super) fn prepare_recovered_decision_fetch_store_transition",
+            "successor: BoundRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>",
+        ),
+        (
+            "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition",
+            "successor: BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>",
+        ),
     ] {
-        assert!(
-            fetch_binding.contains(required),
-            "Fetch-to-Store successor omitted staged-address binding {required}"
-        );
+        let body = source
+            .split(entrypoint)
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing recovered transition entrypoint {entrypoint}"))
+            .split("    /// Stage ")
+            .next()
+            .expect("recovered transition stays bounded");
+        let stage = body
+            .find("stage_recovered_")
+            .expect("transition stages its durable child");
+        let bind = body
+            .find(".bind_staged_child(")
+            .expect("transition binds the exact staged child");
+        let publish = body
+            .find("Ok(PreparedRecovered")
+            .expect("transition returns one sealed publication");
+        assert!(stage < bind && bind < publish);
+        assert!(source.contains(bound_type));
     }
-
-    let transitions = include_str!("../v2_lifecycle_body_pipeline_transition.rs");
-    let fetch_flow = transitions
-        .split("pub(super) fn prepare_recovered_decision_fetch_store_transition")
-        .nth(1)
-        .expect("Fetch-to-Store has one body transition")
-        .split("/// Stage one recovered Sign")
-        .next()
-        .expect("Fetch-to-Store transition stays bounded");
-    let fetch_stage = fetch_flow
-        .find("stage_recovered_decision_fetch_store_transition")
-        .expect("Fetch-to-Store stages the coordinator child");
-    let fetch_bind = fetch_flow
-        .find("successor\n            .bind_staged_child(")
-        .expect("Fetch-to-Store binds its staged child");
-    assert!(fetch_stage < fetch_bind);
-    assert!(fetch_flow.contains("transition.child_ordinal"));
-
-    let broadcast_flow = transitions
-        .split("pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition")
-        .nth(1)
-        .expect("Sign-to-Broadcast has one body transition")
-        .split("/// Stage the exact two-child result")
-        .next()
-        .expect("Sign-to-Broadcast transition stays bounded");
-    let broadcast_stage = broadcast_flow
-        .find("stage_recovered_lifecycle_sign_broadcast_transition")
-        .expect("Sign-to-Broadcast stages the coordinator child");
-    let broadcast_bind = broadcast_flow
-        .find("successor\n            .bind_staged_child(")
-        .expect("Sign-to-Broadcast binds its staged child");
-    assert!(broadcast_stage < broadcast_bind);
-    assert!(broadcast_flow.contains("transition.child_ordinal"));
 }

@@ -19,10 +19,30 @@ MAXIMUM_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_RUST_LINE_REDUCTION
 
 TEST_MARKER = "#[cfg(test)]\nmod tests {"
 TEST_SUFFIX_SHA256 = (
-    "0aa4cf941cfe183eac800e12919364b86aa50c0d0efbd2f77a2a3dba3aa78550"
+    "4e3516e559fa868d8977aed18a11f67ea0e8378738dfeae2d121260058d079e9"
 )
 TEST_RECORDS_SHA256 = (
-    "1e9f86c5e04618de7c2c37aba5bd5bafa05a8cb33ee6f1eae221ccf82cf77a91"
+    "aa2c4080e48f120c6082865a704c48dff6da89a749b7b4807c72b2c3fe1751ce"
+)
+TEST_LEAVES = (
+    (
+        Path("crates/kotodama_lang/src/semantic/tests/numeric_rounding_modes.rs"),
+        "a9b884a4d3b647b5e29d40a178edd0bd755bf5e04d4f18045b656567e70f7b34",
+        1,
+        "8d5036613dcf371bbe7e51cad2c95158b6a1f5d5fbb91d139635146fac815549",
+    ),
+    (
+        Path("crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"),
+        "eb4b783faf55411f27608d5758b64d6fd6eb87f77fc6b07c5d3112b096c89092",
+        13,
+        "c9e496eff35dca6bdec40e87651766d71f3dc5d511abdfc58f26938165e21cfc",
+    ),
+    (
+        Path("crates/kotodama_lang/src/semantic_sum_tests.rs"),
+        "fddc9300a5b1a4bf7402162ed698f6873cb40217a76ff0d6594e498051c412d5",
+        1,
+        "60c30af0f8ef4a55f1004d351c8a4fa24c4d78aa6d30c61b712c4e5cefa9b42b",
+    ),
 )
 BUILTIN_SET_SHA256 = (
     "22b449e1ace350352d344ce2217882892bb49b8879c9874014e233931d2f6731"
@@ -153,11 +173,26 @@ def validate_source(source: str) -> None:
 
     _require(_sha256(test_suffix) == TEST_SUFFIX_SHA256, "test suffix changed")
     test_records = _test_records(test_suffix)
-    _require(len(test_records) == 206, "direct test count changed")
+    _require(len(test_records) == 120, "direct test count changed")
     _require(
         _json_sha256(test_records) == TEST_RECORDS_SHA256,
         "test identifiers, attributes, or order changed",
     )
+    for path, digest, record_count, records_digest in TEST_LEAVES:
+        leaf = REPO_ROOT / path
+        _require(leaf.is_file() and not leaf.is_symlink(), f"invalid test leaf: {path}")
+        try:
+            leaf.resolve(strict=True).relative_to(REPO_ROOT)
+        except ValueError as error:
+            raise GuardError(f"test leaf escapes repository root: {path}") from error
+        leaf_source = leaf.read_text(encoding="utf-8")
+        _require(_sha256(leaf_source) == digest, f"test leaf changed: {path}")
+        leaf_records = _test_records(leaf_source)
+        _require(len(leaf_records) == record_count, f"test leaf count changed: {path}")
+        _require(
+            _json_sha256(leaf_records) == records_digest,
+            f"test leaf identities changed: {path}",
+        )
 
     builtins = _builtin_variants(production)
     _require(len(builtins) == 232, "production Builtin reference set changed")

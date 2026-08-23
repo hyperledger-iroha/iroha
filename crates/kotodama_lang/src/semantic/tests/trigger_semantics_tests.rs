@@ -34,8 +34,8 @@ fn trigger_decl_builds_typed_metadata() {
 }
 analyze_error_code_cases! {
     trigger_metadata_json_parse_uses_json_literal_diagnostics:
-    duplicate = include_str!( "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko" ) => "E_JSON_DUPLICATE_KEY";
-    malformed = include_str!( "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko" ) => "E_JSON_LITERAL_INVALID";
+    duplicate = include_str!( "../test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko" ) => "E_JSON_DUPLICATE_KEY";
+    malformed = include_str!( "../test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko" ) => "E_JSON_LITERAL_INVALID";
 }
 #[test]
 fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
@@ -90,7 +90,7 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
 #[test]
 fn trigger_decl_supports_data_filter() {
     let program = parse(include_str!(
-        "semantic/test_sources/trigger_decl_supports_data_filter_1.ko"
+        "../test_sources/trigger_decl_supports_data_filter_1.ko"
     ))
     .expect("parse trigger decl");
     let typed = analyze(&program).expect("analyze trigger decl");
@@ -397,14 +397,14 @@ fn trigger_decl_supports_structured_data_filters_for_core_families() {
             )),
         ),
         (
-            include_str!("semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_1.ko")
+            include_str!("../test_sources/trigger_decl_supports_structured_data_filters_for_core_families_1.ko")
             .to_string(),
             EventFilterBox::Data(DataEventFilter::Configuration(
                 ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
             )),
         ),
         (
-            include_str!("semantic/test_sources/trigger_decl_supports_structured_data_filters_for_core_families_2.ko")
+            include_str!("../test_sources/trigger_decl_supports_structured_data_filters_for_core_families_2.ko")
             .to_string(),
             EventFilterBox::Data(DataEventFilter::Executor(
                 ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
@@ -422,7 +422,7 @@ fn trigger_decl_supports_structured_data_filters_for_core_families() {
 fn trigger_decl_supports_pipeline_filter() {
     use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
     let program = parse(include_str!(
-        "semantic/test_sources/trigger_decl_supports_pipeline_filter_1.ko"
+        "../test_sources/trigger_decl_supports_pipeline_filter_1.ko"
     ))
     .expect("parse trigger decl");
     let typed = analyze(&program).expect("analyze trigger decl");
@@ -438,7 +438,7 @@ fn trigger_decl_supports_pipeline_filter() {
 fn trigger_decl_supports_pipeline_transaction_approved_filter() {
     use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
     let program = parse(include_str!(
-        "semantic/test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"
+        "../test_sources/trigger_decl_supports_pipeline_transaction_approved_filter_1.ko"
     ))
     .expect("parse trigger decl");
     let typed = analyze(&program).expect("analyze trigger decl");
@@ -453,7 +453,7 @@ fn trigger_decl_supports_pipeline_transaction_approved_filter() {
 #[test]
 fn trigger_decl_rejects_invalid_data_matcher_literal() {
     let program = parse(include_str!(
-        "semantic/test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"
+        "../test_sources/trigger_decl_rejects_invalid_data_matcher_literal_1.ko"
     ))
     .expect("parse trigger decl");
     let err = analyze(&program).expect_err("invalid matcher should error");
@@ -486,7 +486,7 @@ fn trigger_decl_rejects_duplicate_data_matchers() {
     let err = analyze(&program).expect_err("duplicate matcher should error");
     assert!(err.message.contains("duplicate `asset_definition` matcher"));
 }
-analyze_reject_contains_tests! { trigger_decl_rejects_invalid_authority: include_str!( "semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko" ) => "parse trigger decl", err = "invalid authority should error", "invalid trigger authority"; }
+analyze_reject_contains_tests! { trigger_decl_rejects_invalid_authority: include_str!( "../test_sources/trigger_decl_rejects_invalid_authority_1.ko" ) => "parse trigger decl", err = "invalid authority should error", "invalid trigger authority"; }
 #[test]
 fn trigger_decl_accepts_canonical_domainless_authority() {
     let authority = sample_account_literal();
@@ -512,12 +512,12 @@ fn trigger_decl_accepts_canonical_domainless_authority() {
         authority,
     );
 }
-analyze_reject_contains_tests! { trigger_decl_requires_kotoage_entrypoint: include_str!( "semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko" ) => "parse trigger decl", err = "non-kotoage target should error", "`kotoage`/`言挙げ` function"; }
+analyze_reject_contains_tests! { trigger_decl_requires_kotoage_entrypoint: include_str!( "../test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko" ) => "parse trigger decl", err = "non-kotoage target should error", "`kotoage`/`言挙げ` function"; }
 #[test]
 fn trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast() {
     for lifecycle in ["hajimari", "kaizen"] {
         let mut program = parse(
-            include_str!("semantic/test_sources/trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast_1.ko"),
+            include_str!("../test_sources/trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast_1.ko"),
         )
         .expect("parse valid trigger declaration");
         let trigger = program

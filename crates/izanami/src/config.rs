@@ -975,7 +975,6 @@ fn build_nexus_layer(
     fee_asset_id: &AssetDefinitionId,
 ) -> Table {
     let mut layer = Table::new();
-    TomlWriter::new(&mut layer).write(["nexus", "enabled"], true);
     TomlWriter::new(&mut layer).write(
         ["nexus", "lane_count"],
         i64::from(nexus.lane_catalog.lane_count().get()),
@@ -1552,6 +1551,16 @@ mod tests {
         assert!(sumeragi.contains_key("queues"));
         assert!(sumeragi.contains_key("keys"));
         assert!(!sumeragi.contains_key("npos"));
+        let nexus = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .expect("canonical Nexus lane configuration");
+        assert!(
+            !nexus.contains_key("enabled"),
+            "the retired nexus.enabled switch must not be emitted"
+        );
+        assert!(nexus.contains_key("lane_count"));
     }
     #[test]
     fn nexus_profile_deduplicates_bootstrap_staking_owners_for_shared_dataspace() {

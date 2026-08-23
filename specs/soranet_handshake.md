@@ -66,13 +66,25 @@ T = SHA3-256(
 )
 ```
 
-The dual-KDF then becomes:
+The two-flight suites use the three contributory X25519 terms from the Noise XX
+schedule. With client ephemeral/static secrets `e_c`/`s_c` and relay
+ephemeral/static secrets `e_r`/`s_r`, both peers compute these values in the
+listed order and abort if any result is all zero:
 
+```text
+ee = X25519(e_c, public(e_r))
+es = X25519(e_c, public(s_r))
+se = X25519(s_c, public(e_r))
 ```
-classical_secret = HKDF-Extract(classical_share, transcript_hash=T)
-pq_secret        = HKDF-Extract(pq_share, transcript_hash=T)
-traffic_secret   = HKDF-Expand(classical_secret || pq_secret, context="soranet-handshake")
-```
+
+`LP64(x)` below means `len(x):u64be || x`. The common HKDF input starts with
+`LP64("soranet.session-key.ikm.v1") ||
+LP64("soranet.handshake.x25519.xx.v1") || LP64(ee) || LP64(es) || LP64(se)`.
+NK2 appends `LP64(primary_shared) || LP64(T)`. NK3 appends
+`LP64(dual_mix) || LP64(primary_shared) || LP64(forward_shared) || LP64(T)`.
+HKDF-SHA3-256 extracts with salt `T` and expands with the negotiated suite's
+`soranet.handshake.nk{2,3}.session.v1` label. Consequently neither an ML-KEM
+secret nor the X25519 schedule can be omitted without changing the session key.
 
 Classical-only initiators (missing ML-KEM-768 share) MUST abort prior to key
 derivation and increment the `downgrade_attempts` metric.
@@ -689,12 +701,12 @@ sequenceDiagram
     participant C as Client
     participant R as Relay
 
-    C->>R: HybridClientInit<br/>nonce_c, suite_list,<br/>X25519_static_c,<br/>ML-KEM public,<br/>capability TLVs[, resume_hash]
+    C->>R: HybridClientInit<br/>nonce_c, suite_list,<br/>X25519 e_c and s_c,<br/>ML-KEM public,<br/>capability TLVs[, resume_hash]
     R->>R: Select mutually supported suite/KEM/sig<br/>Validate capabilities
-    R->>C: HybridRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
+    R->>C: HybridRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
     Note over C,R: relay_auth = Ed25519(SigningKey_directory, H(LP(domain) || LP(version) || LP(suite_id) || LP(client_frame) || LP(relay_body) || LP(transcript_hash) || LP(relay_identity) || LP(ALPN) || LP(TLS_name)))
-    Note over C: HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>key material = primary_shared || transcript_hash
+    Note over C,R: ee = DH(e_c,e_r), es = DH(e_c,s_r), se = DH(s_c,e_r); reject any all-zero output<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>IKM order = X25519 domain, ee, es, se, primary_shared, transcript_hash (all LP64)
 ```
 
 - Relay-only confirmation lets the client detect tampering without
@@ -709,12 +721,12 @@ sequenceDiagram
     participant C as Client
     participant R as Relay
 
-    C->>R: PqfsClientCommit<br/>nonce_c, suite_list,<br/>X25519_static_c,<br/>primary & forward ML-KEM publics,<br/>forward commitment,<br/>capability TLVs[, resume_hash]
+    C->>R: PqfsClientCommit<br/>nonce_c, suite_list,<br/>X25519 e_c and s_c,<br/>primary & forward ML-KEM publics,<br/>forward commitment,<br/>capability TLVs[, resume_hash]
     R->>R: Verify commitment & capabilities<br/>Select suite/KEM/sig
-    R->>C: PqfsRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
+    R->>C: PqfsRelayResponse<br/>nonce_r, X25519 e_r and s_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
     Note over C,R: relay_auth binds the exact client frame, exact relay body, transcript hash, directory identity, QUIC ALPN, and TLS server name with length prefixes
-    Note over C: dual_mix = HKDF-expand("soranet.kem.dual.mix.v1", primary_shared || forward_shared || transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session.v1"<br/>confirm info = "soranet.handshake.nk3.confirm.v1"
+    Note over C,R: ee = DH(e_c,e_r), es = DH(e_c,s_r), se = DH(s_c,e_r); reject any all-zero output<br/>dual_mix = SHAKE256-expand("soranet.kem.dual.mix.v1", primary_shared, forward_shared, transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session.v1"<br/>IKM order = X25519 domain, ee, es, se, dual_mix, primary_shared, forward_shared, transcript_hash (all LP64)<br/>The transmitted primary/forward confirmations remain ML-KEM-secret + transcript checks
 ```
 
 - The client recomputes the forward commitment and dual-mix before accepting.

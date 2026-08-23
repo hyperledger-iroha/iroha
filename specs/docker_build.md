@@ -136,13 +136,13 @@ restart and stages a distinct owner-`0600` FD198 launch copy per peer. Each
 daemon consumes its launch copy before startup; `down` stops the cohort and
 deletes both the persistent sources and every validated launch remnant.
 
-To include the typed four-replica Inrou acceptance canary and the full product
-doctor, pass a runtime-only workspace produced by the same-revision CLI. The
-directory must contain `container_manifest.json`, `service_manifest.json`, and
-`bundle.tgz`; do not add that workspace or any signer material to the repository.
+To include the optional read-only full product-route diagnostic, run:
 
 ```bash
-python3 scripts/taira_devnet.py up \
-  --inrou-canary-dir /runtime-only/path/to/inrou-canary \
-  --full-doctor
+python3 scripts/taira_devnet.py up --full-doctor
 ```
+
+The diagnostic uses the same-revision `iroha` CLI and the same three standard
+devnet binaries (`kagami`, `iroha3d_taira`, and `iroha`). It requires no Inrou
+workspace or SoraFS preseed; `--inrou-canary-dir` is not part of the
+first-release devnet interface.

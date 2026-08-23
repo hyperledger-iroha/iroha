@@ -30,7 +30,7 @@ pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1: usize = 8;
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1: usize = 4;
 /// Maximum DER bytes accepted for one trusted attestation root.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1: usize = 16 * 1024;
-/// Maximum revoked TBSCertificate DER SHA-256 digests retained by one policy.
+/// Maximum revoked `TBSCertificate` DER SHA-256 digests retained by one policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1: usize = 256;
 /// Maximum iOS application identities retained by one policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1: usize = 16;

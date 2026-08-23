@@ -1676,6 +1676,9 @@ pub fn fold_with_fri(
     evaluations: &[u64],
     arity: u32,
     max_reductions: u32,
+    lde_root: u64,
+    lde_log_size: u32,
+    domain_offset: u64,
     transcript: &mut Transcript,
 ) -> Result<(Vec<u64>, Vec<u64>)> {
     if arity != 8 && arity != 16 {
@@ -1688,6 +1691,8 @@ pub fn fold_with_fri(
     let arity = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations.to_vec();
+    let mut domain =
+        FriDomain::from_lde_parameters(lde_root, lde_log_size, current.len(), domain_offset)?;
     let mut layers = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
@@ -1699,24 +1704,26 @@ pub fn fold_with_fri(
         layers.push(root);
         let beta = transcript.challenge_beta(round);
         betas.push(beta);
-        let mut padded = current;
-        pad_to_arity(&mut padded, arity);
+        let round_arity = fri_round_arity(current.len(), arity)?;
         tracing::debug!(
             round,
-            padded_len = padded.len(),
+            layer_len = current.len(),
+            round_arity,
             "folding FRI layer with beta"
         );
-        let next = fold_round(&padded, arity, beta);
+        let next = fold_round(&current, arity, beta, domain)?;
         let next_len = next.len();
         tracing::info!(
             round,
             root,
             beta,
-            padded_len = padded.len(),
+            layer_len = current.len(),
+            round_arity,
             next_len,
             "fri round committed"
         );
         current = next;
+        domain = domain.folded(round_arity);
         round += 1;
     }
     let final_root = fri_layer_commitment(round, &current);
@@ -1730,6 +1737,9 @@ fn fold_with_fri_opening_layers(
     evaluations: &[u64],
     arity: u32,
     max_reductions: u32,
+    lde_root: u64,
+    lde_log_size: u32,
+    domain_offset: u64,
     transcript: &mut Transcript,
     mode: ExecutionMode,
 ) -> Result<(Vec<Vec<u64>>, Vec<u64>, Vec<u64>)> {
@@ -1743,12 +1753,13 @@ fn fold_with_fri_opening_layers(
     let arity_usize = usize::try_from(arity).expect("FRI arity fits usize");
     let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations.to_vec();
+    let mut domain =
+        FriDomain::from_lde_parameters(lde_root, lde_log_size, current.len(), domain_offset)?;
     let mut layer_values = Vec::new();
     let mut roots = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
     while current.len() > 1 && round < max_rounds {
-        pad_to_arity(&mut current, arity_usize);
         let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
         let root = merkle_root_with_mode(&leaves, mode);
         transcript.append_fri_layer(round, root);
@@ -1756,7 +1767,9 @@ fn fold_with_fri_opening_layers(
         layer_values.push(current.clone());
         let beta = transcript.challenge_beta(round);
         betas.push(beta);
-        current = fold_round(&current, arity_usize, beta);
+        let round_arity = fri_round_arity(current.len(), arity_usize)?;
+        current = fold_round(&current, arity_usize, beta, domain)?;
+        domain = domain.folded(round_arity);
         round += 1;
     }
     let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
@@ -1775,16 +1788,21 @@ fn hash_fri_leaves_with_mode(
     if values.is_empty() {
         return Ok(Vec::new());
     }
-    let chunk = fri_chunk_size(arity).max(1);
+    let configured_arity = fri_chunk_size(arity).max(1);
+    let round_arity = fri_round_arity(values.len(), configured_arity)?;
+    let output_len = values.len() / round_arity;
     let round_field =
         u64::try_from(round).map_err(|_| Error::QueryIndexOverflow { index: round })?;
-    let mut messages = Vec::with_capacity(values.len().div_ceil(chunk));
-    for (idx, group) in values.chunks(chunk).enumerate() {
-        let index = u64::try_from(idx).map_err(|_| Error::QueryIndexOverflow { index: idx })?;
-        let mut limbs = Vec::with_capacity(group.len() + 2);
+    let mut messages = Vec::with_capacity(output_len);
+    for leaf_index in 0..output_len {
+        let index = u64::try_from(leaf_index)
+            .map_err(|_| Error::QueryIndexOverflow { index: leaf_index })?;
+        let mut limbs = Vec::with_capacity(round_arity + 2);
         limbs.push(round_field);
         limbs.push(index);
-        limbs.extend(group.iter().copied());
+        for position in 0..round_arity {
+            limbs.push(values[leaf_index + position * output_len]);
+        }
         messages.push(limbs);
     }
     hash_with_domain_limb_batches(FRI_LEAF_DOMAIN, &messages, mode)
@@ -1819,12 +1837,12 @@ fn open_fri_query_chains(
                     len: values.len(),
                 });
             }
-            let leaf_index = index / arity_usize;
-            let start = leaf_index
-                .checked_mul(arity_usize)
-                .ok_or(Error::QueryMismatch { index: round })?;
-            let end = start.saturating_add(arity_usize).min(values.len());
-            let group = values[start..end].to_vec();
+            let round_arity = fri_round_arity(values.len(), arity_usize)?;
+            let output_len = values.len() / round_arity;
+            let leaf_index = index % output_len;
+            let group = (0..round_arity)
+                .map(|position| values[leaf_index + position * output_len])
+                .collect::<Vec<_>>();
             let paths = merkle_paths_for_leaf_indices(&round_leaves[round], &[leaf_index], mode)?;
             let folded_index = leaf_index;
             let folded_value = layer_values
@@ -1855,13 +1873,12 @@ fn open_fri_query_chains(
                 len: final_values.len(),
             });
         }
-        let final_leaf_index = index / arity_usize;
-        let start = final_leaf_index
-            .checked_mul(arity_usize)
-            .ok_or(Error::QueryMismatch {
-                index: openings.len(),
-            })?;
-        let end = start.saturating_add(arity_usize).min(final_values.len());
+        let final_arity = fri_round_arity(final_values.len(), arity_usize)?;
+        let final_leaf_count = final_values.len() / final_arity;
+        let final_leaf_index = index % final_leaf_count;
+        let final_group = (0..final_arity)
+            .map(|position| final_values[final_leaf_index + position * final_leaf_count])
+            .collect::<Vec<_>>();
         let final_paths = merkle_paths_for_leaf_indices(
             round_leaves.last().expect("final leaves"),
             &[final_leaf_index],
@@ -1871,40 +1888,156 @@ fn open_fri_query_chains(
             initial_index: initial_index_u32,
             rounds,
             final_index: u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?,
-            final_values: final_values[start..end].to_vec(),
+            final_values: final_group,
             final_merkle_path: final_paths.into_iter().next().unwrap_or_default(),
         });
     }
     Ok(openings)
 }
-fn pad_to_arity(values: &mut Vec<u64>, arity: usize) {
-    if values.is_empty() || arity == 0 {
-        return;
-    }
-    let remainder = values.len() % arity;
-    if remainder == 0 {
-        return;
-    }
-    let pad_value = *values.last().expect("non-empty values");
-    let padding = arity - remainder;
-    values.extend(std::iter::repeat_n(pad_value, padding));
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FriDomain {
+    generator: u64,
+    offset: u64,
 }
-fn fold_round(values: &[u64], arity: usize, challenge: u64) -> Vec<u64> {
-    if values.is_empty() || arity == 0 {
-        return Vec::new();
-    }
-    let chunk_count = values.len().div_ceil(arity);
-    let mut next = Vec::with_capacity(chunk_count);
-    for chunk in values.chunks(arity) {
-        let mut acc = 0u64;
-        let mut power = FIELD_ONE;
-        for &value in chunk {
-            acc = add_mod(acc, mul_mod(value, power));
-            power = mul_mod(power, challenge);
+
+impl FriDomain {
+    pub(crate) fn from_lde_parameters(
+        lde_root: u64,
+        lde_log_size: u32,
+        domain_size: usize,
+        offset: u64,
+    ) -> Result<Self> {
+        if domain_size == 0 || !domain_size.is_power_of_two() {
+            return Err(Error::FriDomainSize {
+                length: domain_size,
+                arity: 1,
+            });
         }
-        next.push(acc);
+        let domain_log = domain_size.ilog2();
+        if domain_log > lde_log_size {
+            return Err(Error::FriDomainSize {
+                length: domain_size,
+                arity: 1usize << lde_log_size,
+            });
+        }
+        let root_stride = 1u64 << (lde_log_size - domain_log);
+        Ok(Self {
+            generator: field_pow(lde_root, root_stride),
+            offset,
+        })
     }
-    next
+
+    pub(crate) fn point(self, index: usize) -> u64 {
+        mul_mod(
+            self.offset,
+            field_pow(
+                self.generator,
+                u64::try_from(index).expect("FRI domain index fits u64"),
+            ),
+        )
+    }
+
+    pub(crate) fn coset_generator(self, output_len: usize) -> u64 {
+        field_pow(
+            self.generator,
+            u64::try_from(output_len).expect("FRI output length fits u64"),
+        )
+    }
+
+    pub(crate) fn folded(self, arity: usize) -> Self {
+        let exponent = u64::try_from(arity).expect("FRI arity fits u64");
+        Self {
+            generator: field_pow(self.generator, exponent),
+            offset: field_pow(self.offset, exponent),
+        }
+    }
+}
+
+pub(crate) fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> {
+    if configured_arity == 0 {
+        return Err(Error::FriArity(0));
+    }
+    if length == 0 {
+        return Err(Error::FriDomainSize {
+            length,
+            arity: configured_arity,
+        });
+    }
+    let round_arity = configured_arity.min(length);
+    if length % round_arity != 0 {
+        return Err(Error::FriDomainSize {
+            length,
+            arity: round_arity,
+        });
+    }
+    Ok(round_arity)
+}
+
+pub(crate) fn fold_fri_coset(
+    values: &[u64],
+    challenge: u64,
+    x: u64,
+    coset_generator: u64,
+) -> Result<u64> {
+    if values.is_empty() || x == 0 {
+        return Err(Error::FriDomainSize {
+            length: values.len(),
+            arity: values.len(),
+        });
+    }
+    let arity = values.len();
+    let arity_field = u64::try_from(arity).map_err(|_| Error::FriDomainSize {
+        length: arity,
+        arity,
+    })?;
+    let inverse_arity = field_inverse(arity_field);
+    let inverse_x = field_inverse(x);
+    let inverse_coset_generator = field_inverse(coset_generator);
+    let mut result = 0u64;
+    let mut inverse_x_power = FIELD_ONE;
+    let mut challenge_power = FIELD_ONE;
+    let mut inverse_frequency = FIELD_ONE;
+    for _degree in 0..arity {
+        let mut spectral_value = 0u64;
+        let mut twiddle = FIELD_ONE;
+        for &value in values {
+            spectral_value = add_mod(spectral_value, mul_mod(value, twiddle));
+            twiddle = mul_mod(twiddle, inverse_frequency);
+        }
+        let coefficient = mul_mod(spectral_value, mul_mod(inverse_arity, inverse_x_power));
+        result = add_mod(result, mul_mod(challenge_power, coefficient));
+        inverse_x_power = mul_mod(inverse_x_power, inverse_x);
+        challenge_power = mul_mod(challenge_power, challenge);
+        inverse_frequency = mul_mod(inverse_frequency, inverse_coset_generator);
+    }
+    Ok(result)
+}
+
+fn fold_round(
+    values: &[u64],
+    configured_arity: usize,
+    challenge: u64,
+    domain: FriDomain,
+) -> Result<Vec<u64>> {
+    let round_arity = fri_round_arity(values.len(), configured_arity)?;
+    let output_len = values.len() / round_arity;
+    let coset_generator = domain.coset_generator(output_len);
+    let mut group = Vec::with_capacity(round_arity);
+    let mut next = Vec::with_capacity(output_len);
+    for leaf_index in 0..output_len {
+        group.clear();
+        for position in 0..round_arity {
+            group.push(values[leaf_index + position * output_len]);
+        }
+        next.push(fold_fri_coset(
+            &group,
+            challenge,
+            domain.point(leaf_index),
+            coset_generator,
+        )?);
+    }
+    Ok(next)
 }
 #[cfg(test)]
 fn fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
@@ -2201,6 +2334,9 @@ impl StarkBackend {
             &air_composition_values,
             self.config.params.fri.arity,
             self.config.params.fri.max_reductions,
+            self.config.params.lde_root,
+            self.config.params.lde_log_size,
+            self.config.params.omega_coset,
             &mut transcript,
             canonical_mode,
         )?;
@@ -2551,6 +2687,21 @@ fn mul_mod(a: u64, b: u64) -> u64 {
     let reduced = product % u128::from(GOLDILOCKS_MODULUS);
     u64::try_from(reduced).expect("modulus reduction fits in u64")
 }
+fn field_pow(mut base: u64, mut exponent: u64) -> u64 {
+    let mut result = FIELD_ONE;
+    while exponent > 0 {
+        if exponent & 1 == 1 {
+            result = mul_mod(result, base);
+        }
+        base = mul_mod(base, base);
+        exponent >>= 1;
+    }
+    result
+}
+fn field_inverse(value: u64) -> u64 {
+    debug_assert_ne!(value, 0, "zero has no Goldilocks multiplicative inverse");
+    field_pow(value, GOLDILOCKS_MODULUS - 2)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2857,6 +3008,9 @@ mod tests {
             &evaluations,
             params.fri.arity,
             params.fri.max_reductions,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
             &mut transcript,
         )
         .expect("fri folding");
@@ -2878,8 +3032,17 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let err =
-            super::fold_with_fri(&[1, 2, 3], 4, 1, &mut transcript).expect_err("invalid arity");
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let err = super::fold_with_fri(
+            &[1, 2, 3],
+            4,
+            1,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect_err("invalid arity");
         assert!(matches!(err, super::Error::FriArity(4)));
     }
     #[test]
@@ -2944,27 +3107,70 @@ mod tests {
         assert_ne!(product, 0);
     }
     #[test]
-    fn pad_to_arity_extends_with_last_value() {
-        let mut values = vec![1u64, 2, 3];
-        super::pad_to_arity(&mut values, 4);
-        assert_eq!(values.len(), 4);
-        assert_eq!(values[3], 3);
-        super::pad_to_arity(&mut values, 4);
-        assert_eq!(values.len(), 4);
+    fn fri_round_arity_uses_a_real_final_subgroup_and_rejects_padding() {
+        assert_eq!(super::fri_round_arity(16, 8).unwrap(), 8);
+        assert_eq!(super::fri_round_arity(2, 8).unwrap(), 2);
+        let err = super::fri_round_arity(12, 8).unwrap_err();
+        assert!(matches!(
+            err,
+            super::Error::FriDomainSize {
+                length: 12,
+                arity: 8
+            }
+        ));
     }
     #[test]
-    fn fold_round_weights_by_challenge_powers() {
-        let values = vec![1u64, 2, 3, 4];
-        let challenge = 5;
-        let folded = super::fold_round(&values, values.len(), challenge);
-        assert_eq!(folded.len(), 1);
-        let mut expected = 0u64;
-        let mut power = super::FIELD_ONE;
-        for &value in &values {
-            expected = super::add_mod(expected, super::mul_mod(value, power));
-            power = super::mul_mod(power, challenge);
-        }
-        assert_eq!(folded[0], expected);
+    fn fold_round_matches_direct_constant_and_linear_evaluation() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = super::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            16,
+            params.omega_coset,
+        )
+        .expect("FRI domain");
+        let challenge = 0x1234_5678_9abc_def0 % super::GOLDILOCKS_MODULUS;
+        let constant = 37;
+        let constant_values = vec![constant; 16];
+        assert_eq!(
+            super::fold_round(&constant_values, 8, challenge, domain).unwrap(),
+            vec![constant; 2]
+        );
+
+        let intercept = 11;
+        let slope = 29;
+        let linear_values = (0..16)
+            .map(|index| {
+                reference_add(
+                    intercept,
+                    reference_mul(slope, reference_domain_point(params, 16, index)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = reference_add(intercept, reference_mul(slope, challenge));
+        assert_eq!(
+            super::fold_round(&linear_values, 8, challenge, domain).unwrap(),
+            vec![expected; 2]
+        );
+    }
+    #[test]
+    fn fri_merkle_leaves_commit_strided_cosets() {
+        let values = (0u64..16).collect::<Vec<_>>();
+        let leaves = super::hash_fri_leaves_with_mode(0, &values, 8, ExecutionMode::Cpu)
+            .expect("FRI leaves");
+        let even_coset = (0..8)
+            .map(|position| values[position * 2])
+            .collect::<Vec<_>>();
+        let odd_coset = (0..8)
+            .map(|position| values[1 + position * 2])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            leaves,
+            vec![
+                super::hash_fri_chunk(0, 0, &even_coset).unwrap(),
+                super::hash_fri_chunk(0, 1, &odd_coset).unwrap(),
+            ]
+        );
     }
     #[test]
     fn fri_layer_commitment_changes_when_values_change() {
@@ -2986,9 +3192,16 @@ mod tests {
         )
         .expect("transcript");
         let evaluations: Vec<u64> = (0u64..16).map(|idx| idx + 1).collect();
-        let (layers, betas) =
-            super::fold_with_fri(&evaluations, 8, params.fri.max_reductions, &mut transcript)
-                .expect("fri folding");
+        let (layers, betas) = super::fold_with_fri(
+            &evaluations,
+            8,
+            params.fri.max_reductions,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect("fri folding");
         assert_eq!(layers.len(), betas.len() + 1);
         assert_eq!(betas.len(), 2);
         let mut transcript_again = Transcript::initialise(
@@ -3003,39 +3216,86 @@ mod tests {
             &evaluations,
             8,
             params.fri.max_reductions,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
             &mut transcript_again,
         )
         .expect("fri folding repeat");
         assert_eq!(layers, repeat_layers);
         assert_eq!(betas, repeat_betas);
     }
-    fn reference_pad_to_arity(values: &mut Vec<u64>, arity: usize) {
-        if values.is_empty() || arity == 0 {
-            return;
-        }
-        let remainder = values.len() % arity;
-        if remainder == 0 {
-            return;
-        }
-        let pad_value = *values.last().expect("non-empty values");
-        let padding = arity - remainder;
-        values.extend(std::iter::repeat_n(pad_value, padding));
+    fn reference_add(a: u64, b: u64) -> u64 {
+        ((u128::from(a) + u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS)) as u64
     }
-    fn reference_fold_round(values: &[u64], arity: usize, beta: u64) -> Vec<u64> {
-        if values.is_empty() || arity == 0 {
-            return Vec::new();
-        }
-        let mut next = Vec::with_capacity(values.len().div_ceil(arity));
-        for chunk in values.chunks(arity) {
-            let mut acc = 0u64;
-            let mut power = super::FIELD_ONE;
-            for &value in chunk {
-                acc = super::add_mod(acc, super::mul_mod(value, power));
-                power = super::mul_mod(power, beta);
+    fn reference_sub(a: u64, b: u64) -> u64 {
+        ((u128::from(a) + u128::from(super::GOLDILOCKS_MODULUS) - u128::from(b))
+            % u128::from(super::GOLDILOCKS_MODULUS)) as u64
+    }
+    fn reference_mul(a: u64, b: u64) -> u64 {
+        ((u128::from(a) * u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS)) as u64
+    }
+    fn reference_pow(mut base: u64, mut exponent: u64) -> u64 {
+        let mut result = 1;
+        while exponent > 0 {
+            if exponent & 1 == 1 {
+                result = reference_mul(result, base);
             }
-            next.push(acc);
+            base = reference_mul(base, base);
+            exponent >>= 1;
         }
-        next
+        result
+    }
+    fn reference_inverse(value: u64) -> u64 {
+        reference_pow(value, super::GOLDILOCKS_MODULUS - 2)
+    }
+    fn reference_domain_point(
+        params: fastpq_isi::StarkParameterSet,
+        domain_size: usize,
+        index: usize,
+    ) -> u64 {
+        let domain_log = domain_size.ilog2();
+        let stride = 1u64 << (params.lde_log_size - domain_log);
+        let generator = reference_pow(params.lde_root, stride);
+        reference_mul(
+            params.omega_coset,
+            reference_pow(generator, u64::try_from(index).expect("index fits u64")),
+        )
+    }
+    fn reference_fold_round(
+        values: &[u64],
+        configured_arity: usize,
+        beta: u64,
+        domain: super::FriDomain,
+    ) -> Vec<u64> {
+        let arity = configured_arity.min(values.len());
+        assert_eq!(values.len() % arity, 0);
+        let output_len = values.len() / arity;
+        (0..output_len)
+            .map(|leaf_index| {
+                let nodes = (0..arity)
+                    .map(|position| domain.point(leaf_index + position * output_len))
+                    .collect::<Vec<_>>();
+                let group = (0..arity)
+                    .map(|position| values[leaf_index + position * output_len])
+                    .collect::<Vec<_>>();
+                let mut result = 0;
+                for (position, (&value, &node)) in group.iter().zip(&nodes).enumerate() {
+                    let mut numerator = 1;
+                    let mut denominator = 1;
+                    for (other_position, &other_node) in nodes.iter().enumerate() {
+                        if position == other_position {
+                            continue;
+                        }
+                        numerator = reference_mul(numerator, reference_sub(beta, other_node));
+                        denominator = reference_mul(denominator, reference_sub(node, other_node));
+                    }
+                    let weight = reference_mul(numerator, reference_inverse(denominator));
+                    result = reference_add(result, reference_mul(value, weight));
+                }
+                result
+            })
+            .collect()
     }
     fn reference_fri_layer_commitment(round: usize, values: &[u64]) -> u64 {
         let modulus = u128::from(super::GOLDILOCKS_MODULUS);
@@ -3069,9 +3329,16 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let (layers, betas) =
-            super::fold_with_fri(&evaluations, params.fri.arity, 3, &mut transcript)
-                .expect("fold with fri");
+        let (layers, betas) = super::fold_with_fri(
+            &evaluations,
+            params.fri.arity,
+            3,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect("fold with fri");
         let mut reference_transcript = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
@@ -3083,6 +3350,13 @@ mod tests {
         let mut current = evaluations.clone();
         let mut reference_layers = Vec::new();
         let mut reference_betas = Vec::new();
+        let mut domain = super::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            current.len(),
+            params.omega_coset,
+        )
+        .expect("reference FRI domain");
         let mut round = 0usize;
         while current.len() > 1 && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
@@ -3090,9 +3364,9 @@ mod tests {
             reference_layers.push(root);
             let beta = reference_transcript.challenge_beta(round);
             reference_betas.push(beta);
-            let mut padded = current.clone();
-            reference_pad_to_arity(&mut padded, arity);
-            current = reference_fold_round(&padded, arity, beta);
+            let round_arity = arity.min(current.len());
+            current = reference_fold_round(&current, arity, beta, domain);
+            domain = domain.folded(round_arity);
             round += 1;
         }
         let final_root = reference_fri_layer_commitment(round, &current);
@@ -3116,9 +3390,16 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let (baseline_layers, _) =
-            super::fold_with_fri(&evaluations, params.fri.arity, 3, &mut transcript)
-                .expect("baseline fold");
+        let (baseline_layers, _) = super::fold_with_fri(
+            &evaluations,
+            params.fri.arity,
+            3,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect("baseline fold");
         let mut mutated = evaluations.clone();
         mutated[0] = mutated[0].wrapping_add(1);
         let mut reference_transcript = Transcript::initialise(
@@ -3131,15 +3412,22 @@ mod tests {
         .expect("reference transcript");
         let mut current = mutated.clone();
         let mut mutated_layers = Vec::new();
+        let mut domain = super::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            current.len(),
+            params.omega_coset,
+        )
+        .expect("reference FRI domain");
         let mut round = 0usize;
         while current.len() > 1 && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             mutated_layers.push(root);
             let beta = reference_transcript.challenge_beta(round);
-            let mut padded = current.clone();
-            reference_pad_to_arity(&mut padded, arity);
-            current = reference_fold_round(&padded, arity, beta);
+            let round_arity = arity.min(current.len());
+            current = reference_fold_round(&current, arity, beta, domain);
+            domain = domain.folded(round_arity);
             round += 1;
         }
         let final_root = reference_fri_layer_commitment(round, &current);
@@ -3198,6 +3486,9 @@ mod tests {
                     &evaluation,
                     params.fri.arity,
                     params.fri.max_reductions,
+                    params.lde_root,
+                    params.lde_log_size,
+                    params.omega_coset,
                     &mut transcript_a,
                 )
                 .expect("fri folding");
@@ -3205,6 +3496,9 @@ mod tests {
                     &evaluation,
                     params.fri.arity,
                     params.fri.max_reductions,
+                    params.lde_root,
+                    params.lde_log_size,
+                    params.omega_coset,
                     &mut transcript_b,
                 )
                 .expect("fri folding");

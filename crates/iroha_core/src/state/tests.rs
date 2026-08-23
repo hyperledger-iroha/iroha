@@ -16942,9 +16942,6 @@ state_test! { sync apply_lane_lifecycle_rejects_retiring_default_routing_lane
 }
 state_test! { sync apply_lane_lifecycle_rejects_same_plan_default_lane_replacement
     let state = blank_test_state();
-    {
-        let mut nexus = state.nexus.write();
-    }
     let initial_catalog = state.nexus_snapshot().lane_catalog;
     let_row! { initial_entry = state .nexus_snapshot() .lane_config .entry(LaneId::SINGLE) .expect("default lane config exists") .clone() };
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![LaneConfig { id: LaneId::SINGLE, alias: "fresh-default-route".to_string(), ..LaneConfig::default() }], retire: vec![LaneId::SINGLE], } };

@@ -201,6 +201,7 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     let (mut executor, reopened_body_store) = V2EffectExecutor::open_with_body_store(
         runtime,
         reopened_body_store,
+        super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
         context.clone(),
         service.local_peer.clone(),
         Some(local_validator),

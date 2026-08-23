@@ -89,37 +89,21 @@ files. The independent checker reconstructs those contracts, derives the graph
 from the runner source, rehashes every input and output, and compares the
 normalized bytes with `tests/fixtures/tlc_replay_witness.tsv`.
 
-The final-source run on 2026-08-21 produced:
+The 2026-08-21 replay is not current release evidence because the formal input
+closure changed during the V1 hard cut. The trace witness now imports
+`SumeragiV2Inductive` directly, and the retired `SumeragiV2` compatibility
+entry point no longer exists. Current execution results must therefore be
+collected again from that exact closure.
 
-```text
-standalone SANY:       0
-raw TLC:               12
-normalizer:            0
-wrapper:               0
-tool states:           101
-normalized actions:    100
-separate stderr:       empty
-raw TLC SHA-256:       2f7f2ad7e7f779b84b7f27335ed63ce9ac25a47c57e03ad589179dc473e01df6
-normalized SHA-256:    32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748
-receipt SHA-256:       c57126bcd5578358c93fc70cad2d1f2c411a10b7c6d85d936d72628cfd430239
-source manifest:       120059637afe2fe699d29a3f3a42bf6afe5bab0206bce05f4b7a9df4cd5b03ba
-tool manifest:         3484b697e7f8744b506d6150a2d1079026f8709dc2c7da8439c3cd8b15e0a863
-```
-
-All three stderr files were empty regular mode-0600 single-link files, and the
-normalized output matched the tracked TSV byte for byte. The independent
-checker exited 0. Release-required checking exited 2 because the existing
-project signing facility authenticates source commits, not the canonical
-receipt and its execution artifacts. The receipt is therefore explicitly
-`unsigned-diagnostic`; it cannot promote a proof ledger, result registry,
-reducer result, or integration result. No custom cryptography or unsigned
-release fallback is accepted.
-
-The complete proof-ledger checker has no reset-scoped error after the hard cut.
-It still exits 1 on nine unchanged `fc09b635` inventory/hash debts outside this
-reset: the queue include inventory; four reducer/effects/worker source seals;
-the multilane and G-UNIT inventories; and the publication-writer and bootstrap
-symbol inventories.
+The collector emits one canonical release-signing request. The receipt checker
+has one success path: it verifies a detached OpenSSH SSHSIG over the exact
+canonical `receipt.json` bytes with the pinned verifier, namespace, one-entry
+Ed25519 allowed-signers policy, and revocation input. It has no inspection or
+optional release mode. The finalizer alone may consume the signing request and
+publish a read-only release bundle after signature verification. Until an
+external signing custodian supplies that signature, there is no promotable
+formal replay receipt, proof-ledger result, reducer result, or integration
+result.
 
 ## Accelerated 100,000-height chaos gate
 

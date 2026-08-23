@@ -15525,12 +15525,8 @@ fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<PathBuf> {
             original.display()
         );
     }
-    let canonical = fs::canonicalize(&original).wrap_err_with(|| {
-        format!(
-            "canonicalize Inrou disk directory {}",
-            original.display()
-        )
-    })?;
+    let canonical = fs::canonicalize(&original)
+        .wrap_err_with(|| format!("canonicalize Inrou disk directory {}", original.display()))?;
     #[cfg(unix)]
     {
         let effective_uid = rustix::process::geteuid().as_raw();
@@ -26843,7 +26839,11 @@ mod tests {
 
         let error = validate_soracloud_runtime_manager_posture(&config)
             .expect_err("programmatic config must not bypass the release-wide Inrou posture gate");
-        assert!(error.to_string().contains("first-release iroha3d forbids Inrou"));
+        assert!(
+            error
+                .to_string()
+                .contains("first-release iroha3d forbids Inrou")
+        );
         assert!(InrouStartupCapabilitySnapshot::from_config(&config).is_none());
 
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
@@ -27203,12 +27203,9 @@ mod tests {
         let mut state = test_state()?;
         let enabled_config = test_runtime_manager_config(temp_dir.path().join("runtime"))
             .with_local_host_identity(ALICE_ID.clone(), "12D3KooWDisabledHostWithdraw");
-        let capability = SoracloudRuntimeManager::new(
-            enabled_config.clone(),
-            Arc::clone(&state),
-        )
-        .build_local_inrou_host_capability_record(123)
-        .expect("enabled fixture has a local Inrou host capability");
+        let capability = SoracloudRuntimeManager::new(enabled_config.clone(), Arc::clone(&state))
+            .build_local_inrou_host_capability_record(123)
+            .expect("enabled fixture has a local Inrou host capability");
         Arc::get_mut(&mut state)
             .expect("unique test state")
             .world

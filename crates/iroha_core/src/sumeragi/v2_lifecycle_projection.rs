@@ -848,7 +848,7 @@ impl super::ProductionLifecycleOwnerV1 {
                 target,
                 publication,
                 CertifiedServeConcreteAdmissionFailureV1::Coordinator,
-                None,
+                Some(decision),
                 Some(replay),
                 None,
             );

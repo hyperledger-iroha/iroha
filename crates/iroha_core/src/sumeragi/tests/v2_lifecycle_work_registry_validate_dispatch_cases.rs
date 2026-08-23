@@ -1084,17 +1084,127 @@ fn durable_validate_store_fixture_from_fixture(
     let directory = TempDir::new().expect("temporary detached Validate body store");
     let mut store = V2BodyStore::open(directory.path(), fixture.verified.context().clone())
         .expect("open detached Validate body store");
+    let (fixture, durable) =
+        persist_durable_validate_fixture_into_store(fixture, &mut store, execution_commitment);
+    (fixture, directory, store, durable)
+}
+
+#[cfg(feature = "bls")]
+fn persist_durable_validate_fixture_into_store(
+    mut fixture: DurableValidateFixture,
+    store: &mut V2BodyStore,
+    execution_commitment: Option<wire::ExecutionCommitment>,
+) -> (DurableValidateFixture, DurableBodyReceipt) {
     let durable = store
         .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
         .expect("persist detached Validate fixture body");
     assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
-    durable_validate_store_fixture_from_existing(
-        fixture,
-        directory,
-        store,
-        durable,
-        execution_commitment,
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixture.effect.clone()
+    else {
+        unreachable!("detached Validate fixture retains one Validate effect")
+    };
+    let mut certificate =
+        certified_pipeline_prepare_certificate_for_test(&fixture.manifest, &durable);
+    if let Some(execution_commitment) = execution_commitment {
+        certificate.execution_commitment = execution_commitment;
+    }
+    let fetch_effect = AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(certificate.clone()),
+    };
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let ordinal = fixture.lease.ordinal();
+    let fetch_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&fetch_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
     )
+    .expect("bind persisted Validate Fetch fixture")
+    .pop()
+    .expect("one persisted Validate Fetch fixture owner");
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("carry persisted Fetch authority into Validate parent Store");
+    let store_pending = store_ownership
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("mint persisted Validate parent binding");
+    let pending = store_pending
+        .project_store_validate_successor(&store_effect, &fixture.effect)
+        .expect("project persisted Store-to-Validate fixture lineage");
+    let (_store_replay, validate_replay) =
+        certified_pipeline_replay_evidence_with_certificate_for_test(
+            tag,
+            &fixture.manifest,
+            &durable,
+            &pending,
+            certificate,
+        )
+        .expect("bind persisted Validate replay to its exact body receipt");
+    let replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
+    let candidate = replay_evidence
+        .project_installed_validate_candidate(
+            InstalledBodyCandidateProjectionPermit::new(),
+            &fixture.verified,
+            &fixture.effect,
+            &durable,
+            &pending,
+        )
+        .expect("project persisted replay-authorized Validate fixture");
+    let (physical_slots, slot_universe, consumed_slots) = candidate
+        .physical_geometry
+        .normalized()
+        .expect("normalize persisted Validate fixture geometry");
+    assert_eq!(slot_universe, consumed_slots);
+    assert_eq!(physical_slots.len(), 1);
+    let (&slot, &digest) = physical_slots
+        .first_key_value()
+        .expect("one persisted Validate fixture slot");
+    let owner = OwnerId::new(candidate.causal_root, ordinal);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact persisted Validate registry address");
+    let removed = fixture
+        .registry
+        .entries
+        .remove(&fixture.address)
+        .expect("replace the synthetic Validate fixture after persistence");
+    assert!(fixture.registry.entries.is_empty());
+    drop(removed);
+    let validate = DurableValidateBody {
+        address,
+        effect: fixture.effect.clone(),
+        pending,
+        durable_receipt: durable.clone(),
+        expected_manifest_hash: fixture.expected_manifest_hash,
+        replay_evidence,
+    };
+    assert!(validate.validates(digest));
+    let work = ConcreteLifecycleWork {
+        digest,
+        kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+    };
+    assert!(work.validates_at(address));
+    fixture.address = address;
+    fixture.slot = slot;
+    fixture.lease.owner = owner;
+    fixture.lease.key = candidate.key;
+    fixture.lease.work_class = candidate.work_class;
+    fixture.lease.stage = candidate.stage;
+    fixture.lease.physical_slots = physical_slots;
+    fixture.store_ownership = store_ownership;
+    assert!(work.validates_at(fixture.address));
+    assert!(fixture.registry.entries.insert(address, work).is_none());
+    (fixture, durable)
 }
 
 #[cfg(feature = "bls")]
@@ -1216,7 +1326,7 @@ fn durable_validate_store_fixture_from_existing(
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
     assert!(fixture.registry.entries.insert(address, work).is_none());
-    (fixture, directory, store, durable)
+    (fixture, durable)
 }
 
 #[cfg(feature = "bls")]
@@ -1265,6 +1375,203 @@ fn claimed_durable_validate_coordinator(fixture: &DurableValidateFixture) -> Lif
         .state = LifecycleState::Claimed(fixture.lease.id());
     coordinator.active_lease = Some(fixture.lease.clone());
     coordinator
+}
+
+#[cfg(feature = "bls")]
+fn ready_durable_validate_coordinator(
+    fixtures: &[&DurableValidateFixture],
+) -> LifecycleCoordinator {
+    let first = fixtures
+        .first()
+        .expect("Ready Validate census fixture is non-empty");
+    let context = first.verified.context();
+    let mut context_id = [0_u8; 32];
+    context_id.copy_from_slice(context.id().0.as_ref());
+    let active_context = LifecycleContext::new(
+        LifecycleDigest::new(context_id),
+        first.lease.key().round().height(),
+    );
+    let high_water = first
+        .lease
+        .ordinal()
+        .checked_sub(1)
+        .expect("Ready Validate fixture ordinal is non-zero");
+    let mut coordinator = LifecycleCoordinator::new(
+        active_context,
+        high_water,
+        CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 64))),
+    );
+    for fixture in fixtures {
+        assert_eq!(fixture.verified.context().id(), context.id());
+        let work = fixture
+            .registry
+            .entries
+            .get(&fixture.address)
+            .expect("Ready Validate fixture retains its carrier");
+        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+            unreachable!("Ready Validate fixture retains one Validate carrier")
+        };
+        let candidate = validate
+            .project_candidate(&fixture.verified)
+            .expect("project Ready Validate fixture candidate");
+        assert!(matches!(
+            coordinator.reduce_admit(AdmissionRequest::Candidate(candidate)),
+            AdmissionDecision::Admitted {
+                owner,
+                ordinal,
+                producer_turn_ordinal: None,
+            } if owner == fixture.lease.owner() && ordinal == fixture.lease.ordinal()
+        ));
+    }
+    coordinator
+}
+
+#[cfg(feature = "bls")]
+fn readdress_durable_validate_fixture(fixture: &mut DurableValidateFixture, ordinal: u128) {
+    let (old_address, mut work) = fixture
+        .registry
+        .entries
+        .pop_first()
+        .expect("readdress fixture retains one Validate carrier");
+    assert_eq!(old_address, fixture.address);
+    let owner = OwnerId::new(work.causal_root(), ordinal);
+    let address = ConcreteWorkAddress::new(owner, ordinal, fixture.slot)
+        .expect("readdress exact Validate carrier");
+    let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &mut work.kind else {
+        unreachable!("readdress fixture retains one Validate carrier")
+    };
+    validate.address = address;
+    assert!(work.validates_at(address));
+    assert!(fixture.registry.entries.insert(address, work).is_none());
+    fixture.address = address;
+    fixture.lease.id = super::super::LeaseId(ordinal);
+    fixture.lease.ordinal = ordinal;
+    fixture.lease.owner = owner;
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn recovered_ready_validate_census_is_complete_plural_and_rejects_aliases() {
+    let mut first = durable_validate_fixture_at_view(0x31, 2);
+    let mut second = durable_validate_fixture_at_view(0x31, 3);
+    let second_ordinal = first
+        .lease
+        .ordinal()
+        .checked_add(1)
+        .expect("second Ready Validate ordinal");
+    readdress_durable_validate_fixture(&mut second, second_ordinal);
+    let coordinator = ready_durable_validate_coordinator(&[&first, &second]);
+    let mut tampered_coordinator = ready_durable_validate_coordinator(&[&first, &second]);
+    let second_record = tampered_coordinator
+        .records
+        .get_mut(&second_ordinal)
+        .expect("plural census retains its second logical member");
+    let second_digest = second_record
+        .physical_slots
+        .get_mut(&second.slot)
+        .expect("second logical member retains its exact slot");
+    *second_digest = LifecycleDigest::new([0xE7; 32]);
+    first.registry.entries.append(&mut second.registry.entries);
+    let census = first
+        .registry
+        .project_recovered_durable_validate_retry_census(&coordinator, None)
+        .expect("project both distinct Ready Validate owners atomically");
+    assert_eq!(census.len_for_test(), 2);
+    assert_eq!(
+        first
+            .registry
+            .project_recovered_durable_validate_retry_census(&tampered_coordinator, None),
+        Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier),
+        "one non-alias member cannot drift its physical digest inside a plural census"
+    );
+
+    let mut canonical = durable_validate_fixture_at_view(0x32, 2);
+    let mut alias = durable_validate_fixture_at_view(0x32, 2);
+    readdress_durable_validate_fixture(
+        &mut alias,
+        canonical
+            .lease
+            .ordinal()
+            .checked_add(1)
+            .expect("alias ordinal"),
+    );
+    let coordinator = ready_durable_validate_coordinator(&[&canonical]);
+    canonical
+        .registry
+        .entries
+        .append(&mut alias.registry.entries);
+    assert_eq!(
+        canonical
+            .registry
+            .project_recovered_durable_validate_retry_census(&coordinator, None),
+        Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers),
+        "two physical carriers for one logical body must fail before startup"
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn recovered_ready_validate_marker_oracle_defers_only_the_live_parent() {
+    let (mut fixture, _directory, _store, durable) =
+        durable_validate_store_fixture_at_view(0x33, 2);
+    let mut coordinator = ready_durable_validate_coordinator(&[&fixture]);
+    let mut census = fixture
+        .registry
+        .project_recovered_durable_validate_retry_census(&coordinator, None)
+        .expect("project exact Ready Validate marker owner");
+    let key = (durable.round(), durable.subject());
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    assert_eq!(
+        census.classify_and_bind_validated_marker(key, &validated),
+        Ok(true),
+        "the still-Ready parent exclusively owns exact marker replay"
+    );
+    let foreign = ValidatedBodyReceipt::for_test_with_commitment(
+        durable.clone(),
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"foreign cold marker parent state"),
+            Hash::new(b"foreign cold marker post state"),
+            Hash::new(b"foreign cold marker writes"),
+            1,
+            Hash::new(b"foreign cold marker block"),
+        ),
+    );
+    assert!(
+        census
+            .classify_and_bind_validated_marker(key, &foreign)
+            .is_err(),
+        "a marker commitment cannot replace the sealed cold authority"
+    );
+
+    let ordinal = fixture.lease.ordinal();
+    coordinator.ready_index.remove(&ordinal);
+    coordinator
+        .records
+        .get_mut(&ordinal)
+        .expect("terminalized fixture retains its row")
+        .state = LifecycleState::Claimed(fixture.lease.id());
+    coordinator.active_lease = Some(fixture.lease.clone());
+    coordinator.settle_turn(
+        fixture.lease.clone(),
+        super::super::TurnOutcome::Terminal(TerminalOutcome::Cancelled),
+    );
+    assert!(coordinator.active_lease.is_none());
+    assert!(!coordinator.ready_index.contains(&ordinal));
+    assert!(matches!(
+        coordinator.records[&ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Cancelled)
+    ));
+    assert!(fixture.registry.entries.remove(&fixture.address).is_some());
+    let mut terminal_census = fixture
+        .registry
+        .project_recovered_durable_validate_retry_census(&coordinator, None)
+        .expect("terminal parent projects an empty deferral census");
+    assert_eq!(terminal_census.len_for_test(), 0);
+    assert_eq!(
+        terminal_census.classify_and_bind_validated_marker(key, &validated),
+        Ok(false),
+        "a terminalized parent cannot defer marker replay from its durable child"
+    );
 }
 
 #[cfg(feature = "bls")]

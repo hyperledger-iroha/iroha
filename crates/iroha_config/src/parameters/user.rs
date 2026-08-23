@@ -6276,16 +6276,15 @@ impl SoranetHandshake {
             pow,
         } = self;
         let resolved_suite = kem_suite.map_or_else(
-            || match MlKemSuite::from_kem_id(kem_id) {
-                Some(suite) => suite,
-                None => {
+            || {
+                MlKemSuite::from_kem_id(kem_id).unwrap_or_else(|| {
                     emitter.emit(
                         Report::new(ParseError::InvalidSoranetHandshakeConfig).attach(format!(
                             "network.soranet_handshake.kem_id {kem_id} is unsupported"
                         )),
                     );
                     STREAMING_DEFAULT_KEM_SUITE
-                }
+                })
             },
             |with_origin| with_origin.into_value().into_suite(),
         );
@@ -6926,7 +6925,7 @@ fn replace_soranet_vpn_helper_secret_for_test(path: &Path) -> io::Result<()> {
 }
 
 fn read_soranet_vpn_helper_secret(
-    source: WithOrigin<PathBuf>,
+    source: &WithOrigin<PathBuf>,
 ) -> core::result::Result<[u8; 32], String> {
     const FIELD: &str = "network.soranet_vpn.helper_ticket_secret_path";
     let resolved = source.resolve_relative_path();
@@ -7171,7 +7170,7 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let helper_ticket_secret = helper_ticket_secret_path.map(|source| {
+        let helper_ticket_secret = helper_ticket_secret_path.as_ref().map(|source| {
             read_soranet_vpn_helper_secret(source).unwrap_or_else(|error| panic!("{error}"))
         });
         if enabled && helper_ticket_secret.is_none() {
@@ -8894,11 +8893,7 @@ impl Offline {
         if trusted_artifact_paths
             .iter()
             .enumerate()
-            .any(|(index, path)| {
-                trusted_artifact_paths[index + 1..]
-                    .iter()
-                    .any(|other| *other == *path)
-            })
+            .any(|(index, path)| trusted_artifact_paths[index + 1..].contains(path))
         {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -11902,6 +11897,11 @@ impl Nexus {
             }
         })
     }
+    fn parse_optional_positive_u64(
+        value: Option<u64>,
+    ) -> core::result::Result<Option<NonZeroU64>, ()> {
+        value.map_or(Ok(None), |value| NonZeroU64::new(value).map(Some).ok_or(()))
+    }
     #[allow(clippy::too_many_lines)]
     fn build_lane_catalog(
         lane_count: NonZeroU32,
@@ -12067,35 +12067,23 @@ impl Nexus {
                     ));
                 }
                 if let Some(scheduler) = descriptor.scheduler {
-                    let teu_capacity = match scheduler.teu_capacity {
-                        Some(value) => match NonZeroU64::new(value) {
-                            Some(value) => Some(value),
-                            None => {
-                                lane_errors = true;
-                                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                                    format!(
-                                        "lane[{idx}] scheduler.teu_capacity must be a positive u64"
-                                    ),
-                                ));
-                                continue;
-                            }
-                        },
-                        None => None,
+                    let Ok(teu_capacity) =
+                        Self::parse_optional_positive_u64(scheduler.teu_capacity)
+                    else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] scheduler.teu_capacity must be a positive u64"
+                        )));
+                        continue;
                     };
-                    let starvation_bound_slots = match scheduler.starvation_bound_slots {
-                        Some(value) => match NonZeroU64::new(value) {
-                            Some(value) => Some(value),
-                            None => {
-                                lane_errors = true;
-                                emitter.emit(
-                                    Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                                        "lane[{idx}] scheduler.starvation_bound_slots must be a positive u64"
-                                    )),
-                                );
-                                continue;
-                            }
-                        },
-                        None => None,
+                    let Ok(starvation_bound_slots) =
+                        Self::parse_optional_positive_u64(scheduler.starvation_bound_slots)
+                    else {
+                        lane_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "lane[{idx}] scheduler.starvation_bound_slots must be a positive u64"
+                        )));
+                        continue;
                     };
                     if teu_capacity.is_none() && starvation_bound_slots.is_none() {
                         lane_errors = true;
@@ -35461,9 +35449,12 @@ publish_delay_seconds = 17
         inrou_enabled: Option<bool>,
         bounded_egress: bool,
     ) -> Table {
+        use std::fmt::Write as _;
+
         let mut source = "production_mode = true\n".to_owned();
         if let Some(enabled) = inrou_enabled {
-            source.push_str(&format!(
+            write!(
+                source,
                 r#"
 [inrou]
 enabled = {enabled}
@@ -35475,17 +35466,18 @@ max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
 "#,
-            ));
+            )
+            .expect("writing to an owned string cannot fail");
         }
         if bounded_egress {
             source.push_str(
-                r#"
+                r"
 [egress]
 default_allow = false
 allowed_hosts = []
 rate_per_minute = 60
 max_bytes_per_minute = 1048576
-"#,
+",
             );
         }
         let mut table = table_with_soracloud_runtime(&source);
@@ -35668,9 +35660,9 @@ max_storage_bytes = 10737418240
     }
     #[test]
     fn soracloud_runtime_nonproduction_also_rejects_enabled_inrou() {
-        let result = actual::Root::from_toml_source(TomlSource::inline(
-            table_with_soracloud_runtime(
-            r#"
+        let result =
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                r#"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35679,8 +35671,7 @@ max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
 "#,
-            ),
-        ));
+            )));
         assert!(result.is_err());
     }
     #[test]

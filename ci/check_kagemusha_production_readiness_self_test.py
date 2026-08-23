@@ -341,8 +341,14 @@ try:
             os.close(descriptor)
 except (OSError, ValueError) as error:
     errors.append(f'source-projection bound self-test failed unexpectedly: {error}')
-if 'recursive-step-two-qualification-v4.norito' not in FINAL_METADATA or MAX_RELEASE_INVENTORY_ENTRIES != 17 or MAX_QUALIFICATION_RECEIPT_BYTES != 802_816:
-    errors.append('self-test failed to pin the final recursive qualification receipt inventory')
+if (
+    'recursive-step-two-qualification-v4.norito' not in FINAL_METADATA
+    or 'internal-validation-receipt-v1.norito' not in FINAL_METADATA
+    or MAX_RELEASE_INVENTORY_ENTRIES != 18
+    or MAX_INTERNAL_VALIDATION_RECEIPT_BYTES != 1_048_576
+    or MAX_QUALIFICATION_RECEIPT_BYTES != 802_816
+):
+    errors.append('self-test failed to pin the final internal and recursive receipt inventory')
 for invalid_catalog_path in (Path('relative/catalog'), Path('/trusted/staging/../catalog')):
     expect_value_error(lambda: absolute_directory_chain(invalid_catalog_path),
         'self-test failed to reject a noncanonical catalog path chain')
@@ -1407,13 +1413,28 @@ static_mutations = (
         '            "detached-authority",',
         'reject daemon authority-key detachment before Core',
         ('trusted promotion forwarding',)),
+    (NODE_VALIDATOR_QUALIFICATION_COMPONENT,
+        '        reason => Err(format!(\n'
+        '            "stock launcher returned an unexpected Kagemusha qualification outcome: {reason:?}"\n'
+        '        )),',
+        '        _ => Ok(()),',
+        'reject a stock launcher that accepts an unexpected unavailable outcome',
+        ('stock-launcher fail-closed qualification outcome',)),
+    (NODE_VALIDATOR_QUALIFICATION_COMPONENT,
+        '        KagemushaValidatorQualificationOutcomeV1::Signed(_) => Err(\n'
+        '            "stock launcher unexpectedly signed a Kagemusha validator qualification without trusted promotion inputs"\n'
+        '                .to_owned(),\n'
+        '        ),',
+        '        KagemushaValidatorQualificationOutcomeV1::Signed(_) => Ok(()),',
+        'reject a stock launcher that accepts an unexpected signed outcome',
+        ('stock-launcher fail-closed qualification outcome',)),
     (NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT,
         '"/Library/SORA/Kagemusha/catalog-revalidation";',
         '"/tmp/kagemusha-catalog-revalidation";',
         'reject a non-fixed macOS catalog-revalidation path',
         D_RECEIPT_PATH),
     (NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT,
-        '#[cfg(not(target_os = "macos"))]\npub(super) fn read_configured_kagemusha_promotion_reservation(',
+        '#[cfg(not(target_os = "macos"))]\npub fn read_configured_kagemusha_promotion_reservation(',
         '#[cfg(any())]\npub(super) fn read_configured_kagemusha_promotion_reservation(',
         'reject a non-macOS validator-qualification bypass',
         D_RECEIPT_PATH),
@@ -2138,6 +2159,16 @@ static_mutations = (
         '        name: "detached-internal-validation-receipt.norito",',
         'reject a candidate inventory without the internal-validation receipt',
         ('exact candidate inventory entry changed',)),
+    (READINESS,
+        '    "internal-validation-receipt-v1.norito",\n',
+        '',
+        'reject a readiness inventory without the internal-validation receipt',
+        ('18-file readiness inventory with bounded internal-validation receipt',)),
+    (READINESS,
+        '    (\n        "internal-validation-receipt-v1.norito",\n        MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,\n    ),\n',
+        '',
+        'reject an unbounded internal-validation receipt',
+        ('bounded opaque internal-validation receipt staging',)),
     (KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT,
         '[(name, identity)] if valid_temp_name(name) => {',
         '[(name, identity)] if name.starts_with(TEMP_PREFIX) => {',
@@ -2192,12 +2223,18 @@ static_mutations = (
         'name: Verify Kagemusha V4 production readiness',
         'reject an unblocked Kagemusha promotion workflow',
         ('name: Verify Kagemusha V4 production readiness (publication blocked)',)),
-    (KAGAMI, 'if expected.len() != 18', 'if expected.len() != 17', 'reject a seventeen-file final release verifier'),
+    (KAGAMI,
+        'if inventory_state.includes_promotion_record() && expected.len() != 18',
+        'if inventory_state.includes_promotion_record() && expected.len() != 17',
+        'reject a seventeen-file final release verifier'),
     (KAGAMI, '        (\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n            "qualification receipt",\n        ),\n',
         '', 'reject a verifier inventory without the qualification receipt', ('18-file verifier inventory',)),
     (KAGAMI, '        (\n            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,\n            "internal-validation receipt",\n        ),\n',
         '', 'reject a verifier inventory without the internal-validation receipt', ('18-file verifier inventory',)),
     (BUNDLE, 'const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 18;', 'const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;', 'reject a seventeen-file final release producer'),
+    (BUNDLE, '            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n            PROMOTION_RECORD_FILE_NAME_V4,\n',
+        '            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,\n            PROMOTION_RECORD_FILE_NAME_V4,\n',
+        'reject a producer inventory without the qualification receipt', ('function-scoped 18-file producer inventory',)),
     (BUNDLE, '            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,\n            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n',
         '            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,\n            KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,\n',
         'reject a producer inventory without the internal-validation receipt', ('function-scoped 18-file producer inventory',)),

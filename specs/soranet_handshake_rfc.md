@@ -60,8 +60,12 @@ epoch pointer.
 | 2 | Relay | NK2 `HybridRelayResponse` or NK3 `PqfsRelayResponse` carrying Noise/X25519 material, ML-KEM ciphertext and confirmation data, capability echo, transcript hash `T`, and directory-bound Ed25519 authentication | Padded to a 1024-byte multiple. |
 
 Transcript hash `T` MUST be computed as described in `specs/soranet_handshake.md`
-and mixed into the dual HKDF. Both first-release suites complete in two flights;
-there is no `ClientFinish` frame or unauthenticated client-signature slot.
+and mixed into the dual HKDF. Both peers MUST compute the ordered X25519 Noise
+XX contributions `ee = DH(e_c,e_r)`, `es = DH(e_c,s_r)`, and
+`se = DH(s_c,e_r)`, reject an all-zero result for any contribution, and mix all
+three into the suite KDF before the ML-KEM secret material. Both first-release
+suites complete in two flights; there is no `ClientFinish` frame or
+unauthenticated client-signature slot.
 Tickets, salt metadata, and retry state are protected application data after
 session-key acceptance, not a third handshake flight.
 

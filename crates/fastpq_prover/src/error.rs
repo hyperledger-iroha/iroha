@@ -149,6 +149,14 @@ pub enum Error {
         /// Position of the failing query.
         index: usize,
     },
+    /// A proof-carried Goldilocks element did not use its unique canonical representation.
+    #[error("non-canonical Goldilocks field element in `{context}` at nested indices {indices:?}")]
+    NonCanonicalGoldilocksElement {
+        /// Stable proof-field name identifying the rejected value.
+        context: &'static str,
+        /// Outer-to-inner vector indices locating the rejected value within that field.
+        indices: Vec<usize>,
+    },
     /// FASTPQ verifier input exceeded a configured limit.
     #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
     VerifierLimitExceeded {
@@ -191,6 +199,14 @@ pub enum Error {
     /// Unsupported FRI arity advertised by the parameter set.
     #[error("unsupported FRI arity {0}; expected 8 or 16")]
     FriArity(u32),
+    /// A FRI layer cannot be partitioned into complete multiplicative cosets.
+    #[error("FRI layer length {length} is not compatible with effective arity {arity}")]
+    FriDomainSize {
+        /// Number of evaluations in the malformed layer.
+        length: usize,
+        /// Effective arity required for this reduction.
+        arity: usize,
+    },
     /// Value exceeds the supported width for the stage 1 trace encoding.
     #[error("value limb width `{length}` exceeds 64-bit limit")]
     ValueWidth {

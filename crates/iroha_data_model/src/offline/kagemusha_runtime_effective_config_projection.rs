@@ -22,7 +22,7 @@ use super::kagemusha_promotion_receipt::{
 pub const KAGEMUSHA_V4_RUNTIME_EFFECTIVE_CONFIG_SHA256_DOMAIN_V1: &[u8] =
     b"iroha.kagemusha.v4.runtime_effective_config.sha256.v1";
 
-/// One effective public validator endpoint and its genesis-authenticated PoP.
+/// One effective public validator endpoint and its genesis-authenticated `PoP`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -35,7 +35,7 @@ pub struct KagemushaV4RuntimeValidatorProjectionV1 {
     pub validator_id: PeerId,
     /// Effective public P2P address.
     pub public_address: SocketAddr,
-    /// Exact PoP retained by the frozen height-one context.
+    /// Exact `PoP` retained by the frozen height-one context.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bls_pop: Vec<u8>,
 }
@@ -60,7 +60,7 @@ impl KagemushaV4RuntimeValidatorProjectionV1 {
 /// Canonical projection derived after every startup configuration overlay.
 ///
 /// The Sumeragi fingerprint commits the complete protocol-effective shared
-/// config. The genesis context and PoPs are copied from authenticated signed
+/// config. The genesis context and `PoPs` are copied from authenticated signed
 /// genesis or retained validator-qualification and snapshot authorities, not
 /// reconstructed from caller assertions.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -120,7 +120,7 @@ impl KagemushaV4RuntimeEffectiveConfigProjectionV1 {
     /// # Errors
     ///
     /// Returns [`KagemushaPromotionReceiptValidationError`] for a non-validator,
-    /// zero commitment, malformed PoP, or non-canonical validator order.
+    /// zero commitment, malformed `PoP`, or non-canonical validator order.
     pub fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
         let zero = Hash::prehashed([0; Hash::LENGTH]);
         if !self.is_validator

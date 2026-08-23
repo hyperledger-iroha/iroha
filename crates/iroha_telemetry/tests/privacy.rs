@@ -275,7 +275,7 @@ fn record_event_api_routes_to_expected_counters() {
         timestamp_unix: 75,
         mode,
         kind: SoranetPrivacyEventKindV1::GarAbuseCategory(SoranetPrivacyEventGarAbuseCategoryV1 {
-            label: "Policy::Spam".to_string(),
+            category_hash: [0xA5; 8],
         }),
     });
     let buckets = aggregator.drain_ready(ts(120));
@@ -366,7 +366,7 @@ fn ndjson_feed_rehydrates_events() {
             mode,
             kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
                 SoranetPrivacyEventGarAbuseCategoryV1 {
-                    label: "Policy::Spam".to_string(),
+                    category_hash: [0xA5; 8],
                 },
             ),
         },
@@ -942,7 +942,9 @@ fn privacy_config_and_event_category_cardinality_are_bounded() {
             mode: SoranetPrivacyModeV1::Entry,
             kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
                 SoranetPrivacyEventGarAbuseCategoryV1 {
-                    label: format!("category-{index}"),
+                    category_hash: u64::try_from(index)
+                        .expect("bounded index fits u64")
+                        .to_le_bytes(),
                 },
             ),
         };
@@ -954,7 +956,7 @@ fn privacy_config_and_event_category_cardinality_are_bounded() {
         timestamp_unix: 600,
         mode: SoranetPrivacyModeV1::Entry,
         kind: SoranetPrivacyEventKindV1::GarAbuseCategory(SoranetPrivacyEventGarAbuseCategoryV1 {
-            label: "category-excess".to_owned(),
+            category_hash: u64::MAX.to_le_bytes(),
         }),
     };
     assert!(matches!(

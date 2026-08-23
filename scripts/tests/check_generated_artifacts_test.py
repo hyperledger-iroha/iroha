@@ -350,6 +350,109 @@ def test_connect_recipient_fixtures_have_one_safe_external_stage_owner() -> None
         assert "--ignored" in command
 
 
+def test_norito_rpc_fixtures_have_one_closed_two_root_owner() -> None:
+    blob_names = {
+        "asset_metadata_parity.norito",
+        "burn_asset.norito",
+        "executor_upgrade_demo.norito",
+        "grant_revoke_permission.norito",
+        "grant_revoke_role.norito",
+        "grant_revoke_role_permission.norito",
+        "mint_asset.norito",
+        "mixed_executable_batch.norito",
+        "register_asset_definition.norito",
+        "register_nft_demo.norito",
+        "register_peer_with_pop_demo.norito",
+        "register_pipeline_trigger_demo.norito",
+        "register_precommit_trigger_demo.norito",
+        "register_role_demo.norito",
+        "register_time_trigger_demo.norito",
+        "repo_initiate_tri_party.norito",
+        "repo_reverse_unwind.norito",
+        "set_parameter_next_mode.norito",
+        "settlement_dvp_atomic.norito",
+        "settlement_pvp_net.norito",
+        "transfer_asset.norito",
+        "transfer_asset_definition.norito",
+        "transfer_domain.norito",
+        "transfer_nft_demo.norito",
+        "trigger_repetitions_demo.norito",
+        "typed_fee_payment_gas_limit.norito",
+        "unregister_peer_demo.norito",
+    }
+    outputs = {
+        "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
+        "IrohaSwift/Fixtures/transaction_payloads.json",
+        "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json",
+        "fixtures/norito_rpc/iroha_compact_hash_vector.properties",
+        "fixtures/norito_rpc/schema_hashes.json",
+        "fixtures/norito_rpc/transaction_fixtures.manifest.json",
+        "fixtures/norito_rpc/transaction_payloads.json",
+        "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
+        "java/iroha_android/src/test/resources/transaction_payloads.json",
+        "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json",
+        "python/iroha_python/tests/fixtures/transaction_payloads.json",
+        *(f"fixtures/norito_rpc/{name}" for name in blob_names),
+        *(
+            f"java/iroha_android/src/test/resources/{name}"
+            for name in blob_names
+        ),
+    }
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owner = next(
+        entry
+        for entry in manifest["generated"]
+        if entry["name"] == "norito-rpc-fixtures"
+    )
+
+    assert len(outputs) == 65
+    assert set(owner["outputs"]) == outputs
+    for output in outputs:
+        assert sum(output in entry["outputs"] for entry in manifest["generated"]) == 1
+        assert output not in owner["generator"]
+    assert set(owner["generator_sources"]) == {
+        "crates/iroha/Cargo.toml",
+        "crates/iroha/src/client.rs",
+        "tools/norito_codegen_exporter/Cargo.toml",
+        "tools/norito_codegen_exporter/src/lib.rs",
+        "tools/norito_codegen_exporter/src/norito_rpc.rs",
+        "xtask/Cargo.toml",
+        "xtask/src/main.rs",
+        "xtask/src/norito_rpc.rs",
+        "xtask/src/norito_rpc/alias_setup_fixture.rs",
+    }
+    assert set(owner["inputs"]) == {
+        "Cargo.lock",
+        "Cargo.toml",
+        "crates/iroha_crypto/src/**/*.rs",
+        "crates/iroha_data_model/src/**/*.rs",
+        "crates/iroha_primitives/src/**/*.rs",
+        "crates/norito/src/**/*.rs",
+        "fixtures/norito_rpc/transaction_payloads.json",
+        "rust-toolchain.toml",
+    }
+    generator = owner["generator"]
+    check = owner["check"]
+    assert "IROHA_NORITO_RPC_FIXTURE_STAGE" in generator
+    assert "IROHA_NORITO_RPC_FIXTURE_STAGE" not in check
+    assert "norito-rpc-fixtures" in generator
+    assert "--output-root" in generator
+    assert "norito-rpc-verify" in check
+    for command in (generator, check):
+        assert "IROHA_NORITO_RPC_FIXTURE_CARGO_TARGET_DIR" in command
+        assert "cargo run" in command
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "--jobs 1" in command
+        assert "-p xtask" in command
+        assert "--features dev-tools" in command
+        assert "--bin xtask" in command
+        assert "-Z" not in command
+        assert "--lockfile-path" not in command
+
+
 def test_mochi_canonical_binary_fixtures_have_one_safe_external_stage_owner() -> None:
     outputs = {
         "mochi/mochi-core/tests/fixtures/canonical_block_wire.bin",

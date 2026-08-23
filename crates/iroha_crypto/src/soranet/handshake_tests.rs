@@ -1055,11 +1055,19 @@ mod tests {
             relay_static_bytes: [3; NOISE_SECRET_LEN],
             relay_static_public: [4; NOISE_SECRET_LEN],
             relay_ephemeral_public: [5; NOISE_SECRET_LEN],
+            noise_xx_dh: NoiseXxDhSecrets {
+                ee: Zeroizing::new([6; NOISE_SECRET_LEN]),
+                es: Zeroizing::new([7; NOISE_SECRET_LEN]),
+                se: Zeroizing::new([8; NOISE_SECRET_LEN]),
+            },
             primary_kem: simulated_kem(),
             forward_secure_kem: simulated_kem(),
         };
         material.zeroize_sensitive_fields();
         assert_eq!(material.relay_static_bytes, [0; NOISE_SECRET_LEN]);
+        assert!(material.noise_xx_dh.ee.iter().all(|byte| *byte == 0));
+        assert!(material.noise_xx_dh.es.iter().all(|byte| *byte == 0));
+        assert!(material.noise_xx_dh.se.iter().all(|byte| *byte == 0));
         assert!(
             material
                 .primary_kem
@@ -2389,6 +2397,98 @@ mod tests {
         assert!(json.contains("MissingRequiredKEM"));
         assert!(json.contains("dilithium3"));
         assert!(json.contains("ed25519"));
+    }
+    #[test]
+    fn noise_xx_dh_contributions_are_symmetric() {
+        let client_ephemeral_secret = StaticSecret::from([0x11; NOISE_SECRET_LEN]);
+        let client_static_secret = StaticSecret::from([0x22; NOISE_SECRET_LEN]);
+        let relay_ephemeral_secret = StaticSecret::from([0x33; NOISE_SECRET_LEN]);
+        let relay_static_secret = StaticSecret::from([0x44; NOISE_SECRET_LEN]);
+        let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
+        let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
+        let relay_ephemeral_public = X25519PublicKey::from(&relay_ephemeral_secret).to_bytes();
+        let relay_static_public = X25519PublicKey::from(&relay_static_secret).to_bytes();
+
+        let client = derive_client_noise_xx_dh(
+            &client_ephemeral_secret,
+            &client_static_secret,
+            &relay_ephemeral_public,
+            &relay_static_public,
+        )
+        .expect("derive client Noise XX contributions");
+        let relay = derive_relay_noise_xx_dh(
+            &relay_ephemeral_secret,
+            &relay_static_secret,
+            &client_ephemeral_public,
+            &client_static_public,
+        )
+        .expect("derive relay Noise XX contributions");
+
+        assert_eq!(client.ee.as_slice(), relay.ee.as_slice());
+        assert_eq!(client.es.as_slice(), relay.es.as_slice());
+        assert_eq!(client.se.as_slice(), relay.se.as_slice());
+        for contribution in [&client.ee, &client.es, &client.se] {
+            assert!(contribution.iter().any(|byte| *byte != 0));
+        }
+    }
+    #[test]
+    fn x25519_dh_rejects_an_all_zero_output() {
+        let local_secret = StaticSecret::from([0x55; NOISE_SECRET_LEN]);
+        let error = checked_x25519_dh("ee", &local_secret, &[0; NOISE_SECRET_LEN])
+            .err()
+            .expect("low-order peer must produce a rejected all-zero DH output");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("Noise XX ee X25519 DH output must not be all zero")),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[test]
+    fn session_keys_depend_on_every_noise_xx_contribution() {
+        let transcript_hash = [0x61; TRANSCRIPT_BINDING_LEN];
+        let primary_shared = [0x62; 32];
+        let forward_shared = [0x63; 32];
+        let make_dh = |ee, es, se| NoiseXxDhSecrets {
+            ee: Zeroizing::new([ee; NOISE_SECRET_LEN]),
+            es: Zeroizing::new([es; NOISE_SECRET_LEN]),
+            se: Zeroizing::new([se; NOISE_SECRET_LEN]),
+        };
+
+        for suite in [
+            HandshakeSuite::Nk2Hybrid,
+            HandshakeSuite::Nk3PqForwardSecure,
+        ] {
+            let baseline_dh = make_dh(0x71, 0x72, 0x73);
+            let derive = |dh: &NoiseXxDhSecrets| {
+                derive_session_key_and_confirmation(SessionKeyInputs {
+                    suite,
+                    transcript_hash: &transcript_hash,
+                    noise_xx_dh: dh,
+                    primary_shared: &primary_shared,
+                    forward_shared: (suite == HandshakeSuite::Nk3PqForwardSecure)
+                        .then_some(forward_shared.as_slice()),
+                })
+                .expect("derive hybrid session material")
+            };
+            let (baseline_key, baseline_confirmation) = derive(&baseline_dh);
+            for (label, changed_dh) in [
+                ("ee", make_dh(0x81, 0x72, 0x73)),
+                ("es", make_dh(0x71, 0x82, 0x73)),
+                ("se", make_dh(0x71, 0x72, 0x83)),
+            ] {
+                let (changed_key, changed_confirmation) = derive(&changed_dh);
+                assert_ne!(
+                    baseline_key.payload(),
+                    changed_key.payload(),
+                    "{suite:?} session key ignored Noise XX {label}"
+                );
+                if suite == HandshakeSuite::Nk2Hybrid {
+                    assert_ne!(
+                        baseline_confirmation, changed_confirmation,
+                        "NK2 relay confirmation ignored Noise XX {label}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn runtime_handshake_roundtrip_produces_matching_session_keys() {

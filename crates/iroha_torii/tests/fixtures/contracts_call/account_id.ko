@@ -1,29 +1,26 @@
-
 seiyaku ContractViewAccountIdTest {
+    state AccountId Stored;
+    fn bind_impl(AccountId account_id) {
+        Stored = account_id;
+    }
 
-  state AccountId Stored;
+    hajimari(AccountId account_id) {
+        bind_impl(account_id: account_id);
+    }
 
-  fn bind_impl(AccountId account_id) {
-    Stored = account_id;
-  }
+    kotoage fn bind(AccountId account_id) authorize("CanEnactGovernance") {
+        bind_impl(account_id: account_id);
+    }
 
-  hajimari(AccountId account_id) {
-    bind_impl(account_id: account_id);
-  }
+    view fn literal() -> AccountId {
+        return context::authority();
+    }
 
-  kotoage fn bind(AccountId account_id) authorize("CanEnactGovernance") {
-    bind_impl(account_id: account_id);
-  }
+    view fn stored() -> AccountId {
+        return Stored;
+    }
 
-  view fn literal() -> AccountId {
-    return context::authority();
-  }
-
-  view fn stored() -> AccountId {
-    return Stored;
-  }
-
-  view fn stored_tuple() -> (AccountId, int) {
-    return (Stored, 1);
-  }
+    view fn stored_tuple() -> (AccountId, int) {
+        return (Stored, 1);
+    }
 }

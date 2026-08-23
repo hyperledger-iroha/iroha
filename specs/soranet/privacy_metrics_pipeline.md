@@ -35,8 +35,11 @@ Operators can poll the relay's admin listener for raw observations via
 `GET /privacy/events`. The endpoint returns newline-delimited JSON
 (`application/x-ndjson`) containing `SoranetPrivacyEventV1` payloads mirrored
 from the internal `PrivacyEventBuffer`. The buffer retains the newest events up
-to `privacy.event_buffer_capacity` entries (default 4 096) and is drained on
-read, so scrapers should poll frequently enough to avoid gaps. Events cover the
+to `privacy.event_buffer_capacity` entries (default 4 096). GAR observations
+contain only a fixed eight-byte category hash; raw category labels are validated
+as canonical values of at most 64 bytes and are never retained in this queue.
+The buffer is drained on read, so scrapers should poll frequently enough to
+avoid gaps. Events cover the
 same handshake, throttle, verified bandwidth, active circuit, and GAR signals
 that power the Prometheus counters, allowing downstream collectors to archive
 privacy-safe breadcrumbs or feed secure aggregation workflows.

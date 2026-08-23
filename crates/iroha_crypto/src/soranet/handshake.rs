@@ -44,6 +44,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
 const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
+const NOISE_XX_DH_IKM_DOMAIN: &[u8] = b"soranet.handshake.x25519.xx.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
 /// ALPN used by the public `SoraNet` QUIC transport.
@@ -169,6 +170,45 @@ impl From<HandshakeSuite> for u8 {
 impl fmt::Display for HandshakeSuite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
+    }
+}
+/// Bounded, cryptographically parsed fields needed by a relay before admission.
+///
+/// This view is produced by the same parser used by [`process_client_hello`],
+/// so transport runtimes do not need a second wire-format implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientHelloMetadata {
+    handshake_suite: HandshakeSuite,
+    kem_id: u8,
+    sig_id: u8,
+    client_capabilities: Vec<u8>,
+    resume_hash: Option<Vec<u8>>,
+}
+impl ClientHelloMetadata {
+    /// Return the handshake suite encoded by the client frame.
+    #[must_use]
+    pub const fn handshake_suite(&self) -> HandshakeSuite {
+        self.handshake_suite
+    }
+    /// Return the requested ML-KEM identifier.
+    #[must_use]
+    pub const fn kem_id(&self) -> u8 {
+        self.kem_id
+    }
+    /// Return the requested signature identifier.
+    #[must_use]
+    pub const fn sig_id(&self) -> u8 {
+        self.sig_id
+    }
+    /// Return the exact client capability vector committed by the frame.
+    #[must_use]
+    pub fn client_capabilities(&self) -> &[u8] {
+        &self.client_capabilities
+    }
+    /// Return the optional resume binding carried by the frame.
+    #[must_use]
+    pub fn resume_hash(&self) -> Option<&[u8]> {
+        self.resume_hash.as_deref()
     }
 }
 #[derive(Debug)]
@@ -1195,7 +1235,7 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
             path.display()
         ))
     })?;
-    let record: SaltAnnouncementRecord = json::from_str(&contents)?;
+    let record: SaltAnnouncementRecord = json::from_str(contents)?;
     decode_salt_hex(&record.blinded_cid_salt_hex).map_err(|err| match err {
         HarnessError::SaltLength(len) => HarnessError::Validation(format!(
             "salt fixture {}: blinded_cid_salt_hex must decode to 32 bytes, got {len}",
@@ -1567,12 +1607,25 @@ struct KemLabelSet {
     confirmation: &'static [u8],
     shared: &'static [u8],
 }
+struct NoiseXxDhSecrets {
+    ee: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+    es: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+    se: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+}
+impl NoiseXxDhSecrets {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.ee.zeroize();
+        self.es.zeroize();
+        self.se.zeroize();
+    }
+}
 struct DeterministicHandshakeMaterial {
     client_static_public: [u8; NOISE_SECRET_LEN],
     client_ephemeral_public: [u8; NOISE_SECRET_LEN],
     relay_static_bytes: [u8; NOISE_SECRET_LEN],
     relay_static_public: [u8; NOISE_SECRET_LEN],
     relay_ephemeral_public: [u8; NOISE_SECRET_LEN],
+    noise_xx_dh: NoiseXxDhSecrets,
     primary_kem: SimulatedKemArtifacts,
     forward_secure_kem: SimulatedKemArtifacts,
 }
@@ -1583,6 +1636,7 @@ impl DeterministicHandshakeMaterial {
         self.relay_static_bytes.zeroize();
         self.relay_static_public.zeroize();
         self.relay_ephemeral_public.zeroize();
+        self.noise_xx_dh.zeroize_sensitive_fields();
         self.primary_kem.zeroize_sensitive_fields();
         self.forward_secure_kem.zeroize_sensitive_fields();
     }
@@ -1679,25 +1733,32 @@ fn derive_handshake_material(
     relay_static: &[u8; NOISE_SECRET_LEN],
 ) -> Result<DeterministicHandshakeMaterial, HarnessError> {
     let profile = kem_profile(params.kem_id)?;
-    let client_static_public =
-        X25519PublicKey::from(&StaticSecret::from(*client_static)).to_bytes();
-    let relay_static_public = X25519PublicKey::from(&StaticSecret::from(*relay_static)).to_bytes();
-    let client_ephemeral_public = {
+    let client_static_secret = StaticSecret::from(*client_static);
+    let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
+    let relay_static_secret = StaticSecret::from(*relay_static);
+    let relay_static_public = X25519PublicKey::from(&relay_static_secret).to_bytes();
+    let client_ephemeral_secret = {
         let seed = Zeroizing::new(derive_seed(
             b"soranet.noise.client.ephemeral.v1",
             &[client_static.as_ref(), params.client_nonce],
         )?);
-        let secret = StaticSecret::from(*seed);
-        X25519PublicKey::from(&secret).to_bytes()
+        StaticSecret::from(*seed)
     };
-    let relay_ephemeral_public = {
+    let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
+    let relay_ephemeral_secret = {
         let seed = Zeroizing::new(derive_seed(
             b"soranet.noise.relay.ephemeral.v1",
             &[relay_static.as_ref(), params.relay_nonce],
         )?);
-        let secret = StaticSecret::from(*seed);
-        X25519PublicKey::from(&secret).to_bytes()
+        StaticSecret::from(*seed)
     };
+    let relay_ephemeral_public = X25519PublicKey::from(&relay_ephemeral_secret).to_bytes();
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &relay_ephemeral_public,
+        &relay_static_public,
+    )?;
     let primary_kem = derive_kem_artifacts(
         KemVariant::Primary,
         params,
@@ -1718,6 +1779,7 @@ fn derive_handshake_material(
         relay_static_bytes: *relay_static,
         relay_static_public,
         relay_ephemeral_public,
+        noise_xx_dh,
         primary_kem,
         forward_secure_kem,
     })
@@ -2779,6 +2841,7 @@ fn build_session_artifacts(
     let session_inputs = SessionKeyInputs {
         suite: spec.suite,
         transcript_hash,
+        noise_xx_dh: &material.noise_xx_dh,
         primary_shared: material.primary_kem.shared_secret.as_slice(),
         forward_shared: forward_shared.as_deref(),
     };
@@ -3891,6 +3954,8 @@ fn handle_nk2_client_finish(
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
+        client_ephemeral_secret,
+        client_static_secret,
         client_kem_secret,
         client_capabilities,
         descriptor_commit,
@@ -3947,6 +4012,12 @@ fn handle_nk2_client_finish(
             "relay transcript hash mismatch in NK2 handshake".to_string(),
         ));
     }
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &parsed.relay_ephemeral_pub,
+        &parsed.relay_static_pub,
+    )?;
     let shared_secret = decapsulate_mlkem(
         profile.suite(),
         client_kem_secret.as_ref(),
@@ -3956,6 +4027,7 @@ fn handle_nk2_client_finish(
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: shared_secret.as_bytes(),
         forward_shared: None,
     })?;
@@ -4083,6 +4155,8 @@ fn handle_nk3_client_finish(
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
+        client_ephemeral_secret,
+        client_static_secret,
         client_kem_secret,
         forward_kem_secret,
         forward_kem_public,
@@ -4127,6 +4201,12 @@ fn handle_nk3_client_finish(
         sig_id,
         resume_hash.as_deref(),
     )?;
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &parsed.relay_ephemeral_pub,
+        &parsed.relay_static_pub,
+    )?;
     let (primary_shared, forward_shared) = decapsulate_nk3_secrets(
         profile.suite(),
         &client_kem_secret,
@@ -4139,6 +4219,7 @@ fn handle_nk3_client_finish(
         derive_session_key_and_confirmation(SessionKeyInputs {
             suite: HandshakeSuite::Nk3PqForwardSecure,
             transcript_hash: &transcript,
+            noise_xx_dh: &noise_xx_dh,
             primary_shared: primary_shared.as_bytes(),
             forward_shared: Some(forward_shared.as_bytes()),
         })?;
@@ -4170,20 +4251,45 @@ fn parse_client_hello(
     client_hello: &[u8],
     expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
+    let parsed = parse_client_hello_unbound(client_hello)?;
+    validate_client_resume_hash(parsed.resume_hash.as_deref(), expected_resume)?;
+    Ok(parsed)
+}
+fn parse_client_hello_unbound(client_hello: &[u8]) -> Result<ClientHelloParsed, HarnessError> {
     validate_handshake_frame_len("client hello", client_hello.len())?;
     let mut cursor = MessageCursor::new(client_hello);
     let msg_type = cursor.read_u8()?;
     match msg_type {
-        HYBRID_CLIENT_HELLO_TYPE => parse_client_hello_nk2(cursor, expected_resume),
-        PQFS_CLIENT_COMMIT_TYPE => parse_client_hello_nk3(cursor, expected_resume),
+        HYBRID_CLIENT_HELLO_TYPE => parse_client_hello_nk2(cursor),
+        PQFS_CLIENT_COMMIT_TYPE => parse_client_hello_nk3(cursor),
         other => Err(HarnessError::Validation(format!(
             "unexpected client hello message type {other:#04x}"
         ))),
     }
 }
+fn validate_client_resume_hash(
+    actual_resume: Option<&[u8]>,
+    expected_resume: Option<&[u8]>,
+) -> Result<(), HarnessError> {
+    match (expected_resume, actual_resume) {
+        (Some(expected), Some(actual)) if actual != expected => {
+            Err(HarnessError::Validation(format!(
+                "client resume hash mismatch (expected {}, got {})",
+                hex::encode(expected),
+                hex::encode(actual)
+            )))
+        }
+        (Some(_), None) => Err(HarnessError::Validation(
+            "client omitted required resume hash".to_string(),
+        )),
+        (None, Some(_)) => Err(HarnessError::Validation(
+            "client supplied unexpected resume hash".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
 fn parse_client_hello_nk2(
     mut cursor: MessageCursor<'_>,
-    expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
     let client_nonce_bytes = cursor.read_len_prefixed()?;
     if client_nonce_bytes.len() != 32 {
@@ -4193,6 +4299,11 @@ fn parse_client_hello_nk2(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
+    if client_nonce.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(
+            "client nonce must not be all zero".to_string(),
+        ));
+    }
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk2Hybrid {
@@ -4209,26 +4320,6 @@ fn parse_client_hello_nk2(
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
     let resume_hash = read_optional_resume_hash(&mut cursor)?;
-    match (expected_resume, resume_hash.as_deref()) {
-        (Some(expected), Some(actual)) if actual != expected => {
-            return Err(HarnessError::Validation(format!(
-                "client resume hash mismatch (expected {}, got {})",
-                hex::encode(expected),
-                hex::encode(actual)
-            )));
-        }
-        (Some(_), None) => {
-            return Err(HarnessError::Validation(
-                "client omitted required resume hash".to_string(),
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(HarnessError::Validation(
-                "client supplied unexpected resume hash".to_string(),
-            ));
-        }
-        _ => {}
-    }
     validate_noise_padding(
         "nk2 client hello",
         cursor.buf.len(),
@@ -4250,7 +4341,6 @@ fn parse_client_hello_nk2(
 }
 fn parse_client_hello_nk3(
     mut cursor: MessageCursor<'_>,
-    expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
     let client_nonce_bytes = cursor.read_len_prefixed()?;
     if client_nonce_bytes.len() != 32 {
@@ -4260,6 +4350,11 @@ fn parse_client_hello_nk3(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
+    if client_nonce.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(
+            "client nonce must not be all zero".to_string(),
+        ));
+    }
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk3PqForwardSecure {
@@ -4277,26 +4372,6 @@ fn parse_client_hello_nk3(
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
     let resume_hash = read_optional_resume_hash(&mut cursor)?;
-    match (expected_resume, resume_hash.as_deref()) {
-        (Some(expected), Some(actual)) if actual != expected => {
-            return Err(HarnessError::Validation(format!(
-                "client resume hash mismatch (expected {}, got {})",
-                hex::encode(expected),
-                hex::encode(actual)
-            )));
-        }
-        (Some(_), None) => {
-            return Err(HarnessError::Validation(
-                "client omitted required resume hash".to_string(),
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(HarnessError::Validation(
-                "client supplied unexpected resume hash".to_string(),
-            ));
-        }
-        _ => {}
-    }
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     validate_exact_field_len(
         "forward commitment",
@@ -4650,11 +4725,9 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     kem_suite: MlKemSuite,
     relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
-    if parsed.client_static_public.is_none() {
-        return Err(HarnessError::Validation(
-            "NK2 handshake requires client static key".into(),
-        ));
-    }
+    let client_static_public = parsed.client_static_public.ok_or_else(|| {
+        HarnessError::Validation("NK2 handshake requires client static key".into())
+    })?;
     let client_forward = parsed.forward_kem_public.clone();
     if client_forward.is_some() {
         return Err(HarnessError::Validation(
@@ -4662,12 +4735,19 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         ));
     }
     let noise = RelayNoiseState::generate(rng)?;
+    let noise_xx_dh = derive_relay_noise_xx_dh(
+        &noise.ephemeral_secret,
+        &noise.static_secret,
+        &parsed.client_ephemeral_public,
+        &client_static_public,
+    )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
         compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: None,
     })?;
@@ -4703,12 +4783,13 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
 }
 /// Required payloads carried by the NK3 client hello message.
 struct Nk3HandshakeRequirements {
+    client_static_public: [u8; NOISE_SECRET_LEN],
     forward_public: Vec<u8>,
     forward_commitment: Vec<u8>,
 }
 impl Nk3HandshakeRequirements {
     fn collect(parsed: &ClientHelloParsed) -> Result<Self, HarnessError> {
-        let _client_static_public = parsed.client_static_public.ok_or_else(|| {
+        let client_static_public = parsed.client_static_public.ok_or_else(|| {
             HarnessError::Validation("NK3 handshake requires client static key".into())
         })?;
         let forward_public = parsed.forward_kem_public.clone().ok_or_else(|| {
@@ -4718,6 +4799,7 @@ impl Nk3HandshakeRequirements {
             HarnessError::Validation("NK3 handshake requires forward commitment".into())
         })?;
         Ok(Self {
+            client_static_public,
             forward_public,
             forward_commitment,
         })
@@ -4758,6 +4840,12 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
+    let noise_xx_dh = derive_relay_noise_xx_dh(
+        &noise.ephemeral_secret,
+        &noise.static_secret,
+        &parsed.client_ephemeral_public,
+        &requirements.client_static_public,
+    )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
     let transcript = compute_relay_transcript(
@@ -4774,6 +4862,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     let (session_key, _) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk3PqForwardSecure,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: Some(forward.shared_secret.as_ref()),
     })?;
@@ -4823,6 +4912,27 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     });
     state.requires_client_finish = false;
     Ok((relay_response, state))
+}
+/// Parse an incoming `ClientHello` for bounded relay-side admission preflight.
+///
+/// The parser validates the canonical NK2/NK3 frame shape, padding, fixed-size
+/// fields, Noise public keys, and aggregate frame bound. It intentionally does
+/// not validate ML-KEM public material, which remains behind admission controls
+/// in [`process_client_hello`]. Resume-hash policy is likewise enforced by the
+/// full handshake once the relay has resolved any authenticated resume binding.
+///
+/// # Errors
+/// Returns an error when the frame is malformed or contains invalid cheap-to-
+/// validate handshake material.
+pub fn inspect_client_hello(client_hello: &[u8]) -> Result<ClientHelloMetadata, HarnessError> {
+    let parsed = parse_client_hello_unbound(client_hello)?;
+    Ok(ClientHelloMetadata {
+        handshake_suite: parsed.handshake_suite,
+        kem_id: parsed.kem_id,
+        sig_id: parsed.sig_id,
+        client_capabilities: parsed.client_capabilities,
+        resume_hash: parsed.resume_hash,
+    })
 }
 /// Parse an incoming `ClientHello` and craft the `RelayHello` response.
 ///
@@ -5005,11 +5115,55 @@ fn build_telemetry_payload(
         .map(String::into_bytes)
         .map_err(HarnessError::from)
 }
+fn checked_x25519_dh(
+    contribution: &str,
+    local_secret: &StaticSecret,
+    peer_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<Zeroizing<[u8; NOISE_SECRET_LEN]>, HarnessError> {
+    let peer_public = X25519PublicKey::from(*peer_public);
+    let shared = local_secret.diffie_hellman(&peer_public);
+    let mut output = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
+    output.copy_from_slice(shared.as_bytes());
+    if constant_time_bytes_eq(output.as_slice(), &[0u8; NOISE_SECRET_LEN]) {
+        return Err(HarnessError::Validation(format!(
+            "Noise XX {contribution} X25519 DH output must not be all zero"
+        )));
+    }
+    Ok(output)
+}
+
+fn derive_client_noise_xx_dh(
+    client_ephemeral_secret: &StaticSecret,
+    client_static_secret: &StaticSecret,
+    relay_ephemeral_public: &[u8; NOISE_SECRET_LEN],
+    relay_static_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<NoiseXxDhSecrets, HarnessError> {
+    Ok(NoiseXxDhSecrets {
+        ee: checked_x25519_dh("ee", client_ephemeral_secret, relay_ephemeral_public)?,
+        es: checked_x25519_dh("es", client_ephemeral_secret, relay_static_public)?,
+        se: checked_x25519_dh("se", client_static_secret, relay_ephemeral_public)?,
+    })
+}
+
+fn derive_relay_noise_xx_dh(
+    relay_ephemeral_secret: &StaticSecret,
+    relay_static_secret: &StaticSecret,
+    client_ephemeral_public: &[u8; NOISE_SECRET_LEN],
+    client_static_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<NoiseXxDhSecrets, HarnessError> {
+    Ok(NoiseXxDhSecrets {
+        ee: checked_x25519_dh("ee", relay_ephemeral_secret, client_ephemeral_public)?,
+        es: checked_x25519_dh("es", relay_static_secret, client_ephemeral_public)?,
+        se: checked_x25519_dh("se", relay_ephemeral_secret, client_static_public)?,
+    })
+}
+
 /// Inputs required to derive session keys and confirmation tags.
 #[derive(Clone, Copy)]
 struct SessionKeyInputs<'a> {
     suite: HandshakeSuite,
     transcript_hash: &'a [u8; 32],
+    noise_xx_dh: &'a NoiseXxDhSecrets,
     primary_shared: &'a [u8],
     forward_shared: Option<&'a [u8]>,
 }
@@ -5019,23 +5173,29 @@ fn derive_session_key_and_confirmation(
     let SessionKeyInputs {
         suite,
         transcript_hash,
+        noise_xx_dh,
         primary_shared,
         forward_shared,
     } = inputs;
-    let (session_label, confirm_label) = match suite {
-        HandshakeSuite::Nk2Hybrid => (
-            b"soranet.handshake.nk2.session.v1",
-            b"soranet.handshake.nk2.confirm.v1",
-        ),
+    let (session_label, confirm_label): (&[u8], &[u8]) = match suite {
+        HandshakeSuite::Nk2Hybrid => (b"soranet.handshake.nk2.session.v1", NK2_CONFIRM_LABEL),
         HandshakeSuite::Nk3PqForwardSecure => (
             b"soranet.handshake.nk3.session.v1",
             b"soranet.handshake.nk3.confirm.v1",
         ),
     };
     let hk = match suite {
-        HandshakeSuite::Nk2Hybrid => {
-            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])?
-        }
+        HandshakeSuite::Nk2Hybrid => hkdf_sha3_256_from_ikm_parts(
+            Some(transcript_hash),
+            &[
+                NOISE_XX_DH_IKM_DOMAIN,
+                noise_xx_dh.ee.as_slice(),
+                noise_xx_dh.es.as_slice(),
+                noise_xx_dh.se.as_slice(),
+                primary_shared,
+                transcript_hash,
+            ],
+        )?,
         HandshakeSuite::Nk3PqForwardSecure => {
             let forward = forward_shared.ok_or_else(|| {
                 HarnessError::Validation(
@@ -5050,6 +5210,10 @@ fn derive_session_key_and_confirmation(
             hkdf_sha3_256_from_ikm_parts(
                 Some(transcript_hash),
                 &[
+                    NOISE_XX_DH_IKM_DOMAIN,
+                    noise_xx_dh.ee.as_slice(),
+                    noise_xx_dh.es.as_slice(),
+                    noise_xx_dh.se.as_slice(),
                     dual_mix.as_slice(),
                     primary_shared,
                     forward,
@@ -5061,19 +5225,10 @@ fn derive_session_key_and_confirmation(
     let mut session_key = Zeroizing::new(vec![0u8; 32]);
     hk.expand(session_label, session_key.as_mut_slice())
         .map_err(|_| HarnessError::Kdf)?;
-    let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
-        let mut confirm = Zeroizing::new(vec![0u8; 32]);
-        let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
-        hk_confirm
-            .expand(NK2_CONFIRM_LABEL, confirm.as_mut_slice())
-            .map_err(|_| HarnessError::Kdf)?;
-        confirm.to_vec()
-    } else {
-        let mut confirm = Zeroizing::new(vec![0u8; 32]);
-        hk.expand(confirm_label, confirm.as_mut_slice())
-            .map_err(|_| HarnessError::Kdf)?;
-        confirm.to_vec()
-    };
+    let mut confirm = Zeroizing::new(vec![0u8; 32]);
+    hk.expand(confirm_label, confirm.as_mut_slice())
+        .map_err(|_| HarnessError::Kdf)?;
+    let confirmation = confirm.to_vec();
     Ok((SessionKey::from_zeroizing_vec(session_key), confirmation))
 }
 fn hkdf_sha3_256_from_ikm_parts(

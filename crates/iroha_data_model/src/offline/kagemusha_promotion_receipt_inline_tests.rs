@@ -71,6 +71,14 @@ fn release_bound_verifier_record(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::similar_names,
+    reason = "StepEq and StepEp are distinct protocol-defined Pasta-cycle parity labels that the fixture must bind explicitly"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the activation fixture binds both verifier parities and every release identity in one coherent object"
+)]
 fn valid_release_activation_fixture() -> (
     KagemushaRecursiveSpendReleaseActivationV4,
     OfflineDeviceAttestationPolicy,
@@ -79,17 +87,17 @@ fn valid_release_activation_fixture() -> (
     let mut activation = release_activation_wire_fixture();
     let policy = device_attestation_policy_wire_fixture();
     let release_policy_source = b"wire-bound release policy".to_vec();
-    let eq_key = VerifyingKeyBox::new(
+    let step_eq_key = VerifyingKeyBox::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
         b"receipt Eq verifier key".to_vec(),
     );
-    let ep_key = VerifyingKeyBox::new(
+    let step_ep_key = VerifyingKeyBox::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
         b"receipt Ep verifier key".to_vec(),
     );
     for (parity, key) in [
-        (KagemushaPastaCycleParityV1::StepEq, &eq_key),
-        (KagemushaPastaCycleParityV1::StepEp, &ep_key),
+        (KagemushaPastaCycleParityV1::StepEq, &step_eq_key),
+        (KagemushaPastaCycleParityV1::StepEp, &step_ep_key),
     ] {
         let profile = activation
             .release_record
@@ -181,20 +189,20 @@ fn valid_release_activation_fixture() -> (
         .promotion_record
         .release_policy_sha256 = digest(&release_policy_source);
     activation.configured_policy_sha256 = digest(&release_policy_source);
-    let (eq_id, eq_record) = release_bound_verifier_record(
+    let (step_eq_id, step_eq_record) = release_bound_verifier_record(
         &activation.release_record.manifest,
         KagemushaPastaCycleParityV1::StepEq,
-        eq_key,
+        step_eq_key,
     );
-    let (ep_id, ep_record) = release_bound_verifier_record(
+    let (step_ep_id, step_ep_record) = release_bound_verifier_record(
         &activation.release_record.manifest,
         KagemushaPastaCycleParityV1::StepEp,
-        ep_key,
+        step_ep_key,
     );
-    activation.step_eq_verifier_key_id = eq_id;
-    activation.step_eq_verifier_record = eq_record;
-    activation.step_ep_verifier_key_id = ep_id;
-    activation.step_ep_verifier_record = ep_record;
+    activation.step_eq_verifier_key_id = step_eq_id;
+    activation.step_eq_verifier_record = step_eq_record;
+    activation.step_ep_verifier_key_id = step_ep_id;
+    activation.step_ep_verifier_record = step_ep_record;
     activation
         .validate_structure()
         .expect("complete release activation fixture");
@@ -525,6 +533,7 @@ fn receipt_anchor_block(block_signer: &KeyPair) -> SignedBlock {
 }
 
 #[cfg(feature = "transparent_api")]
+#[derive(Clone, Copy)]
 struct CompleteReceiptOptions {
     direct_activation: bool,
     alternate_authorization: bool,
@@ -567,6 +576,10 @@ fn sign_expectations_body_unchecked(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture assembles the complete reservation, authorization, transaction, block, and finality receipt chain"
+)]
 fn complete_receipt_fixture_with_options(
     options: CompleteReceiptOptions,
 ) -> CompleteReceiptFixture {
@@ -928,6 +941,10 @@ fn validator_seals_reject_mixed_exact_reservation_generations() {
 
 #[cfg(feature = "transparent_api")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the root expectation audit keeps every signature, provenance, finality, role, and digest splice together"
+)]
 fn root_expectations_authenticate_key_domain_provenance_seals_transaction_anchor_and_digests() {
     let fixture = complete_receipt_fixture(true);
     let verified = KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
@@ -1605,7 +1622,7 @@ fn canary_transaction_fixture(
         body.expires_at_height,
     );
     let mut builder = TransactionBuilder::new(
-        body.binding.network_id.clone(),
+        body.binding.network_id,
         body.canary_authority.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1618,6 +1635,10 @@ fn canary_transaction_fixture(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canary fixture assembles the complete authorization, transaction, evidence, and signed receipt chain"
+)]
 fn complete_canary_fixture() -> CompleteCanaryFixture {
     let receipt = complete_receipt_fixture(true);
     let receipt_bytes = norito::encode_canonical(&receipt.receipt).expect("canonical receipt");
@@ -1808,6 +1829,31 @@ fn canary_permit_expiry_matches_the_bounded_finality_corridor() {
             &receipt_bytes,
         ),
         Err(KagemushaV4TairaCanaryEvidenceValidationError::CanaryTransaction),
+    );
+}
+
+#[cfg(feature = "transparent_api")]
+#[test]
+fn canary_query_rejects_reversed_node_status_observation_times() {
+    let fixture = complete_canary_fixture();
+    let receipt_bytes =
+        norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
+    let mut body = fixture.evidence.body.clone();
+    let before_observed_at_ms = body.query.node_status_before_observed_at_ms;
+    body.query.node_status_before_observed_at_ms = body.query.node_status_after_observed_at_ms;
+    body.query.node_status_after_observed_at_ms = before_observed_at_ms;
+
+    assert_eq!(
+        KagemushaV4TairaCanaryEvidenceV1::try_sign(
+            body,
+            &fixture.receipt.issuer,
+            &fixture.authorization,
+            &fixture.authorization_bytes,
+            &fixture.receipt.expectations,
+            &fixture.receipt.receipt,
+            &receipt_bytes,
+        ),
+        Err(KagemushaV4TairaCanaryEvidenceValidationError::QueryEvidence),
     );
 }
 

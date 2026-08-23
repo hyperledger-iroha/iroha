@@ -55,6 +55,13 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   not accepted. Both suites bind the authenticated directory identity,
   descriptor commitment, exact capability bytes, X25519 material, and ML-KEM
   material before deriving application keys.
+- The classical schedule is contributory rather than cosmetic: both peers
+  derive ordered X25519 `ee`, `es`, and `se` Noise-XX terms, reject any all-zero
+  DH output, and length-prefix all three into the HKDF-SHA3-256 input before the
+  suite's ML-KEM secret material. Changing any one contribution therefore
+  changes the session key. NK2's relay confirmation comes from that same hybrid
+  schedule; NK3's per-KEM confirmation tags remain transcript-bound checks of
+  their respective ML-KEM secrets.
 - Steps:
   1. **QUIC/TLS**: client connects to relay, completes TLS handshake using Ed25519 certificates signed by governance CA. TLS session used for initial key material.
   2. **Hybrid client flight**: the client sends the exact sorted capability

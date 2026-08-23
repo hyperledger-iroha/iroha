@@ -31,7 +31,7 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorAssetBudget,
+        AxtEffectBinding, AxtFastpqBinding, DataSpaceId, FeeSponsorAssetBudget,
         FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
         FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
         LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope,
@@ -45,6 +45,8 @@ use iroha_data_model::{
     state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
+#[cfg(test)]
+use iroha_data_model::nexus::AxtProofEnvelope;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{
     json::Json,

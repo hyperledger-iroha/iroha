@@ -2544,7 +2544,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn space_directory_manifest_fanout_query_fetches_global_window_from_each_shard() {
+fn space_directory_manifest_fanout_query_preserves_coordinator_window_and_filters() {
     let query = routing::SpaceDirectoryManifestQuery {
         dataspace: Some(10),
         status: Some("Active".to_owned()),
@@ -2555,6 +2555,8 @@ fn space_directory_manifest_fanout_query_fetches_global_window_from_each_shard()
 
     let fanout_query = super::space_directory_manifest_fanout_query(&query, 12);
 
+    // This is the coordinator envelope. The routed collector subsequently binds each request to
+    // its route's dataspace and rewrites it to a terminal, bounded one-row page.
     assert_eq!(fanout_query.dataspace, query.dataspace);
     assert_eq!(fanout_query.status, query.status);
     assert_eq!(fanout_query.limit, Some(12));

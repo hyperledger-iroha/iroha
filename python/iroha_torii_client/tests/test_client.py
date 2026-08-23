@@ -1140,7 +1140,7 @@ VPN_QUOTE_SESSION_ID = "44" * 16
 VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
-VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 656
+VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 688
 VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 
 
@@ -1574,14 +1574,14 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
     assert session.calls == []
 
 
-def test_vpn_session_accepts_exact_lowercase_664_byte_helper_ticket() -> None:
+def test_vpn_session_accepts_exact_lowercase_696_byte_helper_ticket() -> None:
     parsed = ToriiClient._parse_vpn_session(
         _vpn_session_payload(),
         context="vpn session response",
     )
 
     assert parsed.helper_ticket_hex == VPN_HELPER_TICKET_HEX
-    assert len(parsed.helper_ticket_hex) == 1328
+    assert len(parsed.helper_ticket_hex) == 1392
 
 
 @pytest.mark.parametrize(
@@ -1600,7 +1600,7 @@ def test_vpn_session_rejects_noncanonical_helper_ticket(helper_ticket_hex: str) 
 
     with pytest.raises(
         RuntimeError,
-        match=r"helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters",
+        match=r"helper_ticket_hex must contain exactly 1392 lowercase hexadecimal characters",
     ):
         ToriiClient._parse_vpn_session(payload, context="vpn session response")
 

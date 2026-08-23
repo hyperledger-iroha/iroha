@@ -926,6 +926,38 @@ fn exit_routing_validation_rejects_plain_http() {
     }
 }
 #[test]
+fn exit_routing_validation_requires_bounded_canonical_gar_categories() {
+    assert!(is_canonical_gar_category_v1("stream.norito.read_only"));
+    assert!(!is_canonical_gar_category_v1("Stream.Norito.ReadOnly"));
+
+    let mut routing = ExitRoutingConfig {
+        norito_stream: Some(NoritoStreamRoutingConfig {
+            torii_ws_url: "wss://localhost:8080/ws".into(),
+            connect_timeout_millis: 0,
+            padding_target_millis: 0,
+            gar_category_read_only: Some("Stream.Norito.ReadOnly".into()),
+            gar_category_authenticated: None,
+            spool_dir: None,
+            route_refresh_secs: 0,
+        }),
+        ..ExitRoutingConfig::default()
+    };
+    let error = routing.validate().expect_err("mixed-case label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
+
+    routing
+        .norito_stream
+        .as_mut()
+        .expect("route retained")
+        .gar_category_read_only = Some("a".repeat(GAR_CATEGORY_MAX_BYTES_V1 + 1));
+    let error = routing.validate().expect_err("oversized label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
+}
+#[test]
 fn exit_routing_validation_rejects_kaigi_plain_http() {
     let mut routing = ExitRoutingConfig {
         kaigi_stream: Some(KaigiStreamRoutingConfig {

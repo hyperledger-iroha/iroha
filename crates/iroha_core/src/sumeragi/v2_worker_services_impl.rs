@@ -1,4 +1,26 @@
+/// Read-only worker/corridor snapshot for pending-Kura Apply diagnostics.
+#[cfg(test)]
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct PendingKuraApplyIoSnapshotV1 {
+    queued_commands: usize,
+    tracked_queued: usize,
+    tracked_active: usize,
+    tracked_completion_pending: usize,
+    completion_owners: usize,
+    local_completions: usize,
+    held_completion: bool,
+}
+
 impl ProductionV2Services {
+    /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
+        matches!(
+            self.held_io_completion.as_ref(),
+            Some(V2IoCompletion::CertifiedFetchBodyPersisted(_))
+        )
+    }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
@@ -424,16 +446,16 @@ impl ProductionV2Services {
 
     /// Freeze output/worker cuts for one preencoded recovered-Completion plan
     /// until typed selection or explicit no-selection completion.
-    pub(in crate::sumeragi) fn capture_recovered_completion_capacity_census(
+    pub(in crate::sumeragi) fn capture_lifecycle_completion_capacity_census(
         &self,
-        probes: Vec<RecoveredCompletionCapacityProbeV1>,
-    ) -> Result<RecoveredCompletionCapacityCensusV1<'_>, String> {
+        probes: Vec<LifecycleCompletionCapacityProbeV1>,
+    ) -> Result<LifecycleCompletionCapacityCensusV1<'_>, String> {
         let io = self
             .io
             .as_ref()
-            .ok_or_else(|| "recovered Completion census requires the launched worker".to_owned())?;
+            .ok_or_else(|| "lifecycle Completion census requires the launched worker".to_owned())?;
         if probes.is_empty() || self.exact_output_handoff_owner.is_sealed() {
-            return Err("recovered Completion census has no live service cut".to_owned());
+            return Err("lifecycle Completion census has no live service cut".to_owned());
         }
         let mut candidates = BTreeMap::new();
         let mut validate_keys = BTreeSet::new();
@@ -442,67 +464,78 @@ impl ProductionV2Services {
         let mut fetch_keys = BTreeSet::new();
         for probe in probes {
             let (ordinal, candidate) = match probe {
-                RecoveredCompletionCapacityProbeV1::Validate { ordinal, key } => {
-                    if !key.matches_height_context(&self.context) || !validate_keys.insert(key) {
+                LifecycleCompletionCapacityProbeV1::Validate { ordinal, key } => {
+                    if key.lifecycle_ordinal() != ordinal
+                        || !key.matches_height_context(&self.context)
+                        || !validate_keys.insert(key)
+                    {
                         return Err(
-                            "recovered Completion census changed a Validate dispatch key"
+                            "lifecycle Completion census changed a Validate dispatch key"
                                 .to_owned(),
                         );
                     }
                     (
                         ordinal,
-                        RecoveredCompletionPreparedCapacityV1::Validate {
+                        LifecycleCompletionPreparedCapacityV1::Validate {
                             key,
                             available: false,
                         },
                     )
                 }
-                RecoveredCompletionCapacityProbeV1::Apply {
+                LifecycleCompletionCapacityProbeV1::Apply {
                     ordinal,
                     key,
                     executor_available,
                 } => {
-                    if !key.matches_height_context(&self.context) || !apply_keys.insert(key) {
+                    if key.lifecycle_ordinal() != ordinal
+                        || !key.matches_height_context(&self.context)
+                        || !apply_keys.insert(key)
+                    {
                         return Err(
-                            "recovered Completion census changed an Apply dispatch key".to_owned()
+                            "lifecycle Completion census changed an Apply dispatch key".to_owned()
                         );
                     }
                     (
                         ordinal,
-                        RecoveredCompletionPreparedCapacityV1::Apply {
+                        LifecycleCompletionPreparedCapacityV1::Apply {
                             key,
                             available: executor_available,
                         },
                     )
                 }
-                RecoveredCompletionCapacityProbeV1::Sign { ordinal, key } => {
-                    if !key.matches_height_context(&self.context) || !sign_keys.insert(key) {
+                LifecycleCompletionCapacityProbeV1::Sign { ordinal, key } => {
+                    if key.lifecycle_ordinal() != ordinal
+                        || !key.matches_height_context(&self.context)
+                        || !sign_keys.insert(key)
+                    {
                         return Err(
-                            "recovered Completion census changed a Sign dispatch key".to_owned()
+                            "lifecycle Completion census changed a Sign dispatch key".to_owned()
                         );
                     }
                     (
                         ordinal,
-                        RecoveredCompletionPreparedCapacityV1::Sign {
+                        LifecycleCompletionPreparedCapacityV1::Sign {
                             key,
                             available: false,
                         },
                     )
                 }
-                RecoveredCompletionCapacityProbeV1::Fetch {
+                LifecycleCompletionCapacityProbeV1::Fetch {
                     ordinal,
                     owner,
                     executor_available,
                 } => {
-                    if !fetch_keys.insert(owner.dispatch_key()) {
+                    if owner.dispatch_key().lifecycle_ordinal() != ordinal
+                        || !fetch_keys.insert(owner.dispatch_key())
+                    {
                         return Err(
-                            "recovered Completion census repeated a Fetch dispatch key".to_owned()
+                            "lifecycle Completion census repeated a Fetch dispatch key".to_owned()
                         );
                     }
                     let fanout = self.recovered_decision_fetch_fanout(&owner)?;
                     (
                         ordinal,
-                        RecoveredCompletionPreparedCapacityV1::Fetch {
+                        LifecycleCompletionPreparedCapacityV1::Fetch {
                             owner,
                             fanout,
                             available: executor_available,
@@ -511,16 +544,16 @@ impl ProductionV2Services {
                 }
             };
             if candidates.insert(ordinal, candidate).is_some() {
-                return Err("recovered Completion census repeated one Ready ordinal".to_owned());
+                return Err("lifecycle Completion census repeated one Ready ordinal".to_owned());
             }
         }
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "recovered Completion census requires restart".to_owned())?;
+            .ok_or_else(|| "lifecycle Completion census requires restart".to_owned())?;
         let pending = self.lock_pending_exact_output()?;
         let state = io.command_tx.queue.lock();
-        let mut census = RecoveredCompletionCapacityCensusV1 {
+        let mut census = LifecycleCompletionCapacityCensusV1 {
             operation: Some(operation),
             pending: Some(pending),
             queue: io.command_tx.queue.as_ref(),
@@ -535,7 +568,7 @@ impl ProductionV2Services {
                 .as_ref()
                 .is_none_or(|state| !state.sender_open || !state.receiver_open)
         {
-            return Err("recovered Completion service cut closed during capture".to_owned());
+            return Err("lifecycle Completion service cut closed during capture".to_owned());
         }
         census.worker_predecessor_debt = u64::try_from(
             census
@@ -545,7 +578,7 @@ impl ProductionV2Services {
                 .commands
                 .len(),
         )
-        .map_err(|_| "recovered Completion worker debt overflowed".to_owned())?;
+        .map_err(|_| "lifecycle Completion worker debt overflowed".to_owned())?;
         census.output_predecessor_debt = u64::try_from(
             census
                 .pending
@@ -554,7 +587,7 @@ impl ProductionV2Services {
                 .fanouts
                 .len(),
         )
-        .map_err(|_| "recovered Completion output debt overflowed".to_owned())?;
+        .map_err(|_| "lifecycle Completion output debt overflowed".to_owned())?;
         let state = census
             .state
             .as_ref()
@@ -565,37 +598,37 @@ impl ProductionV2Services {
             .expect("armed census retains its output cut");
         for candidate in census.candidates.values_mut() {
             match candidate {
-                RecoveredCompletionPreparedCapacityV1::Validate { key, available } => {
+                LifecycleCompletionPreparedCapacityV1::Validate { key, available } => {
                     if state.lifecycle_validates.contains_key(key) {
                         return Err(
-                            "recovered Completion Validate is already worker-owned".to_owned()
+                            "lifecycle Completion Validate is already worker-owned".to_owned()
                         );
                     }
                     *available = io
                         .command_tx
                         .queue
-                        .recovered_completion_worker_capacity(state);
+                        .lifecycle_completion_worker_capacity(state);
                 }
-                RecoveredCompletionPreparedCapacityV1::Apply { key, available } => {
-                    if state.recovered_decision_applies.contains_key(key) {
-                        return Err("recovered Completion Apply is already worker-owned".to_owned());
+                LifecycleCompletionPreparedCapacityV1::Apply { key, available } => {
+                    if state.lifecycle_decision_applies.contains_key(key) {
+                        return Err("lifecycle Completion Apply is already worker-owned".to_owned());
                     }
                     *available = *available
                         && io
                             .command_tx
                             .queue
-                            .recovered_completion_worker_capacity(state);
+                            .lifecycle_completion_worker_capacity(state);
                 }
-                RecoveredCompletionPreparedCapacityV1::Sign { key, available } => {
+                LifecycleCompletionPreparedCapacityV1::Sign { key, available } => {
                     if state.recovered_lifecycle_signs.contains_key(key) {
-                        return Err("recovered Completion Sign is already worker-owned".to_owned());
+                        return Err("lifecycle Completion Sign is already worker-owned".to_owned());
                     }
                     *available = io
                         .command_tx
                         .queue
-                        .recovered_completion_worker_capacity(state);
+                        .lifecycle_completion_worker_capacity(state);
                 }
-                RecoveredCompletionPreparedCapacityV1::Fetch {
+                LifecycleCompletionPreparedCapacityV1::Fetch {
                     fanout, available, ..
                 } => {
                     *available = *available
@@ -649,7 +682,7 @@ impl ProductionV2Services {
             && self.kura.get_durable_block_hash(height) == Some(expected.block_hash())
     }
 
-    fn owns_recovered_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
+    fn owns_lifecycle_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
         self.io
             .as_ref()
             .is_some_and(|io| Arc::ptr_eq(&io.command_tx.queue, queue))
@@ -1002,7 +1035,8 @@ impl ProductionV2Services {
             || !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)
         {
             return Err(
-                "Sumeragi v2 recovered Apply service changed lifecycle identity".to_owned(),
+                "Sumeragi v2 lifecycle Decision Apply service changed lifecycle identity"
+                    .to_owned(),
             );
         }
         Self::start_inner(
@@ -1166,6 +1200,8 @@ impl ProductionV2Services {
             exact_output_handoff_owner,
             #[cfg(test)]
             exact_output_admission_hook: None,
+            #[cfg(test)]
+            consensus_broadcasts: Vec::new(),
             active_tag: initial_tag,
             last_status: None,
             fatal_reason: None,
@@ -2286,7 +2322,7 @@ impl ProductionV2Services {
         if self.held_io_completion.as_ref().is_some_and(|completion| {
             matches!(
                 completion,
-                V2IoCompletion::RecoveredDecisionApply(_)
+                V2IoCompletion::LifecycleDecisionApply(_)
                     | V2IoCompletion::RecoveredLifecycleSign(_)
                     | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
                     | V2IoCompletion::LifecycleValidate(_)
@@ -2310,7 +2346,7 @@ impl ProductionV2Services {
             && io
                 .completion_ownership_at(ownership_position)
                 .is_some_and(|owned| {
-                    owned.recovered_decision_apply.is_some()
+                    owned.lifecycle_decision_apply.is_some()
                         || owned.recovered_lifecycle_sign.is_some()
                         || owned.recovered_decision_fetch.is_some()
                         || owned.lifecycle_validate.is_some()
@@ -2339,7 +2375,7 @@ impl ProductionV2Services {
         };
         if matches!(
             &completion,
-            V2IoCompletion::RecoveredDecisionApply(_)
+            V2IoCompletion::LifecycleDecisionApply(_)
                 | V2IoCompletion::RecoveredLifecycleSign(_)
                 | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
                 | V2IoCompletion::LifecycleValidate(_)
@@ -2580,30 +2616,30 @@ impl ProductionV2Services {
                     },
                 ))
             }
-            V2IoCompletion::RecoveredDecisionApply(guarded) => {
+            V2IoCompletion::LifecycleDecisionApply(guarded) => {
                 let key = guarded.result().dispatch_key();
                 let work_ack = match self.io.as_ref().ok_or_else(|| {
-                    "recovered Decision Apply completion lost its I/O service owner".to_owned()
+                    "lifecycle Decision Apply completion lost its I/O service owner".to_owned()
                 }) {
                     Ok(io) => match io
-                        .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))
+                        .prepare_lifecycle_decision_apply_ack(key, Arc::clone(&self.output_guard))
                     {
                         Ok(work_ack) => work_ack,
                         Err(error) => {
                             self.held_io_completion =
-                                Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                                Some(V2IoCompletion::LifecycleDecisionApply(guarded));
                             return Err(error);
                         }
                     },
                     Err(error) => {
                         self.held_io_completion =
-                            Some(V2IoCompletion::RecoveredDecisionApply(guarded));
+                            Some(V2IoCompletion::LifecycleDecisionApply(guarded));
                         return Err(error);
                     }
                 };
                 self.next_completion_source = CompletionSource::Local;
                 Ok(LifecycleCompletionTakeV1::Apply(
-                    PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack },
+                    PreparedLifecycleDecisionApplyCompletionV1 { guarded, work_ack },
                 ))
             }
             V2IoCompletion::RecoveredLifecycleSign(guarded) => {
@@ -2911,11 +2947,11 @@ impl ProductionV2Services {
                         }
                     }
                     PendingServiceCompletion::Io {
-                        completion: V2IoCompletion::RecoveredDecisionApply(_),
+                        completion: V2IoCompletion::LifecycleDecisionApply(_),
                         ..
                     } => {
                         return Err(executor.external_service_failed(
-                            "recovered Decision Apply completion crossed the generic executor drain",
+                            "lifecycle Decision Apply completion crossed the generic executor drain",
                             self,
                         ));
                     }
@@ -3063,7 +3099,7 @@ impl ProductionV2Services {
                     | V2IoCompletionAcknowledgement::LifecycleValidateRetained => false,
                     V2IoCompletionAcknowledgement::Work(_)
                     | V2IoCompletionAcknowledgement::LifecycleWorkRetained
-                    | V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+                    | V2IoCompletionAcknowledgement::LifecycleDecisionApplyRetained
                     | V2IoCompletionAcknowledgement::Untracked => true,
                 };
                 if acknowledge && let Some(io) = self.io.as_ref() {
@@ -3243,7 +3279,7 @@ impl ProductionV2Services {
                     }
                     Err(
                         V2IoTrySendError::ConflictingWorkId { .. }
-                        | V2IoTrySendError::UnreservedRecoveredDecisionApply { .. },
+                        | V2IoTrySendError::UnreservedLifecycleDecisionApply { .. },
                     ) => {
                         unreachable!("retirement commands do not carry work identifiers")
                     }
@@ -3376,6 +3412,78 @@ impl ProductionV2Services {
     /// Return whether fail-stop output handling requires a process restart.
     pub(in crate::sumeragi) fn exact_output_restart_required_for_test(&self) -> bool {
         self.output_guard.restart_required()
+    }
+    /// Snapshot ordinary Apply worker ownership without taking any queue item.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn pending_kura_apply_io_snapshot_for_test(
+        &self,
+    ) -> Option<PendingKuraApplyIoSnapshotV1> {
+        let io = self.io.as_ref()?;
+        let state = io.command_tx.queue.lock();
+        let queued_commands = state
+            .commands
+            .iter()
+            .filter(|command| matches!(command, V2IoCommand::Apply(_)))
+            .count();
+        let tracked = |expected| {
+            state
+                .work
+                .values()
+                .filter(|tracked| {
+                    matches!(tracked.descriptor, V2IoWorkDescriptor::Apply { .. })
+                        && tracked.state == expected
+                })
+                .count()
+        };
+        let snapshot = PendingKuraApplyIoSnapshotV1 {
+            queued_commands,
+            tracked_queued: tracked(V2IoWorkState::Queued),
+            tracked_active: tracked(V2IoWorkState::Active),
+            tracked_completion_pending: tracked(V2IoWorkState::CompletionPending),
+            completion_owners: io.admission.completion_snapshot(Instant::now()).depth,
+            local_completions: self.local_completions.len(),
+            held_completion: self.held_io_completion.is_some(),
+        };
+        drop(state);
+        Some(snapshot)
+    }
+    /// Count accepted service calls carrying this exact canonical consensus envelope.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn consensus_broadcast_count_for_test(
+        &self,
+        expected: &wire::ConsensusMessageV2,
+    ) -> usize {
+        self.consensus_broadcasts
+            .iter()
+            .filter(|message| *message == expected)
+            .count()
+    }
+    /// Count all retained exact fanouts and those carrying one exact PrepareQC.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn pending_exact_prepare_qc_fanouts_for_test(
+        &self,
+        expected: &wire::QuorumCertificate,
+    ) -> Result<(usize, usize), String> {
+        let expected = Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(expected.clone()),
+        ))?;
+        let expected_hash = HashOf::new(&expected);
+        let remote_voters = self.remote_voters();
+        self.lock_pending_exact_output().map(|pending| {
+            let matching = pending
+                .fanouts
+                .iter()
+                .filter(|fanout| {
+                    matches!(fanout.message_hashes.as_slice(), [hash] if *hash == expected_hash)
+                        && fanout.semantic_peers() == remote_voters
+                        && matches!(
+                            &fanout.rollover_claim,
+                            ExactOutputRolloverClaim::GlobalV2(_)
+                        )
+                })
+                .count();
+            (pending.fanouts.len(), matching)
+        })
     }
     /// Hold one auxiliary I/O unit without fabricating a queue command.
     #[cfg(test)]

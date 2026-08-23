@@ -403,7 +403,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1:
             "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",
             "--bin",
             "kagemusha_recursive_spend_v4_bundle",
-            "final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
+            "final_release_inventory_is_exact_and_includes_both_receipts",
         ],
         fuzz_target: None,
     },
@@ -1514,7 +1514,7 @@ pub(crate) mod tests {
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
-        signed_receipt_with_tracked_lock_for_v4_candidate(
+        signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
             candidate,
             finalized_manifest,
             finalized_manifest
@@ -1526,7 +1526,7 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn signed_receipt_with_tracked_lock_for_v4_candidate(
+    pub(crate) fn signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         tracked_cargo_lock_sha256: [u8; 32],
@@ -1568,6 +1568,7 @@ pub(crate) mod tests {
             "data-model-post-canary-wire-splices",
             "workspace-tests",
             "workspace-strict-clippy",
+            "core-final-release-inventory",
             "connect-bridge-production-release-kat",
             "fuzz-release-bundle-parser",
             "fuzz-recursive-topology",
@@ -1601,6 +1602,10 @@ pub(crate) mod tests {
                 .filter(|argument| **argument == "--locked")
                 .count(),
             1
+        );
+        assert_eq!(
+            command("core-final-release-inventory").argv.last(),
+            Some(&"final_release_inventory_is_exact_and_includes_both_receipts")
         );
     }
 

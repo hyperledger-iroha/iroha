@@ -1,6 +1,5 @@
-
-            seiyaku Demo {
-                view fn inspect() -> int {
-                    return 7;
-                }
-            }
+seiyaku Demo {
+    view fn inspect() -> int {
+        return 7;
+    }
+}

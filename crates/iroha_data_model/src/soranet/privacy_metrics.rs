@@ -425,7 +425,7 @@ impl norito::json::JsonDeserialize for SoranetPrivacySuppressionReasonV1 {
     }
 }
 /// Privacy-preserving telemetry event ingested by the secure aggregator.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventV1 {
@@ -437,7 +437,7 @@ pub struct SoranetPrivacyEventV1 {
     pub kind: SoranetPrivacyEventKindV1,
 }
 /// Enumeration of privacy telemetry event kinds.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(DeriveJsonSerialize, DeriveJsonDeserialize),
@@ -526,12 +526,13 @@ pub struct SoranetPrivacyEventVerifiedBytesV1 {
     pub bytes: u128,
 }
 /// Payload describing a GAR abuse category report.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventGarAbuseCategoryV1 {
-    /// Raw GAR category label (hashed before aggregation).
-    pub label: String,
+    /// Truncated BLAKE3 digest of the canonical GAR category label.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub category_hash: [u8; 8],
 }
 /// Handshake failure classification surfaced by telemetry events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -778,6 +779,27 @@ mod handshake_failure_tests {
                 .has_canonical_reason()
             );
         }
+    }
+}
+#[cfg(test)]
+mod gar_event_tests {
+    use super::*;
+
+    #[test]
+    fn fixed_gar_category_hash_roundtrips_through_norito() {
+        let event = SoranetPrivacyEventV1 {
+            timestamp_unix: 1_723_456_789,
+            mode: SoranetPrivacyModeV1::Exit,
+            kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
+                SoranetPrivacyEventGarAbuseCategoryV1 {
+                    category_hash: [0xA5; 8],
+                },
+            ),
+        };
+        let encoded = event.encode();
+        let decoded = SoranetPrivacyEventV1::decode_all(&mut encoded.as_slice())
+            .expect("fixed-hash GAR event must decode");
+        assert_eq!(decoded, event);
     }
 }
 #[cfg(all(test, feature = "json"))]

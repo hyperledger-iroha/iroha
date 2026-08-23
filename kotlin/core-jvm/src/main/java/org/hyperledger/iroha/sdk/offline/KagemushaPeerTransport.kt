@@ -113,6 +113,9 @@ object KagemushaPeerTextCodec {
             require(archive.size <= KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES) {
                 "Kagemusha peer archive exceeds its bound"
             }
+            require(archive.size <= KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES) {
+                "Kagemusha peer archive exceeds the text transport bound"
+            }
             val value = payload.kind.textPrefix + base64UrlEncode(archive)
             require(value.toByteArray(Charsets.UTF_8).size <=
                 KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES
@@ -140,6 +143,9 @@ object KagemushaPeerTextCodec {
         val archive = base64UrlDecode(body)
             ?: throw IllegalArgumentException("Kagemusha peer text is not canonical Base64URL")
         try {
+            require(archive.size <= KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES) {
+                "Kagemusha peer archive exceeds the text transport bound"
+            }
             require(kind.textPrefix + base64UrlEncode(archive) == value) {
                 "Kagemusha peer text is not canonical"
             }

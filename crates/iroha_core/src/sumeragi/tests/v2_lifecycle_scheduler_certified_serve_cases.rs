@@ -10,11 +10,12 @@ use crate::sumeragi::{
     v2_lifecycle_coordinator::{
         AdmissionDecision, AdmissionRequest, LifecycleCoordinator, LifecycleState,
         LifecycleWorkClass, authority,
-        ledger::LifecycleLedgerV1,
+        ledger::{LifecycleLedgerStoreV1, LifecycleLedgerV1},
         projection,
         work_registry::{
-            ClaimedCertifiedServeDispatchErrorV1, ConcreteLifecycleWorkRegistry,
-            ConcreteWorkAddress, PreparedCertifiedServeRegistryBatchV1,
+            CertifiedServeRegistryBatchPublicationError, ClaimedCertifiedServeDispatchErrorV1,
+            ConcreteLifecycleWorkRegistry, ConcreteWorkAddress,
+            PreparedCertifiedServeRegistryBatchV1,
         },
     },
     v2_transport::{AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request},
@@ -237,30 +238,130 @@ impl ServeSchedulerFixture {
 }
 
 #[test]
-fn certified_serve_registry_accepts_adjacent_pair_after_runtime_ordinal_gap() {
-    let mut fixture = ServeSchedulerFixture::new(0x11);
-    assert_eq!(
-        fixture
-            .ordinal_authority
-            .reserve_range(3)
-            .expect("reserve runtime ordinal prefix"),
-        (Some(1), Some(4))
-    );
-    let request = fixture.admit(0, 0x12);
-    let serve = fixture
+fn certified_serve_registry_accepts_an_actor_global_gap_but_rejects_backfill() {
+    let mut fixture = ServeSchedulerFixture::new(0x18);
+    let ledger_directory =
+        tempfile::TempDir::new().expect("temporary actor-global-gap lifecycle ledger");
+    fixture
         .coordinator
-        .records
-        .values()
-        .find(|record| {
-            fixture.coordinator.durable_records[&record.ordinal]
-                .replay_authority
-                .exactly_matches_certified_serve_request(&request)
-        })
-        .expect("find gapped Certified-Serve row");
-    let producer = fixture.coordinator.producer_debts[&serve.ordinal];
-    assert_eq!(serve.ordinal, 4);
-    assert_eq!(producer, 5);
-    assert_eq!(serve.ordinal.checked_add(1), Some(producer));
+        .attach_empty_test_ledger(ledger_directory.path())
+        .expect("attach the exact empty lifecycle ledger");
+    let runtime_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            fixture.ordinal_authority.clone(),
+        );
+    runtime_ordinals
+        .advance_past(13)
+        .expect("reserve the actor-global prefix outside durable lifecycle work");
+    let request = fixture.authenticated_request(0, 0x28);
+    let receipt = fixture
+        .payload_store
+        .persist_pending_with_verified_retention(&fixture.verified, &fixture.keys[0], &request)
+        .expect("persist the exact gapped Certified-Serve request");
+    let prepared = projection::prepare_certified_serve_admission(
+        fixture.coordinator.active_context(),
+        &fixture.verified,
+        &request,
+        receipt,
+    )
+    .expect("prepare the exact gapped Certified-Serve admission");
+    let (candidate, replay) = prepared.into_candidate_and_replay();
+    let serve_key = candidate.key;
+    let mut staged = fixture.coordinator.stage_durable_transaction();
+    let (decision, ordinal_reservation) =
+        staged.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate));
+    assert!(matches!(
+        decision,
+        AdmissionDecision::Admitted {
+            ordinal: 14,
+            producer_turn_ordinal: Some(15),
+            ..
+        }
+    ));
+    let ordinal_reservation =
+        ordinal_reservation.expect("gapped Serve owns one adjacent durable reservation");
+    let batch =
+        PreparedCertifiedServeRegistryBatchV1::from_fresh_admitted_pair(&staged, serve_key, replay)
+            .unwrap_or_else(|_| panic!("seal the exact gapped Serve/Producer registry pair"));
+
+    let mut backfill = fixture.coordinator.clone();
+    backfill.high_water = 14;
+    let backfill_before = format!("{backfill:?}");
+    let publication_called = std::cell::Cell::new(false);
+    let batch = match fixture
+        .registry
+        .install_certified_serve_fresh_batch_before_publication(
+            batch,
+            &fixture.verified,
+            &backfill,
+            &staged,
+            || {
+                publication_called.set(true);
+                Ok::<(), ()>(())
+            },
+        ) {
+        Err(CertifiedServeRegistryBatchPublicationError::Preflight(batch)) => batch,
+        Err(CertifiedServeRegistryBatchPublicationError::Publication(_, _)) => {
+            panic!("backfill must fail before publication")
+        }
+        Ok(()) => panic!("a durable Serve ordinal cannot backfill the current high-water mark"),
+    };
+    assert!(!publication_called.get());
+    assert_eq!(format!("{backfill:?}"), backfill_before);
+    assert_eq!(fixture.registry.len(), 0);
+
+    publication_called.set(false);
+    assert_eq!(
+        runtime_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect the fenced actor-global cursor"),
+        Some(14)
+    );
+    let mut logical_current = fixture.coordinator.clone();
+    logical_current.lifecycle_ordinal_authority = None;
+    let current_before = format!("{logical_current:?}");
+    fixture
+        .registry
+        .install_certified_serve_fresh_batch_before_publication(
+            batch,
+            &fixture.verified,
+            &fixture.coordinator,
+            &staged,
+            || {
+                publication_called.set(true);
+                fixture
+                    .coordinator
+                    .persist_exact_staged_successor_with_ordinal_reservation(
+                        &staged,
+                        &ordinal_reservation,
+                    )
+            },
+        )
+        .unwrap_or_else(|_| panic!("publish the exact actor-global Serve/Producer gap"));
+    assert!(publication_called.get());
+    let mut logical_current = fixture.coordinator.clone();
+    logical_current.lifecycle_ordinal_authority = None;
+    assert_eq!(format!("{logical_current:?}"), current_before);
+    assert_eq!(fixture.registry.len(), 2);
+    fixture.coordinator = staged;
+    assert_eq!(fixture.coordinator.high_water, 15);
+    assert!(
+        fixture
+            .registry
+            .exactly_covers_all_live_work(&fixture.verified, &fixture.coordinator)
+    );
+    assert_eq!(
+        runtime_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect the committed actor-global cursor"),
+        Some(16)
+    );
+    let (_, persisted) = LifecycleLedgerStoreV1::open(
+        ledger_directory.path(),
+        fixture.coordinator.active_context(),
+    )
+    .expect("reopen the exact gapped Serve/Producer ledger");
+    assert_eq!(persisted.high_water(), 15);
 }
 
 #[test]

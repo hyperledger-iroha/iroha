@@ -6,9 +6,9 @@ read-only two-file TLAPM projection, Java, and Python 3.9 or newer. Outputs are
 create-only. Every child receives a closed environment, separate stdout and
 stderr regular files, a new process group, a timeout, and process-group cleanup.
 
-V1 receipts are diagnostic only.  The repository's SSH Git verifier authenticates
-source commits, not the canonical replay receipt and its execution artifacts, so
-source attestations are deliberately not accepted as release-receipt signatures.
+The collector emits the exact V1 detached-SSH release-signing payload. It never
+reads a private key and cannot promote its own output. Release acceptance
+requires an external OpenSSH SSHSIG over the canonical ``receipt.json`` bytes.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ import subprocess
 import sys
 import time
 from typing import Any, Iterable, Union
+
+from sumeragi_v2_replay_signing import SIGNING_CONTRACT
 
 
 SCHEMA_NAME = "iroha-sumeragi-v2-replay-receipt-v1"
@@ -562,9 +564,12 @@ def _source_paths(root: Path) -> list[Path]:
         "scripts/formal/check_sumeragi_v2_replay_receipt.py",
         "scripts/formal/check_sumeragi_v2_replay_trace.sh",
         "scripts/formal/collect_sumeragi_v2_replay_receipt.py",
+        "scripts/formal/finalize_sumeragi_v2_replay_receipt.py",
         "scripts/formal/resolve_java.sh",
         "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json",
+        "scripts/formal/sumeragi_v2_replay_signing.py",
         "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+        "scripts/formal/verify_sumeragi_v2_replay_release.py",
     ]
     return sorted({root / item for item in relative} | set(tla_source_closure(formal_dir)))
 
@@ -951,12 +956,7 @@ def collect(args: argparse.Namespace) -> Path:
                 f"replay counts differ: states={state_count}, actions={action_count}"
             )
 
-        signing = {
-            "status": "unsigned-diagnostic",
-            "provider": None,
-            "release_evidence": False,
-            "attestation": None,
-        }
+        signing = dict(SIGNING_CONTRACT)
 
         for snapshot in source_snapshots:
             _require_unchanged(snapshot)
@@ -972,7 +972,7 @@ def collect(args: argparse.Namespace) -> Path:
         receipt = {
             "schema": SCHEMA_NAME,
             "schema_version": 1,
-            "evidence_class": "diagnostic",
+            "evidence_class": "release-receipt",
             "mode": args.mode,
             "runner": {
                 "path": "scripts/formal/collect_sumeragi_v2_replay_receipt.py",
@@ -1009,7 +1009,7 @@ def collect(args: argparse.Namespace) -> Path:
             },
             "events": events,
             "result": {
-                "accepted": True,
+                "execution_validated": True,
                 "sany_status": 0,
                 "tlc_status": 12,
                 "normalizer_status": 0,

@@ -9,6 +9,40 @@ pub(in crate::sumeragi) struct PreparedLifecycleOutputRecoveryV1 {
     entries: BTreeMap<u128, super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1>,
 }
 
+/// Copy seal for one cold-open Broadcast retained outside the concrete registry.
+///
+/// The move-only executable effect stays in [`PreparedLifecycleOutputRecoveryV1`].
+/// This seal carries only the exact logical coordinates needed to keep that
+/// output passive in a full scheduler census until its dedicated settlement
+/// transaction can execute it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadyRecoveredLifecycleBroadcastAttestationV1 {
+    owner: super::OwnerId,
+    ordinal: u128,
+    key: super::LifecycleKey,
+    stage: super::LifecycleStage,
+    slot: super::PhysicalSlotId,
+    digest: super::LifecycleDigest,
+}
+
+impl ReadyRecoveredLifecycleBroadcastAttestationV1 {
+    /// Rejoin this seal to the unchanged Ready row before scheduler input minting.
+    pub(super) fn matches_ready_record(self, record: &super::LifecycleRecord) -> bool {
+        record.owner == self.owner
+            && record.ordinal == self.ordinal
+            && record.key == self.key
+            && record.work_class == super::LifecycleWorkClass::Broadcast
+            && record.stage == self.stage
+            && record.state == super::LifecycleState::Ready
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&self.slot) == Some(&self.digest)
+            && record.episode.slot_universe.len() == 1
+            && record.episode.slot_universe.contains(&self.slot)
+            && record.episode.consumed_slots == record.episode.slot_universe
+            && record.episode.frozen_predecessors.is_empty()
+    }
+}
+
 impl PreparedLifecycleOutputRecoveryV1 {
     fn assemble(
         ledger: &LifecycleLedgerV1,
@@ -196,6 +230,49 @@ impl super::ProductionLifecycleOwnerV1 {
         self.recovered_lifecycle_outputs
             .as_ref()
             .is_some_and(|outputs| !outputs.entries.is_empty())
+    }
+
+    /// Authenticate one Ready cold-open Broadcast retained outside the registry.
+    ///
+    /// Absence is not authority: callers must separately prove that the exact
+    /// concrete registry address is also absent before accepting this carrier.
+    pub(super) fn attest_ready_recovered_lifecycle_broadcast(
+        &self,
+        ordinal: u128,
+    ) -> Option<ReadyRecoveredLifecycleBroadcastAttestationV1> {
+        let output = self
+            .recovered_lifecycle_outputs
+            .as_ref()?
+            .entries
+            .get(&ordinal)?;
+        let candidate = output.candidate();
+        if candidate.work_class != super::LifecycleWorkClass::Broadcast
+            || !self.coordinator.ready_index.contains(&ordinal)
+            || !recovered_output_matches_ready_coordinator(
+                &self.verified,
+                &self.coordinator,
+                output,
+            )
+        {
+            return None;
+        }
+        let (physical, universe, consumed) = candidate.physical_geometry.normalized().ok()?;
+        let (&slot, &digest) = physical.first_key_value()?;
+        if physical.len() != 1
+            || universe.len() != 1
+            || !universe.contains(&slot)
+            || consumed != universe
+        {
+            return None;
+        }
+        Some(ReadyRecoveredLifecycleBroadcastAttestationV1 {
+            owner: output.owner(),
+            ordinal,
+            key: candidate.key,
+            stage: candidate.stage,
+            slot,
+            digest,
+        })
     }
 
     /// Execute and terminalize the oldest eligible authenticated cold output.

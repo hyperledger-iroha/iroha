@@ -1,7 +1,7 @@
 error: unused `MustUse` that must be used
- --> tests/ui_fail/must_use_not_used.rs:6:5
+ --> tests/ui_fail/must_use_not_used.rs:4:5
   |
-6 |     MustUse::new(5);
+4 |     MustUse::new(5);
   |     ^^^^^^^^^^^^^^^
   |
 note: the lint level is defined here
@@ -11,5 +11,5 @@ note: the lint level is defined here
   |         ^^^^^^^^^^^^^^^
 help: use `let _ = ...` to ignore the resulting value
   |
-6 |     let _ = MustUse::new(5);
+4 |     let _ = MustUse::new(5);
   |     +++++++

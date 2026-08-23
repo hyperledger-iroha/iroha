@@ -1505,7 +1505,6 @@ pub(super) mod tests {
     }
 
     #[expect(
-        clippy::too_many_arguments,
         clippy::too_many_lines,
         reason = "the fixture exposes every consensus identity that the evidence must pin"
     )]

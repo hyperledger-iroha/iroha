@@ -1,6 +1,10 @@
+seiyaku Greeter {
+    state int Counter;
+    hajimari(int value) {
+        Counter = value;
+    }
 
-                seiyaku Greeter {
-                    state int Counter;
-                    hajimari(int value) { Counter = value; }
-                    view fn status() -> int { return Counter; }
-                }
+    view fn status() -> int {
+        return Counter;
+    }
+}

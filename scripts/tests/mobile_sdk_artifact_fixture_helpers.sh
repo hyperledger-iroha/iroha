@@ -698,4 +698,3 @@ SETTINGS
   cp "$SCRIPT_DIR/../java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java" \
     "$keymint_source"
 }
-

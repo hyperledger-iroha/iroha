@@ -834,7 +834,7 @@ pub struct PersistentTokenStore {
     high_watermark: SystemTime,
     records: HashMap<[u8; 32], TokenRecord>,
     dirty: bool,
-    _ledger_lock: ExclusiveLedgerLock,
+    ledger_lock: ExclusiveLedgerLock,
 }
 impl PersistentTokenStore {
     /// Load or create a persistent token store at `path`.
@@ -864,14 +864,14 @@ impl PersistentTokenStore {
             high_watermark: now.max(UNIX_EPOCH),
             records: HashMap::new(),
             dirty: true,
-            _ledger_lock: ledger_lock,
+            ledger_lock,
         };
         store.load_from_disk(now)?;
         Ok(store)
     }
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TokenStoreError> {
         let bytes = match read_optional_bounded_regular_file(
-            self._ledger_lock.custody(),
+            self.ledger_lock.custody(),
             self.limits.max_snapshot_bytes(),
             "token replay snapshot",
         ) {
@@ -1015,7 +1015,7 @@ impl PersistentTokenStore {
             entries,
         };
         let tmp = create_temporary_direct_regular_file(
-            self._ledger_lock.custody(),
+            self.ledger_lock.custody(),
             "temporary token replay snapshot",
         )
         .map_err(|err| TokenStoreError::Io(err.to_string()))?;
@@ -1030,10 +1030,10 @@ impl PersistentTokenStore {
         tmp.as_file()
             .sync_all()
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
-        persist_temporary_snapshot(tmp, self._ledger_lock.custody(), "token replay snapshot")
+        persist_temporary_snapshot(tmp, self.ledger_lock.custody(), "token replay snapshot")
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         #[cfg(unix)]
-        self._ledger_lock
+        self.ledger_lock
             .custody()
             .sync_parent()
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
@@ -1890,7 +1890,7 @@ mod tests {
             .expect("verify");
     }
     #[test]
-    fn admission_token_verifier_preflight_matrix() {
+    fn admission_token_verifier_rejects_invalid_public_keys_at_construction() {
         let id = TOKEN_CASES[2].0;
         let err = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
@@ -1923,6 +1923,10 @@ mod tests {
             }
             other => panic!("{id}: expected ML-DSA public-key config error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_malformed_public_key_before_replay() {
         let id = TOKEN_CASES[12].0;
         let mut fixture =
             minted_token_with_expectation(0x0BAD_5EED, 300, "ML-DSA keypair generation");
@@ -1947,6 +1951,10 @@ mod tests {
             0,
             "{id}"
         );
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_malformed_signatures_before_replay() {
         let id = TOKEN_CASES[13].0;
         let mut fixture = minted_token_with_expectation(0x51A, 300, "ML-DSA keypair generation");
         fixture
@@ -1982,6 +1990,10 @@ mod tests {
             0,
             "{id}"
         );
+    }
+
+    #[test]
+    fn admission_token_verifier_rejects_inert_signature_before_replay() {
         let id = TOKEN_CASES[15].0;
         let mut fixture = minted_token_with_expectation(0x5A, 300, "ML-DSA keypair generation");
         fixture.token.signature.fill(0);

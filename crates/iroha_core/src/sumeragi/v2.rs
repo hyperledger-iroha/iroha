@@ -56,8 +56,11 @@ use super::{
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
         DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
         ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
-        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerError,
-        LifecycleLedgerV1, LifecycleWorkRegistryHolder, LiveValidateApplyRegistryReservation,
+        InvalidBodyReportReplayEvidenceV1, LifecycleContext,
+        LifecycleDecisionApplyCompletionProjectionPermitV1,
+        LifecycleDecisionApplyDispatchIdentityV1, LifecycleDecisionApplyDispatchKeyV1,
+        LifecycleDecisionApplyLineageV1, LifecycleDigest, LifecycleLedgerError, LifecycleLedgerV1,
+        LifecycleWorkRegistryHolder, LiveValidateApplyRegistryReservation,
         LiveValidateApplyWorkProjectionPermit, LiveValidateReportRegistryReservation,
         LiveValidateReportWorkProjectionPermit, LiveValidateSignRegistryReservation,
         LiveValidateSignWorkProjectionPermit, LocalProposalIntentReplayEvidenceV1,
@@ -68,15 +71,13 @@ use super::{
         ProductionRecoveredWalStorageError, PublishedFinalizedLifecycleRetainedFloorV1,
         ReadyRejectedAdapterAuthority, ReadyValidateApplyPredecessorAuthority,
         ReadyValidateSignPredecessorAuthority, ReadyValidatedAdapterAuthority,
-        RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyCompletionProjectionPermit,
-        RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
-        RecoveredDecisionApplyPendingLineageV1, RecoveredDecisionApplyRegistryProjectionPermit,
-        RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
-        RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
-        RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
-        RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
-        SealedLiveWalPersistedEffectV1, SealedValidateApplyProjectionPermit,
-        SealedValidateSignProjectionPermit,
+        RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyPendingLineageV1,
+        RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchStoreProjectionV1,
+        RecoveredLifecycleNextWalVoteSealV1, RecoveredWalControlReplayEvidenceV1,
+        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
+        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
+        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
+        SealedValidateApplyProjectionPermit, SealedValidateSignProjectionPermit,
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -1432,6 +1433,31 @@ impl ProductionLifecycleAdapterStartupV1 {
             },
         })
     }
+
+    /// Exercise the sealed certified-body replay join without exposing the
+    /// production startup state enum to focused descendant tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn replay_certified_body_pipeline_for_test(
+        adapter: SumeragiV2Adapter,
+        effects: Vec<AdapterEffect>,
+        steps: &[CertifiedBodyPipelineColdReplayStepV1],
+    ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), &'static str> {
+        let replayed = Self::recovered(adapter, effects).replay_certified_body_pipeline(steps)?;
+        match replayed.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply: None,
+                local_proposal_attempt: None,
+                leader_wire_launch_prepared: false,
+            } => Ok((adapter, effects)),
+            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
+            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                Err("certified-body test replay retained foreign startup ownership")
+            }
+        }
+    }
+
     /// Compare the sealed adapter startup with one exact verified owner.
     pub(in crate::sumeragi) fn authorizes_verified_context(
         &self,
@@ -2139,10 +2165,6 @@ impl ProductionLifecycleOwnerStartupErrorV1 {
     fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
         Self { kind }
     }
-    /// Classify a pending-Kura join that did not open the recovered Apply branch.
-    pub(in crate::sumeragi) fn pending_kura_recovered_apply(reason: &'static str) -> Self {
-        Self::new(ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(reason))
-    }
 }
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
 ///
@@ -2619,6 +2641,46 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
     }
 }
 // RECOVERED_WAL_VOTE_SIGN_SEAL_END
+impl ProductionLifecycleAdapterStartupV1 {
+    /// Consume one pristine recovered Apply startup into its exact runtime for
+    /// executor-lineage non-substitution tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_lifecycle_apply_runtime_for_lineage_test(
+        mut self,
+        lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
+    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
+        match &mut self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+                ..
+            } if effects.is_empty()
+                && pending_kura_apply.is_none()
+                && local_proposal_attempt.is_none()
+                && !*leader_wire_launch_prepared =>
+            {
+                *leader_wire_launch_prepared = true;
+            }
+            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
+            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                panic!("lineage test requires one pristine recovered Apply startup")
+            }
+        }
+        let (runtime, pending_kura_apply, local_proposal_attempt) = self
+            .into_serialized_runtime(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+                lifecycle_ordinals,
+            )
+            .expect("open exact recovered Apply runtime for lineage test");
+        assert!(pending_kura_apply.is_none());
+        assert!(local_proposal_attempt.is_none());
+        runtime
+    }
+}
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_BEGIN
 /// Fully opened recovered-WAL startup after adapter status publication.
 ///
@@ -3960,15 +4022,50 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyRegistryCarrierV1 {
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
 }
-/// Exact recovered Apply completion projected by the installed registry carrier.
-/// Finality remains bound to the exact Apply tag and dispatch key.
-#[must_use = "recovered Apply completion authority must enter the adapter preview"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
+/// Exact lifecycle Apply completion projected by the installed registry carrier.
+/// Finality remains bound to the exact lineage, Apply tag, and dispatch key.
+#[must_use = "lifecycle Apply completion authority must enter the adapter preview"]
+pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
     tag: reducer::EventTag,
     subject: wire::BlockSubject,
-    dispatch_key: RecoveredDecisionApplyDispatchKeyV1,
+    dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
+}
+impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
+    /// Return the immutable registry lineage without exposing completion material.
+    pub(in crate::sumeragi) const fn lineage(&self) -> LifecycleDecisionApplyLineageV1 {
+        self.dispatch_key.lineage()
+    }
+    /// Return the complete immutable worker/registry ownership key.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
+        self.dispatch_key
+    }
+    /// Return the reducer incarnation authorized by the installed carrier.
+    pub(in crate::sumeragi) const fn tag(&self) -> reducer::EventTag {
+        self.tag
+    }
+    /// Return the exact decided block subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+    /// Borrow the Kura receipt checked against the installed carrier.
+    pub(in crate::sumeragi) const fn receipt(&self) -> &KuraV2CommitReceipt {
+        &self.receipt
+    }
+    /// Borrow the finality artifact checked against the installed carrier.
+    pub(in crate::sumeragi) const fn artifact(&self) -> &wire::finality::V2FinalityArtifact {
+        &self.artifact
+    }
+
+    /// Replace only the dispatch lineage for closed executor non-substitution tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn substitute_dispatch_lineage_for_test(
+        &mut self,
+        lineage: LifecycleDecisionApplyLineageV1,
+    ) {
+        self.dispatch_key = self.dispatch_key.with_lineage_for_test(lineage);
+    }
 }
 /// Adapter-private one-shot permit for unpacking a guarded recovered Sign result.
 ///
@@ -5740,39 +5837,39 @@ impl PreparedRecoveredLifecycleSignAdapterCompletionV1<'_> {
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, effect_count);
     }
 }
-/// Borrow-bound adapter successor for one registry-owned recovered Apply.
+/// Borrow-bound adapter successor for one registry-owned lifecycle Apply.
 ///
 /// Preparation executes `ApplicationCompleted` only on cloned reducer and
 /// registry state. The exact state and precomputed status remain inert until
 /// LedgerV1 and the concrete registry terminal transition have committed.
-#[must_use = "prepared recovered Apply completion has not crossed LedgerV1"]
-pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyAdapterCompletionV1<'a> {
+#[must_use = "prepared lifecycle Apply completion has not crossed LedgerV1"]
+pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyAdapterCompletionV1<'a> {
     adapter: &'a mut SumeragiV2Adapter,
     next_reducer: reducer::Reducer,
     next_registry: WireRegistry,
     event: reducer::Event,
     next_fence_generation: u64,
-    dispatch_key: RecoveredDecisionApplyDispatchKeyV1,
+    dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
 }
 /// Post-Ledger finality values emitted only by the fixed adapter commit.
-#[must_use = "recovered Apply finality must be installed in the exact executor"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterFinalityV1 {
-    dispatch_key: RecoveredDecisionApplyDispatchKeyV1,
+#[must_use = "lifecycle Apply finality must be installed in the exact executor"]
+pub(in crate::sumeragi) struct LifecycleDecisionApplyAdapterFinalityV1 {
+    dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
     tag: reducer::EventTag,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
     committed_status: wire::SumeragiV2Status,
 }
-impl RecoveredDecisionApplyAdapterFinalityV1 {
+impl LifecycleDecisionApplyAdapterFinalityV1 {
     /// Consume this terminal only for the exact executor-owned finality install.
     pub(in crate::sumeragi) fn consume_for_executor(
         self,
-        _permit: super::v2_effects::RecoveredDecisionApplyExecutorFinalityPermitV1,
+        _permit: super::v2_effects::LifecycleDecisionApplyExecutorFinalityPermitV1,
     ) -> (
-        RecoveredDecisionApplyDispatchKeyV1,
+        LifecycleDecisionApplyDispatchKeyV1,
         reducer::EventTag,
         KuraV2CommitReceipt,
         wire::finality::V2FinalityArtifact,
@@ -6102,10 +6199,16 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     /// Project a registry identity and exact Apply material into the worker task.
     pub(in crate::sumeragi) fn project_recovered_apply_task(
         &self,
-        identity: RecoveredDecisionApplyDispatchIdentityV1,
-    ) -> Option<super::v2_apply::RecoveredDecisionApplyTaskV1> {
+        identity: LifecycleDecisionApplyDispatchIdentityV1,
+        address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    ) -> Option<super::v2_apply::LifecycleDecisionApplyTaskV1> {
         if !self.exact_body_binding()
-            || !identity.matches_carrier(self.context, self.installed_digest())
+            || !identity.matches_carrier(
+                self.context,
+                address,
+                self.installed_digest(),
+                LifecycleDecisionApplyLineageV1::Recovered,
+            )
         {
             return None;
         }
@@ -6117,14 +6220,12 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         else {
             return None;
         };
-        Some(
-            super::v2_apply::RecoveredDecisionApplyTaskV1::from_registry_projection(
-                identity,
-                *tag,
-                *subject,
-                certificate.clone(),
-                self.validated_receipt.clone(),
-            ),
+        super::v2_apply::LifecycleDecisionApplyTaskV1::from_recovered_registry_projection(
+            identity,
+            *tag,
+            *subject,
+            certificate.clone(),
+            self.validated_receipt.clone(),
         )
     }
     /// Bind one applied worker result back to this exact installed carrier.
@@ -6134,13 +6235,16 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     /// Kura receipt, and finality artifact before any adapter state is staged.
     pub(in crate::sumeragi) fn project_recovered_apply_completion(
         &self,
-        permit: RecoveredDecisionApplyCompletionProjectionPermit,
-        completion: &super::v2_apply::RecoveredDecisionApplyCompletionV1,
-    ) -> Option<RecoveredDecisionApplyAdapterCompletionAuthorityV1> {
+        permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
+        address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+        completion: &super::v2_apply::LifecycleDecisionApplyCompletionV1,
+    ) -> Option<LifecycleDecisionApplyAdapterCompletionAuthorityV1> {
         self.exact_body_binding().then_some(())?;
-        RecoveredDecisionApplyAdapterCompletionAuthorityV1::from_registry_projection(
+        project_lifecycle_decision_apply_completion(
             permit,
+            LifecycleDecisionApplyLineageV1::Recovered,
             self.context,
+            address,
             self.installed_digest(),
             &self.apply_effect,
             &self.validated_receipt,
@@ -6148,7 +6252,78 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         )
     }
 }
-impl PreparedRecoveredDecisionApplyAdapterCompletionV1<'_> {
+
+/// Project a live Validate successor's guarded Apply result without exposing
+/// the retained candidate, pending owner, or registry carrier.
+pub(in crate::sumeragi) fn project_live_decision_apply_completion(
+    permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
+    context: LifecycleContext,
+    address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    installed_digest: LifecycleDigest,
+    effect: &AdapterEffect,
+    validated_receipt: &ValidatedBodyReceipt,
+    completion: &super::v2_apply::LifecycleDecisionApplyCompletionV1,
+) -> Option<LifecycleDecisionApplyAdapterCompletionAuthorityV1> {
+    project_lifecycle_decision_apply_completion(
+        permit,
+        LifecycleDecisionApplyLineageV1::Live,
+        context,
+        address,
+        installed_digest,
+        effect,
+        validated_receipt,
+        completion,
+    )
+}
+
+fn project_lifecycle_decision_apply_completion(
+    _permit: LifecycleDecisionApplyCompletionProjectionPermitV1,
+    lineage: LifecycleDecisionApplyLineageV1,
+    context: LifecycleContext,
+    address: super::v2_lifecycle_coordinator::ConcreteWorkAddress,
+    installed_digest: LifecycleDigest,
+    effect: &AdapterEffect,
+    validated_receipt: &ValidatedBodyReceipt,
+    completion: &super::v2_apply::LifecycleDecisionApplyCompletionV1,
+) -> Option<LifecycleDecisionApplyAdapterCompletionAuthorityV1> {
+    let AdapterEffect::Apply {
+        tag,
+        subject,
+        certificate,
+    } = effect
+    else {
+        return None;
+    };
+    let key = completion.dispatch_key();
+    let artifact = completion.artifact();
+    let receipt = completion.receipt();
+    if !key.matches_carrier(context, address, installed_digest, lineage)
+        || completion.subject() != *subject
+        || completion.certificate() != certificate
+        || completion.validated_receipt() != validated_receipt
+        || certificate.execution_commitment != validated_receipt.execution_commitment()
+        || artifact.validate().is_err()
+        || !key.matches_height_context(&artifact.height_context)
+        || artifact.subject != *subject
+        || &artifact.commit_qc != certificate
+        || receipt.height() != artifact.height_context.height
+        || receipt.context_id() != artifact.height_context.id()
+        || receipt.block_hash() != subject.block_hash
+        || receipt.subject() != *subject
+        || receipt.certificate() != certificate.as_ref()
+        || receipt.artifact_hash() != HashOf::new(artifact)
+    {
+        return None;
+    }
+    Some(LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
+        tag: *tag,
+        subject: *subject,
+        dispatch_key: key,
+        receipt: receipt.clone(),
+        artifact: artifact.clone(),
+    })
+}
+impl PreparedLifecycleDecisionApplyAdapterCompletionV1<'_> {
     /// Install the already-checked reducer successor after durable settlement.
     ///
     /// This method contains only infallible moves and accounting. It returns a
@@ -6156,7 +6331,7 @@ impl PreparedRecoveredDecisionApplyAdapterCompletionV1<'_> {
     /// synthesizing `RuntimeEffectOwnership` or an `EffectWorkId`.
     pub(in crate::sumeragi) fn commit_after_durable_settlement(
         self,
-    ) -> RecoveredDecisionApplyAdapterFinalityV1 {
+    ) -> LifecycleDecisionApplyAdapterFinalityV1 {
         let Self {
             adapter,
             next_reducer,
@@ -6170,14 +6345,14 @@ impl PreparedRecoveredDecisionApplyAdapterCompletionV1<'_> {
         } = self;
         let tag = match &event {
             reducer::Event::ApplicationCompleted { tag, .. } => *tag,
-            _ => unreachable!("recovered Apply preview retains ApplicationCompleted"),
+            _ => unreachable!("lifecycle Decision Apply preview retains ApplicationCompleted"),
         };
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
         adapter.reducer_fence_generation = next_fence_generation;
         adapter.record_reducer_outcome(&event, reducer::StepDisposition::Applied, &[]);
         adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 0);
-        RecoveredDecisionApplyAdapterFinalityV1 {
+        LifecycleDecisionApplyAdapterFinalityV1 {
             dispatch_key,
             tag,
             receipt,
@@ -9119,10 +9294,10 @@ pub(crate) enum AdapterError {
         "Sumeragi v2 recovered Decision Apply fast-forward violated its closed reducer contract"
     )]
     RecoveredDecisionApplyFastForwardMismatch,
-    /// A registry-owned recovered Apply completion changed its exact durable
+    /// A registry-owned lifecycle Decision Apply completion changed its exact durable
     /// body, CommitQC, Kura receipt, finality artifact, or reducer successor.
-    #[error("Sumeragi v2 recovered Decision Apply completion violated its closed contract")]
-    RecoveredDecisionApplyCompletionMismatch,
+    #[error("Sumeragi v2 lifecycle Decision Apply completion violated its closed contract")]
+    LifecycleDecisionApplyCompletionMismatch,
     /// A lifecycle-owned recovered Sign completion changed its exact worker
     /// request, signature, Proposal payload, reducer fence, or closed successor shape.
     #[error("Sumeragi v2 recovered Sign completion violated its closed contract")]
@@ -13817,17 +13992,17 @@ impl SumeragiV2Adapter {
         let subject = self.registry.register_subject(subject)?;
         self.step(reducer::Event::ApplicationCompleted { tag, subject })
     }
-    /// Preview the sole registry-owned recovered Apply completion.
+    /// Preview the sole registry-owned lifecycle Decision Apply completion.
     ///
     /// The adapter transition runs on cloned reducer and registry state. The
     /// returned token keeps the exclusive adapter borrow and can install that
     /// exact state only after lifecycle LedgerV1 publication succeeds.
-    pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
+    pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(
         &mut self,
-        authority: RecoveredDecisionApplyAdapterCompletionAuthorityV1,
-    ) -> Result<PreparedRecoveredDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
+        authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
+    ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
         self.ensure_ingress()?;
-        let RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
+        let LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
             tag,
             subject,
             dispatch_key,
@@ -13845,7 +14020,7 @@ impl SumeragiV2Adapter {
             || receipt.certificate() != artifact.commit_qc.as_ref()
             || receipt.artifact_hash() != HashOf::new(&artifact)
         {
-            return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
+            return Err(AdapterError::LifecycleDecisionApplyCompletionMismatch);
         }
         let mut next_registry = self.registry.clone();
         let core_subject = next_registry.register_subject(subject)?;
@@ -13866,7 +14041,7 @@ impl SumeragiV2Adapter {
             || next_reducer.awaiting_signature().is_some()
             || !next_reducer.ready_to_finish()
         {
-            return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
+            return Err(AdapterError::LifecycleDecisionApplyCompletionMismatch);
         }
         let next_fence = ReducerFenceProjection {
             pending_persistence: next_reducer.pending_persistence_record().cloned(),
@@ -13892,7 +14067,7 @@ impl SumeragiV2Adapter {
         core::mem::swap(&mut self.registry, &mut next_registry);
         core::mem::swap(&mut self.reducer, &mut next_reducer);
         let committed_status = committed_status?;
-        Ok(PreparedRecoveredDecisionApplyAdapterCompletionV1 {
+        Ok(PreparedLifecycleDecisionApplyAdapterCompletionV1 {
             adapter: self,
             next_reducer,
             next_registry,
@@ -18025,4 +18200,51 @@ mod tests {
     include!("tests/v2_adapter_main_02.rs");
     include!("tests/v2_adapter_main_03.rs");
     include!("tests/v2_adapter_main_04.rs");
+
+    /// Open one genuine recovered Decision Apply owner for cross-lineage tests.
+    #[cfg(feature = "bls")]
+    pub(in crate::sumeragi) fn recovered_decision_apply_owner_for_lineage_test(
+        marker: u8,
+    ) -> (
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let local_signer =
+            iroha_crypto::KeyPair::try_from_seed(vec![1; 32], iroha_crypto::Algorithm::BlsNormal)
+                .expect("deterministic recovered Decision Apply lineage fixture signer");
+        let safety = tempfile::TempDir::new()
+            .expect("temporary recovered Decision Apply lineage fixture WAL");
+        let storage = tempfile::TempDir::new()
+            .expect("temporary recovered Decision Apply lineage fixture stores");
+        let (startup, body_store) = write_decision_startup_with_body_marker(
+            &safety,
+            &storage.path().join("body"),
+            marker,
+            DecisionBodyMarkerFixture::Validated,
+        );
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| {
+                panic!("authenticate recovered Decision Apply lineage fixture: {error}")
+            });
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal recovered Decision Apply lineage fixture body store");
+        let owner = authenticated
+            .open_production_lifecycle_owner_v1_with_store_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &storage.path().join("ledger"),
+                &storage.path().join("serve"),
+                body_store,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("open recovered Decision Apply lineage fixture: {error}")
+            });
+        (owner, safety, storage)
+    }
 }
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use tests::recovered_decision_apply_owner_for_lineage_test;

@@ -1308,7 +1308,7 @@ fn space_directory_manifest_row_status(row: &Map) -> Result<&'static str, Respon
 }
 #[cfg(feature = "app_api")]
 fn merged_space_directory_manifests_response(
-    payloads: Vec<Value>,
+    payloads: Vec<(RoutingDecision, Value)>,
     offset: u64,
     limit: Option<u64>,
     fanout_incomplete: bool,
@@ -1328,16 +1328,15 @@ fn merged_space_directory_manifests_response(
                 "space-directory manifest merge requires a canonical expected UAID",
             )
         })?;
-    let shard_row_limit = match limit {
+    let _page_window = match limit {
         Some(limit) => offset.checked_add(limit).ok_or_else(|| {
             torii_internal_json_error("space-directory manifest page window overflows")
         })?,
         None => u64::MAX,
     };
-    let mut upstream_has_more = fanout_incomplete;
-    let mut shard_count_mode = None;
+    let upstream_has_more = fanout_incomplete;
     let mut row_count = 0_usize;
-    for payload in &payloads {
+    for (route, payload) in &payloads {
         let object = payload.as_object().ok_or_else(|| {
             torii_internal_json_error(
                 "expected JSON object payload while merging space-directory manifests",
@@ -1361,24 +1360,11 @@ fn merged_space_directory_manifests_response(
                     "space-directory manifest pages must include boolean `has_more`",
                 )
             })?;
-        upstream_has_more |= has_more;
-        let count_mode = match object.get("count_mode").and_then(Value::as_str) {
-            Some("exact") => "exact",
-            Some("bounded") => "bounded",
-            _ => {
-                return Err(torii_internal_json_error(
-                    "space-directory manifest pages must include a supported `count_mode`",
-                ));
-            }
-        };
-        if shard_count_mode.is_some_and(|existing| existing != count_mode) {
-            return Err(torii_proxy_error_response(
-                StatusCode::CONFLICT,
-                "route_conflict",
-                "multiple dataspaces returned conflicting manifest count modes",
+        if object.get("count_mode").and_then(Value::as_str) != Some("bounded") {
+            return Err(torii_internal_json_error(
+                "route-scoped space-directory manifest pages must use bounded counting",
             ));
         }
-        shard_count_mode = Some(count_mode);
         let total = object.get("total").and_then(Value::as_u64).ok_or_else(|| {
             torii_internal_json_error(
                 "space-directory manifest pages must include unsigned `total`",
@@ -1394,22 +1380,12 @@ fn merged_space_directory_manifests_response(
                 )
             })?;
         let returned = u64::try_from(rows.len()).unwrap_or(u64::MAX);
-        if returned > shard_row_limit {
+        if has_more || total > 1 || returned > 1 {
             return Err(torii_internal_json_error(
-                "space-directory manifest shard returned more rows than the requested prefix",
+                "a route-scoped manifest page cannot contain or advertise multiple rows",
             ));
         }
-        if has_more && returned != shard_row_limit {
-            return Err(torii_internal_json_error(
-                "a continuing space-directory manifest shard must return the full requested prefix",
-            ));
-        }
-        if requested_dataspace.is_some() && (has_more || total > 1 || returned > 1) {
-            return Err(torii_internal_json_error(
-                "a dataspace-filtered manifest page cannot contain or advertise multiple rows",
-            ));
-        }
-        if total < returned || (!has_more && total != returned) || (has_more && total <= returned) {
+        if total != returned {
             return Err(torii_internal_json_error(
                 "space-directory manifest page metadata is inconsistent with its rows",
             ));
@@ -1425,6 +1401,13 @@ fn merged_space_directory_manifests_response(
                     "space-directory manifests must include `dataspace_id`",
                 ));
             };
+            if dataspace_id != route.dataspace_id.as_u64() {
+                return Err(torii_proxy_error_response(
+                    StatusCode::CONFLICT,
+                    "route_conflict",
+                    "a route returned a space-directory manifest owned by another dataspace",
+                ));
+            }
             if previous_dataspace.is_some_and(|previous| previous >= dataspace_id) {
                 return Err(torii_internal_json_error(
                     "space-directory manifest shard rows must be strictly ordered by dataspace",
@@ -1444,7 +1427,7 @@ fn merged_space_directory_manifests_response(
     budget.admit_merge_btree::<u64, (Vec<u8>, Value)>(1, row_count)?;
     let mut uaid: Option<String> = None;
     let mut manifests = BTreeMap::<u64, (Vec<u8>, Value)>::new();
-    for payload in payloads {
+    for (route, payload) in payloads {
         let Value::Object(mut object) = payload else {
             return Err(torii_internal_json_error(
                 "expected JSON object payload while merging space-directory manifests",
@@ -1511,6 +1494,13 @@ fn merged_space_directory_manifests_response(
                     "space-directory manifests must include `dataspace_id`",
                 ));
             };
+            if dataspace_id != route.dataspace_id.as_u64() {
+                return Err(torii_proxy_error_response(
+                    StatusCode::CONFLICT,
+                    "route_conflict",
+                    "a route returned a space-directory manifest owned by another dataspace",
+                ));
+            }
             if !matches!(
                 object.get("dataspace_alias"),
                 Some(Value::Null | Value::String(_))
@@ -1779,14 +1769,26 @@ mod routed_read_merge_regression_tests {
         total: u64,
         has_more: bool,
         count_mode: &'static str,
-    ) -> Value {
+    ) -> (RoutingDecision, Value) {
+        let route_dataspace = rows
+            .first()
+            .and_then(Value::as_object)
+            .and_then(|row| row.get("dataspace_id"))
+            .and_then(Value::as_u64)
+            .unwrap_or(DataSpaceId::UNIVERSAL.as_u64());
         let mut payload = Map::new();
         payload.insert("uaid".to_owned(), Value::from(test_manifest_uaid_literal()));
         payload.insert("total".to_owned(), Value::from(total));
         payload.insert("has_more".to_owned(), Value::from(has_more));
         payload.insert("count_mode".to_owned(), Value::from(count_mode));
         payload.insert("manifests".to_owned(), Value::Array(rows));
-        Value::Object(payload)
+        (
+            RoutingDecision::new(
+                iroha_data_model::nexus::LaneId::SINGLE,
+                DataSpaceId::new(route_dataspace),
+            ),
+            Value::Object(payload),
+        )
     }
 
     fn assert_invalid_manifest_proxy_response(response: &Response) {
@@ -1818,7 +1820,7 @@ mod routed_read_merge_regression_tests {
             assert_eq!(requested, expected);
             assert_eq!(shard_query.count_mode.as_deref(), Some("bounded"));
             assert_eq!(shard_query.offset, Some(0));
-            assert_eq!(shard_query.limit, Some(5));
+            assert_eq!(shard_query.limit, Some(1));
         }
 
         let query = routing::SpaceDirectoryManifestQuery {
@@ -1831,6 +1833,26 @@ mod routed_read_merge_regression_tests {
             .expect("a filtered manifest fanout has a one-row shard prefix");
         assert_eq!(shard_query.offset, Some(0));
         assert_eq!(shard_query.limit, Some(1));
+
+        let route = RoutingDecision::new(
+            iroha_data_model::nexus::LaneId::new(9),
+            DataSpaceId::new(42),
+        );
+        let route_query = space_directory_manifest_query_for_route(
+            &routing::SpaceDirectoryManifestQuery {
+                status: Some("inactive".to_owned()),
+                limit: Some(99),
+                offset: Some(88),
+                count_mode: Some("exact".to_owned()),
+                ..routing::SpaceDirectoryManifestQuery::default()
+            },
+            route,
+        );
+        assert_eq!(route_query.dataspace, Some(42));
+        assert_eq!(route_query.status.as_deref(), Some("inactive"));
+        assert_eq!(route_query.offset, Some(0));
+        assert_eq!(route_query.limit, Some(1));
+        assert_eq!(route_query.count_mode.as_deref(), Some("bounded"));
     }
 
     #[test]
@@ -1891,8 +1913,8 @@ mod routed_read_merge_regression_tests {
         assert_eq!(payload["manifests"].as_array().map(Vec::len), Some(1));
     }
 
-    #[tokio::test]
-    async fn space_directory_manifest_merge_marks_partial_prefix_as_bounded() {
+    #[test]
+    fn space_directory_manifest_merge_rejects_nonterminal_route_page() {
         let payload =
             test_manifest_payload(vec![test_manifest_row(7, "Active", 1)], 2, true, "bounded");
         let expected_uaid = test_manifest_uaid_literal();
@@ -1908,14 +1930,8 @@ mod routed_read_merge_regression_tests {
             "proxy",
             test_budget(),
         )
-        .expect("a partial shard prefix should merge successfully");
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("manifest merge response body");
-        let payload: Value = norito::json::from_slice(&body).expect("manifest merge response JSON");
-        assert_eq!(payload["total"].as_u64(), Some(1));
-        assert_eq!(payload["has_more"].as_bool(), Some(true));
-        assert_eq!(payload["count_mode"].as_str(), Some("bounded"));
+        .expect_err("a one-dataspace route must return a terminal zero-or-one-row page");
+        assert_invalid_manifest_proxy_response(&response);
     }
 
     #[tokio::test]
@@ -2001,10 +2017,41 @@ mod routed_read_merge_regression_tests {
     }
 
     #[test]
+    fn space_directory_manifest_merge_rejects_cross_route_rows() {
+        let expected_uaid = test_manifest_uaid_literal();
+        let mut payload =
+            test_manifest_payload(vec![test_manifest_row(7, "Active", 1)], 1, false, "bounded");
+        payload.0 =
+            RoutingDecision::new(iroha_data_model::nexus::LaneId::new(8), DataSpaceId::new(8));
+        let response = merged_space_directory_manifests_response(
+            vec![payload],
+            0,
+            Some(1),
+            false,
+            "exact",
+            None,
+            routing::SpaceDirectoryManifestStatus::All,
+            &expected_uaid,
+            "proxy",
+            test_budget(),
+        )
+        .expect_err("a route must not return another dataspace's manifest");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_conflict")
+        );
+    }
+
+    #[test]
     fn space_directory_manifest_merge_rejects_the_wrong_uaid() {
         let mut payload =
             test_manifest_payload(vec![test_manifest_row(7, "Active", 1)], 1, false, "bounded");
         payload
+            .1
             .as_object_mut()
             .expect("payload object")
             .insert("uaid".to_owned(), Value::from("uaid:wrong"));
@@ -2037,6 +2084,7 @@ mod routed_read_merge_regression_tests {
         let row = test_manifest_row(7, "Active", 1);
         let mut missing_total = test_manifest_payload(vec![row.clone()], 1, false, "bounded");
         missing_total
+            .1
             .as_object_mut()
             .expect("payload object")
             .remove("total");
@@ -2044,6 +2092,7 @@ mod routed_read_merge_regression_tests {
         let false_continuation = test_manifest_payload(vec![row.clone()], 1, true, "bounded");
         let mut unknown_page_field = test_manifest_payload(vec![row], 1, false, "bounded");
         unknown_page_field
+            .1
             .as_object_mut()
             .expect("payload object")
             .insert("untrusted".to_owned(), Value::Bool(true));
@@ -2378,24 +2427,10 @@ mod routed_read_merge_regression_tests {
         let expected_uaid = test_manifest_uaid_literal();
         let response = merged_space_directory_manifests_response(
             vec![
-                test_manifest_payload(
-                    vec![
-                        test_manifest_row(1, "Active", 1),
-                        test_manifest_row(3, "Active", 1),
-                    ],
-                    2,
-                    false,
-                    "bounded",
-                ),
-                test_manifest_payload(
-                    vec![
-                        test_manifest_row(2, "Active", 1),
-                        test_manifest_row(4, "Active", 1),
-                    ],
-                    2,
-                    false,
-                    "bounded",
-                ),
+                test_manifest_payload(vec![test_manifest_row(3, "Active", 1)], 1, false, "bounded"),
+                test_manifest_payload(vec![test_manifest_row(1, "Active", 1)], 1, false, "bounded"),
+                test_manifest_payload(vec![test_manifest_row(4, "Active", 1)], 1, false, "bounded"),
+                test_manifest_payload(vec![test_manifest_row(2, "Active", 1)], 1, false, "bounded"),
             ],
             1,
             Some(2),
@@ -2407,7 +2442,7 @@ mod routed_read_merge_regression_tests {
             "proxy",
             test_budget(),
         )
-        .expect("interleaved shard rows should merge globally");
+        .expect("route-scoped rows should merge in global dataspace order");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("manifest merge response body");

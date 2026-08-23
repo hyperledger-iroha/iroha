@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Bring up, verify, inspect, or stop one disposable four-peer Taira devnet.
 
-``up`` builds the current Kagami, fixed-FD Taira daemon, CLI, and native SoraFS
-ingest tool; asks Kagami for a fresh
-four-validator NPoS Nexus network using the canonical Taira chain id; validates
-all four configs; starts the peers; and proves finality with one signed
-``iroha tx ping`` submission followed by the typed transaction-status waiter.
-The opt-in full doctor remains read-only with respect to Inrou: first-release
-shipping nodes reject Inrou hosting until the confinement boundary is complete.
+``up`` builds the current Kagami, fixed-FD Taira daemon, and CLI; asks Kagami
+for a fresh four-validator NPoS Nexus network using the canonical Taira chain
+id; validates all four configs; starts the peers; and proves finality with one
+signed ``iroha tx ping`` submission followed by the typed transaction-status
+waiter.
+The opt-in full doctor remains read-only with respect to Inrou because
+first-release shipping nodes reject Inrou hosting until mandatory confinement
+is complete.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
@@ -19,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -64,18 +66,9 @@ MAX_LOG_TAIL_BYTES = 64 * 1024
 MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 MAX_MARKER_BYTES = 128
 MAX_PID_FILE_BYTES = 32
+BUILD_ENV_REMOVALS = ("CARGO_INCREMENTAL", "RUSTC_WRAPPER")
 RUNTIME_SIGNER_DIRECTORY = Path("runtime") / "taira-runtime-signers"
 RUNTIME_SIGNER_FILE_BYTES = 71
-INROU_CANARY_CONTAINER_FILE = "container_manifest.json"
-INROU_CANARY_SERVICE_FILE = "service_manifest.json"
-INROU_CANARY_BUNDLE_FILE = "bundle.tgz"
-MAX_INROU_CANARY_BUNDLE_BYTES = 512 * 1024 * 1024
-INROU_STAGE_DIRECTORY = Path("runtime") / "taira-inrou-stage"
-INROU_STAGE_RECEIPT_FILE = "receipt.json"
-INROU_STAGE_BUNDLE_PAYLOAD = Path("payloads") / "bundle.bin"
-INROU_STAGE_GUEST_PAYLOAD = Path("payloads") / "guest"
-INROU_STAGE_BUNDLE_MANIFEST = Path("manifests") / "bundle.to"
-INROU_STAGE_GUEST_MANIFEST = Path("manifests") / "aarch64.to"
 GENERATED_LOCALNET_NEXUS_STORAGE_BYTES = 1_073_741_824
 TAIRA_NEXUS_STORAGE_AGGREGATE_BYTES = 68_719_476_736
 TAIRA_NEXUS_STORAGE_WEIGHTS = (
@@ -87,6 +80,41 @@ TAIRA_NEXUS_STORAGE_WEIGHTS = (
 )
 STORAGE_WEIGHT_BASIS_POINTS = 10_000
 TAIRA_SORAFS_MAX_CAPACITY_BYTES = 13_743_895_347
+
+# Keep this inventory beside the commands that consume the surfaces.  A
+# successful `--help` is not sufficient: clap still accepts an existing parent
+# command when one of the leaf options used below has drifted away.
+CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "kagami",
+        ("localnet",),
+        (
+            "--out-dir",
+            "--fresh-random-keys",
+            "--sora-profile",
+            "--consensus-mode",
+            "--peers",
+            "--bind-host",
+            "--public-host",
+            "--chain-id",
+            "--base-api-port",
+            "--base-p2p-port",
+            "--block-cadence-ms",
+        ),
+    ),
+    (
+        "iroha3d_taira",
+        (),
+        ("--sora", "--config", "--genesis-manifest-json", "--check-config"),
+    ),
+    ("iroha", (), ("--config", "--machine", "--output-format", "--fee-payer")),
+    ("iroha", ("tx", "ping"), ("--no-wait", "--log-level", "--msg")),
+    (
+        "iroha",
+        ("tx", "status"),
+        ("--hash", "--wait", "--timeout-ms", "--poll-interval-ms", "--terminal-status"),
+    ),
+)
 
 
 class DevnetError(RuntimeError):
@@ -450,10 +478,23 @@ def read_peer_pid(path: Path) -> int:
 
 
 def command_uses_config(command: str, config: Path) -> bool:
-    """Return whether one process command line names the exact peer config."""
+    """Return whether one daemon argv owns exactly one exact peer config."""
 
-    value = str(config)
-    return f"--config {value}" in command or f"--config={value}" in command
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv or Path(argv[0]).name != "iroha3d_taira":
+        return False
+    configs: list[str] = []
+    for index, argument in enumerate(argv):
+        if argument == "--config":
+            if index + 1 >= len(argv):
+                return False
+            configs.append(argv[index + 1])
+        elif argument.startswith("--config="):
+            configs.append(argument.removeprefix("--config="))
+    return configs == [str(config)]
 
 
 def require_running_cohort(target: Path, run: Runner) -> None:
@@ -461,6 +502,9 @@ def require_running_cohort(target: Path, run: Runner) -> None:
 
     pids: list[int] = []
     for index in range(PEER_COUNT):
+        config = target / f"peer{index}.toml"
+        if config.is_symlink() or not config.is_file():
+            fail(f"generated peer config is missing or unsafe: {config}")
         pids.append(read_peer_pid(target / f"peer{index}.pid"))
     if len(set(pids)) != PEER_COUNT:
         fail("generated peer PID files do not identify four distinct processes")
@@ -509,11 +553,26 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
             return
         if not target.is_dir():
             fail(f"network path is not a directory: {target}")
+        pid_paths = [target / f"peer{index}.pid" for index in range(PEER_COUNT)]
+        present_pid_paths = [
+            path for path in pid_paths if path.exists() or path.is_symlink()
+        ]
+        if not present_pid_paths:
+            require_stopped_cohort(target, run)
+            return
+        if len(present_pid_paths) != PEER_COUNT:
+            fail(
+                "Taira teardown left peer PID files: "
+                + ", ".join(path.name for path in present_pid_paths)
+            )
+        # The generated stop script has process-control authority. Do not run
+        # it until all four PID files, daemon argvs, and exact config paths
+        # prove that the live cohort is ours.
+        require_running_cohort(target, run)
         stop = target / "stop.sh"
-        if stop.is_symlink():
-            fail(f"refusing symlinked stop script: {stop}")
-        if stop.is_file():
-            run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
+        if stop.is_symlink() or not stop.is_file():
+            fail(f"generated Taira network is incomplete: missing safe {stop.name}")
+        run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
         require_stopped_cohort(target, run)
     except (DevnetError, subprocess.TimeoutExpired) as error:
         if not tolerate_failure:
@@ -536,7 +595,7 @@ def reset_network(root: Path, run: Runner) -> Path:
 
 
 def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
-    """Return the single current-workspace build used by ``up``."""
+    """Return the current-workspace build needed by the shipping smoke."""
 
     return [
         str(REPO_ROOT / "scripts" / "cargo_fast.sh"),
@@ -561,15 +620,20 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
         "iroha_cli",
         "--bin",
         "iroha",
-        "-p",
-        "sorafs_node",
-        "--bin",
-        "sorafs-node",
     ]
 
 
-def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path, Path]:
-    """Build or locate the four exact-revision Taira binaries."""
+def cargo_build_env() -> dict[str, str]:
+    """Return an environment consistent with ``cargo_fast --no-sccache``."""
+
+    env = os.environ.copy()
+    for name in BUILD_ENV_REMOVALS:
+        env.pop(name, None)
+    return env
+
+
+def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path]:
+    """Build or locate the exact-revision binaries needed by this invocation."""
 
     if args.bin_dir is not None and not args.no_build:
         fail("--bin-dir requires --no-build so a current build cannot be silently ignored")
@@ -579,6 +643,7 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
         run(
             cargo_build_command(args.profile, target_dir),
             cwd=REPO_ROOT,
+            env=cargo_build_env(),
             timeout=args.build_timeout_seconds,
             capture_output=False,
         )
@@ -589,8 +654,49 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
     )
     return tuple(
         require_executable(bin_dir / name)
-        for name in ("kagami", "iroha3d_taira", "iroha", "sorafs-node")
+        for name in ("kagami", "iroha3d_taira", "iroha")
     )
+
+
+def help_has_option(help_text: str, option: str) -> bool:
+    """Match one complete long option without accepting a longer lookalike."""
+
+    return re.search(rf"(?<![\w-]){re.escape(option)}(?![\w-])", help_text) is not None
+
+
+def preflight_cli_surfaces(
+    kagami: Path,
+    irohad: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    full_doctor: bool,
+) -> None:
+    """Prove every compiled command used by ``up`` before replacing a cohort."""
+
+    binaries: dict[str, Path] = {
+        "kagami": kagami,
+        "iroha3d_taira": irohad,
+        "iroha": iroha,
+    }
+    surfaces = list(CLI_SURFACES)
+    if full_doctor:
+        surfaces.append(
+            ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
+        )
+    for binary_name, subcommands, required_options in surfaces:
+        command = [str(binaries[binary_name]), *subcommands, "--help"]
+        completed = run(command, cwd=REPO_ROOT, timeout=20)
+        help_text = "\n".join((completed.stdout or "", completed.stderr or ""))
+        missing = [
+            option for option in required_options if not help_has_option(help_text, option)
+        ]
+        if missing:
+            surface = " ".join((binary_name, *subcommands))
+            fail(
+                f"compiled CLI surface `{surface}` is missing current options: "
+                + ", ".join(missing)
+            )
 
 
 def generate_network(
@@ -712,6 +818,36 @@ def read_height(root: str, request: Request) -> int:
     return payload
 
 
+def check_sumeragi_status(root: str, request: Request) -> None:
+    """Fail on authoritative restart or watchdog blockers when JSON is exposed."""
+
+    url = root + "v1/sumeragi/status"
+    status, payload = request(url, None)
+    # Operator status can be protected or unavailable during early startup.
+    # Health, readiness, height convergence, and the signed smoke remain the
+    # mandatory portable surface; inspect the richer status whenever Torii
+    # actually exposes its current JSON representation.
+    if status != 200:
+        return
+    if not isinstance(payload, dict):
+        fail(f"invalid Sumeragi status response from {root} (HTTP {status})")
+    restart_required = payload.get("restart_required")
+    if not isinstance(restart_required, bool):
+        fail(f"Sumeragi status omitted boolean restart_required at {root}")
+    if restart_required:
+        fail(f"Sumeragi consensus requires restart at {root}")
+    liveness = payload.get("liveness")
+    if not isinstance(liveness, dict):
+        fail(f"Sumeragi status omitted liveness diagnostics at {root}")
+    blocker = liveness.get("blocker")
+    if blocker is None:
+        return
+    blocker_name = blocker.get("blocker") if isinstance(blocker, dict) else None
+    if not isinstance(blocker_name, str) or not blocker_name:
+        fail(f"Sumeragi status returned an invalid liveness blocker at {root}")
+    fail(f"Sumeragi liveness blocker at {root}: {blocker_name}")
+
+
 def wait_for_cluster(
     roots: Sequence[str],
     timeout: float,
@@ -724,6 +860,12 @@ def wait_for_cluster(
     deadline = time.monotonic() + timeout
     last = "not reachable"
     while time.monotonic() < deadline:
+        # These probes ignore an unavailable/protected status route but make a
+        # published fail-stop or watchdog blocker terminal immediately.  Keep
+        # them outside the retryable readiness block so a serious consensus
+        # diagnosis is not hidden behind a generic convergence timeout.
+        for root in roots:
+            check_sumeragi_status(root, request)
         try:
             for root in roots:
                 for endpoint in ("health", "readyz"):
@@ -814,6 +956,13 @@ def check_mcp(root: str, request: Request) -> None:
         fail(f"MCP tools/list returned no tools at {url} (HTTP {status})")
 
 
+def check_all_mcp(roots: Sequence[str], request: Request) -> None:
+    """Verify the live MCP handshake and curated tools on every validator."""
+
+    for root in roots:
+        check_mcp(root, request)
+
+
 def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
     """Run the broad public-product diagnostic only when explicitly requested."""
 
@@ -831,55 +980,6 @@ def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
         cwd=target,
         timeout=120,
     )
-
-
-def require_inrou_canary_workspace(
-    path: Path,
-) -> tuple[Path, Path, Path]:
-    """Resolve one typed, runtime-only Inrou canary workspace."""
-
-    candidate = path.expanduser().absolute()
-    if candidate.is_symlink() or not candidate.is_dir():
-        fail(f"Inrou canary workspace is missing or not a regular directory: {candidate}")
-    workspace = candidate.resolve(strict=True)
-    files = (
-        workspace / INROU_CANARY_CONTAINER_FILE,
-        workspace / INROU_CANARY_SERVICE_FILE,
-        workspace / INROU_CANARY_BUNDLE_FILE,
-    )
-    for fixture, limit in zip(
-        files,
-        (
-            MAX_BUNDLE_TEXT_BYTES,
-            MAX_BUNDLE_TEXT_BYTES,
-            MAX_INROU_CANARY_BUNDLE_BYTES,
-        ),
-        strict=True,
-    ):
-        if fixture.is_symlink() or not fixture.is_file():
-            fail(f"Inrou canary workspace is missing regular file: {fixture}")
-        try:
-            size = fixture.stat().st_size
-        except OSError as error:
-            fail(f"cannot inspect Inrou canary file {fixture}: {error}")
-        if size == 0 or size > limit:
-            fail(
-                f"Inrou canary file must contain 1..={limit} bytes: {fixture}"
-            )
-    return files
-
-
-def requested_inrou_canary_workspace(
-    args: argparse.Namespace,
-) -> tuple[Path, Path, Path] | None:
-    """Reject the retired production Inrou canary before mutating the devnet."""
-
-    configured = args.inrou_canary_dir
-    if configured is not None:
-        fail(
-            "--inrou-canary-dir is retired because first-release Inrou hosting is disabled"
-        )
-    return None
 
 
 def section_assignment(path: Path, section: str, key: str) -> str:
@@ -1257,158 +1357,6 @@ def apply_canonical_taira_storage_profiles(target: Path) -> None:
     require_canonical_taira_storage_profiles(target)
 
 
-def peer_sorafs_preseed_dir(target: Path, peer_index: int) -> Path:
-    """Resolve the exact disabled-provider store used by local Inrou preseed hydration."""
-
-    require_canonical_taira_storage_profiles(target)
-    config = target / f"peer{peer_index}.toml"
-    if section_assignment(config, "sorafs.storage", "enabled") != "false":
-        fail(f"peer{peer_index} must keep provider SoraFS storage disabled for preseed mode")
-    configured = Path(section_assignment(config, "sorafs.storage", "data_dir"))
-    configured = (
-        configured if configured.is_absolute() else (target / configured)
-    ).resolve(strict=False)
-    expected = _expected_peer_sorafs_dir(target, peer_index)
-    if configured != expected:
-        fail(
-            f"peer{peer_index} SoraFS preseed root is not its disjoint generated root: {configured}"
-        )
-    return configured
-
-
-def require_inrou_stage(stage_dir: Path) -> None:
-    """Require the fixed owner-only stage layout emitted by the native CLI."""
-
-    if stage_dir.is_symlink() or not stage_dir.is_dir():
-        fail(f"native Taira Inrou stage is missing: {stage_dir}")
-    metadata = stage_dir.stat()
-    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o7777 != 0o700:
-        fail(f"native Taira Inrou stage must be owner-only mode 0700: {stage_dir}")
-    required_files = (
-        stage_dir / INROU_STAGE_RECEIPT_FILE,
-        stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
-        stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
-        stage_dir / INROU_STAGE_GUEST_MANIFEST,
-    )
-    for path in required_files:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-            fail(f"native Taira Inrou stage is incomplete: {path}")
-    guest = stage_dir / INROU_STAGE_GUEST_PAYLOAD
-    if guest.is_symlink() or not guest.is_dir() or not any(guest.iterdir()):
-        fail(f"native Taira Inrou guest payload stage is incomplete: {guest}")
-
-
-def prepare_inrou_stage(
-    target: Path,
-    iroha: Path,
-    workspace: tuple[Path, Path, Path],
-    timeout_seconds: float,
-    run: Runner,
-) -> Path:
-    """Create one exact same-revision stage before any validator opens its store."""
-
-    container, service, bundle = workspace
-    stage_dir = target / INROU_STAGE_DIRECTORY
-    if stage_dir.exists() or stage_dir.is_symlink():
-        fail(f"refusing to reuse an existing Taira Inrou stage: {stage_dir}")
-    run(
-        [
-            str(iroha),
-            "-c",
-            str(target / "client.toml"),
-            "taira",
-            "inrou-stage",
-            "--container",
-            str(container),
-            "--service",
-            str(service),
-            "--bundle-file",
-            str(bundle),
-            "--stage-dir",
-            str(stage_dir),
-            "--json",
-        ],
-        cwd=target,
-        timeout=timeout_seconds + 300,
-    )
-    require_inrou_stage(stage_dir)
-    return stage_dir
-
-
-def preseed_inrou_stage(
-    target: Path,
-    sorafs_node: Path,
-    stage_dir: Path,
-    timeout_seconds: float,
-    run: Runner,
-) -> None:
-    """Seed the exact bundle and directory manifest into all four disjoint stores."""
-
-    require_inrou_stage(stage_dir)
-    for peer_index in range(PEER_COUNT):
-        data_dir = peer_sorafs_preseed_dir(target, peer_index)
-        for manifest, source_flag, source in (
-            (
-                stage_dir / INROU_STAGE_BUNDLE_MANIFEST,
-                "--payload",
-                stage_dir / INROU_STAGE_BUNDLE_PAYLOAD,
-            ),
-            (
-                stage_dir / INROU_STAGE_GUEST_MANIFEST,
-                "--payload-dir",
-                stage_dir / INROU_STAGE_GUEST_PAYLOAD,
-            ),
-        ):
-            run(
-                [
-                    str(sorafs_node),
-                    "ingest",
-                    f"--data-dir={data_dir}",
-                    f"--max-capacity-bytes={TAIRA_SORAFS_MAX_CAPACITY_BYTES}",
-                    f"--manifest={manifest}",
-                    f"{source_flag}={source}",
-                ],
-                cwd=target,
-                timeout=timeout_seconds + 300,
-            )
-
-
-def run_inrou_canary(
-    target: Path,
-    iroha: Path,
-    root: str,
-    stage_dir: Path,
-    timeout_seconds: float,
-    run: Runner,
-) -> None:
-    """Register and verify the exact already-preseeded four-replica Inrou stage."""
-
-    require_inrou_stage(stage_dir)
-    timeout_secs = max(1, int(timeout_seconds))
-    run(
-        [
-            str(iroha),
-            "-c",
-            str(target / "client.toml"),
-            "--fee-payer",
-            "authority",
-            "taira",
-            "inrou-canary",
-            "--public-root",
-            root,
-            "--stage-dir",
-            str(stage_dir),
-            "--mode",
-            "deploy",
-            "--timeout-secs",
-            str(timeout_secs),
-            "--json",
-        ],
-        cwd=target,
-        timeout=timeout_seconds + 30,
-    )
-
-
 def dump_logs(target: Path) -> None:
     """Print bounded daemon log tails without reading configs or key files."""
 
@@ -1442,12 +1390,20 @@ def up(
 ) -> dict[str, Any]:
     """Replace the disposable network and prove one signed transaction finalizes."""
 
-    inrou_canary_workspace = requested_inrou_canary_workspace(args)
     root = managed_root(args.dir, create=True)
-    kagami, irohad, iroha, sorafs_node = binary_paths(args, run)
+    target = network_dir(root)
+    if target.is_symlink():
+        fail(f"refusing symlinked network directory: {target}")
+    kagami, irohad, iroha = binary_paths(args, run)
+    preflight_cli_surfaces(
+        kagami,
+        irohad,
+        iroha,
+        run,
+        full_doctor=args.full_doctor,
+    )
     target = reset_network(root, run)
     roots = torii_roots(args.base_api_port)
-    inrou_stage: Path | None = None
     try:
         print("Generating a fresh four-validator Taira network...", flush=True)
         generate_network(
@@ -1461,22 +1417,6 @@ def up(
         apply_canonical_taira_storage_profiles(target)
         validate_configs(target, irohad, run)
         require_bundle_identity(target, roots)
-        if inrou_canary_workspace is not None:
-            print("Building and pre-seeding the exact Taira Inrou stage...", flush=True)
-            inrou_stage = prepare_inrou_stage(
-                target,
-                iroha,
-                inrou_canary_workspace,
-                args.timeout_seconds,
-                run,
-            )
-            preseed_inrou_stage(
-                target,
-                sorafs_node,
-                inrou_stage,
-                args.timeout_seconds,
-                run,
-            )
         env = os.environ.copy()
         env.update(
             {
@@ -1556,18 +1496,7 @@ def up(
         require_applied_transaction(waited, transaction_hash)
         print("Signed smoke reached Applied; waiting for four-peer convergence...", flush=True)
         final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
-        check_mcp(roots[0], request)
-        if inrou_canary_workspace is not None:
-            if inrou_stage is None:
-                fail("Taira Inrou canary stage was not prepared before startup")
-            run_inrou_canary(
-                target,
-                iroha,
-                roots[0],
-                inrou_stage,
-                args.timeout_seconds,
-                run,
-            )
+        check_all_mcp(roots, request)
         if args.full_doctor:
             run_full_doctor(target, iroha, roots[0], run)
     except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
@@ -1586,8 +1515,6 @@ def up(
         "final_height": final[0],
         "transaction_hash": transaction_hash,
         "terminal_status": "Applied",
-        "inrou_canary": inrou_canary_workspace is not None,
-        "inrou_stage": str(inrou_stage) if inrou_stage is not None else None,
     }
     print(json.dumps(report, indent=2, sort_keys=True))
     return report
@@ -1612,7 +1539,7 @@ def check(
     require_bundle_identity(target, roots)
     require_running_cohort(target, run)
     heights = wait_for_cluster(roots, args.timeout_seconds, request)
-    check_mcp(roots[0], request)
+    check_all_mcp(roots, request)
     if args.full_doctor:
         iroha = require_executable(args.iroha.expanduser().absolute())
         run_full_doctor(target, iroha, roots[0], run)
@@ -1637,14 +1564,22 @@ def parser() -> argparse.ArgumentParser:
     """Build the command-line parser."""
 
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--dir", type=Path, default=DEFAULT_DIR, help="managed disposable directory")
+    result.add_argument(
+        "--dir", type=Path, default=DEFAULT_DIR, help="managed disposable directory"
+    )
     commands = result.add_subparsers(dest="command", required=True)
 
     up_parser = commands.add_parser("up", help="replace, start, and verify the devnet")
     up_parser.add_argument("--profile", default="local-release", help="Cargo profile")
     up_parser.add_argument("--target-dir", type=Path, default=REPO_ROOT / "target")
-    up_parser.add_argument("--bin-dir", type=Path, help="directory containing all four binaries")
-    up_parser.add_argument("--no-build", action="store_true", help="use binaries already in --bin-dir")
+    up_parser.add_argument(
+        "--bin-dir",
+        type=Path,
+        help="directory containing Kagami, the Taira daemon, and the Iroha CLI",
+    )
+    up_parser.add_argument(
+        "--no-build", action="store_true", help="use binaries already in --bin-dir"
+    )
     up_parser.add_argument(
         "--build-timeout-seconds",
         type=float,
@@ -1664,11 +1599,10 @@ def parser() -> argparse.ArgumentParser:
         default=DEFAULT_BLOCK_CADENCE_MS,
         help="signed cadence used to derive robust local consensus deadlines",
     )
-    up_parser.add_argument("--full-doctor", action="store_true", help="also require the broad public Taira product surface")
     up_parser.add_argument(
-        "--inrou-canary-dir",
-        type=Path,
-        help="retired first-release production Inrou canary option (always rejected)",
+        "--full-doctor",
+        action="store_true",
+        help="also require the broad public Taira product surface",
     )
     up_parser.set_defaults(handler=up)
 
@@ -1680,7 +1614,9 @@ def parser() -> argparse.ArgumentParser:
         help="override the generated bundle's Torii base port",
     )
     check_parser.add_argument("--full-doctor", action="store_true")
-    check_parser.add_argument("--iroha", type=Path, default=REPO_ROOT / "target/local-release/iroha")
+    check_parser.add_argument(
+        "--iroha", type=Path, default=REPO_ROOT / "target/local-release/iroha"
+    )
     check_parser.set_defaults(handler=check)
 
     down_parser = commands.add_parser("down", help="stop the disposable peers and retain logs")

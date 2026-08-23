@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
+        "a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "57df39a06020e50d4b6e78a3914a20c36d8decbddff413eda9f889b56966f896"
+        "cd8ff3e24c006a404d0a05d1696557ff92909fb96676851b59647ac48965a295"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2978,9 +2978,9 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "sumeragi::v2_runner::tests::"
-            "drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle",
+            "drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve",
             "sumeragi::v2_runner::tests::"
-            "drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle_mutant",
+            "drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve_mutant",
         ),
         (
             "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::completed_certified_serve_tombstone_replays_without_a_serve_carrier",

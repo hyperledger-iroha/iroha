@@ -259,9 +259,7 @@ struct ProductionRecoveredApplyReadyFixture {
 }
 
 #[cfg(feature = "bls")]
-fn production_recovered_apply_ready_fixture(
-    marker: u8,
-) -> ProductionRecoveredApplyReadyFixture {
+fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredApplyReadyFixture {
     let crate::sumeragi::v2_apply::ProductionRecoveredDecisionApplyFixtureV1 {
         verified,
         manifest,
@@ -273,21 +271,16 @@ fn production_recovered_apply_ready_fixture(
         validator_keys,
         directory,
     } = crate::sumeragi::v2_apply::production_recovered_decision_apply_fixture_v1();
-    let fixture = durable_validate_fixture_from_material(
-        marker,
-        verified,
-        manifest,
-        canonical_wire,
-    );
-    let waiting = waiting_durable_validate_fixture_from_store(
-        durable_validate_store_fixture_from_existing(
+    let fixture =
+        durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire);
+    let waiting =
+        waiting_durable_validate_fixture_from_store(durable_validate_store_fixture_from_existing(
             fixture,
             directory,
             body_store,
             durable,
             Some(commit_qc.execution_commitment),
-        ),
-    );
+        ));
     let owned = owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         waiting,
         ReadyDurableValidateFixtureOutcome::Validated,
@@ -463,10 +456,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     apply_service,
                     validator_keys,
                 } = production_recovered_apply_ready_fixture(marker);
-                (
-                    owned,
-                    Some((commit_qc, apply_service, validator_keys)),
-                )
+                (owned, Some((commit_qc, apply_service, validator_keys)))
             } else {
                 (owned_production_ready_validate_fixture(row, marker), None)
             };
@@ -531,9 +521,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 row,
                 marker,
                 &ready,
-                recovered_apply
-                    .as_ref()
-                    .map(|(commit_qc, _, _)| commit_qc),
+                recovered_apply.as_ref().map(|(commit_qc, _, _)| commit_qc),
                 &mut adapter,
             );
         }
@@ -623,8 +611,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     .as_ref()
                     .expect("ValidatedApply retains its exact production fixture")
                     .2;
-                let unrelated =
-                    signed_ready_validate_timeout_vote(&context, keys, row.view(), 3);
+                let unrelated = signed_ready_validate_timeout_vote(&context, keys, row.view(), 3);
                 executor
                     .enqueue_network(unrelated)
                     .expect("queue authenticated runtime ingress beside typed live Apply");
@@ -681,7 +668,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     &mut executor,
                     completion,
                 ),
-                Ok(super::super::ProductionRecoveredDecisionApplyCompletionV1::Applied)
+                Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
             ));
             assert_eq!(
                 Some(executor.runtime_queue_snapshot_for_test(now)),

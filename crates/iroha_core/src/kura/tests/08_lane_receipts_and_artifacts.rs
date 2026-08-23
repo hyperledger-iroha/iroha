@@ -133,7 +133,7 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
 }
 #[test]
 fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let mut block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1)
@@ -516,7 +516,7 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
 #[test]
 fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
     let (
-        (_temp_dir, config, lane_config),
+        (_temp_dir, _config, _lane_config),
         (lane_id, _lane_entry, lane_block_height),
         (block, _ownership, proposal),
         kura,
@@ -894,7 +894,7 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
 }
 #[test]
 fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -1349,7 +1349,7 @@ fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
 }
 #[test]
 fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
@@ -1485,7 +1485,7 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
     );
 }
 fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
@@ -1647,7 +1647,7 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
 }
 #[test]
 fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -1690,7 +1690,7 @@ fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
 }
 #[test]
 fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
-    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;

@@ -98,13 +98,11 @@ pub(super) fn install_runtime_effective_config(
         authenticated_snapshot_bootstrap,
         authenticated_block_cadence,
         effective_genesis,
-        |config| {
-            kagemusha_validator_qualification_command::read_configured_kagemusha_validator_qualification_seal(config)
-                .map_err(|error| error.to_string())
-        },
+        kagemusha_validator_qualification_command::read_configured_kagemusha_validator_qualification_seal,
     )
 }
 
+/// Install the runtime projection after catalog authentication using one exact seal reader.
 pub(super) fn install_runtime_effective_config_with_validator_seal_reader(
     config: &Config,
     state: &State,
@@ -113,7 +111,10 @@ pub(super) fn install_runtime_effective_config_with_validator_seal_reader(
     effective_genesis: Option<&GenesisBlock>,
     read_configured_kagemusha_validator_qualification_seal: impl FnOnce(
         &Config,
-    ) -> Result<KagemushaV4ValidatorQualificationSealV1, String>,
+    ) -> Result<
+        KagemushaV4ValidatorQualificationSealV1,
+        String,
+    >,
 ) -> Result<(), String> {
     let runtime_effective_config = if let Some(bootstrap) = authenticated_snapshot_bootstrap {
         let Some(_) = config

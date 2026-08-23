@@ -854,6 +854,10 @@ enum BuildOrPull<'a> {
     },
 }
 impl<'a> BuildOrPull<'a> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Compose image selection requires the complete peer deployment context"
+    )]
     fn pull(
         image: PulledImage<'a>,
         healthcheck: bool,
@@ -879,6 +883,10 @@ impl<'a> BuildOrPull<'a> {
             ),
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Compose image selection requires the complete peer deployment context"
+    )]
     fn build(
         image: BuildImage<'a>,
         healthcheck: bool,

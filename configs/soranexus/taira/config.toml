@@ -71,10 +71,10 @@ webhooks_enabled = false
 zk_attachments_enabled = false
 
 # First-release Bootle/Lantern issuance is deliberately staged disabled in the
-# shared template. The peer-1 renderer may enable it only after binding the
-# exact public provider policy and the governed on-chain issuer policy. The
-# provider owns all authentication and Falcon trapdoor material; no secret is
-# accepted in this file.
+# shared template. A deployment-owned peer-1 runtime config may enable it only
+# after binding the exact public provider policy and the governed on-chain
+# issuer policy. The provider owns all authentication and Falcon trapdoor
+# material; no secret is accepted in this file.
 [torii.privacy_bootle_lantern_issuer]
 enabled = false
 state_dir = "/var/lib/iroha/taira-validator-1/privacy/bootle-lantern/issuer"
@@ -189,8 +189,8 @@ discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
 
 [sorafs.discovery.admission]
-# Rendered validator bundles rewrite this to their co-located
-# `sorafs_admission` directory under the canonical install root.
+# Each deployment must point this at its co-located `sorafs_admission`
+# directory under the operator's install root.
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
 signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
@@ -357,7 +357,7 @@ soravpn_spool_bps = 250
 
 [nexus.registry]
 # Public Taira governance lanes require a manifest with explicit validator
-# account-to-peer bindings. Rendered validator bundles rewrite this to the
+# account-to-peer bindings. Each deployment must point these paths at its
 # co-located `manifests` directory.
 manifest_directory = "configs/soranexus/taira/manifests"
 cache_directory = "configs/soranexus/taira/manifests"

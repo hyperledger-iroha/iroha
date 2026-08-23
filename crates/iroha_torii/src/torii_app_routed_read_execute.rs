@@ -37,17 +37,14 @@ fn bounded_space_directory_manifest_shard_query(
 ) -> Result<(routing::SpaceDirectoryManifestQuery, &'static str), Error> {
     let (page_offset, page_limit) =
         routing::space_directory_manifest_pagination(Some(page_limit), page_offset)?;
-    let shard_limit = if query.dataspace.is_some() {
-        // A dataspace filter can match at most one manifest globally.
-        1
-    } else {
-        routing::space_directory_manifest_fanout_window(page_offset, page_limit)?
-    };
+    if query.dataspace.is_none() {
+        let _ = routing::space_directory_manifest_fanout_window(page_offset, page_limit)?;
+    }
     let requested_count_mode = routed_read_count_mode_label(query.count_mode.as_deref());
-    // The coordinator envelope is authoritative for global pagination. Never trust the duplicated
-    // query fields: every shard must expose the complete prefix used by the global merge.
+    // The coordinator envelope is authoritative for global pagination. Every route is responsible
+    // for exactly one dataspace, so its complete local page contains at most one manifest.
     query.offset = Some(0);
-    query.limit = Some(shard_limit);
+    query.limit = Some(1);
     query.count_mode = Some("bounded".to_owned());
     Ok((query, requested_count_mode))
 }
@@ -1173,10 +1170,6 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                     Ok(bound) => bound,
                     Err(error) => return error.into_response(),
                 };
-            let shard_query_string = match encode_torii_proxy_query(&shard_query) {
-                Ok(query_string) => query_string,
-                Err(error) => return error.into_response(),
-            };
             let expected_uaid = match path_args.first() {
                 Some(raw) => match routing::canonical_routed_uaid_literal(raw) {
                     Ok(uaid) => uaid,
@@ -1188,12 +1181,11 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
                     );
                 }
             };
-            match execute_torii_fanout_json_payloads_resolved_routes(
+            match execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
                 app,
                 routes,
-                endpoint,
                 path_args,
-                shard_query_string,
+                shard_query,
                 body,
                 proxy_memory,
             )

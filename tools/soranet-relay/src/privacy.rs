@@ -5,11 +5,11 @@
 //! they satisfy the configured contribution thresholds; otherwise they surface as
 //! `soranet_privacy_bucket_suppressed` markers.
 use crate::config::{
-    PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
-    PRIVACY_MAX_EXPECTED_SHARES_V1, PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
+    GAR_CATEGORY_MAX_BYTES_V1, PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1,
+    PRIVACY_MAX_COMPLETED_BUCKETS_V1, PRIVACY_MAX_EXPECTED_SHARES_V1, PRIVACY_MAX_OPEN_BUCKETS_V1,
+    PrivacyTelemetryConfig, RelayMode, is_canonical_gar_category_v1,
 };
 use blake3::Hasher as Blake3Hasher;
-use hex::ToHex;
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPowFailureReasonV1, SoranetPrivacyEventActiveSampleV1,
     SoranetPrivacyEventGarAbuseCategoryV1, SoranetPrivacyEventHandshakeFailureV1,
@@ -273,15 +273,13 @@ impl PrivacyEventBuffer {
         self.push(event);
     }
     pub fn record_gar_category(&self, mode: SoranetPrivacyModeV1, when: SystemTime, label: &str) {
-        if label.is_empty() {
+        let Some(category_hash) = gar_category_hash(label) else {
             return;
-        }
+        };
         let event = SoranetPrivacyEventV1 {
             timestamp_unix: unix_seconds(when),
             kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
-                SoranetPrivacyEventGarAbuseCategoryV1 {
-                    label: label.to_string(),
-                },
+                SoranetPrivacyEventGarAbuseCategoryV1 { category_hash },
             ),
             mode,
         };
@@ -408,7 +406,7 @@ struct BucketSummary {
     active_max: Option<u64>,
     bytes_verified: u128,
     rtt_percentiles: Vec<(String, u64)>,
-    gar_counts: BTreeMap<String, u64>,
+    gar_counts: BTreeMap<[u8; 8], u64>,
     suppressed: bool,
 }
 /// Lifetime counters and latest-bucket gauges exported with fixed label sets.
@@ -457,7 +455,7 @@ struct BucketStats {
     rtt: LatencyHistogram,
     active: ActiveAccumulator,
     bytes_verified: u128,
-    gar_counts: BTreeMap<String, u64>,
+    gar_counts: BTreeMap<[u8; 8], u64>,
 }
 /// Histogram accumulator for RTT measurements.
 #[derive(Debug, Default)]
@@ -774,7 +772,7 @@ impl PrivacyAggregator {
     /// Record a GAR abuse category using a privacy-preserving hash.
     pub fn record_gar_category(&self, when: SystemTime, category: &str) {
         if let Some(hash) = gar_category_hash(category) {
-            self.with_bucket(when, move |bucket| bucket.record_gar_category(hash.clone()));
+            self.with_bucket(when, move |bucket| bucket.record_gar_category(hash));
         }
     }
     /// Render Prometheus metrics for completed buckets as of the supplied timestamp.
@@ -944,7 +942,7 @@ impl BucketStats {
     fn record_verified_bytes(&mut self, bytes: u128) {
         self.bytes_verified = self.bytes_verified.saturating_add(bytes);
     }
-    fn record_gar_category(&mut self, hash: String) {
+    fn record_gar_category(&mut self, hash: [u8; 8]) {
         if let Some(entry) = self.gar_counts.get_mut(&hash) {
             *entry = entry.saturating_add(1);
         } else if self.gar_counts.len() < PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
@@ -1015,17 +1013,16 @@ fn bucket_index(timestamp: SystemTime, bucket_secs: u64) -> u64 {
         .map(|duration| duration.as_secs() / bucket_secs)
         .unwrap_or(0)
 }
-fn gar_category_hash(category: &str) -> Option<String> {
-    let trimmed = category.trim();
-    if trimmed.is_empty() {
+fn gar_category_hash(category: &str) -> Option<[u8; 8]> {
+    if !is_canonical_gar_category_v1(category) {
         return None;
     }
     let mut hasher = Blake3Hasher::new();
-    hasher.update(trimmed.as_bytes());
+    hasher.update(category.as_bytes());
     let digest = hasher.finalize();
     let mut truncated = [0u8; 8];
     truncated.copy_from_slice(&digest.as_bytes()[..8]);
-    Some(truncated.encode_hex::<String>())
+    Some(truncated)
 }
 fn unix_seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -1357,10 +1354,24 @@ mod tests {
         );
     }
     #[test]
-    fn gar_hash_trims_input() {
-        let hash = gar_category_hash("  Policy::Spam  ").expect("hash generated");
-        let hash_again = gar_category_hash("Policy::Spam").expect("hash generated");
-        assert_eq!(hash, hash_again);
+    fn gar_hash_requires_canonical_bounded_input() {
+        let hash = gar_category_hash("policy.spam").expect("canonical hash generated");
+        assert_eq!(hash, gar_category_hash("policy.spam").expect("stable hash"));
+        assert!(gar_category_hash(" Policy.Spam ").is_none());
+        assert!(gar_category_hash(&"a".repeat(GAR_CATEGORY_MAX_BYTES_V1 + 1)).is_none());
+    }
+    #[test]
+    fn event_buffer_retains_only_fixed_size_gar_hashes() {
+        let buffer = PrivacyEventBuffer::new(1);
+        let raw_category = "policy.secret";
+        buffer.record_gar_category(SoranetPrivacyModeV1::Entry, base_time(), raw_category);
+        assert_eq!(buffer.queue_depth(), 1);
+        let body = buffer.drain_ndjson();
+        assert!(body.contains("category_hash"), "missing fixed hash: {body}");
+        assert!(
+            !body.contains(raw_category),
+            "raw category must never enter the retained event: {body}"
+        );
     }
     #[test]
     fn converts_from_telemetry_config() {

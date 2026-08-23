@@ -1106,13 +1106,10 @@ impl SoranetSecureAggregator {
                 }
             }
             SoranetPrivacyEventKindV1::GarAbuseCategory(payload) => {
-                let label = payload.label.trim();
-                if !label.is_empty() {
-                    if !bucket.record_gar_category(gar_category_hash(label)) {
-                        return Err(PrivacyEventError::TooManyGarCategories {
-                            maximum: MAX_GAR_CATEGORIES_PER_BUCKET,
-                        });
-                    }
+                if !bucket.record_gar_category(payload.category_hash) {
+                    return Err(PrivacyEventError::TooManyGarCategories {
+                        maximum: MAX_GAR_CATEGORIES_PER_BUCKET,
+                    });
                 }
             }
         }

@@ -502,7 +502,7 @@ pub struct TicketRevocationStore {
     high_watermark: SystemTime,
     records: HashMap<[u8; 32], RevokedTicketRecord>,
     dirty: bool,
-    _ledger_lock: Option<ExclusiveLedgerLock>,
+    ledger_lock: Option<ExclusiveLedgerLock>,
 }
 impl TicketRevocationStore {
     /// Create an in-memory store with the provided limits.
@@ -517,7 +517,7 @@ impl TicketRevocationStore {
             high_watermark: UNIX_EPOCH,
             records: HashMap::new(),
             dirty: false,
-            _ledger_lock: None,
+            ledger_lock: None,
         })
     }
     /// Load or create a persistent store at `path`.
@@ -547,7 +547,7 @@ impl TicketRevocationStore {
             high_watermark: now.max(UNIX_EPOCH),
             records: HashMap::new(),
             dirty: true,
-            _ledger_lock: Some(ledger_lock),
+            ledger_lock: Some(ledger_lock),
         };
         store.load_from_disk(now)?;
         Ok(store)
@@ -775,7 +775,7 @@ impl TicketRevocationStore {
             .is_some_and(|record| !is_expired(record.expires_at, effective_now)))
     }
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TicketRevocationStoreError> {
-        let Some(ledger_lock) = &self._ledger_lock else {
+        let Some(ledger_lock) = &self.ledger_lock else {
             return Ok(());
         };
         let bytes = match read_optional_bounded_regular_file(
@@ -882,7 +882,7 @@ impl TicketRevocationStore {
         Ok(self.high_watermark.max(now))
     }
     fn persist(&mut self) -> Result<(), TicketRevocationStoreError> {
-        let Some(ledger_lock) = &self._ledger_lock else {
+        let Some(ledger_lock) = &self.ledger_lock else {
             self.dirty = false;
             return Ok(());
         };

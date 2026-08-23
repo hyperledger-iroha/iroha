@@ -3256,8 +3256,14 @@
             "let carrier_reservation_counts = carriers",
             "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
             "let group_count = carriers",
+            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
-            "let queue_guard = self.push_remove_lock.lock()",
+            "self.wait_for_durability_transitions(&cleanup_hashes)",
+            "let mut queue_guard = self.push_remove_lock.lock()",
+            "while cleanup_hashes",
+            ".any(|hash| self.durability_transition_active(hash))",
+            "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
+            "queue_guard = self.push_remove_lock.lock()",
             "let store = self.lane_reservations.lock()",
             "for group in carriers.iter().flatten()",
             "seen_group_hashes.insert",
@@ -3270,7 +3276,6 @@
             "drop(store)",
             "drop(queue_guard)",
             "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
-            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "for group in carriers.into_iter().flatten()",
             "self.commit_lane_reservation("
         ]
@@ -4477,8 +4482,14 @@
             "let carrier_reservation_counts = carriers",
             "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
             "let group_count = carriers",
+            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
-            "let queue_guard = self.push_remove_lock.lock()",
+            "self.wait_for_durability_transitions(&cleanup_hashes)",
+            "let mut queue_guard = self.push_remove_lock.lock()",
+            "while cleanup_hashes",
+            ".any(|hash| self.durability_transition_active(hash))",
+            "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
+            "queue_guard = self.push_remove_lock.lock()",
             "let store = self.lane_reservations.lock()",
             "for group in carriers.iter().flatten()",
             "seen_group_hashes.insert",
@@ -4491,9 +4502,8 @@
             "drop(store)",
             "drop(queue_guard)",
             "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
-            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "for group in carriers.into_iter().flatten()",
-          "self.commit_lane_reservation("
+            "self.commit_lane_reservation("
         ]
       }
     ],
@@ -7312,6 +7322,7 @@
           "kind": "struct",
           "symbol": "RecoveredPendingKuraApplyCarrierPermitV1",
           "required_tokens": [
+            "lifecycle_ordinal: u128",
             "_linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1"
           ]
         },
@@ -7320,8 +7331,9 @@
           "kind": "method",
           "symbol": "ProductionLifecycleOwnerV1::with_pending_kura_apply_replay",
           "required_tokens": [
-            "exactly_covers_recovered_decision_apply_ready_work",
+            "exact_recovered_decision_apply_ready_ordinal",
             "RecoveredPendingKuraApplyCarrierPermitV1",
+            "lifecycle_ordinal",
             "bind_recovered_apply_carrier",
             "startup.with_pending_kura_apply_replay(replay)"
           ]
@@ -7329,11 +7341,12 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
           "kind": "method",
-          "symbol": "ConcreteLifecycleWorkRegistry::exactly_covers_recovered_decision_apply_ready_work",
+          "symbol": "ConcreteLifecycleWorkRegistry::exact_recovered_decision_apply_ready_ordinal",
           "required_tokens": [
-            "RecoveredWalRegistrySlotV1::DecisionApply(_)",
+            "RecoveredWalRegistrySlotV1::DecisionApply(address)",
             "self.exact_recovered_wal_registry_slot()",
-            "self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)"
+            "self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)",
+            ".then_some(address.ordinal)"
           ]
         },
         {
@@ -7352,10 +7365,12 @@
           "kind": "method",
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::verify_pending_kura_recovered_apply_replay",
           "required_tokens": [
-            "self.verify_pending_kura_apply_replay(expected, startup_effects)?",
-            "evidence.stage = PendingKuraApplyRecoveryStage::Apply",
+            "let recovered_apply_ordinal = apply_carrier.consume_for_executor()",
+            "if recovered_apply_ordinal == 0",
+            "verify_pending_kura_apply_parts(",
+            "recovered_apply_ordinal",
+            "evidence.is_exact(&self.context)",
             "ProductionDecisionApplyStartupTraceProjection",
-            "apply_carrier.consume_for_executor()",
             "check_production_decision_apply_startup_transition(startup)",
             "self.pending_tip_recovery = Some(evidence)"
           ]
@@ -7363,7 +7378,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_runtime.rs",
           "kind": "method",
-          "symbol": "SerializedV2Runtime<SumeragiV2Adapter>::recovered_decision_apply_dispatch_available",
+          "symbol": "SerializedV2Runtime<SumeragiV2Adapter>::lifecycle_decision_apply_dispatch_available",
           "required_tokens": [
             "!self.fail_closed",
             "self.pending_effect_ownership.is_none()",
@@ -7374,7 +7389,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
           "kind": "method",
-          "symbol": "V2EffectExecutor<SerializedV2Runtime>::recovered_decision_apply_dispatch_available",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::lifecycle_decision_apply_dispatch_available",
           "required_tokens": [
             "self.ensure_open()?",
             "self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0",
@@ -7383,44 +7398,49 @@
             "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
             "self.finality_completion.is_none()",
-            "self.runtime.recovered_decision_apply_dispatch_available()"
+            "self.runtime.lifecycle_decision_apply_dispatch_available()"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
           "kind": "method",
-          "symbol": "ProductionLifecycleOwnerV1::dispatch_completion_with_runner_debt",
+          "symbol": "ProductionLifecycleOwnerV1::dispatch_completion_with_runner_debt_and_required_ordinal",
           "required_tokens": [
             "let executor_available = executor",
-            ".recovered_decision_apply_dispatch_available()",
-            "RecoveredCompletionCapacityProbeV1::Apply",
+            ".lifecycle_decision_apply_dispatch_available()",
+            "LifecycleCompletionCapacityProbeV1::Apply",
             "executor_available",
-            "prepare_recovered_decision_apply_dispatch",
-            "prepare_recovered_decision_apply_executor_dispatch",
+            "services.capture_lifecycle_completion_capacity_census(probes)",
+            "plan_turn_requiring_ordinal(inputs, ordinal)",
+            "prepare_lifecycle_decision_apply_dispatch",
+            "prepare_lifecycle_decision_apply_executor_dispatch",
             "reservation.commit(prepared, executor_dispatch)",
-            "ProductionCompletionDispatchV1::ApplyQueued"
+            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
           "kind": "method",
-          "symbol": "ProductionV2Services::capture_recovered_completion_capacity_census",
+          "symbol": "ProductionV2Services::capture_lifecycle_completion_capacity_census",
           "required_tokens": [
-            "RecoveredCompletionCapacityProbeV1::Apply",
+            "LifecycleCompletionCapacityProbeV1::Apply",
+            "key.lifecycle_ordinal() != ordinal",
+            "!apply_keys.insert(key)",
             "executor_available",
             "available: executor_available",
             "*available = *available",
-            "recovered_completion_worker_capacity(state)"
+            "state.lifecycle_decision_applies.contains_key(key)",
+            "lifecycle_completion_worker_capacity(state)"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
           "kind": "method",
-          "symbol": "RecoveredDecisionApplyCapacityReservationV1<'_>::commit",
+          "symbol": "LifecycleDecisionApplyCapacityReservationV1<'_>::commit",
           "required_tokens": [
             "let task = prepared.commit_for_worker()",
-            "state.recovered_decision_applies.insert(",
-            ".push_back(V2IoCommand::RecoveredDecisionApply(task))",
+            "state.lifecycle_decision_applies.insert(",
+            ".push_back(V2IoCommand::LifecycleDecisionApply(task))",
             "executor_dispatch.commit_after_worker_dispatch()",
             "self.queue.ready.notify_all()",
             "operation.complete()"
@@ -7440,7 +7460,9 @@
           "kind": "method",
           "symbol": "LifecycleProducerClaimDispositionV1::blocks_runtime",
           "required_tokens": [
-            "Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled"
+            "Self::AwaitingValidateSidecar",
+            "Self::AwaitingApplyCompletion",
+            "Self::ApplyTerminalSettled"
           ]
         },
         {
@@ -7458,10 +7480,10 @@
           "required_tokens": [
             "Dispatch::ApplyQueued",
             "Self::AwaitingApplyCompletion",
-            "Completion::RecoveredDecisionApplyDeferred",
-            "Completion::RecoveredDecisionApplyRequeued",
-            "Completion::RecoveredDecisionApplyCompletionDeferred",
-            "Completion::RecoveredDecisionApplyApplied",
+            "Completion::LifecycleDecisionApplyDeferred",
+            "Completion::LifecycleDecisionApplyRequeued",
+            "Completion::LifecycleDecisionApplyCompletionDeferred",
+            "Completion::LifecycleDecisionApplyApplied",
             "Ok(Self::ApplyTerminalSettled)"
           ]
         },
@@ -7470,7 +7492,7 @@
           "kind": "fn",
           "symbol": "completion_selection_stops_batch",
           "required_tokens": [
-            "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied"
+            "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied"
           ]
         },
         {
@@ -7496,7 +7518,7 @@
           "symbol": "drain_lifecycle_v2_ingress",
           "required_tokens": [
             "if producer_claim.apply_terminal_settled() {",
-            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+            "settled_apply_output_drain_disposition(",
             "if !producer_claim.blocks_runtime()",
             ".observe_completion(&selected)",
             "completion_selection_stops_batch(&selected)",
@@ -7532,51 +7554,61 @@
           "symbol": "PendingKuraProductionLifecycleV1::drive_apply_recovery_turn",
           "required_tokens": [
             "self.with_lifecycle_setup_transaction",
-            "executor.pending_tip_recovery_attempts()",
+            "executor.begin_pending_tip_recovery_attempt()",
+            ".recovered_apply_ordinal()",
+            "dispatch_completion_requiring_ready_ordinal",
+            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
+            "if ordinal == recovered_apply_ordinal",
             "services.take_next_lifecycle_completion()",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "settle_pending_kura_applied_decision_apply_completion",
             "owner.classify_completion_ready_work(fence)",
-            "ProductionCompletionDispatchV1::ApplyQueued",
-            "evidence.stage() != Stage::ApplicationDispatched"
+            "evidence.stage() != Stage::ApplicationDispatched",
+            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Waiting)",
+            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Advanced)",
+            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed)"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
           "kind": "method",
-          "symbol": "V2EffectExecutor<SerializedV2Runtime>::prepare_recovered_decision_apply_completion",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::prepare_lifecycle_decision_apply_completion",
           "required_tokens": [
             "self.ensure_open()?",
+            "let recovered_requires_empty_ingress =",
             "let pending_recovery_is_exact =",
             "authority.exactly_matches_pending_kura_recovery(&self.context, evidence)",
+            "let lineage_owner_is_exact =",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "|| !pending_recovery_is_exact",
             "|| self.finality_completion.is_some()",
-            ".prepare_recovered_decision_apply_completion(authority)"
+            "|| !lineage_owner_is_exact",
+            ".prepare_lifecycle_decision_apply_completion(authority)"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
           "kind": "method",
-          "symbol": "V2EffectExecutor<SerializedV2Runtime>::commit_recovered_decision_apply_finality",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::commit_lifecycle_decision_apply_finality",
           "required_tokens": [
             "PendingKuraApplyRecoveryStage::ApplicationDispatched",
             "evidence.is_exact(&self.context)",
+            "dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
             "&& pending_recovery_is_exact",
+            "lineage_owner_is_exact",
             "dispatch_key.matches_height_context(&self.context)",
             "self.runtime.driver().ready_to_finish()",
-            "FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key)",
-            "evidence.stage = PendingKuraApplyRecoveryStage::Completed",
-            "PendingTipRecoveryAttemptResult::Completed"
+            "FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)",
+            "evidence.stage = PendingKuraApplyRecoveryStage::Completed"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-          "kind": "fn",
-          "symbol": "settle_applied_decision_apply_completion",
+          "kind": "method",
+          "symbol": "LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner",
           "required_tokens": [
-            "settle_applied_decision_apply_completion_with_status(",
-            "RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight"
+            "settle_applied_lifecycle_decision_apply_completion_with_status(",
+            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight"
           ]
         },
         {
@@ -7584,20 +7616,20 @@
           "kind": "fn",
           "symbol": "settle_pending_kura_applied_decision_apply_completion",
           "required_tokens": [
-            "settle_applied_decision_apply_completion_with_status(",
-            "RecoveredDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation"
+            "settle_applied_lifecycle_decision_apply_completion_with_status(",
+            "LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
           "kind": "fn",
-          "symbol": "settle_applied_decision_apply_completion_with_status",
+          "symbol": "settle_applied_lifecycle_decision_apply_completion_with_status",
           "required_tokens": [
-            "prepare_recovered_decision_apply_terminal_transition",
+            "prepare_lifecycle_decision_apply_terminal_transition",
             "persist_exact_staged_successor(&staged)",
-            "executor.commit_recovered_decision_apply_finality(finality)",
+            "executor.commit_lifecycle_decision_apply_finality(finality)",
             "completion.acknowledge_after_owner_settlement()",
-            "RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight",
+            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
             "super::super::status::set_v2_status(status)"
           ]
         },
@@ -7893,12 +7925,12 @@
           "kind": "fn",
           "symbol": "run_lifecycle_active_height",
           "required_tokens": [
-            "let apply_completion_barrier = producer_claim.blocks_runtime();",
-            "if apply_completion_barrier {",
+            "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
+            "if lane_only_completion_barrier {",
             "drain_lane_relay_ingress(",
             "lane_work.schedule_retransmission()?",
             "dispatch_lane_work_effects(",
-            "let discovery_was_outstanding = if apply_completion_barrier {",
+            "let discovery_was_outstanding = if lane_only_completion_barrier {",
             ".terminal_settlement_stops_runtime()",
             "Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))",
             "let apply_terminal_settled = producer_claim.apply_terminal_settled();",
@@ -10423,8 +10455,14 @@
             "self.validate_lane_queue_carrier_cleanup_batch_bounds(",
             "let group_count = carriers",
             "carrier.len()",
+            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "let _reservation_transition_guard = self.lane_reservation_transition_lock.lock()",
-            "let queue_guard = self.push_remove_lock.lock()",
+            "self.wait_for_durability_transitions(&cleanup_hashes)",
+            "let mut queue_guard = self.push_remove_lock.lock()",
+            "while cleanup_hashes",
+            ".any(|hash| self.durability_transition_active(hash))",
+            "drop(queue_guard);\n            self.wait_for_durability_transitions(&cleanup_hashes);",
+            "queue_guard = self.push_remove_lock.lock()",
             "let store = self.lane_reservations.lock()",
             "let mut seen_group_slot_keys = BTreeSet::new();",
             "for group in carriers.iter().flatten()",
@@ -10439,7 +10477,6 @@
             "drop(store)",
             "drop(queue_guard)",
             "preflight_lane_reservation_plan_journal",
-            "terminal_evidence\n            .try_reserve_exact(group_count)",
             "for group in carriers.into_iter().flatten()",
             "self.commit_lane_reservation(",
             "terminal_evidence.push"

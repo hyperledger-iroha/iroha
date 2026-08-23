@@ -18,7 +18,7 @@ const KAGEMUSHA_CATALOG_REVALIDATION_RECEIPT_ROOT_V1: &str =
     "/Library/SORA/Kagemusha/catalog-revalidation";
 
 /// Controller-authenticated root-custodied promotion reservation.
-pub(super) struct TrustedKagemushaPromotionReservationV1 {
+pub struct TrustedKagemushaPromotionReservationV1 {
     exact_reservation_bytes: Vec<u8>,
     catalog_revalidation_receipt_json: Vec<u8>,
 }
@@ -37,7 +37,7 @@ impl TrustedKagemushaPromotionReservationV1 {
 
 /// Read and authenticate the configured root-owned promotion reservation.
 #[cfg(target_os = "macos")]
-pub(super) fn read_configured_kagemusha_promotion_reservation(
+pub fn read_configured_kagemusha_promotion_reservation(
     config: &Config,
 ) -> Result<TrustedKagemushaPromotionReservationV1, String> {
     read_configured_kagemusha_promotion_reservation_with(config, |path, maximum, label| {
@@ -47,7 +47,7 @@ pub(super) fn read_configured_kagemusha_promotion_reservation(
 
 /// Reject the fixed macOS custody path on platforms without a reviewed root.
 #[cfg(not(target_os = "macos"))]
-pub(super) fn read_configured_kagemusha_promotion_reservation(
+pub fn read_configured_kagemusha_promotion_reservation(
     _config: &Config,
 ) -> Result<TrustedKagemushaPromotionReservationV1, String> {
     Err(
@@ -112,7 +112,7 @@ fn kagemusha_catalog_revalidation_receipt_path_v1(promotion_id: [u8; 32]) -> Pat
 }
 
 /// Read exact bytes of the already-published catalog seal for same-load comparison.
-pub(super) fn read_configured_kagemusha_catalog_qualification_seal(
+pub fn read_configured_kagemusha_catalog_qualification_seal(
     config: &Config,
 ) -> Result<Vec<u8>, String> {
     let path = config
@@ -178,7 +178,7 @@ fn decode_exact_kagemusha_validator_qualification_seal(
 }
 
 /// Prepared root-owned, no-replace destination for one local validator seal.
-pub(super) struct KagemushaValidatorSealPublicationTarget {
+pub struct KagemushaValidatorSealPublicationTarget {
     inner: RootOwnedNoReplaceArtifactPublicationTarget,
 }
 
@@ -228,8 +228,7 @@ impl KagemushaValidatorSealPublicationTarget {
             || canonical.len() > KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1
         {
             return Err(format!(
-                "Kagemusha validator seal exceeds the {}-byte limit",
-                KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1
+                "Kagemusha validator seal exceeds the {KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1}-byte limit"
             ));
         }
         self.inner
@@ -315,12 +314,20 @@ fn validate_validator_seal_directory_separation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config::base::toml::TomlSource;
     use iroha_crypto::{Algorithm, KeyPair};
     use std::path::PathBuf;
 
+    fn config_fixture() -> Config {
+        Config::from_toml_source(TomlSource::inline(
+            crate::config_tests::minimal_config_table(),
+        ))
+        .expect("minimal production config fixture")
+    }
+
     #[test]
     fn configured_reservation_reader_requires_exact_path_key_and_bytes() {
-        let config = Config::default();
+        let config = config_fixture();
         let error = read_configured_kagemusha_promotion_reservation_with(&config, |_, _, _| {
             unreachable!("missing config must fail before reading")
         })
@@ -328,7 +335,7 @@ mod tests {
         .expect("missing reservation configuration must fail");
         assert!(error.contains("reservation_path"));
 
-        let mut configured = Config::default();
+        let mut configured = config_fixture();
         configured
             .settlement
             .offline
@@ -366,7 +373,7 @@ mod tests {
 
     #[test]
     fn validator_output_rejects_config_path_substitution() {
-        let mut config = Config::default();
+        let mut config = config_fixture();
         config
             .settlement
             .offline
@@ -383,7 +390,7 @@ mod tests {
 
     #[test]
     fn validator_output_directory_must_not_contain_trusted_source_directories() {
-        let mut config = Config::default();
+        let mut config = config_fixture();
         config.settlement.offline.kagemusha_artifact_dir =
             Some(PathBuf::from("/trusted/kagemusha/artifacts"));
         let output = Path::new("/trusted/kagemusha/validator.norito");
@@ -403,14 +410,14 @@ mod tests {
         assert!(error.contains("promotion reservation"));
 
         let output = Path::new("/Library/SORA/Kagemusha/validator.norito");
-        let error = validate_validator_seal_directory_separation(&Config::default(), output)
+        let error = validate_validator_seal_directory_separation(&config_fixture(), output)
             .expect_err("an output ancestor of the fixed revalidation root must fail closed");
         assert!(error.contains("catalog-revalidation receipt"));
     }
 
     #[test]
     fn validator_output_directory_must_not_nest_under_trusted_source_directories() {
-        let mut config = Config::default();
+        let mut config = config_fixture();
         config
             .settlement
             .offline
@@ -431,7 +438,7 @@ mod tests {
             );
         let reservation_bytes =
             norito::encode_canonical(&reservation).expect("canonical reservation fixture");
-        let mut config = Config::default();
+        let mut config = config_fixture();
         config
             .settlement
             .offline
@@ -483,7 +490,8 @@ mod tests {
                 Ok(b"substituted catalog receipt".to_vec())
             }
         })
-        .expect_err("a different promotion-scoped receipt must fail closed");
+        .err()
+        .expect("a different promotion-scoped receipt must fail closed");
         assert!(error.contains("does not bind the exact"));
     }
 
@@ -515,7 +523,7 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn live_reader_rejects_unreviewed_platform_root() {
-        let error = read_configured_kagemusha_promotion_reservation(&Config::default())
+        let error = read_configured_kagemusha_promotion_reservation(&config_fixture())
             .expect_err("unreviewed platform must fail before reading any path");
         assert!(error.contains("unsupported outside macOS"));
     }

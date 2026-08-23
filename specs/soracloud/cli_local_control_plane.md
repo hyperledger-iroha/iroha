@@ -1,10 +1,11 @@
 # Soracloud CLI and Control Plane
 
-Soracloud v1 is an authoritative mixed-plane runtime:
+Soracloud v1 ships an authoritative deterministic runtime:
 
 - deterministic services run on `SoraContainerRuntimeV1::Ivm`
-- hosted HTTP services run on `execution_plane = HttpService` with
-  `runtime = Inrou`
+- hosted HTTP manifests use `execution_plane = HttpService` with
+  `runtime = Inrou`, but first-release admission rejects them in every shipping
+  mode until the mandatory confinement launcher is complete
 
 The control plane remains authoritative. Torii serves status and mutation
 routes directly from committed world state plus the embedded Soracloud runtime
@@ -34,14 +35,14 @@ sensitive Soracloud state is not part of the public discovery surface.
 
 ## Runtime Scope
 
-- Use `HttpService + Inrou` for collector-heavy, SSE, cache-backed, or
-  browser-assisted workloads that need a hosted HTTP plane.
 - Use deterministic IVM services for wallet auth, confidential vault state,
   governance-sensitive mutations, and other replay-safe handlers.
-- Public routing is longest-prefix authoritative, so one host can safely split
-  `/api/v1/search*` to a hosted service while `/api/auth*` and
-  `/api/v1/user*` stay on an IVM service.
-- Hosted services declare persistent lease-backed storage through
+- `HttpService + Inrou` manifests and split-plane scaffolds are retained for
+  local planning and launcher qualification only. They cannot be released or
+  advertised by a first-release node.
+- The intended hosted topology uses authoritative longest-prefix routing, but
+  it is not a shipping deployment surface in this release.
+- Deferred hosted services declare persistent lease-backed storage through
   `lease_volumes`.
 - `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
   at `/`, and is materialized per replica.
@@ -389,7 +390,8 @@ non-root local backend/public access, and reject non-loopback backend input.
 QMP must attest the protected backend before serving. Graceful cleanup touches
 only chains installed by the current held firewall object; ambiguity aborts.
 
-Prepare verified native-ISA Debian guest assets and run the canonical smoke:
+For private implementation qualification only, prepare verified native-ISA
+Debian guest assets and run the retained smoke:
 
 ```bash
 eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
@@ -399,8 +401,8 @@ cargo xtask soracloud-inrou-smoke portable
 The test-only `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
 `IROHA_INROU_PORTABLE_INITRD_IMAGE` variables supply local guest assets; they
-do not select production behavior. Production backend and acceleration
-selection comes only from `iroha_config`.
+do not select shipping behavior. No first-release configuration enables the
+private backend.
 
 PortableVm uses a verified base image with a mutable `qcow2` root overlay.
 Shared lease volumes are exact-size persistent raw block devices. Only a raw
@@ -422,10 +424,11 @@ Focused validation includes:
 - `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
 
-## Recommended Hosted-Service Workflow
+## Deferred Hosted-Service Workflow
 
-Use the `http-service` scaffold for one hosted HTTP service that should run on
-the Soracloud hosted plane without an app manifest wrapper.
+The `http-service` scaffold describes one future hosted HTTP service without an
+app manifest wrapper. Use it only for local development, planning, and launcher
+qualification; first-release deploy and upgrade admission rejects it.
 
 Build and refresh the single service pair:
 
@@ -445,25 +448,8 @@ iroha soracloud service plan --container ./container_manifest.json --service ./s
 iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
-Deploy or upgrade through the same hosted-service root scripts:
-
-```bash
-cd .soracloud-live
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud service deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud service upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-The direct `deploy`, `upgrade`, and manifest-pair `status` outputs keep the
-same local route and workspace-script projection that `plan` reports,
-alongside the live control-plane data.
+Do not run the generated hosted `deploy.sh` or `upgrade.sh` wrappers against a
+first-release node. Their manifests are rejected before a VM can be launched.
 
 ## Recommended Single-App Workflow
 
@@ -525,13 +511,16 @@ iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://12
 This path keeps the frontend at `/` and the API at `/api/healthz` on the same
 hostname.
 
-## Recommended Mixed-App Workflow
+## Deferred Mixed-App Workflow
 
-Use the split-app scaffold for apps that need:
+The split-app scaffold models apps that will eventually need:
 
 - a static frontend published to SoraFS
 - a hosted live API on Inrou
 - a deterministic IVM vault or auth plane
+
+This workflow is local/planning-only in the first release. The hosted member
+prevents deploy, release, or upgrade from succeeding on a shipping node.
 
 ```bash
 iroha soracloud app init \
@@ -578,35 +567,25 @@ cd .soracloud-hayahi
 iroha soracloud app build --manifest ./app_manifest.json --dry-run
 ```
 
-Inspect the local split-plane routing and frontend publish shape before deploy:
+Inspect the local split-plane routing and frontend publish shape:
 
 ```bash
 iroha soracloud app plan \
   --manifest .soracloud-hayahi/app_manifest.json
 ```
 
-Deploy the static site plus every service without SSH or manual pinning:
+Validate the deferred split-app release contract locally:
 
 ```bash
 cd .soracloud-hayahi
-./doctor.sh
-TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app doctor --manifest ./app_manifest.json
 iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
-iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-`app doctor` and `app release` resolve and run the same
-root `doctor.sh` and `release.sh` scripts adjacent to `app_manifest.json`, so
-operators can stay on the manifest-driven CLI path without shelling into the
-workspace manually.
+Do not run `release.sh`, `deploy.sh`, `upgrade.sh`, or their non-dry-run CLI
+counterparts for this scaffold in the first release. Admission rejects the
+hosted member.
 
-Those generated root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
+The generated local root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
 then an explicit source checkout via `IROHA_SOURCE_DIR` or
 `IROHA_MANIFEST_PATH`, so local app workspaces can target a nearby
 `iroha_cli` checkout without requiring a globally installed source wrapper.
@@ -614,16 +593,8 @@ When you drive the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`,
 set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
 artifact state isolated from other local builds.
 
-Upgrade the static site plus every service without SSH or manual pinning:
-
-```bash
-cd .soracloud-hayahi
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-```
-
-For Taira-style deployments, keep Torii root bound to Torii itself and use the
-gateway host only as:
+For Taira deployment of shipping deterministic apps, keep Torii root bound to
+Torii itself and use the gateway host only as:
 
 - the Torii/control-plane base URL
 - the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.net/...`

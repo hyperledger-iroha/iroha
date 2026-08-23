@@ -14,7 +14,7 @@ import org.junit.Test;
 
 public final class IrohaPeerKagemushaAdapterV1Tests {
   @Test
-  public void requiresAbi21AndPreservesExactBytesThroughNative() {
+  public void requiresAbi22AndPreservesExactBytesThroughNative() {
     final byte[] archive = portableOfferFixture();
     final boolean nativeAvailable =
         KagemushaRecursiveSpendProver.isArtifactStreamingAvailable();

@@ -511,7 +511,7 @@ fn mint_challenge_ticket_reports_rng_failure() {
         .expect_err("failing RNG must abort challenge minting");
     match err {
         ChallengeMintError::Pow(pow::MintError::RandomBytes { operation, message }) => {
-            assert_eq!(operation, "minting PoW client nonce");
+            assert_eq!(operation, "minting PoW solution nonce");
             assert!(
                 message.contains("failing p2p ticket RNG"),
                 "unexpected message: {message}"

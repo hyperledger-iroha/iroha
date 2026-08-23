@@ -5873,7 +5873,7 @@ final class ToriiClientTests: XCTestCase {
             "dns_servers": [],
             "tunnel_addresses": ["10.208.0.2/32"],
             "mtu_bytes": 1280,
-            "helper_ticket_hex": "5356504e48543100" + String(repeating: "00", count: 656),
+            "helper_ticket_hex": "5356504e48543100" + String(repeating: "00", count: 688),
             "bytes_in": 0,
             "bytes_out": 0,
             "status": "active"
@@ -6441,7 +6441,7 @@ final class ToriiClientTests: XCTestCase {
         let quoteId = String(repeating: "11", count: 32)
         let paymentHash = String(repeating: "22", count: 32)
         let meteringKey = String(repeating: "33", count: 32)
-        let helperTicketHex = "5356504e48543100" + String(repeating: "00", count: 656)
+        let helperTicketHex = "5356504e48543100" + String(repeating: "00", count: 688)
         let auth = ToriiCanonicalRequestAuth(accountId: "alice@universal",
                                              privateKey: Data(repeating: 7, count: 32),
                                              timestampMs: 1_700_000_000_020,
@@ -6510,13 +6510,13 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(created.leaseFee, "1000000.25")
         XCTAssertEqual(fetched?.paymentTransactionHash, paymentHash)
         XCTAssertEqual(created.helperTicketHex, helperTicketHex)
-        XCTAssertEqual(created.helperTicketHex.utf8.count, 1_328)
+        XCTAssertEqual(created.helperTicketHex.utf8.count, 1_392)
     }
 
     func testVpnSessionRejectsNonCanonicalHelperTicketHex() throws {
         let sessionId = String(repeating: "11", count: 32)
         let paymentHash = String(repeating: "22", count: 32)
-        let validHelperTicketHex = "5356504e48543100" + String(repeating: "00", count: 656)
+        let validHelperTicketHex = "5356504e48543100" + String(repeating: "00", count: 688)
 
         func sessionData(helperTicketHex: String) throws -> Data {
             let payload: [String: Any] = [

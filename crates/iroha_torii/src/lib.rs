@@ -11849,23 +11849,6 @@ async fn handler_space_directory_manifests(
     if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
         let route = match resolve_torii_route_for_dataspace_id(app.as_ref(), dataspace_id) {
             Ok(route) => route,
-            Err(
-                queue::RoutingResolveError::UnknownDataspace { .. }
-                | queue::RoutingResolveError::NoLaneForDataspace { .. },
-            ) => {
-                // A dataspace filter can match at most one manifest globally, so one row proves
-                // its complete prefix even when the client offset uses the larger fetch window.
-                let fanout_query = space_directory_manifest_fanout_query(&query, 1);
-                let query_string = encode_torii_proxy_query(&fanout_query)?;
-                return Ok(execute_torii_fanout_space_directory_manifests_read(
-                    &app,
-                    uaid_literal,
-                    query_string,
-                    client_offset,
-                    client_limit,
-                )
-                .await);
-            }
             Err(error) => {
                 return Err(Error::PushIntoQueue {
                     source: Box::new(queue::Error::UnresolvedRoute {

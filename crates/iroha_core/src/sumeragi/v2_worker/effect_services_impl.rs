@@ -93,6 +93,8 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
+        #[cfg(test)]
+        let observed_message = message.clone();
         if self.proposal_work_retired
             && matches!(
                 &message.payload,
@@ -173,6 +175,8 @@ impl V2EffectServices for ProductionV2Services {
                 );
             }
             operation.complete();
+            #[cfg(test)]
+            self.consensus_broadcasts.push(observed_message);
             return Ok(if ownership == ExactFanoutOwnership::SourceRetained {
                 ConsensusBroadcastDisposition::SourceRetained
             } else {
@@ -190,6 +194,8 @@ impl V2EffectServices for ProductionV2Services {
             iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
         operation.complete();
+        #[cfg(test)]
+        self.consensus_broadcasts.push(observed_message);
         Ok(if source_retained {
             ConsensusBroadcastDisposition::SourceRetained
         } else {
@@ -666,13 +672,31 @@ impl V2EffectServices for ProductionV2Services {
                         "exhausted bounded Sumeragi v2 interrupted-tip recovery"
                     );
                 }
-                _ => {
+                Some(PendingTipRecoveryAttemptResult::Advanced) => {
                     iroha_logger::debug!(
                         height = status.height,
                         stage = ?status.pending_tip_recovery_stage,
                         attempts = status.pending_tip_recovery_attempts,
                         result = ?status.pending_tip_recovery_last_result,
                         "advanced bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                Some(PendingTipRecoveryAttemptResult::Waiting) => {
+                    iroha_logger::debug!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        result = ?status.pending_tip_recovery_last_result,
+                        "waiting in bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                None => {
+                    iroha_logger::debug!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        fail_closed = status.fail_closed,
+                        "started or fail-stopped a bounded Sumeragi v2 interrupted-tip recovery attempt"
                     );
                 }
             }

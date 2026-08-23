@@ -377,12 +377,12 @@ fn plan_kagemusha_v4_activation_binding(
                 format!("failed to encode Kagemusha V4 release record: {error}"),
             )
         })?;
+    let release_record_sha256: [u8; 32] = Sha256::digest(&release_record_bytes).into();
     let manifest = &activation.release_record.manifest;
     if promotion_binding.reviewed_source_closure_descriptor_sha256
         != manifest.reviewed_source_closure_descriptor_sha256
         || promotion_binding.manifest_sha256 != release_binding.manifest_sha256
-        || promotion_binding.release_record_sha256
-            != <[u8; 32]>::from(Sha256::digest(&release_record_bytes))
+        || promotion_binding.release_record_sha256 != release_record_sha256
         || promotion_binding.release_policy_source.sha256 != activation.configured_policy_sha256
         || !promotion_binding
             .device_attestation_policy_norito

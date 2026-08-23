@@ -524,16 +524,25 @@ def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
 
 
 def copy_reviewed_rust_include_components(tmp_path: Path) -> None:
-    """Copy each reviewed include closure whose parent is in the fixture."""
-    for parent_relative, component_relatives in REVIEWED_RUST_INCLUDE_MANIFESTS.items():
-        parent = tmp_path / parent_relative
-        if not parent.is_file():
-            continue
-        for component_relative in component_relatives:
-            source = (ROOT_DIR / parent_relative).parent / component_relative
-            destination = parent.parent / component_relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+    """Copy the complete reviewed include closure rooted in the fixture."""
+    visited: set[Path] = set()
+    while True:
+        parents = tuple(
+            parent_relative
+            for parent_relative in REVIEWED_RUST_INCLUDE_MANIFESTS
+            if parent_relative not in visited
+            and (tmp_path / parent_relative).is_file()
+        )
+        if not parents:
+            return
+        for parent_relative in parents:
+            visited.add(parent_relative)
+            parent = tmp_path / parent_relative
+            for component_relative in REVIEWED_RUST_INCLUDE_MANIFESTS[parent_relative]:
+                source = (ROOT_DIR / parent_relative).parent / component_relative
+                destination = parent.parent / component_relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
 
 
 def copy_flat_async_architecture_fixture(tmp_path: Path, module) -> Path:
@@ -1225,7 +1234,7 @@ def test_fairness_consuming_proof_cannot_precede_action_refinement(
         f"proof obligation {dependent_id} cannot be tlaps_proved before "
         "prerequisite async-fair-action-refinement is tlaps_proved"
     ) in errors
-def test_historical_timeout_authorization_is_derived_not_duplicated(
+def test_same_round_authorization_is_derived(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -1246,40 +1255,40 @@ ReducerProvenanceWithoutTimeoutTransport ==
 =============================================================================
 """
     proof = r"""---- MODULE SumeragiV2InductiveProofs ----
-THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
+THEOREM ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization ==
   ReducerProvenanceInvariant
-    => HistoricalTcLockedCommitAuthorizationInvariant
-BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
-   DurableTimeoutProtectionSuppliesInstalledTcAuthorization
+    => SameRoundLockAndCommitAuthorizationInvariant
+BY PendingLockCommitUsesExactCurrentRound,
+   DurableTimeoutProtectionIsDirect
 =============================================================================
 """
     invariant_path.write_text(invariant, encoding="utf-8")
     proof_path.write_text(proof, encoding="utf-8")
 
-    assert module._historical_timeout_derivation_errors(formal_dir) == []
+    assert module._same_round_authorization_derivation_errors(formal_dir) == []
 
     invariant_path.write_text(
         invariant.replace(
             "/\\ DurableTimeoutsProtectCommits",
             "/\\ DurableTimeoutsProtectCommits\n"
-            "  /\\ HistoricalTcLockedCommitAuthorizationInvariant",
+            "  /\\ SameRoundLockAndCommitAuthorizationInvariant",
             1,
         ),
         encoding="utf-8",
     )
-    errors = module._historical_timeout_derivation_errors(formal_dir)
+    errors = module._same_round_authorization_derivation_errors(formal_dir)
     assert any("may not duplicate the derived" in error for error in errors)
 
     invariant_path.write_text(invariant, encoding="utf-8")
     proof_path.write_text(
         proof.replace(
             "ReducerProvenanceInvariant\n"
-            "    => HistoricalTcLockedCommitAuthorizationInvariant",
+            "    => SameRoundLockAndCommitAuthorizationInvariant",
             "TRUE",
         ),
         encoding="utf-8",
     )
-    errors = module._historical_timeout_derivation_errors(formal_dir)
+    errors = module._same_round_authorization_derivation_errors(formal_dir)
     assert any("must state only" in error for error in errors)
 
 
@@ -8922,8 +8931,8 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             ownership: FinalityCompletionOwner::Runtime(ownership),
         });""",
             """            artifact: completion.artifact,
-            ownership: FinalityCompletionOwner::RecoveredDecisionApply(
-                RecoveredDecisionApplyDispatchKeyV1::new_for_test(),
+            ownership: FinalityCompletionOwner::LifecycleDecisionApply(
+                LifecycleDecisionApplyDispatchKeyV1::for_test(1, 1),
             ),
         });""",
             "durable finality tombstone must retain the completed Apply owner",
@@ -26816,6 +26825,24 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
             "non-Unix adjacent storage operation cannot fall back to path I/O",
         ),
         (
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+            "super::authority::lifecycle_ordinal_authorities_after_high_watermark",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark",
+            "both restored high-waters must advance the shared source",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+            "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+            "both restored high-waters must advance the shared source",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+            ".bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
+            ".discard_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
+            "both restored high-waters must advance the shared source",
+        ),
+        (
             Path(
                 "crates/iroha_core/src/sumeragi/"
                 "serviced_candidate_store.rs"
@@ -27107,7 +27134,7 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS = (
 SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY = SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[3:]
 assert len(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS) == len(
     set(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS)
-) == 29
+) == 32
 
 
 @pytest.mark.parametrize(

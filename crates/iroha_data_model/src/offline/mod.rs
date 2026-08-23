@@ -3032,7 +3032,10 @@ impl KagemushaReviewedSourceClosureV1 {
     }
     /// Return the exact canonical compact sorted-key ASCII JSON descriptor plus LF.
     ///
-    /// Returns [`KagemushaValidationError`] for an invalid closure or descriptor encoding failure.
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the closure is invalid or the generated descriptor
+    /// exceeds its protocol size bound.
     pub fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate()?;
         let mut out = String::new();
@@ -3766,6 +3769,7 @@ mod kagemusha_v4_artifact_contract_tests {
         isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
     };
     use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
+
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
@@ -5304,7 +5308,7 @@ mod kagemusha_v4_artifact_contract_tests {
         );
         let mismatched_lock_receipt = norito::encode_canonical(
             &kagemusha_internal_validation_receipt::tests::
-                signed_receipt_with_tracked_lock_for_v4_candidate(
+                signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
                     &candidate,
                     &manifest,
                     [0xD4; 32],

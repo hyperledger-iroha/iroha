@@ -114,21 +114,21 @@ _TRUSTED_ARCHIVE_NAMES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
+        "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
+        "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
+        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
+        "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -192,6 +192,10 @@ _RUNNER_EXTRA_ENV = {
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+    "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
     "IROHA_RELEASE_INVOCATION_ROOT",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",

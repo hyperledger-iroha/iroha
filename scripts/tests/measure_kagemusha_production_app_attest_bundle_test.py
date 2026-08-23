@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import plistlib
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -222,6 +224,136 @@ class CaptureBundleMeasurementTest(unittest.TestCase):
             )
             with self.assertRaises(FileExistsError):
                 measure._write_new_private_json(output, value)
+
+    def test_private_output_zero_length_write_fails_without_partial_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "measurement.json"
+            writer = mock.Mock(side_effect=[0, OSError("write loop continued")])
+            with (
+                mock.patch.object(measure.os, "write", writer),
+                self.assertRaisesRegex(OSError, "short capture-app measurement write"),
+            ):
+                measure._write_new_private_json(
+                    output,
+                    {"schema": measure.SCHEMA, "version": 1},
+                )
+            self.assertEqual(writer.call_count, 1)
+            self.assertFalse(output.exists())
+
+    def test_private_output_close_failure_cleans_staging_file(self) -> None:
+        value = {"schema": measure.SCHEMA, "version": 1}
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "measurement.json"
+
+            def close_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                raise OSError("injected close failure")
+
+            with (
+                mock.patch.object(measure.os, "close", side_effect=close_then_fail),
+                self.assertRaisesRegex(OSError, "injected close failure"),
+            ):
+                measure._write_new_private_json(output, value)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_private_output_post_link_replacement_is_preserved_as_uncertain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "measurement.json"
+            displaced = root / "displaced-created-file.json"
+            raced_payload = b"raced replacement\n"
+            real_link = os.link
+
+            def replace_after_link(
+                source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                *,
+                follow_symlinks: bool = True,
+            ) -> None:
+                real_link(source, target, follow_symlinks=follow_symlinks)
+                Path(target).rename(displaced)
+                Path(target).write_bytes(raced_payload)
+                Path(target).chmod(0o600)
+
+            with (
+                mock.patch.object(measure.os, "link", side_effect=replace_after_link),
+                self.assertRaisesRegex(
+                    measure.MeasurementPublicationUncertain,
+                    "no final name was removed",
+                ),
+            ):
+                measure._write_new_private_json(
+                    output, {"schema": measure.SCHEMA, "version": 1}
+                )
+            self.assertEqual(output.read_bytes(), raced_payload)
+            self.assertTrue(displaced.is_file())
+
+    def test_private_output_same_inode_same_length_mutation_is_uncertain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "measurement.json"
+            value = {"kind": "original"}
+            mutated_payload = json.dumps(
+                {"kind": "tampered"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii") + b"\n"
+            expected_payload = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii") + b"\n"
+            self.assertEqual(len(mutated_payload), len(expected_payload))
+            real_link = os.link
+
+            def mutate_after_link(
+                source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+                *,
+                follow_symlinks: bool = True,
+            ) -> None:
+                real_link(source, target, follow_symlinks=follow_symlinks)
+                Path(target).write_bytes(mutated_payload)
+                Path(target).chmod(0o600)
+
+            with (
+                mock.patch.object(measure.os, "link", side_effect=mutate_after_link),
+                self.assertRaisesRegex(
+                    measure.MeasurementPublicationUncertain,
+                    "no final name was removed",
+                ),
+            ):
+                measure._write_new_private_json(output, value)
+            self.assertEqual(output.read_bytes(), mutated_payload)
+
+    def test_main_returns_temporary_failure_for_uncertain_publication(self) -> None:
+        argv = [
+            "measure_kagemusha_production_app_attest_bundle.py",
+            "--app",
+            "/unused/app",
+            "--signed-entitlements",
+            "/unused/entitlements.plist",
+            "--development-team",
+            "ABCDEFGHIJ",
+            "--bundle-id",
+            "org.example.capture",
+            "--output",
+            "/unused/output.json",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(measure, "measure_bundle", return_value={}),
+            mock.patch.object(
+                measure,
+                "_write_new_private_json",
+                side_effect=measure.MeasurementPublicationUncertain("uncertain"),
+            ),
+        ):
+            self.assertEqual(measure.main(), 75)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 #[test]
 fn partial_stage_discard_recovers_committed_replacement_before_returning() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement_hash = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let original = DummyBlocks::new().next();
@@ -87,7 +87,7 @@ fn partial_stage_discard_recovers_committed_replacement_before_returning() {
 }
 #[test]
 fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let original = DummyBlocks::new().next();
@@ -153,7 +153,7 @@ fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
 }
 #[test]
 fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let blocks = store_dummy_block_arcs(&kura, 4);
     let blocks_dir = kura.active_blocks_dir.lock().clone();
     for block in blocks.iter().skip(1) {
@@ -223,7 +223,7 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
 }
 #[test]
 fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     let (expected, artifact, expected_header) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let (blocks, payloads) = store_retained_archive_chain(&kura);
@@ -311,7 +311,7 @@ fn v2_finality_store_rejects_header_matching_canonical_wire_substitution() {
 }
 #[test]
 fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
@@ -359,7 +359,7 @@ fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
 }
 #[test]
 fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restart() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
@@ -456,7 +456,7 @@ fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamp
 }
 #[test]
 fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let (blocks, _) = store_retained_archive_chain(&kura);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let enforced_before = kura
@@ -633,7 +633,7 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
 }
 #[test]
 fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let (blocks, _) = store_retained_archive_chain(&kura);
@@ -661,7 +661,7 @@ fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
 }
 #[test]
 fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let (blocks, _) = store_retained_archive_chain(&kura);
@@ -686,7 +686,7 @@ fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
 }
 #[test]
 fn unfinalized_block_cannot_become_bodyless_before_finality() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     let artifact = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
@@ -716,7 +716,7 @@ fn unfinalized_block_cannot_become_bodyless_before_finality() {
 }
 #[test]
 fn retained_header_tamper_fails_finality_read_and_restart_closed() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let _ = kura
@@ -771,7 +771,7 @@ fn retained_header_tamper_fails_finality_read_and_restart_closed() {
 }
 #[test]
 fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
@@ -823,7 +823,7 @@ fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation(
 }
 #[test]
 fn startup_rejects_evicted_body_with_deleted_retained_header() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
@@ -844,7 +844,7 @@ fn startup_rejects_evicted_body_with_deleted_retained_header() {
 }
 #[test]
 fn startup_rejects_evicted_body_with_deleted_complete_wire_finality() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         store_dummy_block_arcs(&kura, 4);
@@ -868,7 +868,7 @@ fn startup_rejects_evicted_body_with_deleted_complete_wire_finality() {
 }
 #[test]
 fn startup_rejects_noncanonical_retained_header_inventory_name() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
@@ -926,7 +926,7 @@ fn retained_sidecar_inventory_is_bounded_by_chain_height_plus_transient_slack() 
 fn assert_restart_reconciles_retained_suffix_after_published_truncate(
     remove_one_before_restart: bool,
 ) {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
@@ -969,7 +969,7 @@ fn restart_reconciles_retained_suffix_when_crash_interrupts_cleanup() {
 #[test]
 fn retained_header_symlink_substitution_aborts_before_eviction() {
     use std::os::unix::fs::symlink;
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let _ = kura
@@ -1014,7 +1014,7 @@ fn retained_header_symlink_substitution_aborts_before_eviction() {
 }
 #[test]
 fn retained_header_oversize_fails_before_body_eviction() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let _ = kura
@@ -1129,7 +1129,7 @@ fn retired_retained_block_v2_bytes(record: &KuraRetainedBlockRecord) -> Vec<u8> 
 }
 #[test]
 fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
@@ -1250,7 +1250,7 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
 }
 #[test]
 fn concurrent_eviction_and_finality_serialize_without_losing_header() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let _ = kura
@@ -1374,7 +1374,7 @@ fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
 }
 #[test]
 fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let block = DummyBlocks::new().next();
     let block_hash = block.hash();
@@ -1420,7 +1420,7 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
 }
 #[test]
 fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
@@ -1445,7 +1445,7 @@ fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
 }
 #[test]
 fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let mut generator = DummyBlocks::new();
     let blocks = vec![generator.next(), generator.next()];
@@ -1474,7 +1474,7 @@ fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
 }
 #[test]
 fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let mut generator = DummyBlocks::new();
     let blocks = vec![generator.next(), generator.next()];

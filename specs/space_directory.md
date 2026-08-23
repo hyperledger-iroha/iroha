@@ -362,17 +362,19 @@ canonical `AssetPermissionManifest` JSON:
 
 Omitting `limit` uses the configured application-API page size. `limit=0`,
 oversized pages, and pagination windows beyond the configured fetch budget are
-rejected rather than treated as unbounded reads. A routed fanout currently
-requires `offset + limit` to fit within one configured maximum page so every
-shard can return the complete global prefix in one bounded request; a
-dataspace-specific direct read may use the larger configured fetch window.
-Shard prefixes use bounded counting internally. The coordinator reports an
-exact count only when every prefix is terminal, and validates canonical order,
-filters, lifecycle status, nested manifest identity, and manifest hash before
-merging any routed row. Unknown page, row, lifecycle, revocation, or nested
-manifest fields are rejected. UAIDs, hashes, account IDs, names, asset IDs, and
-quantities must use their canonical JSON spelling, and typed manifest checking
-runs inside the admitted transient decode-allocation phase.
+rejected rather than treated as unbounded reads. For routed fanout, the
+coordinator binds every request to that route's dataspace with `offset=0`,
+`limit=1`, and bounded counting; one UAID can have at most one manifest in a
+dataspace. The route identity remains attached to the response through merge,
+and a row naming any other dataspace is rejected. The coordinator reports an
+exact count only when every route returns a terminal page, then applies global
+ordering and pagination once. Nexus-wide pagination windows must still fit
+within one configured maximum page. It validates filters, lifecycle status,
+nested manifest identity, and manifest hash before merging any routed row.
+Unknown page, row, lifecycle, revocation, or nested manifest fields are
+rejected. UAIDs, hashes, account IDs, names, asset IDs, and quantities must use
+their canonical JSON spelling, and typed manifest checking runs inside the
+admitted transient decode-allocation phase.
 
 Read access controls mirror the bindings and portfolio APIs. Use this surface
 to verify manifest rotations, ensure revocation evidence is visible to

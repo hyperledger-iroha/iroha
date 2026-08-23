@@ -1184,7 +1184,8 @@ and the workflow does not invoke the authenticated controller's
 
 The local Kagami publication boundary is non-circular. `promote-release-v4`
 first authenticates the exact seventeen-file pre-promotion candidate, including
-the release, cryptographic-review, and physical-device approval roles. It
+the internal-validation receipt plus the release, cryptographic-review, and
+physical-device approval roles. It
 requires `--promotion-record` to be the exact canonical absent
 `<bundle-dir>/promotion-record-v4.norito` leaf, publishes the derived record with
 the descriptor-relative no-replace durable writer, and then runs the full exact

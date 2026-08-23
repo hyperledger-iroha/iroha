@@ -1501,7 +1501,7 @@ fn supervisor_exposes_config_overrides() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-    let mut nexus = toml::Table::new();
+    let nexus = toml::Table::new();
     let mut sumeragi = toml::Table::new();
     let mut queues = toml::Table::new();
     queues.insert("commands".into(), toml::Value::Integer(1024));

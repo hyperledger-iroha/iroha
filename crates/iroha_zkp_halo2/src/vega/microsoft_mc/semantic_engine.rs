@@ -1185,8 +1185,8 @@ fn build_abc_table(
         (&shape.b, batching),
         (&shape.c, batching.square()),
     ] {
-        for row in 0..shape.constraints {
-            let row_factor = factor * row_weights[row];
+        for (row, row_weight) in row_weights.iter().copied().enumerate() {
+            let row_factor = factor * row_weight;
             for (column, coefficient) in matrix
                 .row_entries(row)
                 .ok_or(Figure9SemanticEngineError::InvalidShape)?

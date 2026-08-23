@@ -293,6 +293,23 @@ impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1 {
 }
 
 impl ProductionLifecycleActivatedRunnerAuthorityV1 {
+    /// Close physical admission without consuming the activated runner owner.
+    ///
+    /// Finalized rollover uses this to establish a finite ingress cut, drain
+    /// every already-admitted terminal recovery occurrence, and only then
+    /// consume the authority through [`Self::retire`].
+    pub(in crate::sumeragi) fn close_ingress(
+        &self,
+        launched_ingress: &Arc<FairV2Ingress>,
+    ) -> Result<(), V2RunnerError> {
+        self.ingress_ready.store(false, Ordering::Release);
+        self.block_ingress.close();
+        if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
+            return Err(V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        Ok(())
+    }
+
     /// Consume the exact readiness owner before lifecycle gate retirement.
     pub(in crate::sumeragi) fn retire(
         self,
@@ -1858,6 +1875,14 @@ fn reconcile_executor_locked_body(
         executor.reconcile_locked_body_for_recovery(directive.tag(), lock, services)?;
     }
     Ok(directive)
+}
+/// Mirror the production pending-Kura pre-activation reconciliation in focused tests.
+#[cfg(test)]
+pub(in crate::sumeragi) fn reconcile_executor_locked_body_for_pending_kura_test(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    reconcile_executor_locked_body(executor, services).map(drop)
 }
 /// Keep lane-work construction behind the completed interrupted-tip
 /// application boundary.

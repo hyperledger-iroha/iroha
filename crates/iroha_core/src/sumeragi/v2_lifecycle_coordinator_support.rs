@@ -2,13 +2,14 @@
 
 use super::ProductionLifecycleOwnerV1;
 
-/// Opaque proof that owner-open installed one exact recovered Decision Apply carrier.
+/// Linear proof that owner-open installed one exact recovered Decision Apply row.
 ///
-/// Only the complete registry/coordinator census below can mint this linear
-/// permit. Pending-tip replay consumes it when promoting authenticated
-/// Decision recovery from its primitive Fetch witness directly to Apply.
+/// The complete registry/coordinator census mints this value with the row's
+/// actor-global ordinal. Pending-tip replay consumes it when joining inert WAL
+/// provenance directly to the canonical lifecycle Apply worker.
 #[must_use = "the recovered Apply carrier permit must enter pending-tip installation"]
 pub(in crate::sumeragi) struct RecoveredPendingKuraApplyCarrierPermitV1 {
+    lifecycle_ordinal: u128,
     _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
 }
 struct RecoveredPendingKuraApplyCarrierPermitLinearityV1;
@@ -16,9 +17,9 @@ impl Drop for RecoveredPendingKuraApplyCarrierPermitLinearityV1 {
     fn drop(&mut self) {}
 }
 impl RecoveredPendingKuraApplyCarrierPermitV1 {
-    /// Consume the opaque owner proof into the formal startup projection.
-    pub(in crate::sumeragi) fn consume_for_executor(self) -> bool {
-        true
+    /// Consume the owner proof and return its exact Ready ordinal.
+    pub(in crate::sumeragi) fn consume_for_executor(self) -> u128 {
+        self.lifecycle_ordinal
     }
 }
 
@@ -33,15 +34,14 @@ impl ProductionLifecycleOwnerV1 {
         mut self,
         replay: crate::sumeragi::v2::RecoveredPendingKuraApplyReplayV1,
     ) -> Result<Self, &'static str> {
-        if !self
+        let lifecycle_ordinal = self
             .registry
-            .exactly_covers_recovered_decision_apply_ready_work(&self.coordinator)
-        {
-            return Err(
+            .exact_recovered_decision_apply_ready_ordinal(&self.coordinator)
+            .ok_or(
                 "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier",
-            );
-        }
+            )?;
         let apply_carrier = RecoveredPendingKuraApplyCarrierPermitV1 {
+            lifecycle_ordinal,
             _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
         };
         let replay = replay.bind_recovered_apply_carrier(apply_carrier);
@@ -333,6 +333,8 @@ enum SourceId {
     Coordinator,
     CoordinatorSupport,
     Effects,
+    FairIngress,
+    IngressPosition,
     KuraTerminalOutcomes,
     LaneWork,
     Launch,
@@ -377,6 +379,8 @@ impl SourceId {
             "coordinator" => Self::Coordinator,
             "coordinator_support" => Self::CoordinatorSupport,
             "effects" => Self::Effects,
+            "fair_ingress" => Self::FairIngress,
+            "ingress_position" => Self::IngressPosition,
             "kura_terminal_outcomes" => Self::KuraTerminalOutcomes,
             "lane_work" => Self::LaneWork,
             "launch" => Self::Launch,
@@ -435,6 +439,8 @@ fn source(id: SourceId) -> String {
             include_str!("v2_lifecycle_coordinator_support.rs").to_owned()
         }
         SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
+        SourceId::FairIngress => include_str!("mod.rs").to_owned(),
+        SourceId::IngressPosition => include_str!("v2_lifecycle_ingress_position.rs").to_owned(),
         SourceId::KuraTerminalOutcomes => {
             include_str!("../kura/autonomous_lifecycle_terminal_outcomes.rs").to_owned()
         }

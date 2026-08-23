@@ -96,8 +96,24 @@ enum AuthenticatedGenesisStoreReplayDispositionV1 {
 /// Inert runtime fingerprint for one replay-authorized Validate after its
 /// move-only admission owner transfers into the lifecycle registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DurableValidateRetrySealV1 {
-    effect: AdapterEffect,
+enum DurableValidateRetrySealV1 {
+    /// Live admission retains the original executable runtime owner so later
+    /// authority refinement can preserve its one physical lifecycle root.
+    Live {
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+    },
+    /// Cold recovery retains a registry-authenticated inert owner. The `Arc`
+    /// permits transactional executor snapshots without making the move-only
+    /// registry projection itself cloneable or externally reusable.
+    Recovered {
+        owner: Arc<RecoveredDurableValidateRetryOwnerV1>,
+        frontier: RecoveredDurableValidateRetryFrontierV1,
+    },
+}
+
+struct DurableValidateRetryProjectionV1 {
+    seal: DurableValidateRetrySealV1,
     ownership: RuntimeEffectOwnership,
 }
 
@@ -110,7 +126,7 @@ impl DurableValidateRetrySealV1 {
         matches!(effect, AdapterEffect::ValidateBody { .. })
             .then_some(())
             .filter(|()| pending.exactly_matches_retry(effect, ownership))?;
-        Some(Self {
+        Some(Self::Live {
             effect: effect.clone(),
             ownership: ownership.clone(),
         })
@@ -120,44 +136,156 @@ impl DurableValidateRetrySealV1 {
         &self,
         effect: &AdapterEffect,
         incoming: &RuntimeEffectOwnership,
-    ) -> Result<Self, String> {
-        let (
-            AdapterEffect::ValidateBody {
-                tag: incumbent_tag,
-                round: incumbent_round,
-                subject: incumbent_subject,
-            },
-            AdapterEffect::ValidateBody {
-                tag: incoming_tag,
-                round: incoming_round,
-                subject: incoming_subject,
-            },
-        ) = (&self.effect, effect)
-        else {
-            return Err("durable Validate retry seal received another effect stage".to_owned());
-        };
-        if (incoming_tag != incumbent_tag && !incoming_tag.strictly_advances(*incumbent_tag))
-            || incoming_round != incumbent_round
-            || incoming_subject != incumbent_subject
-            || self
-                .ownership
-                .exact_pending_adapter_effect_binding(&self.effect)
-                .is_err()
-        {
-            return Err(
-                "durable Validate retry changed its exact body, tag, or incumbent owner".to_owned(),
-            );
+    ) -> Result<DurableValidateRetryProjectionV1, String> {
+        match self {
+            Self::Live {
+                effect: incumbent_effect,
+                ownership: incumbent_ownership,
+            } => {
+                let (
+                    AdapterEffect::ValidateBody {
+                        tag: incumbent_tag,
+                        round: incumbent_round,
+                        subject: incumbent_subject,
+                    },
+                    AdapterEffect::ValidateBody {
+                        tag: incoming_tag,
+                        round: incoming_round,
+                        subject: incoming_subject,
+                    },
+                ) = (incumbent_effect, effect)
+                else {
+                    return Err(
+                        "durable Validate retry seal received another effect stage".to_owned()
+                    );
+                };
+                if (incoming_tag != incumbent_tag
+                    && !incoming_tag.strictly_advances(*incumbent_tag))
+                    || incoming_round != incumbent_round
+                    || incoming_subject != incumbent_subject
+                    || incumbent_ownership
+                        .exact_pending_adapter_effect_binding(incumbent_effect)
+                        .is_err()
+                {
+                    return Err(
+                        "durable Validate retry changed its exact body, tag, or incumbent owner"
+                            .to_owned(),
+                    );
+                }
+                let ownership = incumbent_ownership
+                    .adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)?;
+                ownership
+                    .exact_pending_adapter_effect_binding(effect)
+                    .map_err(|_| {
+                        "durable Validate retry lost its exact adopted owner".to_owned()
+                    })?;
+                Ok(DurableValidateRetryProjectionV1 {
+                    seal: Self::Live {
+                        effect: effect.clone(),
+                        ownership: ownership.clone(),
+                    },
+                    ownership,
+                })
+            }
+            Self::Recovered { owner, frontier } => {
+                let (frontier, ownership) =
+                    owner.exactly_matches_retry(frontier, effect, incoming)?;
+                Ok(DurableValidateRetryProjectionV1 {
+                    seal: Self::Recovered {
+                        owner: Arc::clone(owner),
+                        frontier,
+                    },
+                    ownership,
+                })
+            }
         }
-        let ownership = self
-            .ownership
-            .adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)?;
-        ownership
-            .exact_pending_adapter_effect_binding(effect)
-            .map_err(|_| "durable Validate retry lost its exact adopted owner".to_owned())?;
-        Ok(Self {
-            effect: effect.clone(),
-            ownership,
-        })
+    }
+
+    /// Project a durable commitment join without mutating the current seal.
+    fn project_recovered_commitment_ceiling(
+        &self,
+        commitment: wire::ExecutionCommitment,
+    ) -> Result<Option<Self>, String> {
+        match self {
+            Self::Live { .. } => Ok(None),
+            Self::Recovered { owner, frontier } => frontier
+                .project_commitment_ceiling(commitment)
+                .map(|frontier| {
+                    Some(Self::Recovered {
+                        owner: Arc::clone(owner),
+                        frontier,
+                    })
+                })
+                .map_err(str::to_owned),
+        }
+    }
+}
+
+/// Atomic executor-side sink for one complete recovered Validate retry census.
+///
+/// The opaque registry census alone can obtain owners and feeds every one into
+/// this preflight. No executor state changes until [`Self::commit`] consumes
+/// the complete prepared map.
+pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1<'a, R> {
+    executor: &'a mut V2EffectExecutor<R>,
+    runtime_decision: Option<(
+        wire::ConsensusRound,
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
+    prepared: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+}
+
+impl<R: EffectRuntime> PreparedRecoveredDurableValidateRetryInstallV1<'_, R> {
+    /// Absorb one owner projected by the private complete registry census.
+    pub(in crate::sumeragi) fn absorb(
+        &mut self,
+        owner: RecoveredDurableValidateRetryOwnerV1,
+    ) -> Result<(), EffectExecutorError> {
+        let key = owner.key();
+        let validation_marker_is_exact = match (
+            self.executor.validated_bodies.get(&key),
+            self.executor.rejected_bodies.get(&key),
+        ) {
+            (None, None) => true,
+            (Some(validated), None) => owner.exactly_matches_validated_marker(key, validated),
+            (None, Some(rejected)) => rejected == owner.durable_receipt(),
+            (Some(_), Some(_)) => false,
+        };
+        if owner
+            .expected_decision()
+            .is_some_and(|decision| self.runtime_decision != Some(decision))
+            || self.executor.durable_bodies.get(&key) != Some(owner.durable_receipt())
+            || !validation_marker_is_exact
+            || self.executor.retired_rejected_bodies.contains_key(&key)
+            || self
+                .prepared
+                .insert(
+                    key,
+                    DurableValidateRetrySealV1::Recovered {
+                        frontier: owner.initial_retry_frontier().ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "cold Validate retry owner omitted its initial frontier".to_owned(),
+                            )
+                        })?,
+                        owner: Arc::new(owner),
+                    },
+                )
+                .is_some()
+        {
+            return Err(EffectExecutorError::Contract(
+                "cold Validate retry owner disagreed with runtime or body-store recovery"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Publish the fully preflighted census in one map replacement.
+    pub(in crate::sumeragi) fn commit(self) -> Result<(), EffectExecutorError> {
+        self.executor.durable_validate_retry_seals = self.prepared;
+        Ok(())
     }
 }
 
@@ -299,6 +427,30 @@ impl PreparedPublishedLifecycleValidateRetryMarkerV1 {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Begin an atomic sink for the complete storage-authenticated census.
+    pub(in crate::sumeragi) fn prepare_recovered_durable_validate_retry_install(
+        &mut self,
+    ) -> Result<PreparedRecoveredDurableValidateRetryInstallV1<'_, R>, EffectExecutorError> {
+        self.ensure_open()?;
+        let runtime_decision = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)?;
+        if self.protected_decision.is_some()
+            || !self.pending_durable_validate_admissions.is_empty()
+            || !self.durable_validate_retry_seals.is_empty()
+        {
+            return Err(EffectExecutorError::Contract(
+                "cold Validate retry census collided with live executor ownership".to_owned(),
+            ));
+        }
+        Ok(PreparedRecoveredDurableValidateRetryInstallV1 {
+            executor: self,
+            runtime_decision,
+            prepared: BTreeMap::new(),
+        })
+    }
+
     /// Return whether every inert Validate retry tombstone is scoped to the
     /// sole decided body which may survive until this per-height executor is
     /// consumed at rollover.
@@ -319,14 +471,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         durable_receipt: &DurableBodyReceipt,
     ) -> Result<PreparedPublishedLifecycleValidateRetryMarkerV1, EffectExecutorError> {
         let key = (durable_receipt.round(), durable_receipt.subject());
-        let retained_body_is_exact = self.recovered_bodies.get(&key).is_some_and(
-            |(manifest, retained)| {
-                retained == durable_receipt
-                    && manifest.round == durable_receipt.round()
-                    && manifest.subject == durable_receipt.subject()
-                    && HashOf::new(manifest) == durable_receipt.manifest_hash()
-            },
-        );
+        let retained_body_is_exact =
+            self.recovered_bodies
+                .get(&key)
+                .is_some_and(|(manifest, retained)| {
+                    retained == durable_receipt
+                        && manifest.round == durable_receipt.round()
+                        && manifest.subject == durable_receipt.subject()
+                        && HashOf::new(manifest) == durable_receipt.manifest_hash()
+                });
         if !retained_body_is_exact
             || self.durable_bodies.get(&key) != Some(durable_receipt)
             || self.pending_durable_validate_admissions.contains_key(&key)
@@ -356,11 +509,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .marker
             .expect("published direct lifecycle Validate retains its sealed marker");
         assert_eq!(marker.durable_receipt, prepared.durable_receipt);
-        let key = (marker.durable_receipt.round(), marker.durable_receipt.subject());
-        assert_eq!(
-            self.durable_bodies.get(&key),
-            Some(&marker.durable_receipt)
+        let key = (
+            marker.durable_receipt.round(),
+            marker.durable_receipt.subject(),
         );
+        assert_eq!(self.durable_bodies.get(&key), Some(&marker.durable_receipt));
         assert!(!self.pending_durable_validate_admissions.contains_key(&key));
         assert!(!self.durable_validate_retry_seals.contains_key(&key));
         let previous = self
@@ -649,9 +802,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                                 "lifecycle output admission projection failed: {error:?}"
                             ))
                         }
-                        ProductionLifecycleOutputAdmissionFailureV1::Registry(error) => {
+                        ProductionLifecycleOutputAdmissionFailureV1::Registry(reason) => {
                             EffectExecutorError::Contract(format!(
-                                "lifecycle output registry settlement failed: {error:?}"
+                                "lifecycle output registry settlement failed: {reason:?}"
                             ))
                         }
                         ProductionLifecycleOutputAdmissionFailureV1::Durability => {
@@ -1478,9 +1631,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Ok(());
         }
         if let Some(seal) = self.durable_validate_retry_seals.get_mut(&key) {
-            *seal = seal
+            let projected = seal
                 .project_retry(&effect, &ownership)
                 .map_err(EffectExecutorError::Contract)?;
+            *seal = projected.seal;
             return Ok(());
         }
         let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
@@ -1488,25 +1642,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "ValidateBody has no matching durable body receipt".to_owned(),
             )
         })?;
-        if let Some(recovery) = self.pending_tip_recovery.as_ref() {
-            if recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation
-                || recovery.replay_tag() != tag
-                || recovery.durable_round() != round
-                || recovery.durable_subject() != subject
-                || recovery.durable_receipt() != &receipt
-                || self.validated_bodies.get(&key) != Some(recovery.validated_receipt())
-            {
-                return Err(EffectExecutorError::Contract(
-                    "PendingKura ValidateBody changed its exact recovered validation owner"
-                        .to_owned(),
-                ));
-            }
-            // The independently fsynced marker is the terminal authority for
-            // this closed-ingress recovery stage. The enclosing recovery
-            // transition advances to Apply after this exact catalog stutter;
-            // it must not mint ordinary Proposal/local-body admission work.
-            return Ok(());
-        }
         if self.authenticated_genesis_replay.contains_key(&key)
             && self.remote_proposal_replay.contains_key(&key)
         {
@@ -1579,12 +1714,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            return self.install_pending_durable_validate_admission(
+            self.install_pending_durable_validate_admission(
                 key,
                 &effect,
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
-            );
+            )?;
+            return Ok(None);
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -1612,8 +1748,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
-        let authority_certificate = self
-            .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
+        let authority_certificate =
+            self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
         let Some(RemoteProposalReplayStageV1::Stored {
             replay: stored,
             ownership: store_ownership,
@@ -1681,7 +1817,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )
+        )?;
+        Ok(None)
     }
 }
 

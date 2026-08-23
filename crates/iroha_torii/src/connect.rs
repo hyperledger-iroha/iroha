@@ -1719,9 +1719,9 @@ impl Bus {
                 // `attach` publishes its sender before taking this buffer lock.
                 // Re-check under the lock so a frame which raced that publish
                 // cannot be stranded in the offline buffer until a later reconnect.
-                let tx_opt = match target {
-                    proto::Role::App => sess.app_tx.lock().await.clone(),
-                    proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
+                let tx_opt = match frame.dir {
+                    proto::Dir::AppToWallet => sess.wallet_tx.lock().await.clone(),
+                    proto::Dir::WalletToApp => sess.app_tx.lock().await.clone(),
                 };
                 if let Some(tx) = tx_opt {
                     match tokio::time::timeout(

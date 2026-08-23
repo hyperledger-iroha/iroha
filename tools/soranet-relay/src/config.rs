@@ -561,6 +561,36 @@ const DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES: u64 = 1_048_576;
 const DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY: usize = 8_192;
 const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
+/// Maximum byte length of one canonical first-release GAR category.
+pub(crate) const GAR_CATEGORY_MAX_BYTES_V1: usize = 64;
+
+/// Return whether a GAR category is in the canonical first-release form.
+pub(crate) fn is_canonical_gar_category_v1(category: &str) -> bool {
+    if category.is_empty() || category.len() > GAR_CATEGORY_MAX_BYTES_V1 {
+        return false;
+    }
+    category.split('.').all(|segment| {
+        let bytes = segment.as_bytes();
+        bytes
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && bytes
+                .last()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && bytes.iter().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    })
+}
+
+pub(crate) fn validate_gar_category_v1(field: &str, category: &str) -> Result<(), ConfigError> {
+    if is_canonical_gar_category_v1(category) {
+        return Ok(());
+    }
+    Err(ConfigError::Routing(format!(
+        "{field} must be 1..={GAR_CATEGORY_MAX_BYTES_V1} bytes of canonical lowercase ASCII dot-separated segments"
+    )))
+}
 /// Operating mode for the relay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayMode {
@@ -873,6 +903,12 @@ impl ExitRoutingConfig {
                 )));
             }
             route.torii_ws_url = trimmed.to_owned();
+            if let Some(category) = route.gar_category_read_only.as_deref() {
+                validate_gar_category_v1("norito_stream.gar_category_read_only", category)?;
+            }
+            if let Some(category) = route.gar_category_authenticated.as_deref() {
+                validate_gar_category_v1("norito_stream.gar_category_authenticated", category)?;
+            }
         }
         if let Some(route) = self.kaigi_stream.as_mut() {
             route.apply_defaults();
@@ -888,6 +924,12 @@ impl ExitRoutingConfig {
                 )));
             }
             route.hub_ws_url = trimmed.to_owned();
+            if let Some(category) = route.gar_category_public.as_deref() {
+                validate_gar_category_v1("kaigi_stream.gar_category_public", category)?;
+            }
+            if let Some(category) = route.gar_category_authenticated.as_deref() {
+                validate_gar_category_v1("kaigi_stream.gar_category_authenticated", category)?;
+            }
         }
         Ok(())
     }

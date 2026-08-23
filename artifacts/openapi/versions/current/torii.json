@@ -31785,10 +31785,10 @@
             "type": "integer"
           },
           "helper_ticket_hex": {
-            "description": "Lowercase hexadecimal canonical 664-byte VpnHelperTicketV1 payload.",
-            "maxLength": 1328,
-            "minLength": 1328,
-            "pattern": "^[0-9a-f]{1328}$",
+            "description": "Lowercase hexadecimal canonical 696-byte VpnHelperTicketV1 payload.",
+            "maxLength": 1392,
+            "minLength": 1392,
+            "pattern": "^[0-9a-f]{1392}$",
             "type": "string"
           },
           "lease_fee": {

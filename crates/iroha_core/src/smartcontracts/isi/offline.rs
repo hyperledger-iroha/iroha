@@ -63,6 +63,8 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;
 use kagemusha_marker::v2_marker as kagemusha_v2_marker;
+#[cfg(test)]
+pub(crate) use kagemusha_release_lifecycle::tests::staged_lifecycle_for_test;
 pub(crate) use kagemusha_release_lifecycle::{
     LifecycleEntrypointContext, direct_lifecycle_entrypoint_kind,
     require_local_runtime_effective_config, signed_lifecycle_entrypoint_context,
