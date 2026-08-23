@@ -95,6 +95,7 @@ pub(super) enum KagemushaValidatorQualificationUnavailableV1 {
 
 /// Result of the local one-seal seam; it never publishes or collects seals.
 #[derive(Debug)]
+#[allow(variant_size_differences)] // Boxing the one-byte unavailable reason would add a needless allocation.
 pub(super) enum KagemushaValidatorQualificationOutcomeV1 {
     /// Qualification was deliberately unavailable and no signature was made.
     Unavailable(KagemushaValidatorQualificationUnavailableV1),

@@ -1296,7 +1296,7 @@ impl KagemushaV4TairaCanaryEvidenceV1 {
 }
 
 /// Capability returned only after complete production canary verification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KagemushaV4VerifiedTairaCanaryEvidenceV1 {
     promotion_id: [u8; 32],
     activation_expectations_artifact: KagemushaExactBytesDigestV1,
@@ -1857,10 +1857,14 @@ fn verify_evidence_signature(
     hash: HashOf<KagemushaV4TairaCanaryEvidenceBodyV1>,
 ) -> Result<(), KagemushaV4TairaCanaryEvidenceValidationError> {
     match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => iroha_crypto::ed25519_parse_signature(signature.payload())
-            .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Signature)?,
-        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(signature.payload())
-            .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Signature)?,
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())
+                .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Signature)?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())
+                .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Signature)?;
+        }
         Ok(Algorithm::BlsNormal) => {}
         _ => return Err(KagemushaV4TairaCanaryEvidenceValidationError::Signature),
     }

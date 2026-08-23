@@ -9,6 +9,7 @@ use crate::{
         },
     },
     bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
+    isi::offline::RecordKagemushaTairaCanaryV4,
     metadata::Metadata,
     peer::PeerId,
     prelude::Log,

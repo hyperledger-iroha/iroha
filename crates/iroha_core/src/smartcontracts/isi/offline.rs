@@ -180,11 +180,8 @@ fn decode_canonical_offline_proof_envelope(
 /// Key-material-free projection of one authenticated ABI-21 recursive verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveVerifierReadinessV4 {
-    /// Stable logical role identifier exposed by Torii.
-    ///
-    /// Consensus registry records use release-qualified identifiers derived
-    /// from the owner-manifest digest. Readiness intentionally abstracts that
-    /// rotating storage identity into the fixed ABI-21 Eq/Ep role.
+    /// Stable Torii role; consensus storage IDs are release-qualified by the owner-manifest digest.
+    /// Readiness exposes the fixed ABI-21 Eq/Ep role rather than that rotating identity.
     pub id: iroha_data_model::proof::VerifyingKeyId,
     /// Governance-managed version of the selected registry record.
     pub version: u32,
@@ -6422,3 +6419,5 @@ pub mod isi {
     include!("offline/kagemusha_taira_canary.rs");
     include!("offline/isi_tests.rs");
 }
+
+pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;

@@ -10728,7 +10728,7 @@ pub(crate) mod valid {
             let prepared_txs = Self::prepare_external_transactions(block);
             let committed_heights = Self::committed_heights_for_prepared_transactions(
                 &prepared_txs,
-                state.transactions(),
+                crate::state::StateReadOnlyWithTransactions::transactions(state),
             );
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();

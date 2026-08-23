@@ -1712,6 +1712,13 @@ static_mutations = (
         ('exact-eight manifest inventory check',)),
     (CORE, 'change_release.as_ref().is_some_and(|release|', 'change_release.as_ref().is_none_or(|release|',
         'reject an unguarded offline-change issuance path', ('offline-change issuance window',)),
+    (CORE, 'pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;',
+        'pub(crate) use isi::unchecked_kagemusha_taira_canary_wire_identity_v1;',
+        'reject an unreachable signed-canary wire helper',
+        ('pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;',)),
+    (SCHEMA_GOLDEN, '"6ac84133729450e2392f324aae6d4e98".to_owned()',
+        '"pending-exact-bytes-schema".to_owned()', 'reject a pending public schema golden',
+        ('public schema golden contains pending placeholder',)),
     (WORKFLOW, 'ci/check_kagemusha_production_readiness_source_support.py',
         'ci/retired_kagemusha_production_readiness_source_support.py',
         'reject a missing readiness source-support workflow filter',
@@ -1734,6 +1741,9 @@ for (required_filter, retired_filter, label) in (('cargo test -p iroha_data_mode
     'activation-policy parity'), ('cargo test -p iroha_kagami --bin kagami backing_',
     'cargo test -p iroha_kagami --bin kagami retired_backing_filter', 'ordered Taira backing')):
     expect_static_mutation(WORKFLOW, required_filter, retired_filter, f'reject a missing {label} workflow filter', (required_filter,))
+for required_filter in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
+    expect_static_mutation(WORKFLOW, required_filter, required_filter.replace('cargo test', 'cargo missing-test', 1),
+        'reject a missing Kagemusha release Rust filter', (required_filter,))
 boundary_artifacts = {name: MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES // len(ARTIFACTS) for name in ARTIFACTS}
 if checked_declared_artifact_total(boundary_artifacts) != MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES:
     errors.append('self-test failed to accept the exact artifact aggregate limit')

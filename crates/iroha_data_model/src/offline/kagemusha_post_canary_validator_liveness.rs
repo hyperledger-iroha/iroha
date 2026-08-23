@@ -1108,10 +1108,14 @@ fn verify_typed_signature<T>(
     signing_hash: HashOf<T>,
 ) -> Result<(), KagemushaV4PostCanaryValidatorLivenessValidationError> {
     match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => iroha_crypto::ed25519_parse_signature(signature.payload())
-            .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Signature)?,
-        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(signature.payload())
-            .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Signature)?,
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())
+                .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Signature)?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())
+                .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Signature)?;
+        }
         Ok(Algorithm::BlsNormal) => {}
         _ => return Err(KagemushaV4PostCanaryValidatorLivenessValidationError::Signature),
     }

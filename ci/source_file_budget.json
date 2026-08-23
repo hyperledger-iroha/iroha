@@ -50,7 +50,7 @@
     "crates/iroha_core/src/smartcontracts/isi/asset.rs": 8159,
     "crates/iroha_core/src/smartcontracts/isi/domain.rs": 11351,
     "crates/iroha_core/src/smartcontracts/isi/multisig.rs": 7054,
-    "crates/iroha_core/src/smartcontracts/isi/offline.rs": 6424,
+    "crates/iroha_core/src/smartcontracts/isi/offline.rs": 6423,
     "crates/iroha_core/src/smartcontracts/isi/privacy.rs": 9401,
     "crates/iroha_core/src/smartcontracts/isi/query.rs": 8865,
     "crates/iroha_core/src/smartcontracts/isi/soracloud.rs": 16617,

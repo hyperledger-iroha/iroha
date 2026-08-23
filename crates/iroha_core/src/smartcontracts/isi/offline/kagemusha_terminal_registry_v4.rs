@@ -48,6 +48,7 @@ use iroha_data_model::{
     state_path::StatePath,
     zk::BackendTag,
 };
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 #[cfg(all(
     unix,

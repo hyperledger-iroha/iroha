@@ -127,6 +127,15 @@ KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT = (
     "crates/iroha_cli/src/offline/kagemusha_rollout/liveness.rs"
 )
 KAGEMUSHA_ROLLOUT_LIVENESS_MODULE = "mod liveness;"
+KAGEMUSHA_RELEASE_RUST_TEST_FILTERS = (
+    "cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture",
+    "cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture",
+    "cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture",
+    "cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture",
+    "cargo test -p iroha_core --lib taira_canary -- --nocapture",
+    "cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture",
+    "cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture",
+)
 
 
 def runtime_projection_source_errors(
@@ -1046,6 +1055,21 @@ def canary_source_errors(
          r"get_next_bridge_finality_proof\(height, &mut verifier\)"),
         "canary-anchored contiguous shared finality collection",
     )
+    return errors
+
+
+def release_closure_source_errors(core: str, schema: str, workflow: str) -> list[str]:
+    """Reject release-source gaps that focused filters or compilation would expose."""
+    errors: list[str] = []
+    require(
+        core,
+        CORE,
+        errors,
+        "pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;",
+    )
+    if '"pending-' in schema:
+        errors.append(f"{SCHEMA_GOLDEN}: public schema golden contains pending placeholder")
+    require(workflow, WORKFLOW, errors, *KAGEMUSHA_RELEASE_RUST_TEST_FILTERS)
     return errors
 
 

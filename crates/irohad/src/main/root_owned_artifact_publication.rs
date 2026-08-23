@@ -4,22 +4,15 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::{ffi::OsString, fs};
 
-use thiserror::Error;
-
 /// Failure before or after the no-replace commit boundary.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub(super) enum RootOwnedArtifactPublicationError {
     /// Publication did not cross the no-replace rename boundary.
-    #[error("{0}")]
     PreCommit(String),
     /// Rename succeeded, but durable or semantic confirmation failed.
     ///
     /// The final inode is deliberately left in place and must be reconciled by
     /// an operator; callers must never retry publication automatically.
-    #[error(
-        "{label} publication commit-uncertain at `{}`: RENAME_NOREPLACE succeeded and the final inode was left in place: {detail}",
-        path.display()
-    )]
     CommitUncertain {
         /// Human-readable artifact class.
         label: &'static str,
@@ -29,6 +22,25 @@ pub(super) enum RootOwnedArtifactPublicationError {
         detail: String,
     },
 }
+
+impl std::fmt::Display for RootOwnedArtifactPublicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PreCommit(message) => formatter.write_str(message),
+            Self::CommitUncertain {
+                label,
+                path,
+                detail,
+            } => write!(
+                formatter,
+                "{label} publication commit-uncertain at `{}`: RENAME_NOREPLACE succeeded and the final inode was left in place: {detail}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RootOwnedArtifactPublicationError {}
 
 impl RootOwnedArtifactPublicationError {
     fn pre_commit(message: impl Into<String>) -> Self {
@@ -54,10 +66,18 @@ const MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "macos")]
 const MACOS_XATTR_SHOWCOMPRESSION: std::os::raw::c_int = 0x20;
 #[cfg(target_os = "linux")]
+#[allow(
+    unsafe_code,
+    reason = "Linux exposes descriptor-bound xattr inspection through libc"
+)]
 unsafe extern "C" {
     fn flistxattr(fd: std::os::raw::c_int, list: *mut std::os::raw::c_char, size: usize) -> isize;
 }
 #[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "macOS exposes descriptor-bound xattr inspection with hidden compression metadata through libc"
+)]
 unsafe extern "C" {
     fn flistxattr(
         fd: std::os::raw::c_int,
@@ -205,6 +225,10 @@ fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> 
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[allow(
+    unsafe_code,
+    reason = "descriptor-bound xattr inspection requires the platform libc"
+)]
 fn require_no_xattrs(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
     use std::os::fd::AsRawFd as _;
 
@@ -321,7 +345,7 @@ impl RootOwnedNoReplaceArtifactPublicationTarget {
 
     #[cfg(unix)]
     fn read_pinned_bounded(self, max_bytes: usize) -> Result<Vec<u8>, String> {
-        use std::{io::Read as _, os::unix::fs::MetadataExt as _};
+        use std::io::Read as _;
 
         if max_bytes == 0 {
             return Err(format!("{} byte limit must be positive", self.label));
@@ -846,8 +870,7 @@ impl RootOwnedNoReplaceArtifactPublicationTarget {
                 .map_err(|error| {
                     format!("failed to reserve {} staging readback: {error}", self.label)
                 })?;
-            staging
-                .by_ref()
+            std::io::Read::by_ref(&mut staging)
                 .take(
                     u64::try_from(canonical_bytes.len())
                         .map_err(|_| format!("{} length does not fit u64", self.label))?
@@ -975,8 +998,7 @@ impl RootOwnedNoReplaceArtifactPublicationTarget {
                         self.label
                     )
                 })?;
-            staging
-                .by_ref()
+            std::io::Read::by_ref(&mut staging)
                 .take(
                     u64::try_from(canonical_bytes.len())
                         .map_err(|_| format!("{} length does not fit u64", self.label))?

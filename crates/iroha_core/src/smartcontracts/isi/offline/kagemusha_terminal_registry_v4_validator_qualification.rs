@@ -1,5 +1,5 @@
 use super::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
     isi::{Instruction as _, SetParameter},
