@@ -23836,13 +23836,13 @@ seiyaku GovernanceLifecycle {
             rec.max_proof_bytes = 0;
             assert!(enforce_vk_max_proof_bytes("ballot", &rec, 64).is_ok());
         });
-        world_test!(extract_vote_public_inputs_handles_halo2_envelope {
-            use iroha_zkp_halo2::Halo2ProofEnvelope;
-            let inputs = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]];
-            let halo_env = Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
-                .expect("halo2 envelope");
-            let proof_bytes = halo_env.to_bytes();
-            let columns: Vec<Vec<[u8; 32]>> = inputs.iter().copied().map(|v| vec![v]).collect();
+        world_test!(extract_vote_public_inputs_handles_strict_halo2_envelope {
+            let scalar_columns =
+                crate::zk::zk1_test_helpers::pasta_fp_single_row_columns(&[1, 2, 3, 4, 5]);
+            let proof_bytes = crate::zk::zk1_test_helpers::proof_with_pasta_fp_columns(
+                &[0xaa], &scalar_columns,
+            );
+            let columns = crate::zk::zk1_test_helpers::pasta_fp_columns_as_bytes(&scalar_columns);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:vote-circuit",

@@ -156,7 +156,7 @@
               "mintable": "Infinitely",
               "owning_domain": null,
               "spec": {
-                "scale": null
+                "scale": 9
               },
               "name": "xor"
             }
