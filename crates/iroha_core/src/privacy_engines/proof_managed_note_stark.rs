@@ -369,6 +369,12 @@ impl ProofManagedNoteStarkProtocolV1 {
             NOTE_COPY_BETA_LABEL_V1,
             NOTE_COPY_GAMMA_LABEL_V1,
         ];
+        if extra_domains
+            .iter()
+            .any(|domain| domain.is_empty() || u16::try_from(domain.len()).is_err())
+        {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
         for (index, domain) in extra_domains.iter().enumerate() {
             if extra_domains[..index].contains(domain) {
                 return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
@@ -391,10 +397,10 @@ impl ProofManagedNoteStarkProtocolV1 {
             self.domains.fri_beta_label,
             self.domains.query_seed,
         ];
-        if extra_domains
-            .iter()
-            .any(|domain| aggregate_domains.contains(domain))
-        {
+        if extra_domains.iter().any(|domain| {
+            aggregate_domains.contains(domain)
+                || aggregate::aggregate_stark_domain_is_reserved_v1(domain)
+        }) {
             return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
         }
         Ok(())
@@ -1102,7 +1108,9 @@ fn evaluate_masked_native_columns_at_deep_v1(
     for (column, mask) in columns.iter().zip(masks) {
         let mut trace_coefficients = column.clone();
         if let Err(error) = goldilocks_ifft_v1(&mut trace_coefficients, native_root) {
-            trace_coefficients.fill(F::ZERO);
+            for coefficient in &mut trace_coefficients {
+                coefficient.zeroize_v1();
+            }
             return Err(map_transparent_error_v1(error));
         }
         for (target, evaluation_point) in [(&mut current, point), (&mut next, next_point)] {
@@ -1118,7 +1126,9 @@ fn evaluate_masked_native_columns_at_deep_v1(
                 ),
             );
         }
-        trace_coefficients.fill(F::ZERO);
+        for coefficient in &mut trace_coefficients {
+            coefficient.zeroize_v1();
+        }
     }
     Ok((current, next))
 }
@@ -2485,7 +2495,7 @@ mod tests {
             base_tree,
             aux_tree,
         }];
-        let deep_point = E::ZERO;
+        let deep_point = E::canonical([2, 3, 5, 7]).expect("canonical nonzero DEEP point");
         assert!(
             aggregate::deep_point_is_admissible_v1(deep_point, parameters, &layout)
                 .expect("DEEP admissibility")
@@ -2977,6 +2987,30 @@ mod tests {
             prepare_note_profile_v1(&unsupported_degree),
             Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
         ));
+        for reserved in aggregate::aggregate_stark_reserved_domains_v1() {
+            let mut reserved_aggregate_domain = adapter.protocol_v1();
+            reserved_aggregate_domain.profile_binding_label = reserved;
+            assert_eq!(
+                reserved_aggregate_domain.validate(),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+                "outer profile labels must not reuse aggregate-core roles"
+            );
+            reserved_aggregate_domain = adapter.protocol_v1();
+            reserved_aggregate_domain.relation_layout_domain = reserved;
+            assert_eq!(
+                reserved_aggregate_domain.validate(),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+                "relation layout domains must not reuse aggregate-core roles"
+            );
+        }
+        let mut oversized_profile_domain = adapter.protocol_v1();
+        oversized_profile_domain.profile_binding_label =
+            Box::leak(vec![0_u8; usize::from(u16::MAX) + 1].into_boxed_slice());
+        assert_eq!(
+            oversized_profile_domain.validate(),
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+            "profile domains must fit the canonical u16-framed transcript"
+        );
         let mut insufficient_fri_capacity = adapter.clone();
         insufficient_fri_capacity.maximum_constraint_degree =
             PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
@@ -3031,9 +3065,9 @@ mod tests {
         let maximum_fri_input_degree =
             maximum_fri_input_degree_v1(&prepared.layout, prepared.protocol.parameters)
                 .expect("FRI capacity");
-        assert_eq!(maximum_trace_degree, 23);
-        assert_eq!(maximum_quotient_degree, 30);
-        assert_eq!(maximum_fri_input_degree, 63);
+        assert_eq!(maximum_trace_degree, 4_539);
+        assert_eq!(maximum_quotient_degree, 4_982);
+        assert_eq!(maximum_fri_input_degree, 8_191);
         assert!(maximum_trace_degree.max(maximum_quotient_degree) <= maximum_fri_input_degree);
         assert!(matches!(
             maximum_masked_trace_degree_v1(usize::MAX),
@@ -3062,15 +3096,23 @@ mod tests {
             PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1,
         )
         .expect("degree-four quotient");
-        let degree_five_quotient =
-            maximum_quotient_degree_v1(production_trace_size, 5).expect("degree-five quotient");
-        let production_capacity =
+        let degree_nine_quotient =
+            maximum_quotient_degree_v1(production_trace_size, 9).expect("degree-nine quotient");
+        let production_fri_input_capacity =
             maximum_fri_input_degree_v1(&production_layout, production_parameters)
                 .expect("production FRI capacity");
-        assert_eq!(degree_four_quotient, 49_180);
-        assert_eq!(degree_five_quotient, 65_571);
-        assert_eq!(production_capacity, 65_535);
-        assert!(degree_four_quotient <= production_capacity);
-        assert!(degree_five_quotient > production_capacity);
+        let production_composition_capacity = production_layout
+            .maximum_composition_degree(production_parameters)
+            .expect("production composition capacity");
+        assert_eq!(degree_four_quotient, 50_924);
+        assert_eq!(degree_nine_quotient, 135_059);
+        assert_eq!(production_fri_input_capacity, 32_767);
+        assert_eq!(production_composition_capacity, 131_071);
+        assert!(
+            maximum_masked_trace_degree_v1(production_trace_size).expect("production trace degree")
+                <= production_fri_input_capacity
+        );
+        assert!(degree_four_quotient <= production_composition_capacity);
+        assert!(degree_nine_quotient > production_composition_capacity);
     }
 }

@@ -1,6 +1,21 @@
 //! Ensures the GPU Poseidon tables embed the canonical manifest.
-use fastpq_isi::poseidon::STATE_WIDTH;
-use fastpq_prover::poseidon_manifest;
+use fastpq_isi::poseidon::{PERMUTATION_PROFILE_ID, SBOX_EXPONENT, STATE_WIDTH};
+use fastpq_prover::{poseidon_manifest, poseidon_profile_id, poseidon_profile_sha256};
+
+#[test]
+fn permutation_profile_identity_binds_sbox_and_constants() {
+    assert_eq!(poseidon_profile_id(), PERMUTATION_PROFILE_ID);
+    assert!(poseidon_profile_id().contains("x7"));
+    assert_eq!(SBOX_EXPONENT, 7);
+    assert_eq!(
+        poseidon_profile_sha256(),
+        "874028de6098d274b42a1dc5034b9d27892a6e3913f7ccdf0060d57fe2db4bbb"
+    );
+    assert_eq!(
+        poseidon_manifest().profile_sha256_hex(),
+        poseidon_profile_sha256()
+    );
+}
 #[test]
 fn metal_poseidon_tables_match_manifest() {
     let manifest = poseidon_manifest();
@@ -36,6 +51,26 @@ fn cuda_poseidon_tables_match_manifest() {
         manifest.mds().as_slice(),
         "CUDA MDS matrix diverged from the manifest"
     );
+}
+#[test]
+fn accelerator_sources_pin_the_bijective_goldilocks_sbox() {
+    assert_eq!(SBOX_EXPONENT, 7);
+
+    let metal_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/poseidon2.metal");
+    let metal = std::fs::read_to_string(metal_path).expect("read poseidon2.metal");
+    assert!(metal.contains("pow7_vec(add_mod_vec"));
+    assert!(metal.contains("chunk[i].x = pow7(chunk[i].x)"));
+    assert!(!metal.contains("pow5_vec"));
+    let field_path = concat!(env!("CARGO_MANIFEST_DIR"), "/metal/kernels/field.metal");
+    let field = std::fs::read_to_string(field_path).expect("read field.metal");
+    assert!(field.contains("inline ulong pow7(ulong x)"));
+    assert!(!field.contains("inline ulong pow5(ulong x)"));
+
+    let cuda_path = concat!(env!("CARGO_MANIFEST_DIR"), "/cuda/fastpq_cuda.cu");
+    let cuda = std::fs::read_to_string(cuda_path).expect("read fastpq_cuda.cu");
+    assert!(cuda.contains("poseidon_pow7(f_add"));
+    assert!(cuda.contains("state[0] = poseidon_pow7(state[0])"));
+    assert!(!cuda.contains("poseidon_pow5"));
 }
 fn parse_constant_table(contents: &str, marker: &str) -> Vec<[u64; STATE_WIDTH]> {
     let section = extract_braced_section(contents, marker);

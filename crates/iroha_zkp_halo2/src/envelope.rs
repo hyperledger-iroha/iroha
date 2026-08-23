@@ -514,11 +514,8 @@ mod tests {
     }
     #[test]
     fn rejects_unknown_flag_bits() {
-        let inputs =
-            vec![
-                hex_array("7f19b2a9c5b8f1d3c4e2aa1100ddc3f0e1d2c3b4a5968776655443322110aa55",);
-                Halo2ProofEnvelopeHeader::expected_pi_count(0, 0) as usize
-            ];
+        let input = hex_array("7f19b2a9c5b8f1d3c4e2aa1100ddc3f0e1d2c3b4a5968776655443322110aa55");
+        let inputs = vec![input; usize::from(Halo2ProofEnvelopeHeader::expected_pi_count(0, 0))];
         let err = Halo2ProofEnvelope::new(20, 0, 0, 0x80, inputs.clone(), vec![])
             .expect_err("builders must reject undefined flag bits");
         assert_eq!(err, EnvelopeError::UnsupportedFlags(0x80));

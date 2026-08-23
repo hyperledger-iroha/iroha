@@ -62,13 +62,13 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
 }
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
-/// First executable ZK-ACE action class.
+/// Fixed action class of the disabled ZK-ACE candidate.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 /// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
-pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
@@ -515,7 +515,7 @@ pub struct ZkAcePrivacyPublicInputsV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
 }
-/// Canonical byte packing used by ZK-ACE Poseidon2-domain hashing.
+/// Canonical byte packing used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -582,7 +582,14 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
         limbs,
     }
 }
-/// Domain-separated Poseidon2 hash over already canonical byte parts.
+/// Domain-separated dense-MDS Poseidon `x^7` hash over canonical byte parts.
+///
+/// The function name predates correction of the implementation descriptor and
+/// remains as a source-compatibility alias; this construction is not Poseidon2.
+/// Its four returned words are sequential outputs of one capacity-1 sponge and
+/// therefore provide only about 32 bits of generic collision resistance as a
+/// combined digest. ZK-ACE production activation remains disabled until four
+/// independent lane-domain hashes replace this candidate construction.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let words = zk_ace_poseidon2_domain_words(domain, parts);
@@ -594,7 +601,7 @@ pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] 
     }
     out
 }
-/// Canonical Goldilocks field preimage used by ZK-ACE Poseidon2-domain hashing.
+/// Canonical Goldilocks preimage used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
     let mut words = Vec::new();
@@ -1362,15 +1369,15 @@ mod tests {
         );
         assert_eq!(
             hex::encode(identity_commitment),
-            "9cb1c494eaf171b6ce218d3c7c6de88cdc8228f9b4eda310a325b4b2c1cbd68f"
+            "c6b2d67fbc837b72de0097e8e7d3b451ff09c76a9e99f6c42ef43ae1ec5777f5"
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "3bcb5f79e7b4d64e764ce8218ecf0619483ec8c9cc2d4fe77b93f6b70429dea1"
+            "71af728bb6110a1cca751e6fe253742d4c30d8f69e3be2ebf056447088aec13e"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "c34b477523c0a5ef9738211b85fc3d620ddfdcac41db7ad24fe7b6f0d6cbe5d6"
+            "6496615988495f553fb17dc9dd01cb49c002e870c4e4987aabefe5bf104c732c"
         );
     }
     #[cfg(feature = "json")]

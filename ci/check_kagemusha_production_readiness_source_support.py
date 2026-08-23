@@ -20,6 +20,12 @@ MODEL_PROMOTION_RECEIPT_COMPONENT = (
     "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
 )
 MODEL_PROMOTION_RECEIPT_MODULE = "mod kagemusha_promotion_receipt;"
+MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT = (
+    "crates/iroha_data_model/src/offline/kagemusha_internal_validation_receipt.rs"
+)
+MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE = (
+    "mod kagemusha_internal_validation_receipt;"
+)
 MODEL_CANARY_EVIDENCE_COMPONENT = (
     "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
 )

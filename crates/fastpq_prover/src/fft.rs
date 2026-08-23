@@ -112,6 +112,11 @@ impl Planner {
             params.lde_log_size,
             "lde log size must equal trace log size plus log2(blowup)"
         );
+        assert_eq!(
+            mod_pow(params.lde_root, u64::from(blowup)),
+            params.trace_root,
+            "trace root must equal lde root raised to the FRI blowup factor"
+        );
         let trace_domains = build_domain_cache(params.trace_root, params.trace_log_size);
         let lde_domains = build_domain_cache(params.lde_root, params.lde_log_size);
         let planner = Self {
@@ -1014,6 +1019,24 @@ mod tests {
         assert_eq!(trivial_lde.log_size, 0);
     }
     #[test]
+    fn planner_domains_use_the_blowup_stride_for_every_catalogue_entry() {
+        for params in CANONICAL_PARAMETER_SETS {
+            let planner = Planner::new(&params);
+            for trace_log in 0..=params.trace_log_size {
+                let trace_generator = planner.trace_domain(trace_log).generator;
+                let lde_generator = planner
+                    .lde_domain(trace_log + planner.blowup_log())
+                    .generator;
+                assert_eq!(
+                    super::mod_pow(lde_generator, u64::from(params.fri.blowup_factor)),
+                    trace_generator,
+                    "{} domains disagree at trace log {trace_log}",
+                    params.name
+                );
+            }
+        }
+    }
+    #[test]
     fn planner_rejects_non_primitive_trace_root() {
         let mut params = CANONICAL_PARAMETER_SETS[0];
         params.trace_root = 1;
@@ -1031,6 +1054,16 @@ mod tests {
         assert!(
             result.is_err(),
             "planner accepted LDE root that is not a primitive 2-adic generator"
+        );
+    }
+    #[test]
+    fn planner_rejects_individually_primitive_but_incoherent_roots() {
+        let mut params = CANONICAL_PARAMETER_SETS[0];
+        params.trace_root = super::mod_pow(params.trace_root, 3);
+        let result = catch_unwind(|| Planner::new(&params));
+        assert!(
+            result.is_err(),
+            "planner accepted trace/LDE generators with the wrong blowup relation"
         );
     }
     #[test]

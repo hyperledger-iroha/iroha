@@ -1618,7 +1618,7 @@ pub mod isi {
     }
     // Release activation installs a digest-qualified Eq/Ep pair atomically. Generic
     // registration or rotation can split that pair and strand issued notes.
-    fn ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(
+    fn ensure_generic_verifying_key_is_not_kagemusha_release_owned(
         id: &VerifyingKeyId,
         records: &[&VerifyingKeyRecord],
     ) -> Result<(), Error> {
@@ -1654,8 +1654,7 @@ pub mod isi {
             })
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "Kagemusha V4 release verifier records are owned by atomic release activation"
-                    .into(),
+                "Kagemusha release verifier records are owned by atomic release activation".into(),
             ));
         }
         Ok(())
@@ -2760,7 +2759,7 @@ pub mod isi {
             }
             let id = self.id().clone();
             let record = self.record().clone();
-            ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(&id, &[&record])?;
+            ensure_generic_verifying_key_is_not_kagemusha_release_owned(&id, &[&record])?;
             let id_backend = id.backend.as_str();
             ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &record.circuit_id)?;
             if matches!(record.status, ConfidentialStatus::Withdrawn) {
@@ -9837,7 +9836,7 @@ pub mod isi {
         old: &VerifyingKeyRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(id, &[old, new])?;
+        ensure_generic_verifying_key_is_not_kagemusha_release_owned(id, &[old, new])?;
         if matches!(old.status, ConfidentialStatus::Withdrawn) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "cannot update withdrawn verifying key".into(),
@@ -29760,33 +29759,55 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
                 ),
             );
-            verifying_keys::RegisterVerifyingKey {
-                id: lookalike_id.clone(),
-                record: record(TEST_HALO2_CIRCUIT_ID, 1),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("an unrelated lookalike id must remain available to generic management");
-            assert!(stx.world.verifying_keys.get(&lookalike_id).is_some());
+            let lookalike_record = record(TEST_HALO2_CIRCUIT_ID, 1);
+            ensure_generic_verifying_key_is_not_kagemusha_release_owned(
+                &lookalike_id,
+                &[&lookalike_record],
+            )
+            .expect("an unrelated lookalike id must not be classified as release-owned");
 
-            let old_record = record(
+            let legacy_release_record = record(
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 1,
             );
             stx.world
                 .verifying_keys
-                .insert(reserved_id.clone(), old_record.clone());
+                .insert(ordinary_id.clone(), legacy_release_record.clone());
             let replacement = record(
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 2,
             );
             let err = verifying_keys::UpdateVerifyingKey {
-                id: reserved_id.clone(),
+                id: ordinary_id.clone(),
                 record: replacement,
             }
             .expect_execute_err(
                 &ALICE_ID,
                 &mut stx,
-                "generic updates must not replace a release-qualified Kagemusha verifier",
+                "generic updates must not replace a Kagemusha release-circuit verifier",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(err),
+                "owned by atomic release activation"
+            );
+            assert_eq!(
+                stx.world.verifying_keys.get(&ordinary_id),
+                Some(&legacy_release_record)
+            );
+
+            let legacy_reserved_id_record = record(TEST_HALO2_CIRCUIT_ID, 1);
+            stx.world.verifying_keys.insert(
+                reserved_id.clone(),
+                legacy_reserved_id_record.clone(),
+            );
+            let err = verifying_keys::UpdateVerifyingKey {
+                id: reserved_id.clone(),
+                record: record(TEST_HALO2_CIRCUIT_ID, 2),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "generic updates must not replace a release-qualified Kagemusha id",
             );
             assert_contains!(
                 smart_contract_instruction_error_message(err),
@@ -29794,7 +29815,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(
                 stx.world.verifying_keys.get(&reserved_id),
-                Some(&old_record)
+                Some(&legacy_reserved_id_record)
             );
         });
         world_test!(register_vk_accepts_canonical_soracloud_bootstrap_record {

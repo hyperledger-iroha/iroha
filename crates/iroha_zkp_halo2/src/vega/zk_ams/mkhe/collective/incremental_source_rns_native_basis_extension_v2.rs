@@ -16,15 +16,15 @@
 //! the parent encryption implementation construct the synchronous opening.
 //! The 43-record lifecycle added here returns only a non-authorizing checksum.
 //! Its private tail-publication sibling consumes the arithmetic owner into
-//! actual CAS receipts and an opaque whole-V1 owner contract. The live
-//! Phase-23 owner and callback remain absent. This API makes an allocation-free
-//! live kernel constructor possible, but this private module cannot prove that
-//! a future parent call site allocates the workspace before entropy; that
-//! chronology gate remains explicitly false.
+//! actual CAS receipts and an opaque whole-V1 owner contract. The compiled V1
+//! coordinator now allocates the workspace in the validated pre-entropy
+//! factory and moves it through the synchronous callback. This source-level
+//! chronology does not provide the still-absent live Phase-23 owner, source
+//! adapter, evidence, readiness, or release authority.
 
 #![allow(
     dead_code,
-    reason = "the private non-authorizing V2 arithmetic contract has no production caller"
+    reason = "the private non-authorizing V2 arithmetic contract has no live Phase-23 caller"
 )]
 
 use super::super::super::{
@@ -123,8 +123,9 @@ const PUBLIC_A_TAIL_FRAME_BYTES_V2: usize =
 
 /// This source-only tranche implements arithmetic, never a production owner.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2: bool = true;
-/// No integrated parent call site proves workspace allocation before entropy.
-pub(super) const RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2: bool = false;
+/// The compiled V1 coordinator allocates each record workspace in the
+/// validated pre-entropy factory. This is a source contract, not liveness.
+pub(super) const RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2: bool = true;
 /// The frozen V1 prefix must be retained byte-for-byte, never rederived here.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_PREFIX_RECOMPUTATION_ALLOWED_V2: bool = false;
 /// No CRT interpolation, digest synthesis, or other fake tail lift is allowed.
@@ -133,8 +134,9 @@ pub(super) const RNS_NATIVE_BASIS_EXTENSION_FAKE_TAIL_LIFT_ALLOWED_V2: bool = fa
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2: bool = false;
 /// There is deliberately no public-polynomial source adapter in this tranche.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2: bool = false;
-/// No V1 encryption or Phase-23 bridge invokes this private module.
-pub(super) const RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2: bool = false;
+/// The compiled V1 coordinator invokes this private arithmetic module. The
+/// Phase-23/source backend remains unavailable.
+pub(super) const RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2: bool = true;
 /// The open 40-limb evidence pins remain non-authorizing.
 pub(super) const RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2: bool = false;
 
@@ -171,12 +173,12 @@ const _: () = {
     assert!(MAX_PUBLIC_A_TAIL_CANDIDATES_V2 == 33_554_432);
     assert!(MAX_PUBLIC_A_TAIL_XOF_BYTES_V2 == 268_435_456);
     assert!(RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2);
-    assert!(!RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
+    assert!(RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_PREFIX_RECOMPUTATION_ALLOWED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_FAKE_TAIL_LIFT_ALLOWED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2);
-    assert!(!RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
+    assert!(RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
 };
 
@@ -214,10 +216,10 @@ fn dependency_v2<T>(
 /// allocator metadata, and the caller-supplied 8 KiB encoder scratch.
 /// `synchronous_same_opening_borrowed_bytes` is the exact callback payload
 /// borrowed from V1, not newly allocated or retained by this module.
-/// `ciphertext_workspace_required_pre_entropy_bytes` states the future parent
-/// call-site requirement. This source API only proves that moving an allocated
-/// owner into the live kernel allocates zero additional bytes; it does not
-/// prove when the absent parent call site performs that allocation.
+/// `ciphertext_workspace_required_pre_entropy_bytes` is discharged by the
+/// compiled parent coordinator. This source API also proves that moving the
+/// allocated owner into the live kernel allocates zero additional bytes. The
+/// separate Phase-23/liveness and measured-evidence claims remain open.
 pub(super) struct RnsNativeBasisExtensionResourcesV2 {
     pub(super) full_object_count: u32,
     pub(super) legacy_object_count: u32,
@@ -631,15 +633,14 @@ impl Drop for ZeroizingWorkspaceLeaseV2<'_> {
 
 /// Explicit move-only owner for the C-tail arithmetic workspace.
 ///
-/// A future parent must allocate this owner before sampling the inherited V1
-/// encryption opening, then move that exact owner through
+/// The compiled parent allocates this owner before sampling the inherited V1
+/// encryption opening, then moves that exact owner through
 /// [`RnsNativeSynchronousSameOpeningBorrowV2`] into
 /// [`RnsNativeCiphertextTailKernelV2`]. The live kernel constructor performs no
 /// allocation. Dropping an unused owner, a rejected opening/kernel, or an
 /// unwinding kernel clears both release-degree limbs through their zeroizing
-/// owners. The neutral allocator below does not attest chronology: actual
-/// before-entropy ordering remains a false V1 integration gate because this
-/// private source-only tranche does not edit the parent entropy path.
+/// owners. The neutral allocator alone does not attest chronology; the private
+/// coordinator call site is the source-level witness for that ordering.
 pub(super) struct RnsNativeCiphertextTailWorkspaceOwnerV2 {
     workspace: ZeroizingTwoLimbWorkspaceV2,
 }
@@ -897,6 +898,48 @@ pub(super) struct RnsNativeCollectiveKeyTailOwnerV2 {
 }
 
 impl RnsNativeCollectiveKeyTailOwnerV2 {
+    #[cfg(test)]
+    pub(super) fn malformed_test_owner_v2() -> Self {
+        Self {
+            axes: RnsNativeBasisExtensionAxesV2 {
+                release_profile_digest: [0x11; 32],
+                target_profile_digest: [0x22; 32],
+                security_certificate_digest: [0x33; 32],
+                roster_digest: [0x44; 32],
+                key_material_digest: [0x55; 32],
+                epoch: 1,
+                cpk_transcript_digest: [0x66; 32],
+                parties: core::array::from_fn(|index| {
+                    ZkAmsMkhePartyIdV1::new([index as u8 + 1; 32]).expect("nonzero test-only party")
+                }),
+            },
+            public_a_tail: Vec::new(),
+            collective_b_tail: Vec::new(),
+            integrity_digest: [0x77; 32],
+        }
+    }
+
+    /// Reject a foreign V1 authority before the sole key-tail publication
+    /// visit. Keeping this check on the unconsumed owner prevents even an
+    /// unauthorizing CAS orphan for mismatched governed axes.
+    pub(super) fn validate_v1_authority_binding_v2(
+        &self,
+        authority: &ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ) -> Result<(), RnsNativeBasisExtensionErrorV2> {
+        self.axes.validate_v2()?;
+        if authority.profile_digest() != self.axes.release_profile_digest
+            || authority.security_certificate_digest() != self.axes.security_certificate_digest
+            || authority.roster_digest() != self.axes.roster_digest
+            || authority.key_material_digest() != self.axes.key_material_digest
+            || authority.epoch() != self.axes.epoch
+            || authority.transcript_digest() != self.axes.cpk_transcript_digest
+            || authority.authority_digest() == [0; 32]
+        {
+            return Err(RnsNativeBasisExtensionErrorV2::InvalidAxes);
+        }
+        Ok(())
+    }
+
     fn limb_v2(&self, role: RnsNativeTailObjectRoleV2, limb: usize) -> Option<&[u64]> {
         if !(LEGACY_LIMB_COUNT_V2..TARGET_LIMB_COUNT_V2).contains(&limb) {
             return None;
@@ -930,6 +973,14 @@ impl RnsNativeCollectiveKeyTailOwnerV2 {
             }
         }
         Ok(())
+    }
+
+    /// Establish the allocation-free 43-record checksum chronology before
+    /// the sole key-tail CAS visit can begin.
+    pub(super) fn begin_ciphertext_tail_lifecycle_v2(
+        &self,
+    ) -> Result<RnsNativeCiphertextTailLifecycleV2, RnsNativeBasisExtensionErrorV2> {
+        RnsNativeCiphertextTailLifecycleV2::new_v2(self)
     }
 
     /// Consume the sole arithmetic owner into the publication boundary.
@@ -970,19 +1021,7 @@ impl RnsNativePublishedCollectiveKeyTailOwnerV2 {
         &self,
         authority: &ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     ) -> Result<(), RnsNativeBasisExtensionErrorV2> {
-        self.key_tail.axes.validate_v2()?;
-        if authority.profile_digest() != self.key_tail.axes.release_profile_digest
-            || authority.security_certificate_digest()
-                != self.key_tail.axes.security_certificate_digest
-            || authority.roster_digest() != self.key_tail.axes.roster_digest
-            || authority.key_material_digest() != self.key_tail.axes.key_material_digest
-            || authority.epoch() != self.key_tail.axes.epoch
-            || authority.transcript_digest() != self.key_tail.axes.cpk_transcript_digest
-            || authority.authority_digest() == [0; 32]
-        {
-            return Err(RnsNativeBasisExtensionErrorV2::InvalidAxes);
-        }
-        Ok(())
+        self.key_tail.validate_v1_authority_binding_v2(authority)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1017,12 +1056,6 @@ impl RnsNativePublishedCollectiveKeyTailOwnerV2 {
         visitor: &mut V,
     ) -> Result<RnsNativeCiphertextTailCompletionV2, RnsNativeBasisExtensionErrorV2> {
         RnsNativeCiphertextTailKernelV2::new_v2(&self.key_tail, opening)?.emit_v2(visitor)
-    }
-
-    pub(super) fn begin_ciphertext_tail_lifecycle_v2(
-        &self,
-    ) -> Result<RnsNativeCiphertextTailLifecycleV2, RnsNativeBasisExtensionErrorV2> {
-        RnsNativeCiphertextTailLifecycleV2::new_v2(&self.key_tail)
     }
 }
 

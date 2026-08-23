@@ -1,9 +1,14 @@
 # Poseidon Metal Shared Constants
 
 Metal kernels, CUDA kernels, the Rust prover, and every SDK fixture must share
-the exact same Poseidon2 parameters in order to keep hardware-accelerated
+the exact same Poseidon parameters in order to keep hardware-accelerated
 hashing deterministic. This document records the canonical snapshot, how to
 regenerate it, and how GPU pipelines are expected to ingest the data.
+
+The FASTPQ permutation is the original dense-MDS Poseidon construction with a
+width-three, rate-two state, eight full rounds, 57 partial rounds, and the
+Goldilocks-bijective `x^7` S-box. The retained `poseidon2.metal` and binary
+asset names are legacy filenames; they do not identify the construction.
 
 ## Snapshot Manifest
 

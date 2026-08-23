@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -771,6 +772,217 @@ class KotodamaPerfGateTests(unittest.TestCase):
         ):
             PERF.parse_args([])
 
+    def test_create_only_evidence_report_binds_candidate_and_estimates(
+        self,
+    ) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        baseline = self.root / "baseline"
+        candidate = self.root / "candidate"
+        evidence = self.root / "evidence"
+        evidence.mkdir()
+        report_path = evidence / "report.json"
+        candidate_revision = "c" * 40
+        candidate_lock = "d" * 64
+
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(
+                PERF,
+                "validate_candidate_provenance",
+                return_value=(candidate_revision, candidate_lock),
+            ) as validate_candidate,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = PERF.main(
+                [
+                    "--criterion-dir",
+                    str(self.root),
+                    "--baseline-root",
+                    str(baseline),
+                    "--candidate-root",
+                    str(candidate),
+                    "--expected-candidate-commit",
+                    candidate_revision,
+                    "--json-output",
+                    str(report_path),
+                ]
+            )
+        self.assertEqual(result, 0)
+        validate_candidate.assert_called_once_with(candidate, candidate_revision)
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["schema"], PERF.EVIDENCE_SCHEMA)
+        self.assertEqual(report["threshold"], PERF.MAX_REGRESSION)
+        self.assertEqual(
+            report["benchmark_count"], len(PERF.REGRESSION_BENCHMARKS)
+        )
+        self.assertEqual(
+            report["criterion_estimates_sha256"],
+            PERF.criterion_estimates_sha256(self.root),
+        )
+        self.assertEqual(report["baseline"]["revision"], PERF.BASELINE_SHA)
+        self.assertEqual(
+            report["baseline"]["cargo_lock_sha256"],
+            PERF.BASELINE_CARGO_LOCK_SHA256,
+        )
+        self.assertEqual(report["candidate"]["revision"], candidate_revision)
+        self.assertEqual(
+            report["candidate"]["cargo_lock_sha256"], candidate_lock
+        )
+        self.assertEqual(
+            [row["name"] for row in report["comparisons"]],
+            sorted(PERF.REGRESSION_BENCHMARKS),
+        )
+
+        original = report_path.read_bytes()
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(
+                PERF,
+                "validate_candidate_provenance",
+                return_value=(candidate_revision, candidate_lock),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(
+                PERF.main(
+                    [
+                        "--criterion-dir",
+                        str(self.root),
+                        "--baseline-root",
+                        str(baseline),
+                        "--candidate-root",
+                        str(candidate),
+                        "--expected-candidate-commit",
+                        candidate_revision,
+                        "--json-output",
+                        str(report_path),
+                    ]
+                ),
+                1,
+            )
+        self.assertEqual(report_path.read_bytes(), original)
+
+    def test_evidence_arguments_are_all_or_nothing(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            result = PERF.main(
+                [
+                    "--criterion-dir",
+                    str(self.root),
+                    "--baseline-root",
+                    str(self.root / "baseline"),
+                    "--json-output",
+                    str(self.root / "report.json"),
+                ]
+            )
+        self.assertEqual(result, 1)
+        self.assertIn("must be supplied together", stderr.getvalue())
+
+    def test_failed_budget_never_writes_or_authenticates_evidence(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new", 1.051)
+        evidence = self.root / "evidence"
+        evidence.mkdir()
+        report = evidence / "report.json"
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(
+                PERF, "validate_candidate_provenance"
+            ) as validate_candidate,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = PERF.main(
+                [
+                    "--criterion-dir",
+                    str(self.root),
+                    "--baseline-root",
+                    str(self.root / "baseline"),
+                    "--candidate-root",
+                    str(self.root / "candidate"),
+                    "--expected-candidate-commit",
+                    "c" * 40,
+                    "--json-output",
+                    str(report),
+                ]
+            )
+        self.assertEqual(result, 1)
+        self.assertFalse(report.exists())
+        validate_candidate.assert_not_called()
+
+    def test_evidence_digest_rejects_intermediate_directory_symlink(
+        self,
+    ) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        name = PERF.REGRESSION_BENCHMARKS[0]
+        sample = self.root / name / "base"
+        outside = self.root / "outside-base"
+        sample.rename(outside)
+        sample.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(
+            PERF.GateError, "parent must be a regular, non-symlink directory"
+        ):
+            PERF.criterion_estimates_sha256(self.root)
+
+    def test_candidate_provenance_requires_exact_clean_revision(self) -> None:
+        candidate = self.root / "candidate"
+        candidate.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=candidate, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Kotodama test"],
+            cwd=candidate,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "kotodama@example.invalid"],
+            cwd=candidate,
+            check=True,
+        )
+        lock = candidate / "Cargo.lock"
+        lock.write_bytes(b"exact candidate lock\n")
+        subprocess.run(["git", "add", "Cargo.lock"], cwd=candidate, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "candidate fixture"],
+            cwd=candidate,
+            check=True,
+        )
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=candidate,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        lock_digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(PERF.GateError, "Cargo.lock digest mismatch"):
+            PERF.validate_candidate_provenance(candidate, revision)
+        with mock.patch.object(
+            PERF, "CANDIDATE_CARGO_LOCK_SHA256", lock_digest
+        ):
+            self.assertEqual(
+                PERF.validate_candidate_provenance(candidate, revision),
+                (revision, lock_digest),
+            )
+
+        with self.assertRaisesRegex(PERF.GateError, "revision mismatch"):
+            PERF.validate_candidate_provenance(candidate, "f" * 40)
+        (candidate / "untracked").write_text("drift\n", encoding="utf-8")
+        with (
+            mock.patch.object(
+                PERF, "CANDIDATE_CARGO_LOCK_SHA256", lock_digest
+            ),
+            self.assertRaisesRegex(PERF.GateError, "source drift"),
+        ):
+            PERF.validate_candidate_provenance(candidate, revision)
+
     def test_release_workflow_runs_the_complete_artifact_gate(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
@@ -917,8 +1129,54 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "\n      - name:", 1
         )[0]
         self.assertIn("--baseline-root ../baseline", enforcement_step)
+        self.assertIn("--candidate-root .", enforcement_step)
+        self.assertIn(
+            '--expected-candidate-commit "${{ github.sha }}"',
+            enforcement_step,
+        )
+        self.assertIn(
+            '--json-output "$evidence/report.json"', enforcement_step
+        )
+        self.assertIn('tee "$evidence/checker.log"', enforcement_step)
+        self.assertIn("set -euo pipefail", enforcement_step)
         self.assertNotRegex(enforcement_step, r"(^|\s)--baseline(?:\s|$)")
         self.assertNotIn("--write-baseline", enforcement_step)
+
+        seal_marker = "      - name: Seal complete performance evidence\n"
+        upload_marker = "      - name: Upload complete performance evidence\n"
+        self.assertEqual(workflow.count(seal_marker), 1)
+        self.assertEqual(workflow.count(upload_marker), 1)
+        seal_step = workflow.split(seal_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            '"schema": "iroha.kotodama.performance.workflow.v1"', seal_step
+        )
+        self.assertIn('manifest = evidence / "SHA256SUMS"', seal_step)
+        self.assertIn('("criterion", criterion)', seal_step)
+        self.assertIn('("evidence", evidence)', seal_step)
+        self.assertIn("non-regular evidence path", seal_step)
+        self.assertLess(
+            seal_step.index("if path.is_symlink():"),
+            seal_step.index("if path.is_dir():"),
+        )
+        self.assertNotIn("|| true", seal_step)
+
+        upload_step = workflow.split(upload_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "uses: actions/upload-artifact@"
+            "ea165f8d65b6e75b540449e92b4886f43607fa02",
+            upload_step,
+        )
+        self.assertIn("target-kotodama-perf/criterion", upload_step)
+        self.assertIn(
+            "target-kotodama-perf/kotodama-perf-evidence", upload_step
+        )
+        self.assertIn("if-no-files-found: error", upload_step)
+        self.assertIn("include-hidden-files: true", upload_step)
+        self.assertIn("retention-days: 90", upload_step)
 
         marker = "      - name: Enforce complete artifact release gate\n"
         self.assertEqual(workflow.count(marker), 1)
@@ -940,6 +1198,15 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         build_marker = "      - name: Build canonical Kotodama release tools\n"
         self.assertEqual(workflow.count(build_marker), 1)
+        self.assertLess(
+            workflow.index(enforcement_marker), workflow.index(seal_marker)
+        )
+        self.assertLess(
+            workflow.index(seal_marker), workflow.index(upload_marker)
+        )
+        self.assertLess(
+            workflow.index(upload_marker), workflow.index(build_marker)
+        )
         build_step = workflow.split(build_marker, 1)[1].split(marker, 1)[0]
         self.assertIn(
             "cargo build --locked -p ivm --bin koto -p iroha_cli --bin iroha",

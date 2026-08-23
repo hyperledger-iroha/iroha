@@ -1,8 +1,12 @@
 use std::{cell::Cell, rc::Rc};
 
+use super::super::super::super::ZkAmsMkhePartyIdV1;
 use super::super::super::super::direct_object_transport::{
     ZkAmsMkheDirectObjectPublishedBindingV1, ZkAmsMkheDirectObjectSealTokenV1,
     ZkAmsMkheDirectObjectStagingTokenV1,
+};
+use super::super::{
+    StreamingCollectiveEncryptionKeyAuthoritySealV1, ZkAmsMkheStreamingCollectiveKeyBindingV1,
 };
 use super::*;
 
@@ -50,6 +54,7 @@ struct OneObjectCasV2 {
     writes: usize,
     sealed_reads: usize,
     published_reads: usize,
+    begin_calls: Option<Rc<Cell<usize>>>,
 }
 
 impl OneObjectCasV2 {
@@ -63,6 +68,14 @@ impl OneObjectCasV2 {
             writes: 0,
             sealed_reads: 0,
             published_reads: 0,
+            begin_calls: None,
+        }
+    }
+
+    fn counted_v2(begin_calls: Rc<Cell<usize>>) -> Self {
+        Self {
+            begin_calls: Some(begin_calls),
+            ..Self::new_v2(CasFaultV2::None)
         }
     }
 
@@ -133,6 +146,9 @@ impl ZkAmsMkheDirectObjectCasPublicationV1 for OneObjectCasV2 {
         kind: ZkAmsMkheDirectObjectKindV1,
         payload_bytes: u64,
     ) -> Result<ZkAmsMkheDirectObjectStagingTokenV1, ZkAmsMkheErrorV1> {
+        if let Some(begin_calls) = &self.begin_calls {
+            begin_calls.set(begin_calls.get() + 1);
+        }
         if self.stage.is_some() || self.seal.is_some() || self.object.is_some() {
             return Err(Self::invalid_v2());
         }
@@ -311,7 +327,8 @@ fn resource_ledger_and_fail_closed_flags_are_exact() {
     assert!(RNS_NATIVE_COMPOSITE_PROVIDER_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_EXISTING_READER_BRIDGE_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_SINGLE_QPCS_BATCH_CONTRACT_IMPLEMENTED_V2);
-    assert!(!RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2);
+    assert!(RNS_NATIVE_V1_TAIL_COORDINATOR_IMPLEMENTED_V2);
+    assert!(RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2);
     assert!(!RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_TAIL_PRODUCTION_OWNER_AVAILABLE_V2);
@@ -329,6 +346,50 @@ fn resource_ledger_and_fail_closed_flags_are_exact() {
         RNS_NATIVE_TAIL_PUBLICATION_BLOCKERS_V2[0].code,
         "LIVE_CPK_KEY_CAS_OWNER"
     );
+}
+
+fn malformed_streaming_authority_v2() -> ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
+    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1 {
+        _seal: StreamingCollectiveEncryptionKeyAuthoritySealV1,
+        binding: ZkAmsMkheStreamingCollectiveKeyBindingV1 {
+            version: 0,
+            profile_digest: [0x10; 32],
+            security_certificate_digest: [0x20; 32],
+            roster_digest: [0x30; 32],
+            key_material_digest: [0x40; 32],
+            epoch: 1,
+            transcript_digest: [0x50; 32],
+            parties: core::array::from_fn(|index| {
+                ZkAmsMkhePartyIdV1::new([index as u8 + 1; 32]).unwrap()
+            }),
+            share_digests: [[0x60; 32]; 8],
+            key_digest: [0x70; 32],
+            public_a_limb_pointers: Vec::new(),
+            public_b_limb_pointers: Vec::new(),
+            binding_digest: [0x80; 32],
+        },
+        public_a_publication_receipts: Vec::new(),
+        public_b_publication_receipts: Vec::new(),
+        authority_digest: [0x90; 32],
+        next_sample_index: 0,
+        failed: false,
+    }
+}
+
+#[test]
+fn malformed_authority_rejects_before_first_key_tail_cas() {
+    let begin_calls = Rc::new(Cell::new(0));
+    let result = RnsNativeV1TailPublicationCoordinatorV2::begin_v2(
+        malformed_streaming_authority_v2(),
+        RnsNativeCollectiveKeyTailOwnerV2::malformed_test_owner_v2(),
+        OneObjectCasV2::counted_v2(Rc::clone(&begin_calls)),
+        OneObjectCasV2::new_v2(CasFaultV2::None),
+    );
+    assert!(matches!(
+        result,
+        Err(RnsNativeV1TailCoordinatorErrorV2::Encryption(_))
+    ));
+    assert_eq!(begin_calls.get(), 0);
 }
 
 #[test]
@@ -806,7 +867,9 @@ fn source_has_no_live_authority_shortcut() {
     assert!(!source.contains("RESOURCE_EVIDENCE_QUALIFIED_V2: bool = true"));
     assert!(!source.contains("READINESS_V2: bool = true"));
     assert!(!source.contains("RELEASE_AUTHORIZED_V2: bool = true"));
-    assert!(source.contains("never: Infallible"));
+    assert!(source.contains("RnsNativeV1TailPublicationCoordinatorV2"));
+    assert!(!source.contains("RnsNativeWholeV1ProductionAdapterV2"));
+    assert!(!source.contains("never: Infallible"));
     assert!(source.contains("RnsNativePublicPolynomialDescriptorV1::new"));
     assert!(source.contains("RnsNativePublicPolynomialManifestV1::new"));
     assert!(source.contains("RnsNativePublicPolynomialReaderV1::new"));
@@ -855,6 +918,7 @@ fn parent_declaration_is_exactly_once_and_private() {
         &[
             "#[path = \"incremental_source_rns_native_tail_publication_v2.rs\"]",
             "mod incremental_source_rns_native_tail_publication_v2;",
+            "pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::RnsNativeClaimedDirectNumericOriginV2;",
         ]
     );
     assert_eq!(
@@ -866,7 +930,14 @@ fn parent_declaration_is_exactly_once_and_private() {
     assert!(!parent.contains("pub mod incremental_source_rns_native_tail_publication_v2"));
     assert!(!parent.contains("pub(crate) mod incremental_source_rns_native_tail_publication_v2"));
     assert!(!parent.contains("pub(super) mod incremental_source_rns_native_tail_publication_v2"));
-    assert!(!parent.contains("use incremental_source_rns_native_tail_publication_v2"));
+    assert_eq!(
+        parent
+            .matches("use incremental_source_rns_native_tail_publication_v2")
+            .count(),
+        1
+    );
+    assert!(!parent.contains("pub(crate) use incremental_source_rns_native_tail_publication_v2"));
+    assert!(!parent.contains("pub use incremental_source_rns_native_tail_publication_v2"));
 }
 
 #[test]
@@ -906,6 +977,131 @@ fn paired_whole_owner_shape_and_sample_terminal_are_source_pinned() {
     assert!(source.contains("self.records.len() != RECORDS_V2"));
     assert!(source.contains("owner.ciphertext.sample_index() != record as u64"));
     assert!(source.contains("owner.tail.objects.len() != TAIL_OBJECTS_PER_RECORD_V2"));
+}
+
+#[test]
+fn compiled_v1_tail_coordinator_pins_one_owner_one_publisher_and_exact_order() {
+    let source = include_str!("incremental_source_rns_native_tail_publication_v2.rs");
+    let coordinator = source
+        .split_once("pub(super) struct RnsNativeV1TailPublicationCoordinatorV2")
+        .and_then(|(_, suffix)| {
+            suffix
+                .split_once("/// Exact future production shape")
+                .map(|(coordinator, _)| coordinator)
+        })
+        .expect("compiled V1/tail coordinator boundary");
+    for required in [
+        "authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1",
+        "tails: RnsNativeTailPublicationLifecycleV2<K, P>",
+        "records: Vec<RnsNativeWholeV1RecordPublicationOwnerV2>",
+        "pub(super) fn begin_v2(",
+        "pub(super) fn encrypt_next_with_confidential_sink_v2",
+        "pub(super) fn finish_v2(",
+        "records.try_reserve_exact(RECORDS_V2)",
+        "validate_release_v1()",
+        "validate_v1_authority_binding_v2(&authority)",
+        "RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2()",
+        "RnsNativePreparedTailRecordPublicationV2::new_before_entropy_v2(",
+        "publish_next_record_from_v1_callback_parts_v2(",
+        "RnsNativeWholeV1PublicationOwnersV2 {",
+        ".into_existing_reader_bridge_v2(v1)",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "missing coordinator pin: {required}"
+        );
+    }
+    let validate_authority = coordinator.find("validate_release_v1()").unwrap();
+    let validate_tail_axes = coordinator
+        .find("validate_v1_authority_binding_v2(&authority)")
+        .unwrap();
+    let begin_tail_cas = coordinator
+        .find("RnsNativeTailPublicationLifecycleV2::begin_v2(")
+        .unwrap();
+    assert!(validate_authority < validate_tail_axes);
+    assert!(validate_tail_axes < begin_tail_cas);
+    let poison = coordinator.find("self.poisoned = true;").unwrap();
+    let workspace = coordinator
+        .find("RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2()")
+        .unwrap();
+    let prepared_publication = coordinator
+        .find("RnsNativePreparedTailRecordPublicationV2::new_before_entropy_v2(")
+        .unwrap();
+    let prepare_sink = coordinator.find("prepare_sink()").unwrap();
+    let sink = coordinator.find("if let Err(error) = sink(").unwrap();
+    let tail = coordinator
+        .find("publish_next_record_from_v1_callback_parts_v2(")
+        .unwrap();
+    let manifest = coordinator
+        .find("self.records.push(RnsNativeWholeV1RecordPublicationOwnerV2")
+        .unwrap();
+    let clear = coordinator.rfind("self.poisoned = false;").unwrap();
+    assert!(poison < workspace);
+    assert!(workspace < prepared_publication);
+    assert!(prepared_publication < prepare_sink);
+    assert!(prepare_sink < sink);
+    assert!(sink < tail);
+    assert!(tail < manifest);
+    assert!(manifest < clear);
+    assert_eq!(coordinator.matches("self.poisoned = false;").count(), 1);
+    assert_eq!(coordinator.matches("ciphertext_publisher: P").count(), 1);
+    assert!(!coordinator.contains("impl Clone for RnsNativeV1TailPublicationCoordinatorV2"));
+    assert!(!coordinator.contains("impl Copy for RnsNativeV1TailPublicationCoordinatorV2"));
+    assert!(!coordinator.contains("into_parts"));
+    assert!(!coordinator.contains("authority(&self)"));
+    assert!(!coordinator.contains("provider(&self)"));
+
+    let callback_parts = source
+        .split_once("fn publish_next_record_from_v1_callback_parts_v2")
+        .and_then(|(_, suffix)| {
+            suffix
+                .split_once("impl<K, P> RnsNativeTailPublicationLifecycleV2")
+                .map(|(callback, _)| callback)
+        })
+        .expect("allocation-free callback parts");
+    assert!(callback_parts.contains("prepared_publication.expected"));
+    assert!(callback_parts.contains("prepared_publication.objects"));
+    assert!(!callback_parts.contains("Vec::new"));
+    assert!(!callback_parts.contains("try_reserve"));
+    assert!(!callback_parts.contains(".collect::<"));
+}
+
+#[test]
+fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_closed() {
+    let source = include_str!("incremental_source_rns_native_tail_publication_v2.rs");
+    for required in [
+        "ConfidentialSink(ZkAmsMkheErrorV1)",
+        "Tail(RnsNativeTailPublicationErrorV2)",
+        "RnsNativeV1TailCoordinatorErrorV2::Encryption(encryption_error)",
+        "RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)",
+        "RnsNativeV1TailCoordinatorErrorV2::Tail(error)",
+        "RNS_NATIVE_V1_TAIL_COORDINATOR_IMPLEMENTED_V2: bool = true",
+        "RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2: bool = true",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing error/contract pin: {required}"
+        );
+    }
+    for closed in [
+        "RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2: bool = false",
+        "RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false",
+        "RNS_NATIVE_TAIL_PRODUCTION_OWNER_AVAILABLE_V2: bool = false",
+        "RNS_NATIVE_TAIL_PRODUCTION_ADAPTER_AVAILABLE_V2: bool = false",
+        "RNS_NATIVE_COMPOSITE_PROVIDER_INTEGRATED_V2: bool = false",
+        "RNS_NATIVE_EXISTING_READER_INTEGRATED_V2: bool = false",
+        "RNS_NATIVE_SINGLE_QPCS_BATCH_INTEGRATED_V2: bool = false",
+        "RNS_NATIVE_READER_PROVIDER_RETURN_INTEGRATED_V2: bool = false",
+        "RNS_NATIVE_TAIL_RESOURCE_EVIDENCE_QUALIFIED_V2: bool = false",
+        "RNS_NATIVE_TAIL_DEVICE_EVIDENCE_QUALIFIED_V2: bool = false",
+        "RNS_NATIVE_TAIL_READINESS_V2: bool = false",
+        "RNS_NATIVE_TAIL_RELEASE_AUTHORIZED_V2: bool = false",
+    ] {
+        assert!(source.contains(closed), "opened live gate: {closed}");
+    }
+    assert!(source.contains("code: \"LIVE_PHASE23_CONFIDENTIAL_SINK\""));
+    assert!(!source.contains("RnsNativeWholeV1ProductionAdapterV2"));
+    assert!(!source.contains("pub(super) fn from_raw"));
 }
 
 #[test]

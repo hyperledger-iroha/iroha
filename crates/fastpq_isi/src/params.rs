@@ -6,7 +6,7 @@ pub struct FieldDescriptor {
     pub name: &'static str,
     /// Prime modulus written in decimal form for ease of reference.
     pub modulus_decimal: &'static str,
-    /// Extension degree used for FRI (1 = base field, 2 = quadratic extension).
+    /// Extension degree used for FRI (1 = base field).
     pub extension_degree: u32,
 }
 /// Description of the hash functions used by the STARK.
@@ -24,7 +24,8 @@ pub struct FriParameters {
     pub arity: u32,
     /// Overall trace domain expansion (`blowup factor`).
     pub blowup_factor: u32,
-    /// Maximum number of reduction rounds.
+    /// Maximum reduction rounds available before opening and degree-checking
+    /// the complete terminal domain.
     pub max_reductions: u32,
     /// Number of queries sampled by the verifier.
     pub queries: u32,
@@ -34,13 +35,16 @@ pub struct FriParameters {
 pub struct StarkParameterSet {
     /// Stable identifier (used in manifests and telemetry).
     pub name: &'static str,
-    /// Target security level in bits.
+    /// Declared generic collision-security ceiling in bits.
     pub target_security_bits: u32,
-    /// Bit grinding applied before FRI challenges are sampled.
+    /// Bit grinding actually applied before FRI challenges are sampled.
     pub grinding_bits: u32,
     /// Log₂ size of the trace domain (`N_trace = 2^trace_log_size`).
     pub trace_log_size: u32,
     /// Primitive `2^trace_log_size` root of unity for the trace domain.
+    ///
+    /// This is exactly `lde_root^fri.blowup_factor`, so advancing one trace
+    /// row advances by the blowup stride in the LDE evaluation ordering.
     pub trace_root: u64,
     /// Log₂ size of the low-degree extension domain (`N_eval = 2^lde_log_size`).
     pub lde_log_size: u32,
@@ -59,31 +63,31 @@ pub struct StarkParameterSet {
     /// FRI parameterisation.
     pub fri: FriParameters,
 }
-/// Goldilocks prime (2^64 - 2^32 + 1) with quadratic extension for DEEP-FRI.
-pub const GOLDILOCKS_FP2: FieldDescriptor = FieldDescriptor {
+/// Goldilocks prime (2^64 - 2^32 + 1) used without an extension field.
+pub const GOLDILOCKS_BASE: FieldDescriptor = FieldDescriptor {
     name: "Goldilocks",
     modulus_decimal: "18446744069414584321",
-    extension_degree: 2,
+    extension_degree: 1,
 };
-/// Poseidon2 commitment hash with SHA3-256 transcript permutations.
-pub const POSEIDON2_SHA3: HashDescriptor = HashDescriptor {
-    trace_commitment: "Poseidon2(Goldilocks)",
-    transcript: "SHA3-256",
+/// Dense-MDS Poseidon commitment hash with the Iroha Blake2b-256 transcript.
+pub const POSEIDON_GOLDILOCKS_X7_BLAKE2B: HashDescriptor = HashDescriptor {
+    trace_commitment: "Poseidon(Goldilocks,x^7,t=3,r=2,RF=8,RP=57)",
+    transcript: "Blake2b-256 (Iroha Hash marker)",
 };
 /// Canonical parameters targeting balanced prover throughput.
 pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
     name: "fastpq-lane-balanced",
-    target_security_bits: 128,
-    grinding_bits: 23,
+    target_security_bits: 32,
+    grinding_bits: 0,
     trace_log_size: 16,
-    trace_root: 0x002a_247f_81c6_f850,
+    trace_root: 0xbe5b_4f4b_47ee_4647,
     lde_log_size: 19,
-    lde_root: 0x6026_3388_dbbf_9b2a,
+    lde_root: 0xa9c4_68a3_57df_6e13,
     permutation_size: 65_536,
     lookup_log_size: Some(19),
-    omega_coset: 0x6af3_25e8_25ad_5c18,
-    field: GOLDILOCKS_FP2,
-    hash: POSEIDON2_SHA3,
+    omega_coset: 0xfd0e_69f9_a98e_e946,
+    field: GOLDILOCKS_BASE,
+    hash: POSEIDON_GOLDILOCKS_X7_BLAKE2B,
     fri: FriParameters {
         arity: 8,
         blowup_factor: 8,
@@ -94,17 +98,17 @@ pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
 /// Canonical parameters optimised for latency-sensitive lanes.
 pub const FASTPQ_CANONICAL_LATENCY: StarkParameterSet = StarkParameterSet {
     name: "fastpq-lane-latency",
-    target_security_bits: 128,
-    grinding_bits: 21,
+    target_security_bits: 32,
+    grinding_bits: 0,
     trace_log_size: 16,
-    trace_root: 0x6a9f_4eb3_8fb9_b892,
+    trace_root: 0x701a_f10f_692d_2482,
     lde_log_size: 20,
-    lde_root: 0x9c9c_3a57_1b6f_89ac,
+    lde_root: 0x41ad_09f5_526e_af8f,
     permutation_size: 65_536,
     lookup_log_size: Some(20),
-    omega_coset: 0x3a5f_d417_1e3c_3a4d,
-    field: GOLDILOCKS_FP2,
-    hash: POSEIDON2_SHA3,
+    omega_coset: 0x4ee3_6cc3_ce25_5211,
+    field: GOLDILOCKS_BASE,
+    hash: POSEIDON_GOLDILOCKS_X7_BLAKE2B,
     fri: FriParameters {
         arity: 16,
         blowup_factor: 16,
@@ -122,10 +126,32 @@ pub fn find_by_name(name: &str) -> Option<&'static StarkParameterSet> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mul_mod(left: u64, right: u64) -> u64 {
+        let modulus = u128::from(crate::poseidon::FIELD_MODULUS);
+        u64::try_from((u128::from(left) * u128::from(right)) % modulus)
+            .expect("reduced product fits u64")
+    }
+
+    fn pow_mod(mut base: u64, mut exponent: u64) -> u64 {
+        let mut result = 1;
+        while exponent != 0 {
+            if exponent & 1 == 1 {
+                result = mul_mod(result, base);
+            }
+            base = mul_mod(base, base);
+            exponent >>= 1;
+        }
+        result
+    }
+
     #[test]
-    fn canonical_sets_meet_security_target() {
+    fn canonical_sets_declare_target_and_shape() {
         for set in CANONICAL_PARAMETER_SETS {
-            assert!(set.target_security_bits >= 128);
+            assert_eq!(set.target_security_bits, 32);
+            assert_eq!(set.grinding_bits, 0);
+            assert_eq!(set.field, GOLDILOCKS_BASE);
+            assert_eq!(set.field.extension_degree, 1);
             assert!((set.fri.arity == 8) || (set.fri.arity == 16));
             assert_eq!(set.fri.blowup_factor, set.fri.arity);
             assert!(set.fri.max_reductions >= 6);
@@ -143,8 +169,39 @@ mod tests {
     fn lookup_finds_sets() {
         let balanced = find_by_name("fastpq-lane-balanced").expect("balanced params");
         assert_eq!(balanced.fri.arity, 8);
+        assert_eq!(balanced.hash, POSEIDON_GOLDILOCKS_X7_BLAKE2B);
+        assert_eq!(
+            balanced.hash.trace_commitment,
+            "Poseidon(Goldilocks,x^7,t=3,r=2,RF=8,RP=57)"
+        );
+        assert_eq!(balanced.hash.transcript, "Blake2b-256 (Iroha Hash marker)");
         assert!(find_by_name("fastpq-lane-latency").is_some());
         assert!(find_by_name("unknown").is_none());
         assert_eq!(balanced.permutation_size, 1 << balanced.trace_log_size);
+    }
+
+    #[test]
+    fn regenerated_domain_roots_are_coherent_and_cosets_are_outside_lde_subgroups() {
+        for params in CANONICAL_PARAMETER_SETS {
+            for (root, log_size) in [
+                (params.trace_root, params.trace_log_size),
+                (params.lde_root, params.lde_log_size),
+            ] {
+                assert_eq!(pow_mod(root, 1_u64 << log_size), 1, "{}", params.name);
+                assert_ne!(pow_mod(root, 1_u64 << (log_size - 1)), 1, "{}", params.name);
+            }
+            assert_eq!(
+                pow_mod(params.lde_root, u64::from(params.fri.blowup_factor)),
+                params.trace_root,
+                "{} trace/LDE generators must use the advertised blowup stride",
+                params.name
+            );
+            assert_ne!(
+                pow_mod(params.omega_coset, 1_u64 << params.lde_log_size),
+                1,
+                "{} coset offset must be outside the LDE subgroup",
+                params.name
+            );
+        }
     }
 }

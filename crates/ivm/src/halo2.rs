@@ -606,6 +606,28 @@ mod tests {
         assert_eq!(circuit.verify(), Err("unsupported opcode"));
     }
     #[test]
+    fn vm_execution_circuit_rejects_malformed_pc_without_panicking() {
+        let program = build_program(&[wide_enc::encode_halt()]);
+
+        let misaligned = base_state(2);
+        let trace = vec![misaligned.clone(), misaligned];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        let result = std::panic::catch_unwind(|| circuit.verify());
+        assert_eq!(
+            result.expect("misaligned verification must not panic"),
+            Err("misaligned pc")
+        );
+
+        let past_code = base_state(8);
+        let trace = vec![past_code.clone(), past_code];
+        let circuit = VMExecutionCircuit::new(&program, &trace, &[]);
+        let result = std::panic::catch_unwind(|| circuit.verify());
+        assert_eq!(
+            result.expect("out-of-range verification must not panic"),
+            Err("pc out of bounds")
+        );
+    }
+    #[test]
     fn vm_execution_circuit_rejects_unexpected_register_drift() {
         let program = build_program(&[
             wide_enc::encode_rr(wide::arithmetic::ADD, 3, 1, 2),
@@ -1304,11 +1326,15 @@ fn verify_memory_path(leaf: [u8; 32], index: usize, path: &[[u8; 32]]) -> [u8; 3
 }
 fn region_perm(addr: u64, size: u32, code_len: u64, heap_limit: u64) -> Option<crate::error::Perm> {
     use crate::memory::Memory;
+    if code_len > Memory::HEAP_START || heap_limit > Memory::HEAP_MAX_SIZE {
+        return None;
+    }
     let end = addr.checked_add(size as u64)?;
     if end <= code_len {
         return Some(crate::error::Perm::READ | crate::error::Perm::EXECUTE);
     }
-    if addr >= Memory::HEAP_START && end <= Memory::HEAP_START + heap_limit {
+    let heap_end = Memory::HEAP_START.checked_add(heap_limit)?;
+    if addr >= Memory::HEAP_START && end <= heap_end {
         return Some(crate::error::Perm::READ | crate::error::Perm::WRITE);
     }
     if addr >= Memory::INPUT_START && end <= Memory::INPUT_START + Memory::INPUT_SIZE {
@@ -1540,6 +1566,11 @@ impl AssertRangeCircuit {
 // -----------------------------------------------------------------------------
 // Control Flow Circuits
 // -----------------------------------------------------------------------------
+fn verify_control_flow_pc(pc: u64, code_len: u64) -> Result<(), &'static str> {
+    use crate::memory::Memory;
+    ensure_equal_bool(code_len <= Memory::HEAP_START, true)?;
+    ensure_equal_bool(pc < code_len, true)
+}
 /// Circuit verifying an unconditional jump (JMP).
 pub struct JumpCircuit {
     pub pc: u64,
@@ -1549,9 +1580,10 @@ pub struct JumpCircuit {
 }
 impl JumpCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
-        let target = ((self.pc as i64) + self.offset as i64) as u64;
+        verify_control_flow_pc(self.pc, self.code_len)?;
+        let target = self.pc.wrapping_add_signed(i64::from(self.offset));
         ensure_equal_u64(self.next_pc, target)?;
-        ensure_equal_u64(self.next_pc & 1, 0)?;
+        ensure_equal_u64(self.next_pc & 3, self.pc & 3)?;
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
 }
@@ -1575,7 +1607,7 @@ impl JalCircuit {
         .verify()
     }
 }
-/// Circuit verifying a register-based jump (JALR/JR).
+/// Circuit verifying an aligned register-based jump (`JALR`).
 pub struct JumpRegCircuit {
     pub pc: u64,
     pub base: u64,
@@ -1586,11 +1618,13 @@ pub struct JumpRegCircuit {
 }
 impl JumpRegCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
+        verify_control_flow_pc(self.pc, self.code_len)?;
         if let Some(l) = self.link {
             ensure_equal_u64(l, self.pc.wrapping_add(4))?;
         }
-        let mut target = self.base.wrapping_add(self.imm as i64 as u64);
-        target &= !1u64;
+        let raw_target = self.base.wrapping_add(self.imm as i64 as u64);
+        let alignment = self.pc & 3;
+        let target = ((raw_target.wrapping_sub(alignment)) & !3) | alignment;
         ensure_equal_u64(self.next_pc, target)?;
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
@@ -1605,11 +1639,12 @@ pub struct BranchCircuit {
 }
 impl BranchCircuit {
     pub fn verify(&self) -> Result<(), &'static str> {
-        let taken_pc = ((self.pc as i64) + self.offset as i64) as u64;
+        verify_control_flow_pc(self.pc, self.code_len)?;
+        let taken_pc = self.pc.wrapping_add_signed(i64::from(self.offset));
         let not_pc = self.pc.wrapping_add(4);
         let expected = if self.take_branch { taken_pc } else { not_pc };
         ensure_equal_u64(self.next_pc, expected)?;
-        ensure_equal_u64(self.next_pc & 1, 0)?;
+        ensure_equal_u64(self.next_pc & 3, self.pc & 3)?;
         ensure_equal_bool(self.next_pc < self.code_len, true)
     }
 }
@@ -1659,17 +1694,27 @@ impl<'a> VMExecutionCircuit<'a> {
         let offset = crate::metadata::ProgramMetadata::parse(self.program)
             .map_err(|_| "program")?
             .code_offset;
-        let code = &self.program[offset..];
+        let code = self.program.get(offset..).ok_or("program")?;
         for window in self.trace.windows(2) {
             let curr = &window[0];
             let next = &window[1];
-            if curr.pc as usize >= code.len() {
+            let pc = usize::try_from(curr.pc).map_err(|_| "pc out of bounds")?;
+            if pc == code.len() {
                 ensure_equal_u64(curr.pc, next.pc)?;
                 ensure_slice_equal_u64(&curr.gpr, &next.gpr)?;
                 ensure_slice_equal_bool(&curr.tags, &next.tags)?;
                 continue;
             }
-            let bytes: [u8; 4] = code[curr.pc as usize..curr.pc as usize + 4]
+            if pc > code.len() {
+                return Err("pc out of bounds");
+            }
+            if !pc.is_multiple_of(4) {
+                return Err("misaligned pc");
+            }
+            let end = pc.checked_add(4).ok_or("pc out of bounds")?;
+            let bytes: [u8; 4] = code
+                .get(pc..end)
+                .ok_or("pc out of bounds")?
                 .try_into()
                 .map_err(|_| "pc out of bounds")?;
             let instr = u32::from_le_bytes(bytes);

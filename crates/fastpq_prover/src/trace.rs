@@ -1770,7 +1770,7 @@ pub(crate) fn derive_polynomial_data(
 pub(crate) fn column_index(trace: &Trace, name: &str) -> Option<usize> {
     trace.columns.iter().position(|column| column.name == name)
 }
-/// Compute a Poseidon2 Merkle root over column hashes using an optional fused first level.
+/// Compute a Poseidon Merkle root over column hashes using an optional fused first level.
 pub fn merkle_root_with_first_level(leaves: &[u64], first_level: Option<&[u64]>) -> u64 {
     if leaves.is_empty() {
         return 0;

@@ -2554,7 +2554,7 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
             "{label} native BFV AIR governed trace context is required"
         ))
     })?;
-    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
         &open.envelope_bytes,
         &limits,
         statement_hash,
@@ -15976,7 +15976,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
         Some(public_padding_context.clone()),
         &limits,
     )?;
-    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
         envelope_bytes,
         &limits,
         statement_hash,

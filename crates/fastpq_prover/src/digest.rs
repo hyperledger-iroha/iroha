@@ -1,6 +1,7 @@
 use crate::{
     Error, Result,
     batch::TransitionBatch,
+    poseidon_profile_sha256,
     trace::{ColumnDigests, Trace, build_trace, column_hashes, merkle_root_with_first_level},
 };
 use fastpq_isi::StarkParameterSet;
@@ -10,11 +11,12 @@ const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
 /// Compute the deterministic commitment over a transition batch.
 ///
 /// The commitment is derived by building the canonical FASTPQ trace,
-/// hashing each column with Poseidon2, folding the resulting digests into a
-/// Poseidon2 Merkle root, and finally hashing a length-prefixed payload with
+/// hashing each column with Poseidon, folding the resulting digests into a
+/// Poseidon Merkle root, and finally hashing a length-prefixed payload with
 /// `Hash::new`. The payload captures the domain separator, parameter name, trace
-/// dimensions, column digests, and the Merkle root so downstream consumers can
-/// validate the commitment using only public data.
+/// dimensions, exact Poseidon profile digest, column digests, and the Merkle
+/// root so downstream consumers can validate the commitment using only public
+/// data.
 ///
 /// # Errors
 ///
@@ -59,11 +61,13 @@ pub fn trace_commitment_from_digests(
     let mut payload = Vec::with_capacity(
         TRACE_COMMITMENT_DOMAIN.len()
             + params.name.len()
+            + poseidon_profile_sha256().len()
             + core::mem::size_of_val(column_digests.leaves())
             + 32,
     );
     append_length_prefixed(&mut payload, TRACE_COMMITMENT_DOMAIN)?;
     append_length_prefixed(&mut payload, params.name.as_bytes())?;
+    append_length_prefixed(&mut payload, poseidon_profile_sha256().as_bytes())?;
     payload.extend_from_slice(&rows.to_le_bytes());
     payload.extend_from_slice(&padded_len.to_le_bytes());
     payload.extend_from_slice(&column_count.to_le_bytes());

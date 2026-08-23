@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator governance lifecycle coverage for the complete canonical
-//! first-release exact-12 privacy registry.
+//! first-release exact-12 privacy registry. Ten executable profiles retain
+//! positive governance coverage; ZK-ACE and ZK-AMS remain explicitly
+//! unavailable and fail closed on every validator.
 //!
 //! This scenario deliberately does not construct privacy proofs. The isolated
 //! release-evidence runner owns native-engine proof coverage; this test proves
@@ -37,9 +39,11 @@ use iroha_data_model::{
     prelude::QueryBuilderExt,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
-        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
+        PrivacyCompiledProfileUnavailableReasonV1, PrivacyEngineIdV1,
+        PrivacyExact12CapabilityManifestV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1,
+        PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        privacy_exact12_fixture_bundle_v1,
     },
     query::transaction::prelude::FindTransactions,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
@@ -58,10 +62,16 @@ const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(300);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
+const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 2] = [ZK_ACE_PROTOCOL, ZK_AMS_PROTOCOL];
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
-    compiled: CompiledPrivacyProfileV1,
+    protocol_id: PrivacyProtocolIdV1,
+    compiled_profile: PrivacyCompiledProfileResultV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
+}
+fn is_expected_unavailable(protocol_id: PrivacyProtocolIdV1) -> bool {
+    UNAVAILABLE_PROTOCOLS.contains(&protocol_id)
 }
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
@@ -74,7 +84,7 @@ fn require_test_network_feature(feature: &str) -> Result<()> {
     ensure!(
         enabled,
         "{TEST_NAME}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` so the four real \
-         validators execute the same complete exact-12 profile set as the test harness"
+         validators execute the same exact-12 availability catalog as the test harness"
     );
     Ok(())
 }
@@ -105,36 +115,61 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
     .iter()
     .any(|needle| error_chain_contains(error, needle))
 }
-fn compiled_exact12() -> Result<Vec<CompiledPrivacyProfileV1>> {
+fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
     ensure!(
         PrivacyProtocolIdV1::COUNT == 12,
         "first-release exact-12 registry cardinality drifted to {}",
         PrivacyProtocolIdV1::COUNT
     );
-    let profiles = PrivacyProtocolIdV1::ALL
-        .into_iter()
-        .map(|protocol_id| {
-            compiled_privacy_profile_v1(protocol_id).wrap_err_with(|| {
-                format!(
-                    "canonical exact-12 profile `{}` is not executable",
+    let mut profiles = Vec::new();
+    for protocol_id in PrivacyProtocolIdV1::ALL {
+        match compiled_privacy_profile_v1(protocol_id) {
+            Ok(profile) => {
+                ensure!(
+                    !is_expected_unavailable(protocol_id),
+                    "fail-closed protocol `{}` unexpectedly became executable",
                     protocol_id.canonical_label()
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+                );
+                profiles.push(profile);
+            }
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: unavailable,
+            }) if unavailable == protocol_id && is_expected_unavailable(protocol_id) => {
+                ensure!(
+                    compiled_privacy_profile_snapshot_result_v1(protocol_id)
+                        == PrivacyCompiledProfileResultV1::Unavailable(
+                            PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                        ),
+                    "fail-closed capability result drifted for `{}`",
+                    protocol_id.canonical_label()
+                );
+            }
+            Err(error) => {
+                return Err(eyre!(
+                    "canonical exact-12 profile `{}` has unexpected compiled status: {error:?}",
+                    protocol_id.canonical_label()
+                ));
+            }
+        }
+    }
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT,
-        "compiled exact-12 profile count drifted: expected {}, got {}",
-        PrivacyProtocolIdV1::COUNT,
+        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
+        "available exact-12 profile count drifted: expected {}, got {}",
+        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
         profiles.len()
     );
-    for (index, (profile, protocol_id)) in profiles.iter().zip(PrivacyProtocolIdV1::ALL).enumerate()
-    {
+    for pair in profiles.windows(2) {
+        let left = PrivacyProtocolIdV1::ALL
+            .iter()
+            .position(|protocol_id| *protocol_id == pair[0].protocol_id)
+            .expect("compiled protocol belongs to exact-12 registry");
+        let right = PrivacyProtocolIdV1::ALL
+            .iter()
+            .position(|protocol_id| *protocol_id == pair[1].protocol_id)
+            .expect("compiled protocol belongs to exact-12 registry");
         ensure!(
-            profile.protocol_id == protocol_id,
-            "compiled exact-12 profile {index} is out of canonical order: expected \
-             {protocol_id:?}, got {:?}",
-            profile.protocol_id
+            left < right,
+            "available exact-12 profiles are not in canonical order"
         );
     }
     Ok(profiles)
@@ -145,20 +180,52 @@ fn expected_states(
 ) -> Result<Vec<ExpectedProtocolState>> {
     let activations = activations.into_iter().collect::<Vec<_>>();
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT
-            && activations.len() == PrivacyProtocolIdV1::COUNT,
-        "expected-state construction requires exactly {} profiles and activations",
-        PrivacyProtocolIdV1::COUNT
+        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
+            && activations.len() == profiles.len(),
+        "expected-state construction requires exactly {} available profiles and activations",
+        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
     );
-    Ok(profiles
-        .iter()
-        .copied()
-        .zip(activations)
-        .map(|(compiled, activation)| ExpectedProtocolState {
-            compiled,
+    let mut available = profiles.iter().copied().zip(activations).peekable();
+    let mut expected = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+    for protocol_id in PrivacyProtocolIdV1::ALL {
+        let compiled_profile = compiled_privacy_profile_snapshot_result_v1(protocol_id);
+        let activation = match compiled_profile {
+            PrivacyCompiledProfileResultV1::Available(snapshot) => {
+                let Some((compiled, activation)) = available.next() else {
+                    return Err(eyre!(
+                        "compiled profile list omitted available protocol `{}`",
+                        protocol_id.canonical_label()
+                    ));
+                };
+                ensure!(
+                    compiled.protocol_id == protocol_id
+                        && snapshot == PrivacyCompiledProfileSnapshotV1::from(compiled),
+                    "compiled binding/order drifted for available protocol `{}`",
+                    protocol_id.canonical_label()
+                );
+                activation
+            }
+            PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ) if is_expected_unavailable(protocol_id) => None,
+            status => {
+                return Err(eyre!(
+                    "unexpected compiled status for `{}`: {status:?}",
+                    protocol_id.canonical_label()
+                ));
+            }
+        };
+        expected.push(ExpectedProtocolState {
+            protocol_id,
+            compiled_profile,
             activation,
-        })
-        .collect())
+        });
+    }
+    ensure!(
+        available.next().is_none(),
+        "compiled profile list contains a non-canonical trailing entry"
+    );
+    Ok(expected)
 }
 fn assert_exact12_snapshot(
     snapshot: &PrivacyExact12CapabilityManifestV1,
@@ -187,15 +254,14 @@ fn assert_exact12_snapshot(
         .enumerate()
     {
         ensure!(
-            row.protocol_id == protocol_id && state.compiled.protocol_id == protocol_id,
+            row.protocol_id == protocol_id && state.protocol_id == protocol_id,
             "{context}: canonical protocol order drifted at row {index}: expected \
-             {protocol_id:?}, snapshot={:?}, compiled={:?}",
+             {protocol_id:?}, snapshot={:?}, expected={:?}",
             row.protocol_id,
-            state.compiled.protocol_id
+            state.protocol_id
         );
-        let compiled_snapshot = PrivacyCompiledProfileSnapshotV1::from(state.compiled);
         ensure!(
-            row.compiled_profile == PrivacyCompiledProfileResultV1::Available(compiled_snapshot),
+            row.compiled_profile == state.compiled_profile,
             "{context}: immutable compiled binding drifted for `{}`: {:?}",
             protocol_id.canonical_label(),
             row.compiled_profile
@@ -418,7 +484,7 @@ async fn wait_for_transaction_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn assert_zk_ams_unavailable(
+fn assert_unreleased_profiles_unavailable(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
     context: &str,
@@ -431,27 +497,36 @@ fn assert_zk_ams_unavailable(
         "{context}: committed height {} is below {minimum_height}",
         snapshot.committed_height
     );
-    let row = snapshot
-        .protocols
-        .iter()
-        .find(|row| row.protocol_id == ZK_AMS_PROTOCOL)
-        .ok_or_else(|| eyre!("{context}: capability snapshot omitted ZK-AMS"))?;
-    ensure!(
-        row.compiled_profile
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "{context}: ZK-AMS compiled status unexpectedly changed: {:?}",
-        row.compiled_profile
-    );
-    ensure!(
-        row.activation.is_none(),
-        "{context}: unavailable ZK-AMS unexpectedly has an activation: {:?}",
-        row.activation
-    );
+    for protocol_id in UNAVAILABLE_PROTOCOLS {
+        let row = snapshot
+            .protocols
+            .iter()
+            .find(|row| row.protocol_id == protocol_id)
+            .ok_or_else(|| {
+                eyre!(
+                    "{context}: capability snapshot omitted unavailable protocol `{}`",
+                    protocol_id.canonical_label()
+                )
+            })?;
+        ensure!(
+            row.compiled_profile
+                == PrivacyCompiledProfileResultV1::Unavailable(
+                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                ),
+            "{context}: compiled status unexpectedly changed for `{}`: {:?}",
+            protocol_id.canonical_label(),
+            row.compiled_profile
+        );
+        ensure!(
+            row.activation.is_none(),
+            "{context}: unavailable protocol `{}` unexpectedly has an activation: {:?}",
+            protocol_id.canonical_label(),
+            row.activation
+        );
+    }
     Ok(())
 }
-async fn wait_for_identical_zk_ams_unavailable(
+async fn wait_for_identical_unreleased_profiles(
     clients: &[Client],
     minimum_height: u64,
     context: &str,
@@ -463,17 +538,19 @@ async fn wait_for_identical_zk_ams_unavailable(
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
             match client.get_privacy_capabilities() {
-                Ok(snapshot) => match assert_zk_ams_unavailable(&snapshot, minimum_height, context)
-                {
-                    Ok(()) => {
-                        last_observed.push(format!(
-                            "peer {index}: unavailable at height {}",
-                            snapshot.committed_height
-                        ));
-                        snapshots.push(snapshot);
+                Ok(snapshot) => {
+                    match assert_unreleased_profiles_unavailable(&snapshot, minimum_height, context)
+                    {
+                        Ok(()) => {
+                            last_observed.push(format!(
+                                "peer {index}: unavailable at height {}",
+                                snapshot.committed_height
+                            ));
+                            snapshots.push(snapshot);
+                        }
+                        Err(error) => last_observed.push(format!("peer {index}: {error}")),
                     }
-                    Err(error) => last_observed.push(format!("peer {index}: {error}")),
-                },
+                }
                 Err(error) => {
                     last_observed.push(format!("peer {index}: query failed: {error}"));
                 }
@@ -498,25 +575,35 @@ async fn wait_for_identical_zk_ams_unavailable(
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Result<()> {
+async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
-    let unavailable = CompiledPrivacyProfileErrorV1::EngineUnavailable {
-        protocol_id: ZK_AMS_PROTOCOL,
-    };
-    ensure!(
-        compiled_privacy_profile_v1(ZK_AMS_PROTOCOL) == Err(unavailable),
-        "this closed-profile test must be replaced when every ZK-AMS release gate closes"
-    );
-    ensure!(
-        compiled_privacy_profile_snapshot_result_v1(ZK_AMS_PROTOCOL)
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "local ZK-AMS capability result is not the exact fail-closed status"
-    );
-    let candidate = zk_ams_release_candidate_profile_material_v1()
+    for protocol_id in UNAVAILABLE_PROTOCOLS {
+        let unavailable = CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id };
+        ensure!(
+            compiled_privacy_profile_v1(protocol_id) == Err(unavailable),
+            "this closed-profile test must be replaced when `{}` becomes governance-available",
+            protocol_id.canonical_label()
+        );
+        ensure!(
+            compiled_privacy_profile_snapshot_result_v1(protocol_id)
+                == PrivacyCompiledProfileResultV1::Unavailable(
+                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                ),
+            "local capability result for `{}` is not the exact fail-closed status",
+            protocol_id.canonical_label()
+        );
+    }
+    let zk_ams_candidate = zk_ams_release_candidate_profile_material_v1()
         .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
+    let mut zk_ace_candidate = compiled_available_profiles()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| eyre!("exact-12 registry contains no executable control profile"))?;
+    zk_ace_candidate.protocol_id = ZK_ACE_PROTOCOL;
+    zk_ace_candidate.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+    zk_ace_candidate.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
+    zk_ace_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -525,14 +612,14 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let context = stringify!(zk_ams_unreleased_profile_fails_closed_across_four_peer_restart);
+    let context = stringify!(zk_ace_and_zk_ams_fail_closed_across_four_peer_restart);
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
-            "ZK-AMS closed-profile test requires exactly four validators"
+            "unreleased-profile test requires exactly four validators"
         );
         let all_clients = network
             .peers()
@@ -542,12 +629,12 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
         let client = all_clients[0].clone();
         let initial_height = client
             .get_privacy_capabilities()
-            .wrap_err("query initial ZK-AMS capability state")?
+            .wrap_err("query initial unavailable-profile capability state")?
             .committed_height;
-        wait_for_identical_zk_ams_unavailable(
+        wait_for_identical_unreleased_profiles(
             &all_clients,
             initial_height,
-            "ZK-AMS must begin unavailable and unregistered",
+            "ZK-ACE and ZK-AMS must begin unavailable and unregistered",
         )
         .await?;
         let grant = instruction_transaction(
@@ -557,68 +644,96 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
                 client.account.clone(),
             ),
         );
-        submit_signed_transaction(&client, &grant, "grant ZK-AMS governance permission").await?;
+        submit_signed_transaction(&client, &grant, "grant unavailable-profile governance permission")
+            .await?;
         wait_for_transaction_on_peers(
             &all_clients,
             &grant,
-            "ZK-AMS governance grant convergence",
+            "unavailable-profile governance grant convergence",
         )
         .await?;
-        let proposal_height = next_incoming_height(&client)?;
-        let activation_height = proposal_height
-            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-            .ok_or_else(|| eyre!("ZK-AMS candidate activation height overflowed"))?;
-        let activation = instruction_transaction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(proposed_activation(
-                candidate,
-                proposal_height,
-                activation_height,
-            )),
-        );
-        let activation_error = submit_signed_transaction(
-            &client,
-            &activation,
-            "unreleased ZK-AMS candidate activation must reject",
-        )
-        .await
-        .expect_err("unreleased ZK-AMS candidate activation was accepted");
-        ensure!(
-            error_chain_contains(&activation_error, "does not match compiled native profile")
-                && error_chain_contains(&activation_error, "not governance-available"),
-            "ZK-AMS candidate activation rejected for wrong reason: {activation_error:?}"
-        );
+        for candidate in [zk_ace_candidate, zk_ams_candidate] {
+            let proposal_height = next_incoming_height(&client)?;
+            let activation_height = proposal_height
+                .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+                .ok_or_else(|| eyre!("unavailable-profile activation height overflowed"))?;
+            let protocol_id = candidate.protocol_id;
+            let proposed = proposed_activation(candidate, proposal_height, activation_height);
+            proposed.validate().wrap_err_with(|| {
+                format!(
+                    "construct structurally valid `{}` activation probe",
+                    protocol_id.canonical_label()
+                )
+            })?;
+            let activation = instruction_transaction(
+                &client,
+                RegisterPrivacyProtocolActivationV1::new(proposed),
+            );
+            let activation_error = submit_signed_transaction(
+                &client,
+                &activation,
+                &format!(
+                    "unreleased `{}` candidate activation must reject",
+                    protocol_id.canonical_label()
+                ),
+            )
+            .await
+            .expect_err("unreleased privacy candidate activation was accepted");
+            ensure!(
+                error_chain_contains(&activation_error, "does not match compiled native profile")
+                    && error_chain_contains(&activation_error, "not governance-available"),
+                "candidate activation for `{}` rejected for wrong reason: {activation_error:?}",
+                protocol_id.canonical_label()
+            );
+        }
         let bundle = privacy_exact12_fixture_bundle_v1()
             .wrap_err("construct canonical Exact12 fixture bundle")?;
-        let fixture_row = bundle
-            .rows
-            .iter()
-            .find(|row| row.protocol_id == ZK_AMS_PROTOCOL)
-            .ok_or_else(|| eyre!("Exact12 fixture bundle omitted ZK-AMS"))?;
-        let envelope: PrivacyProofEnvelopeV1 =
-            norito::decode_from_bytes(&fixture_row.envelope_norito)
-                .wrap_err("decode canonical ZK-AMS fixture envelope")?;
-        let action = instruction_transaction(&client, SubmitPrivacyProofV1::new(envelope));
-        let action_error = submit_signed_transaction(
-            &client,
-            &action,
-            "unreleased ZK-AMS production action must reject",
-        )
-        .await
-        .expect_err("unreleased ZK-AMS production action was accepted");
-        ensure!(
-            error_chain_contains(&action_error, "privacy protocol")
-                && error_chain_contains(&action_error, "is not registered"),
-            "ZK-AMS production action rejected for wrong reason: {action_error:?}"
-        );
+        let mut unavailable_actions = Vec::with_capacity(UNAVAILABLE_PROTOCOLS.len());
+        for protocol_id in UNAVAILABLE_PROTOCOLS {
+            let fixture_row = bundle
+                .rows
+                .iter()
+                .find(|row| row.protocol_id == protocol_id)
+                .ok_or_else(|| {
+                    eyre!(
+                        "Exact12 fixture bundle omitted `{}`",
+                        protocol_id.canonical_label()
+                    )
+                })?;
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_from_bytes(&fixture_row.envelope_norito).wrap_err_with(|| {
+                    format!(
+                        "decode canonical `{}` fixture envelope",
+                        protocol_id.canonical_label()
+                    )
+                })?;
+            let action = instruction_transaction(&client, SubmitPrivacyProofV1::new(envelope));
+            let action_error = submit_signed_transaction(
+                &client,
+                &action,
+                &format!(
+                    "unreleased `{}` production action must reject",
+                    protocol_id.canonical_label()
+                ),
+            )
+            .await
+            .expect_err("unreleased privacy production action was accepted");
+            ensure!(
+                error_chain_contains(&action_error, "privacy protocol")
+                    && error_chain_contains(&action_error, "is not registered"),
+                "production action for `{}` rejected for wrong reason: {action_error:?}",
+                protocol_id.canonical_label()
+            );
+            unavailable_actions.push((protocol_id, action));
+        }
         let pre_restart_height = client
             .get_privacy_capabilities()
-            .wrap_err("query ZK-AMS state before restart")?
+            .wrap_err("query unavailable-profile state before restart")?
             .committed_height;
-        wait_for_identical_zk_ams_unavailable(
+        wait_for_identical_unreleased_profiles(
             &all_clients,
             pre_restart_height,
-            "ZK-AMS activation and action rejections must preserve closed state",
+            "unavailable-profile activation and action rejections must preserve closed state",
         )
         .await?;
         let restart_index = all_clients.len() - 1;
@@ -626,17 +741,25 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
         let config_layers = network.config_layers().collect::<Vec<_>>();
         ensure!(
             restart_peer.shutdown_if_started().await,
-            "selected ZK-AMS validator was not running before restart"
+            "selected unavailable-profile validator was not running before restart"
         );
         let sentinel = instruction_transaction(
             &client,
-            Log::new(Level::INFO, "ZK-AMS closed-profile restart sentinel".to_owned()),
+            Log::new(
+                Level::INFO,
+                "unavailable-profile restart sentinel".to_owned(),
+            ),
         );
-        submit_signed_transaction(&client, &sentinel, "commit ZK-AMS restart sentinel").await?;
+        submit_signed_transaction(
+            &client,
+            &sentinel,
+            "commit unavailable-profile restart sentinel",
+        )
+        .await?;
         wait_for_transaction_on_peers(
             &all_clients[..restart_index],
             &sentinel,
-            "healthy-validator ZK-AMS sentinel convergence",
+            "healthy-validator unavailable-profile sentinel convergence",
         )
         .await?;
         timeout(
@@ -644,39 +767,45 @@ async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Re
             restart_peer.start_checked(config_layers.iter(), None),
         )
         .await
-        .map_err(|_| eyre!("ZK-AMS validator restart exceeded {RESTART_TIMEOUT:?}"))?
-        .wrap_err("restart ZK-AMS validator")?;
+        .map_err(|_| eyre!("unavailable-profile validator restart exceeded {RESTART_TIMEOUT:?}"))?
+        .wrap_err("restart unavailable-profile validator")?;
         wait_for_transaction_on_peers(
             &all_clients,
             &sentinel,
-            "post-restart ZK-AMS sentinel convergence",
+            "post-restart unavailable-profile sentinel convergence",
         )
         .await?;
         let final_height = client
             .get_privacy_capabilities()
-            .wrap_err("query final ZK-AMS capability state")?
+            .wrap_err("query final unavailable-profile capability state")?
             .committed_height;
-        wait_for_identical_zk_ams_unavailable(
+        wait_for_identical_unreleased_profiles(
             &all_clients,
             final_height,
-            "ZK-AMS closed status must survive validator restart",
+            "ZK-ACE and ZK-AMS closed status must survive validator restart",
         )
         .await?;
         let restarted_client = bounded_client(restart_peer.client());
-        let replay_error = submit_signed_transaction(
-            &restarted_client,
-            &action,
-            "post-restart unreleased ZK-AMS action must reject",
-        )
-        .await
-        .expect_err("post-restart unreleased ZK-AMS action was accepted");
-        ensure!(
-            error_chain_contains(&replay_error, "privacy protocol")
-                && error_chain_contains(&replay_error, "is not registered"),
-            "post-restart ZK-AMS action rejected for wrong reason: {replay_error:?}"
-        );
+        for (protocol_id, action) in &unavailable_actions {
+            let replay_error = submit_signed_transaction(
+                &restarted_client,
+                action,
+                &format!(
+                    "post-restart unreleased `{}` action must reject",
+                    protocol_id.canonical_label()
+                ),
+            )
+            .await
+            .expect_err("post-restart unreleased privacy action was accepted");
+            ensure!(
+                error_chain_contains(&replay_error, "privacy protocol")
+                    && error_chain_contains(&replay_error, "is not registered"),
+                "post-restart action for `{}` rejected for wrong reason: {replay_error:?}",
+                protocol_id.canonical_label()
+            );
+        }
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ams_unreleased_profile_fails_closed_across_four_peer_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ace_and_zk_ams_fail_closed_across_four_peer_restart:passed"
         );
         Ok(())
     }
@@ -689,7 +818,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
 -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
-    let profiles = compiled_exact12()?;
+    let profiles = compiled_available_profiles()?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -721,7 +850,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             initial_height,
             &absent,
-            "compiled exact-12 profiles must begin inactive and unregistered",
+            "available profiles must begin inactive while ZK-ACE and ZK-AMS remain unavailable",
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
@@ -753,7 +882,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             post_unauthorized_height,
             &absent,
-            "unauthorized registration rejection must not register any exact-12 activation",
+            "unauthorized registration rejection must not register any available activation",
         )
         .await?;
         submit_instruction(
@@ -793,7 +922,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             post_early_height,
             &absent,
-            "one-block-early rejection must not register any exact-12 activation",
+            "one-block-early rejection must not register any available activation",
         )
         .await?;
         let tampered_height = next_incoming_height(&client)?;
@@ -833,13 +962,13 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         let first_registration_height = next_incoming_height(&client)?;
         let final_registration_height = first_registration_height
             .checked_add(
-                u64::try_from(PrivacyProtocolIdV1::COUNT - 1).expect("exact-12 count fits u64"),
+                u64::try_from(profiles.len() - 1).expect("available profile count fits u64"),
             )
-            .ok_or_else(|| eyre!("final exact-12 registration height overflowed"))?;
+            .ok_or_else(|| eyre!("final available-profile registration height overflowed"))?;
         let activation_height = final_registration_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("shared exact-12 activation height overflowed"))?;
-        let mut proposed_records = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+        let mut proposed_records = Vec::with_capacity(profiles.len());
         let mut first_proposal_transaction = None;
         for (index, compiled) in profiles.iter().copied().enumerate() {
             let expected_height = first_registration_height
@@ -882,23 +1011,25 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .wrap_err("query height after exact-12 proposals")?
                 .committed_height
                 == final_registration_height,
-            "the twelve exact-12 proposals did not occupy their deterministic consecutive heights"
+            "the available-profile proposals did not occupy their deterministic consecutive heights"
         );
         let proposed = expected_states(&profiles, proposed_records.iter().copied().map(Some))?;
         let proposed_snapshots = wait_for_identical_exact12_snapshots(
             &all_clients,
             final_registration_height,
             &proposed,
-            "all exact-12 records are Proposed with immutable compiled bindings",
+            "all available records are Proposed while unavailable rows remain fail-closed",
         )
         .await?;
         ensure!(
-            proposed_snapshots
+            proposed_snapshots.iter().all(|snapshot| snapshot
+                .protocols
                 .iter()
-                .all(|snapshot| snapshot.protocols.iter().all(|row| row
+                .filter(|row| !is_expected_unavailable(row.protocol_id))
+                .all(|row| row
                     .activation
                     .is_some_and(|record| !record.lifecycle.is_active()))),
-            "a pre-activation proposal submission was incorrectly exposed as Active"
+            "an available pre-activation proposal was incorrectly exposed as Active"
         );
         let last_pre_activation_height = activation_height
             .checked_sub(1)
@@ -919,16 +1050,18 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             last_pre_activation_height,
             &proposed,
-            "every exact-12 lifecycle remains Proposed through activation height minus one",
+            "every available lifecycle remains Proposed through activation height minus one",
         )
         .await?;
         ensure!(
-            last_proposed_snapshots
+            last_proposed_snapshots.iter().all(|snapshot| snapshot
+                .protocols
                 .iter()
-                .all(|snapshot| snapshot.protocols.iter().all(|row| row
+                .filter(|row| !is_expected_unavailable(row.protocol_id))
+                .all(|row| row
                     .activation
                     .is_some_and(|record| !record.lifecycle.is_active()))),
-            "an exact-12 lifecycle became Active before its governed height"
+            "an available lifecycle became Active before its governed height"
         );
         let restart_index = all_clients.len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
@@ -951,7 +1084,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             std::slice::from_ref(&all_clients[restart_index]),
             last_pre_activation_height,
             &proposed,
-            "cold-restarted validator directly recovers the complete Proposed exact-12 snapshot",
+            "cold-restarted validator recovers available proposals and closed unavailable rows",
         )
         .await?;
         ensure!(
@@ -1002,17 +1135,19 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &healthy_clients,
             activation_height,
             &active,
-            "the three-validator quorum promotes the complete exact-12 registry while validator \
-             four remains offline with Proposed state",
+            "the three-validator quorum promotes every available profile while validator four \
+             remains offline with Proposed state and unavailable rows stay closed",
         )
         .await?;
         ensure!(
-            active_snapshots
+            active_snapshots.iter().all(|snapshot| snapshot
+                .protocols
                 .iter()
-                .all(|snapshot| snapshot.protocols.iter().all(|row| row
+                .filter(|row| !is_expected_unavailable(row.protocol_id))
+                .all(|row| row
                     .activation
                     .is_some_and(|record| record.lifecycle.is_active()))),
-            "an exact-12 lifecycle failed to become Active at the shared governed height"
+            "an available lifecycle failed to become Active at the shared governed height"
         );
         ensure!(
             active_snapshots
@@ -1061,14 +1196,14 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &healthy_clients,
             height_after_fresh_duplicate,
             &active,
-            "fresh duplicate governance rejection preserves every Active exact-12 binding",
+            "fresh duplicate rejection preserves active profiles and closed unavailable rows",
         )
         .await?;
         ensure!(
             post_duplicate_snapshots
                 .iter()
                 .all(|snapshot| snapshot.protocols == immutable_active_rows),
-            "fresh duplicate registration mutated an Active exact-12 row"
+            "fresh duplicate registration mutated an exact-12 capability row"
         );
         ensure!(
             post_duplicate_snapshots
@@ -1123,7 +1258,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &healthy_clients,
             expected_catch_up_height,
             &active,
-            "healthy validators preserve the complete Active exact-12 snapshot",
+            "healthy validators preserve active profiles and closed unavailable rows",
         )
         .await?;
         wait_for_transaction_on_peers(
@@ -1143,7 +1278,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             expected_catch_up_height,
             &active,
-            "restarted validator catches up the complete ordered Active exact-12 snapshot",
+            "restarted validator catches up active profiles and closed unavailable rows",
         )
         .await?;
         wait_for_transaction_on_peers(

@@ -45,9 +45,9 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
-#[cfg(all(feature = "kaigi_privacy_mocks", not(any(debug_assertions, test))))]
+#[cfg(all(feature = "kaigi_privacy_mocks", not(test)))]
 compile_error!(
-    "`kaigi_privacy_mocks` is a test-only feature; production builds must run real Kaigi roster verification"
+    "`kaigi_privacy_mocks` is a unit-test-only feature and cannot be enabled in a production library"
 );
 #[cfg(not(feature = "zk-halo2"))]
 compile_error!(

@@ -148,7 +148,10 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
 }
-/// One canonical governed ZK-ACE transparent transfer.
+/// Candidate governed ZK-ACE transfer shape retained for fail-closed evidence.
+///
+/// Production builders cannot currently return this type because ZK-ACE has
+/// no activatable compiled profile.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one ZK-ACE proof.
@@ -264,12 +267,11 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-/// Build one governed, transaction-intent-bound native ZK-ACE transfer.
+/// Reject a governed ZK-ACE candidate before constructing a proof.
 ///
-/// `fixture_seed` fixes the policy witness and stable replay nullifier, while
-/// `proof_seed` controls only prover randomness. Reusing the exact transaction
-/// context and fixture seed with a distinct proof seed therefore creates a
-/// byte-distinct, independently proved replay of the same authorization.
+/// Otherwise-valid inputs return
+/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while the
+/// compiled ZK-ACE profile is fail-closed.
 pub fn build_privacy_release_zk_ace_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     source: AccountId,
@@ -287,7 +289,12 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
     )
-    .map_err(|_| evidence_error())?;
+    .map_err(|error| match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable { .. } => {
+            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+        }
+        _ => evidence_error(),
+    })?;
     let identity_root = network_seed_v1(fixture_seed, b"zk-ace-identity-root", 0);
     let identity_blinding = network_seed_v1(fixture_seed, b"zk-ace-identity-blinding", 0);
     let replay_secret = network_seed_v1(fixture_seed, b"zk-ace-replay-secret", 0);
@@ -1319,6 +1326,25 @@ mod tests {
             )
             .expect_err("zero ZK-ACE amount must reject"),
             PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
+        );
+        assert_eq!(
+            build_privacy_release_zk_ace_network_action_v1(
+                valid.clone(),
+                valid.authority.clone(),
+                AccountId::new(
+                    KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
+                        .expect("fail-closed destination keypair")
+                        .public_key()
+                        .clone(),
+                ),
+                asset(),
+                1,
+                [0x53; 32],
+                [0x54; 32],
+                key_pair.private_key(),
+            )
+            .expect_err("otherwise valid ZK-ACE builder must remain unavailable"),
+            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
         );
         let mut zero_genesis = valid.clone();
         zero_genesis.genesis_hash = [0; 32];
