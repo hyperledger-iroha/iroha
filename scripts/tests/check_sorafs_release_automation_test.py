@@ -701,7 +701,13 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert (
         "LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/"
         "runtimes/linux-x64/native"
-    ) in workflow
+    ) not in workflow
+    assert 'native_package_root="$RUNNER_TEMP/csharp-native-package"' in workflow
+    assert (
+        "printf 'LD_LIBRARY_PATH=%s/runtimes/linux-x64/native\\n'"
+        in workflow
+    )
+    assert '>> "$GITHUB_ENV"' in workflow
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in workflow
