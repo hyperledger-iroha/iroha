@@ -13253,6 +13253,8 @@ impl HostedHttpWorker {
             listen_base_url,
             egress_accounting_offset_bytes,
             stderr_log_path,
+            port_forward: None,
+            qmp_control: None,
         }
     }
     fn pid(&self) -> Option<u32> {
