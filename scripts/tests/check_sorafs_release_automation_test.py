@@ -698,10 +698,23 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in workflow
-    assert (
+    for marker in (
+        "Bind runtime-native package paths",
+        'if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" != /* || -z "${GITHUB_ENV:-}" ]]; then',
+        'echo "LD_LIBRARY_PATH=$package_root/runtimes/linux-x64/native"',
+        'echo "IrohaNativePackageRoot=$package_root"',
+        'echo "CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT=$package_root"',
+        "refusing an unauthenticated native package fallback",
+    ):
+        assert marker in workflow
+    for forbidden in (
         "LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/"
-        "runtimes/linux-x64/native"
-    ) in workflow
+        "runtimes/linux-x64/native",
+        "IrohaNativePackageRoot: ${{ runner.temp }}/csharp-native-package",
+        "CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: "
+        "${{ runner.temp }}/csharp-native-package",
+    ):
+        assert forbidden not in workflow
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in workflow

@@ -34,7 +34,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 #[cfg(test)]
 use iroha_crypto::KeyPair;
 use iroha_crypto::{
-    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
+    Algorithm, Hash, PrivateKey, PublicKey, Signature, SignatureOf,
+    derive_non_signing_ed25519_public_key,
 };
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -887,6 +888,12 @@ pub struct OfflineDeviceAttestationRegistration {
     pub android_package_name: Option<String>,
     /// Android signing certificate SHA-256 expected in the `KeyMint` attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
+    /// Complete hardware-authenticated Android build and verified-boot properties.
+    ///
+    /// This is absent for iOS. Android learns these values from the returned
+    /// KeyDescription, so they are deliberately excluded from the challenge
+    /// preimage and are instead compared byte-for-byte during native admission.
+    pub android_attested_device_properties: Option<OfflineAndroidAttestedDevicePropertiesV2>,
     /// Fixed P-256 device authority authenticated by this registration.
     pub public_key: KagemushaDevicePublicKeyV2,
     /// Hardware assertion scheme bound to this note key.
@@ -4916,7 +4923,8 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     fn device_attestation_policy_wire_fixture() -> OfflineDeviceAttestationPolicy {
         OfflineDeviceAttestationPolicy {
-            version: 1,
+            version: OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            policy_epoch: 7,
             trusted_roots: vec![OfflineDeviceAttestationTrustedRoot {
                 platform: OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM.to_owned(),
                 der: vec![0x30, 0x01, 0x42],
@@ -4943,6 +4951,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 cache_max_age_seconds: 3_600,
                 non_valid_serials: vec!["1ab".to_owned(), "fe10".to_owned()],
             }),
+            android_vulnerability_rules: Vec::new(),
             require_ios_app_policy: true,
             require_android_app_policy: true,
         }

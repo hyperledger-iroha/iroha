@@ -11964,6 +11964,10 @@ class _ContractCallBatchPlan:
 
 __all__ = [
     "ToriiClient",
+    "PRIVACY_EXACT12_ACTION_OPERATIONS_V1",
+    "PrivacyExact12ActionOperationV1",
+    "PrivacyExact12ActionRequestV1",
+    "PrivacyActionOperationViewV1",
     "OperatorSigningContext",
     "SorafsOrderbookSubmissionAmbiguousError",
     "SorafsOrderbookSubmissionIdentity",
@@ -12105,6 +12109,219 @@ _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v0"
+
+PrivacyExact12ActionOperationV1 = Literal[
+    "zk_ace_authorization_action_v1",
+    "anonymous_pgc_payment_action_v1",
+    "verange_range_proof_v1",
+    "zk_ams_batch_admission_action_v1",
+    "zk_ams_provision_account_action_v1",
+    "vega_credential_presentation_v1",
+    "zk_x509_identity_presentation_v1",
+    "jindo_polynomial_evaluation_v1",
+    "bootle_lantern_credential_presentation_v1",
+    "orchard_note_action_v1",
+    "fcmp_membership_payment_v1",
+    "ivm_private_note_action_v1",
+    "pq_masp_note_action_v1",
+]
+
+PRIVACY_EXACT12_ACTION_OPERATIONS_V1: Tuple[
+    PrivacyExact12ActionOperationV1, ...
+] = (
+    "zk_ace_authorization_action_v1",
+    "anonymous_pgc_payment_action_v1",
+    "verange_range_proof_v1",
+    "zk_ams_batch_admission_action_v1",
+    "zk_ams_provision_account_action_v1",
+    "vega_credential_presentation_v1",
+    "zk_x509_identity_presentation_v1",
+    "jindo_polynomial_evaluation_v1",
+    "bootle_lantern_credential_presentation_v1",
+    "orchard_note_action_v1",
+    "fcmp_membership_payment_v1",
+    "ivm_private_note_action_v1",
+    "pq_masp_note_action_v1",
+)
+
+
+@dataclass(frozen=True)
+class PrivacyExact12ActionRequestV1:
+    """One closed, public Exact12 operation and its authenticated signed wire.
+
+    The request contains no witness material.  An optional manifest digest lets
+    an application bind submission to the exact finalized capability snapshot
+    it displayed; the client always fetches a new authenticated snapshot before
+    it submits, whether or not that additional binding is supplied.
+    """
+
+    operation: PrivacyExact12ActionOperationV1
+    signed_transaction_versioned: bytes
+    expected_manifest_digest: Optional[bytes] = None
+
+    def __post_init__(self) -> None:
+        if self.operation not in PRIVACY_EXACT12_ACTION_OPERATIONS_V1:
+            raise ValueError(
+                "operation must be one exact PrivacyExact12ActionOperationV1"
+            )
+        wire = self.signed_transaction_versioned
+        if not isinstance(wire, (bytes, bytearray, memoryview)):
+            raise TypeError("signed_transaction_versioned must be bytes-like")
+        canonical_wire = bytes(wire)
+        if not canonical_wire:
+            raise ValueError("signed_transaction_versioned must not be empty")
+        object.__setattr__(self, "signed_transaction_versioned", canonical_wire)
+
+        digest = self.expected_manifest_digest
+        if digest is None:
+            return
+        if not isinstance(digest, (bytes, bytearray, memoryview)):
+            raise TypeError("expected_manifest_digest must be bytes-like")
+        canonical_digest = bytes(digest)
+        if len(canonical_digest) != 32 or not any(canonical_digest):
+            raise ValueError(
+                "expected_manifest_digest must contain exactly 32 non-zero bytes"
+            )
+        object.__setattr__(self, "expected_manifest_digest", canonical_digest)
+
+
+@dataclass(frozen=True)
+class PrivacyActionOperationViewV1:
+    """Public state of one authenticated native privacy-action submission."""
+
+    protocol_id: str
+    operation_schema: PrivacyExact12ActionOperationV1
+    transaction_hash: str
+    transaction_intent_digest: str
+    statement_digest: str
+    proof_envelope_hash: str
+    local_state: Literal["submitted", "terminal"]
+    terminal_chain_state: Optional[
+        Literal["Committed", "Applied", "Rejected", "Expired"]
+    ]
+    committed_height: Optional[int]
+    rejection_reason: Optional[str]
+    ledger_effect_kind: str
+    capability_manifest_digest: str
+    capability_committed_height: int
+
+
+@dataclass(frozen=True)
+class _PrivacyExact12ActionOperationSpecV1:
+    protocol_id: str
+    manifest_operation_schema: str
+    inspector: str
+    execution_mode: str
+    ledger_effect_kind: str
+    inspection_execution_classification: Optional[str] = None
+    action_kind: Optional[str] = None
+    inspector_requires_network_id: bool = False
+
+
+_PRIVACY_EXACT12_ACTION_OPERATION_SPECS_V1: Mapping[
+    PrivacyExact12ActionOperationV1, _PrivacyExact12ActionOperationSpecV1
+] = {
+    "zk_ace_authorization_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "zk-ace-pq-authorization-v0",
+        "zk_ace_authorization_action_v1",
+        "inspect_signed_privacy_zk_ace_transfer_action_v1",
+        "authorization_action",
+        "zk_ace_transparent_transfer",
+    ),
+    "anonymous_pgc_payment_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "anonymous-pgc-k-out-of-n-v1",
+        "anonymous_pgc_payment_action_v1",
+        "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
+        "payment_action",
+        "anonymous_pgc_account_state_transition",
+    ),
+    "verange_range_proof_v1": _PrivacyExact12ActionOperationSpecV1(
+        "verange-transparent-range-v1",
+        "verange_range_proof_v1",
+        "inspect_signed_privacy_verange_action_v1",
+        "component",
+        "verification_only",
+        inspection_execution_classification="action_verification_and_finality_only",
+    ),
+    "zk_ams_batch_admission_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "iroha-zk-ams-v1",
+        "zk_ams_admission_and_provisioning_v1",
+        "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
+        "admission_action",
+        "zk_ams_batch_admission",
+        action_kind="batch_admission",
+    ),
+    "zk_ams_provision_account_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "iroha-zk-ams-v1",
+        "zk_ams_admission_and_provisioning_v1",
+        "inspect_signed_privacy_zk_ams_provision_account_action_v1",
+        "admission_action",
+        "zk_ams_provision_account",
+        action_kind="provision_account",
+    ),
+    "vega_credential_presentation_v1": _PrivacyExact12ActionOperationSpecV1(
+        "vega-existing-credential-zk-v0",
+        "vega_credential_presentation_v1",
+        "inspect_signed_privacy_vega_action_v1",
+        "presentation_action",
+        "verification_only",
+        inspection_execution_classification="action_verification_and_finality_only",
+    ),
+    "zk_x509_identity_presentation_v1": _PrivacyExact12ActionOperationSpecV1(
+        _ZK_X509_PRIVACY_PROTOCOL_ID_V1,
+        "zk_x509_identity_presentation_v1",
+        "inspect_signed_privacy_zk_x509_identity_presentation_action_v1",
+        "presentation_action",
+        "zk_x509_certificate_nullifier",
+        inspector_requires_network_id=True,
+    ),
+    "jindo_polynomial_evaluation_v1": _PrivacyExact12ActionOperationSpecV1(
+        "iroha-jindo-polynomial-commitment-v0",
+        "jindo_polynomial_evaluation_v1",
+        "inspect_signed_privacy_jindo_action_v1",
+        "component",
+        "verification_only",
+        inspection_execution_classification="action_verification_and_finality_only",
+    ),
+    "bootle_lantern_credential_presentation_v1": (
+        _PrivacyExact12ActionOperationSpecV1(
+            "iroha-bootle-lantern-anoncred-v1",
+            "bootle_lantern_credential_presentation_v1",
+            "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
+            "presentation_action",
+            "verification_only",
+        )
+    ),
+    "orchard_note_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "orchard-halo2-actions-v1",
+        "orchard_note_action_v1",
+        "inspect_signed_privacy_orchard_note_action_v1",
+        "note_action",
+        "orchard_note_state_transition",
+    ),
+    "fcmp_membership_payment_v1": _PrivacyExact12ActionOperationSpecV1(
+        "monero-fcmp-plus-plus-v1",
+        "fcmp_membership_payment_v1",
+        "inspect_signed_privacy_fcmp_membership_payment_action_v1",
+        "payment_action",
+        "fcmp_membership_payment",
+    ),
+    "ivm_private_note_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "iroha-ivm-private-note-stark-v1",
+        "ivm_private_note_action_v1",
+        "inspect_signed_privacy_ivm_private_note_action_v1",
+        "note_action",
+        "ivm_private_note_state_transition",
+    ),
+    "pq_masp_note_action_v1": _PrivacyExact12ActionOperationSpecV1(
+        "pq-masp-stark-v0",
+        "pq_masp_note_action_v1",
+        "inspect_signed_privacy_pq_masp_note_action_v1",
+        "note_action",
+        "pq_masp_note_state_transition",
+    ),
+}
+
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
 _CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 = (
@@ -12380,6 +12597,233 @@ class ToriiClient(
                 "privacy capabilities response must use application/x-norito media type"
             )
         return crypto.privacy_exact12_capability_manifest_v1(response.content)
+
+    def submit_signed_privacy_action_v1(
+        self,
+        request: PrivacyExact12ActionRequestV1,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+        network_id: "NetworkId",
+        wait: bool = True,
+        interval: float = 1.0,
+        timeout: Optional[float] = 30.0,
+        max_attempts: Optional[int] = None,
+        scope: str = "global",
+        on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
+    ) -> tuple["SignedTransactionEnvelope", PrivacyActionOperationViewV1]:
+        """Authenticate, fresh-gate, and submit any one Exact12 operation.
+
+        The thirteen public operations are closed even though ZK-AMS admission
+        and provisioning share one consensus protocol row.  Native inspection
+        and exact NetworkId reconstruction complete before the authenticated
+        capability query, so malformed or foreign-network wires cannot cause a
+        network submission.  Waiting uses only committed/applied success states;
+        local construction, HTTP acceptance, and an approved queue state are
+        not treated as final semantics.
+        """
+
+        if type(request) is not PrivacyExact12ActionRequestV1:
+            raise TypeError("request must be a PrivacyExact12ActionRequestV1")
+        signing_context = self._require_local_signing_context(
+            "submit_signed_privacy_action_v1"
+        )
+        network_id = _normalize_network_id(network_id, "network_id")
+        if network_id != signing_context.network_id:
+            raise ValueError(
+                "network_id does not match ToriiClient local_signing_context"
+            )
+
+        spec = _PRIVACY_EXACT12_ACTION_OPERATION_SPECS_V1[request.operation]
+        crypto = _require_crypto()
+        inspector = getattr(crypto, spec.inspector, None)
+        if not callable(inspector):
+            raise RuntimeError(
+                f"iroha_python._crypto is missing {spec.inspector}; rebuild the extension"
+            )
+        wire = request.signed_transaction_versioned
+        if spec.inspector_requires_network_id:
+            inspection = inspector(wire, network_id)
+        else:
+            inspection = inspector(wire)
+        if not isinstance(inspection, Mapping):
+            raise RuntimeError("native privacy action inspector returned a non-object")
+        if inspection.get("protocol_id") != spec.protocol_id:
+            raise RuntimeError(
+                "native privacy action inspector returned a mismatched protocol"
+            )
+        if (
+            spec.action_kind is not None
+            and inspection.get("action_kind") != spec.action_kind
+        ):
+            raise RuntimeError(
+                "native privacy action inspector returned a mismatched ZK-AMS operation"
+            )
+        expected_inspection_classification = (
+            spec.inspection_execution_classification or spec.execution_mode
+        )
+        if (
+            inspection.get("execution_classification")
+            != expected_inspection_classification
+        ):
+            raise RuntimeError(
+                "native privacy action inspector returned a mismatched execution mode"
+            )
+        observed_effect = inspection.get("ledger_effect")
+        if spec.ledger_effect_kind == "verification_only":
+            if observed_effect is not None:
+                raise RuntimeError(
+                    "verification-only privacy action declared a ledger effect"
+                )
+        elif observed_effect != spec.ledger_effect_kind:
+            raise RuntimeError(
+                "native privacy action inspector returned a mismatched ledger effect"
+            )
+
+        authenticated_hashes: Dict[str, bytes] = {}
+        for field_name in (
+            "transaction_hash",
+            "transaction_intent_digest",
+            "statement_digest",
+            "proof_envelope_hash",
+        ):
+            value = inspection.get(field_name)
+            if not isinstance(value, (bytes, bytearray, memoryview)):
+                raise RuntimeError(
+                    f"native privacy action inspector omitted {field_name}"
+                )
+            canonical = bytes(value)
+            if len(canonical) != 32 or not any(canonical):
+                raise RuntimeError(
+                    f"native privacy action inspector returned invalid {field_name}"
+                )
+            authenticated_hashes[field_name] = canonical
+
+        envelope = crypto.signed_transaction_envelope_from_versioned_v1(
+            wire,
+            signing_context.network_id,
+        )
+        authenticated_wire = getattr(envelope, "signed_transaction_versioned", None)
+        if not isinstance(authenticated_wire, (bytes, bytearray, memoryview)) or bytes(
+            authenticated_wire
+        ) != wire:
+            raise RuntimeError(
+                "authenticated privacy transaction envelope changed the submitted wire"
+            )
+        envelope_hash = _normalize_hash_hex(
+            self._envelope_hash_hex(envelope),
+            "privacy action envelope hash",
+        )
+        if not hmac.compare_digest(
+            envelope_hash,
+            authenticated_hashes["transaction_hash"].hex(),
+        ):
+            raise RuntimeError(
+                "native privacy action inspection and transaction envelope hash disagree"
+            )
+
+        manifest = self.privacy_capabilities_v1(canonical_auth=canonical_auth)
+        manifest_digest_value = getattr(manifest, "manifest_digest", None)
+        if not isinstance(
+            manifest_digest_value,
+            (bytes, bytearray, memoryview),
+        ):
+            raise RuntimeError("Exact12 capability manifest omitted its digest")
+        manifest_digest = bytes(manifest_digest_value)
+        if len(manifest_digest) != 32 or not any(manifest_digest):
+            raise RuntimeError("Exact12 capability manifest digest is invalid")
+        if request.expected_manifest_digest is not None and not hmac.compare_digest(
+            manifest_digest,
+            request.expected_manifest_digest,
+        ):
+            raise RuntimeError(
+                "fresh Exact12 capability manifest does not match the requested digest"
+            )
+        capability = manifest.require_network_capability(spec.protocol_id)
+        if not isinstance(capability, Mapping):
+            raise RuntimeError("Exact12 capability gate returned a non-object")
+        expected_capability_fields = {
+            "protocol_id": spec.protocol_id,
+            "operation_schema": spec.manifest_operation_schema,
+            "execution_mode": spec.execution_mode,
+        }
+        for field_name, expected in expected_capability_fields.items():
+            if capability.get(field_name) != expected:
+                raise RuntimeError(
+                    f"Exact12 capability gate returned a mismatched {field_name}"
+                )
+        capability_manifest_digest = capability.get("manifest_digest")
+        if not isinstance(
+            capability_manifest_digest,
+            (bytes, bytearray, memoryview),
+        ) or not hmac.compare_digest(
+            bytes(capability_manifest_digest),
+            manifest_digest,
+        ):
+            raise RuntimeError(
+                "Exact12 capability row does not bind the fresh manifest digest"
+            )
+        capability_height = capability.get("committed_height")
+        if (
+            isinstance(capability_height, bool)
+            or not isinstance(capability_height, int)
+            or capability_height <= 0
+        ):
+            raise RuntimeError(
+                "Exact12 capability row has an invalid committed height"
+            )
+
+        if wait:
+            result = self.submit_transaction_envelope_and_wait(
+                envelope,
+                interval=interval,
+                timeout=timeout,
+                max_attempts=max_attempts,
+                scope=scope,
+                success_statuses=("Committed", "Applied"),
+                failure_statuses=("Rejected", "Expired"),
+                on_status=on_status,
+            )
+            terminal_kind = _extract_pipeline_status_kind(result)
+            if terminal_kind not in {"Committed", "Applied"}:
+                raise RuntimeError(
+                    "privacy action wait returned without committed terminal state"
+                )
+            local_state: Literal["submitted", "terminal"] = "terminal"
+        else:
+            self.submit_transaction_envelope(envelope)
+            result = None
+            terminal_kind = None
+            local_state = "submitted"
+
+        committed_height: Optional[int] = None
+        if isinstance(result, Mapping):
+            status_value = result.get("status")
+            if isinstance(status_value, Mapping):
+                candidate_height = status_value.get("block_height")
+                if (
+                    not isinstance(candidate_height, bool)
+                    and isinstance(candidate_height, int)
+                    and candidate_height > 0
+                ):
+                    committed_height = candidate_height
+
+        return envelope, PrivacyActionOperationViewV1(
+            protocol_id=spec.protocol_id,
+            operation_schema=request.operation,
+            transaction_hash=authenticated_hashes["transaction_hash"].hex(),
+            transaction_intent_digest=authenticated_hashes[
+                "transaction_intent_digest"
+            ].hex(),
+            statement_digest=authenticated_hashes["statement_digest"].hex(),
+            proof_envelope_hash=authenticated_hashes["proof_envelope_hash"].hex(),
+            local_state=local_state,
+            terminal_chain_state=terminal_kind,
+            committed_height=committed_height,
+            rejection_reason=None,
+            ledger_effect_kind=spec.ledger_effect_kind,
+            capability_manifest_digest=manifest_digest.hex(),
+            capability_committed_height=capability_height,
+        )
 
     def submit_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,

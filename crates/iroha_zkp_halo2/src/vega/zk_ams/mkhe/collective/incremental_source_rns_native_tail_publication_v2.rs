@@ -26,7 +26,10 @@
     reason = "private source-only tail publication contract awaits the live V1/Phase-23 owner"
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use super::super::super::{
     ZkAmsMkheErrorV1,
@@ -766,38 +769,6 @@ where
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn publish_next_record_from_v1_callback_v2(
-        &mut self,
-        prepared_publication: RnsNativePreparedTailRecordPublicationV2,
-        workspace: RnsNativeCiphertextTailWorkspaceOwnerV2,
-        record_ordinal: u8,
-        sample_index: u64,
-        canonical_plaintext: &[[u8; 32]],
-        ephemeral: &[i64],
-        error_zero: &[i64],
-        error_one: &[i64],
-        encryption_nonce: &[u8; 32],
-    ) -> Result<(), RnsNativeTailPublicationErrorV2> {
-        publish_next_record_from_v1_callback_parts_v2(
-            &self.key_tail,
-            &mut self.basis_lifecycle,
-            &mut self.records,
-            &mut self.next_record,
-            &mut self.poisoned,
-            &mut self.ciphertext_publisher,
-            prepared_publication,
-            workspace,
-            record_ordinal,
-            sample_index,
-            canonical_plaintext,
-            ephemeral,
-            error_zero,
-            error_one,
-            encryption_nonce,
-        )
-    }
-
     pub(super) fn finish_v2(
         mut self,
     ) -> Result<RnsNativeCompletedTailPublicationV2<K, P>, RnsNativeTailPublicationErrorV2> {
@@ -1027,6 +998,64 @@ enum RnsNativeV1TailCallbackFailureV2 {
     Tail(RnsNativeTailPublicationErrorV2),
 }
 
+fn remember_confidential_sink_failure_v2(
+    failure: &Cell<Option<RnsNativeV1TailCallbackFailureV2>>,
+    error: ZkAmsMkheErrorV1,
+) -> ZkAmsMkheErrorV1 {
+    failure.set(Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(
+        error,
+    )));
+    error
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_v1_tail_callback_v2<Hook, PublishTail>(
+    failure: &Cell<Option<RnsNativeV1TailCallbackFailureV2>>,
+    sink: Hook,
+    canonical_plaintext: &[[u8; 32]],
+    ephemeral: &[i64],
+    error_zero: &[i64],
+    error_one: &[i64],
+    encryption_nonce: &[u8; 32],
+    publish_tail: PublishTail,
+) -> Result<(), ZkAmsMkheErrorV1>
+where
+    Hook: FnOnce(&[[u8; 32]], &[i64], &[i64], &[i64], &[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+    PublishTail: FnOnce() -> Result<(), RnsNativeTailPublicationErrorV2>,
+{
+    sink(
+        canonical_plaintext,
+        ephemeral,
+        error_zero,
+        error_one,
+        encryption_nonce,
+    )
+    .map_err(|error| remember_confidential_sink_failure_v2(failure, error))?;
+    publish_tail().map_err(|error| {
+        failure.set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
+        ZkAmsMkheErrorV1::InvalidCiphertext
+    })
+}
+
+fn resolve_v1_tail_encryption_result_v2<T>(
+    result: Result<T, ZkAmsMkheErrorV1>,
+    callback_failure: Option<RnsNativeV1TailCallbackFailureV2>,
+) -> Result<T, RnsNativeV1TailCoordinatorErrorV2> {
+    match (result, callback_failure) {
+        (Ok(value), None) => Ok(value),
+        (Ok(_), Some(_)) => Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned),
+        (Err(_), Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error))) => {
+            Err(RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error))
+        }
+        (Err(_), Some(RnsNativeV1TailCallbackFailureV2::Tail(error))) => {
+            Err(RnsNativeV1TailCoordinatorErrorV2::Tail(error))
+        }
+        (Err(encryption_error), None) => Err(RnsNativeV1TailCoordinatorErrorV2::Encryption(
+            encryption_error,
+        )),
+    }
+}
+
 /// Inhabited, move-only source contract joining the exact V1 authority to the
 /// 38-to-40-limb tail lifecycle. It is intentionally private and exposes no
 /// authority, provider, manifest, callback, or raw-parts accessor.
@@ -1130,7 +1159,13 @@ where
             return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
         }
 
-        let mut callback_failure = None;
+        // The callback is moved into the parent encryption core. A plain
+        // `Option` would therefore be copied into that closure and leave the
+        // outer value unchanged, collapsing callback failures into the
+        // parent's narrower encryption error. Keep one synchronous shared
+        // slot so the exact sink/tail provenance survives the callback.
+        let callback_failure = Cell::new(None);
+        let callback_failure_slot = &callback_failure;
         let RnsNativeTailPublicationLifecycleV2 {
             key_tail,
             basis_lifecycle,
@@ -1154,8 +1189,10 @@ where
                         match RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2() {
                             Ok(workspace) => workspace,
                             Err(_) => {
-                                callback_failure = Some(RnsNativeV1TailCallbackFailureV2::Tail(
-                                    RnsNativeTailPublicationErrorV2::Basis,
+                                callback_failure_slot.set(Some(
+                                    RnsNativeV1TailCallbackFailureV2::Tail(
+                                        RnsNativeTailPublicationErrorV2::Basis,
+                                    ),
                                 ));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
@@ -1166,17 +1203,18 @@ where
                         ) {
                             Ok(prepared) => prepared,
                             Err(error) => {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error));
+                                callback_failure_slot
+                                    .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
                         };
                     let sink = match prepare_sink() {
                         Ok(sink) => sink,
                         Err(error) => {
-                            callback_failure =
-                                Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error));
-                            return Err(error);
+                            return Err(remember_confidential_sink_failure_v2(
+                                callback_failure_slot,
+                                error,
+                            ));
                         }
                     };
                     Ok(
@@ -1186,59 +1224,41 @@ where
                               error_zero: &[i64],
                               error_one: &[i64],
                               encryption_nonce: &[u8; 32]| {
-                            if let Err(error) = sink(
+                            invoke_v1_tail_callback_v2(
+                                callback_failure_slot,
+                                sink,
                                 canonical_plaintext,
                                 ephemeral,
                                 error_zero,
                                 error_one,
                                 encryption_nonce,
-                            ) {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error));
-                                return Err(error);
-                            }
-                            if let Err(error) = publish_next_record_from_v1_callback_parts_v2(
-                                key_tail,
-                                basis_lifecycle,
-                                tail_records,
-                                next_record,
-                                tail_poisoned,
-                                publisher,
-                                prepared_publication,
-                                workspace,
-                                record_ordinal,
-                                u64::from(record_ordinal),
-                                canonical_plaintext,
-                                ephemeral,
-                                error_zero,
-                                error_one,
-                                encryption_nonce,
-                            ) {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error));
-                                return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-                            }
-                            Ok(())
+                                || {
+                                    publish_next_record_from_v1_callback_parts_v2(
+                                        key_tail,
+                                        basis_lifecycle,
+                                        tail_records,
+                                        next_record,
+                                        tail_poisoned,
+                                        publisher,
+                                        prepared_publication,
+                                        workspace,
+                                        record_ordinal,
+                                        u64::from(record_ordinal),
+                                        canonical_plaintext,
+                                        ephemeral,
+                                        error_zero,
+                                        error_one,
+                                        encryption_nonce,
+                                    )
+                                },
+                            )
                         },
                     )
                 },
             );
 
-        let manifest = match encryption_result {
-            Ok(manifest) if callback_failure.is_none() => manifest,
-            Ok(_) => return Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned),
-            Err(encryption_error) => {
-                return Err(match callback_failure {
-                    Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error)) => {
-                        RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)
-                    }
-                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error)) => {
-                        RnsNativeV1TailCoordinatorErrorV2::Tail(error)
-                    }
-                    None => RnsNativeV1TailCoordinatorErrorV2::Encryption(encryption_error),
-                });
-            }
-        };
+        let manifest =
+            resolve_v1_tail_encryption_result_v2(encryption_result, callback_failure.get())?;
         if manifest.sample_index() != u64::from(record_ordinal)
             || self.authority.next_sample_index() != u64::from(record_ordinal) + 1
             || self.tails.next_record != record_ordinal + 1

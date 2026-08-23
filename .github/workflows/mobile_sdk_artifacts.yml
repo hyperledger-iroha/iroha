@@ -178,9 +178,23 @@ jobs:
     timeout-minutes: 120
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind reviewed Apple privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Apple privacy mode" >&2
+            exit 1
+          fi
+          case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true|false) ;;
+            *)
+              echo "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -357,9 +371,23 @@ jobs:
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind reviewed Android privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Android privacy mode" >&2
+            exit 1
+          fi
+          case "${ANDROID_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true|false) ;;
+            *)
+              echo "ANDROID_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$ANDROID_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"

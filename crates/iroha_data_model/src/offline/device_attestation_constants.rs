@@ -22,6 +22,50 @@ pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1: usize = 4
 pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1: usize = 40;
 /// Maximum upstream cache lifetime accepted for one governed snapshot.
 pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1: u32 = 86_400;
+/// Current governed Offline device-attestation policy layout.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2: u16 = 2;
+/// Current finalized Offline device-attestation policy-view layout.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_VERSION_V1: u16 = 1;
+/// Current Offline device-eligibility credential layout.
+pub const OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_VERSION_V1: u16 = 1;
+/// Current finalized-policy binding layout used by eligibility credentials.
+pub const OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1: u16 = 1;
+/// Current attested Android device-property layout.
+pub const OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2: u16 = 2;
+/// Highest Android Key Attestation `osVersion` accepted by policy selectors.
+pub const OFFLINE_ANDROID_OS_VERSION_MAX_V2: u32 = 999_999;
+/// Maximum lifetime of one Offline device-eligibility credential.
+pub const OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_MAX_TTL_MS_V1: u64 = 24 * 60 * 60 * 1_000;
+/// Android 12 encoded as the Key Attestation `osVersion` integer.
+pub const OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2: u32 = 120_000;
+/// Maximum governed Android vulnerability rules in one policy.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_VULNERABILITY_RULES_V2: usize = 256;
+/// Maximum source identifiers retained by one governed vulnerability rule.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_SOURCES_V2: usize = 8;
+/// Maximum CVE identifiers retained by one governed vulnerability rule.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_CVES_V2: usize = 16;
+/// Maximum printable bytes in one governed vulnerability-rule identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_ID_BYTES_V2: usize = 128;
+/// Maximum printable bytes in one governed vulnerability source identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_SOURCE_BYTES_V2: usize = 512;
+/// Maximum printable bytes in one governed CVE identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_CVE_BYTES_V2: usize = 32;
+/// Maximum attested Android build-property bytes retained per property.
+pub const OFFLINE_ANDROID_ATTESTED_PROPERTY_MAX_BYTES_V2: usize = 128;
+/// Maximum attested verified-boot key bytes retained in registration state.
+pub const OFFLINE_ANDROID_VERIFIED_BOOT_KEY_MAX_BYTES_V2: usize = 1_024;
+/// Samsung bulletin containing the August 2021 Keymaster IV-reuse fix.
+pub const OFFLINE_SAMSUNG_SMR_AUGUST_2021_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=8&year=2021";
+/// Samsung bulletin containing the October 2021 Keymaster downgrade fix.
+pub const OFFLINE_SAMSUNG_SMR_OCTOBER_2021_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=10&year=2021";
+/// Samsung bulletin containing the July 2026 fabricKeymaster fix.
+pub const OFFLINE_SAMSUNG_SMR_JULY_2026_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=7&year=2026";
+/// Peer-reviewed analysis of Samsung's 2021 TrustZone Keymaster failures.
+pub const OFFLINE_SAMSUNG_KEYMASTER_USENIX_2022_SOURCE_V2: &str =
+    "https://www.usenix.org/conference/usenixsecurity22/presentation/shakevsky";
 /// Maximum canonical Norito bytes for one governed device-attestation policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 /// Maximum trusted roots retained by one governed device-attestation policy.

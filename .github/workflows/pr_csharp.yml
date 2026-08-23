@@ -129,16 +129,28 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
-      IrohaNativePackageRoot: ${{ runner.temp }}/csharp-native-package
       IrohaNativePackagePython: python3
-      CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-native-package
       CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: linux-x64
     defaults:
       run:
         working-directory: csharp
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Bind runtime-native package paths
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" != /* || -z "${GITHUB_ENV:-}" ]]; then
+            echo "GitHub runner paths are unavailable; refusing an unauthenticated native package fallback" >&2
+            exit 1
+          fi
+          package_root="$RUNNER_TEMP/csharp-native-package"
+          {
+            echo "LD_LIBRARY_PATH=$package_root/runtimes/linux-x64/native"
+            echo "IrohaNativePackageRoot=$package_root"
+            echo "CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT=$package_root"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:

@@ -437,9 +437,16 @@ jobs:
     timeout-minutes: 10
     env:
       IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind authenticated privacy-native runtime path
+        shell: bash
+        run: |
+          if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" != /* || -z "${GITHUB_ENV:-}" ]]; then
+            echo "GitHub runner paths are unavailable; refusing an unauthenticated privacy-native fallback" >&2
+            exit 1
+          fi
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/privacy-jvm-native-abi22" >> "$GITHUB_ENV"
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 8.0.x

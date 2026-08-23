@@ -120,7 +120,10 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             "Authenticate exact ABI22 C# privacy input",
             "scripts/check_native_sdk_abi22_artifact.py verify",
             'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"',
-            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            "Bind authenticated privacy-native runtime path",
+            'if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" != /* || -z "${GITHUB_ENV:-}" ]]; then',
+            'echo "LD_LIBRARY_PATH=$RUNNER_TEMP/privacy-jvm-native-abi22" >> "$GITHUB_ENV"',
+            "refusing an unauthenticated privacy-native fallback",
             "PRIVACY_CSHARP_NATIVE_ARTIFACT: ${{ runner.temp }}/"
             "privacy-jvm-native-abi22/libconnect_norito_bridge.so",
             "PRIVACY_CSHARP_NATIVE_MANIFEST: ${{ runner.temp }}/"
@@ -128,6 +131,10 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             "run: ci/check_privacy_csharp_sdk.sh",
         ):
             self.assertIn(marker, csharp)
+        self.assertNotIn(
+            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
+            csharp,
+        )
 
         ordered = (
             csharp.index("actions/setup-dotnet@"),

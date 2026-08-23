@@ -1004,6 +1004,7 @@ fn compiled_v1_tail_coordinator_pins_one_owner_one_publisher_and_exact_order() {
         "validate_v1_authority_binding_v2(&authority)",
         "RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2()",
         "RnsNativePreparedTailRecordPublicationV2::new_before_entropy_v2(",
+        "invoke_v1_tail_callback_v2(",
         "publish_next_record_from_v1_callback_parts_v2(",
         "RnsNativeWholeV1PublicationOwnersV2 {",
         ".into_existing_reader_bridge_v2(v1)",
@@ -1030,7 +1031,7 @@ fn compiled_v1_tail_coordinator_pins_one_owner_one_publisher_and_exact_order() {
         .find("RnsNativePreparedTailRecordPublicationV2::new_before_entropy_v2(")
         .unwrap();
     let prepare_sink = coordinator.find("prepare_sink()").unwrap();
-    let sink = coordinator.find("if let Err(error) = sink(").unwrap();
+    let sink = coordinator.find("invoke_v1_tail_callback_v2(").unwrap();
     let tail = coordinator
         .find("publish_next_record_from_v1_callback_parts_v2(")
         .unwrap();
@@ -1066,6 +1067,123 @@ fn compiled_v1_tail_coordinator_pins_one_owner_one_publisher_and_exact_order() {
     assert!(!callback_parts.contains("Vec::new"));
     assert!(!callback_parts.contains("try_reserve"));
     assert!(!callback_parts.contains(".collect::<"));
+}
+
+#[test]
+fn prepare_sink_failure_retains_exact_origin_and_starts_no_output() {
+    let failure = Cell::new(None);
+    let output_calls = Cell::new(0);
+    let sink_error = ZkAmsMkheErrorV1::InvalidKeyMaterial;
+    let result: Result<(), _> = Err(remember_confidential_sink_failure_v2(&failure, sink_error));
+    assert_eq!(output_calls.get(), 0);
+    assert_eq!(
+        resolve_v1_tail_encryption_result_v2(result, failure.get()),
+        Err(RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(
+            sink_error
+        ))
+    );
+    assert_eq!(output_calls.get(), 0);
+}
+
+#[test]
+fn callback_sink_failure_poison_path_skips_tail_and_later_output() {
+    let failure = Cell::new(None);
+    let tail_calls = Cell::new(0);
+    let later_output_calls = Cell::new(0);
+    let sink_error = ZkAmsMkheErrorV1::InvalidWireEncoding;
+    let result = invoke_v1_tail_callback_v2(
+        &failure,
+        |_, _, _, _, _| Err(sink_error),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[0x11; 32],
+        || {
+            tail_calls.set(tail_calls.get() + 1);
+            Ok(())
+        },
+    );
+    if result.is_ok() {
+        later_output_calls.set(later_output_calls.get() + 1);
+    }
+    assert_eq!(tail_calls.get(), 0);
+    assert_eq!(later_output_calls.get(), 0);
+    assert_eq!(
+        resolve_v1_tail_encryption_result_v2(result, failure.get()),
+        Err(RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(
+            sink_error
+        ))
+    );
+    assert_eq!(tail_calls.get(), 0);
+    assert_eq!(later_output_calls.get(), 0);
+}
+
+#[test]
+fn tail_callback_failure_retains_origin_and_skips_later_output() {
+    let failure = Cell::new(None);
+    let sink_calls = Cell::new(0);
+    let tail_calls = Cell::new(0);
+    let later_output_calls = Cell::new(0);
+    let tail_error = RnsNativeTailPublicationErrorV2::InvalidReceipt;
+    let result = invoke_v1_tail_callback_v2(
+        &failure,
+        |_, _, _, _, _| {
+            sink_calls.set(sink_calls.get() + 1);
+            Ok(())
+        },
+        &[],
+        &[],
+        &[],
+        &[],
+        &[0x22; 32],
+        || {
+            tail_calls.set(tail_calls.get() + 1);
+            Err(tail_error)
+        },
+    );
+    if result.is_ok() {
+        later_output_calls.set(later_output_calls.get() + 1);
+    }
+    assert_eq!(sink_calls.get(), 1);
+    assert_eq!(tail_calls.get(), 1);
+    assert_eq!(later_output_calls.get(), 0);
+    assert_eq!(
+        resolve_v1_tail_encryption_result_v2(result, failure.get()),
+        Err(RnsNativeV1TailCoordinatorErrorV2::Tail(tail_error))
+    );
+    assert_eq!(later_output_calls.get(), 0);
+}
+
+#[test]
+fn callback_failure_can_never_be_cleared_as_a_success() {
+    let failure = Some(RnsNativeV1TailCallbackFailureV2::Tail(
+        RnsNativeTailPublicationErrorV2::Poisoned,
+    ));
+    assert_eq!(
+        resolve_v1_tail_encryption_result_v2(Ok(()), failure),
+        Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned)
+    );
+
+    let source = include_str!("incremental_source_rns_native_tail_publication_v2.rs");
+    let coordinator = source
+        .split_once("pub(super) fn encrypt_next_with_confidential_sink_v2")
+        .and_then(|(_, suffix)| {
+            suffix
+                .split_once("/// Consume the exact 43-record chronology")
+                .map(|(method, _)| method)
+        })
+        .expect("coordinator encrypt transition");
+    let poison = coordinator.find("self.poisoned = true;").unwrap();
+    let callback = coordinator.find("invoke_v1_tail_callback_v2(").unwrap();
+    let manifest = coordinator
+        .find("self.records.push(RnsNativeWholeV1RecordPublicationOwnerV2")
+        .unwrap();
+    let clear = coordinator.find("self.poisoned = false;").unwrap();
+    assert!(poison < callback);
+    assert!(callback < manifest);
+    assert!(manifest < clear);
+    assert_eq!(coordinator.matches("self.poisoned = false;").count(), 1);
 }
 
 #[test]

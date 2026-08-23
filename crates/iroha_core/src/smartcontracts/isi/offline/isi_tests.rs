@@ -1526,10 +1526,17 @@ mod tests {
             .expect("canonical low-S online assertion fixture")
     }
     fn test_der_tlv(tag: &[u8], value: &[u8]) -> Vec<u8> {
-        assert!(value.len() < 128, "test DER fixture uses one-byte lengths");
-        let mut encoded = Vec::with_capacity(tag.len() + 1 + value.len());
+        assert!(
+            value.len() < 256,
+            "test DER fixture uses at most two length bytes"
+        );
+        let mut encoded = Vec::with_capacity(tag.len() + 2 + value.len());
         encoded.extend_from_slice(tag);
-        encoded.push(value.len() as u8);
+        if value.len() < 128 {
+            encoded.push(value.len() as u8);
+        } else {
+            encoded.extend_from_slice(&[0x81, value.len() as u8]);
+        }
         encoded.extend_from_slice(value);
         encoded
     }
@@ -1563,6 +1570,19 @@ mod tests {
                 let root = android_root_of_trust_fixture(&[0xA5], 0xFF, 0, &[0x5A; 32]);
                 // Context-specific constructed high tag [704].
                 body.extend_from_slice(&test_der_tlv(&[0xBF, 0x85, 0x40], &root));
+                for (tag, value) in [
+                    (&[0xBF, 0x85, 0x41][..], test_der_tlv(&[0x02], &[1])),
+                    (&[0xBF, 0x85, 0x42][..], test_der_tlv(&[0x02], &[1])),
+                    (&[0xBF, 0x85, 0x46][..], test_der_tlv(&[0x04], b"b")),
+                    (&[0xBF, 0x85, 0x47][..], test_der_tlv(&[0x04], b"d")),
+                    (&[0xBF, 0x85, 0x48][..], test_der_tlv(&[0x04], b"p")),
+                    (&[0xBF, 0x85, 0x4C][..], test_der_tlv(&[0x04], b"m")),
+                    (&[0xBF, 0x85, 0x4D][..], test_der_tlv(&[0x04], b"x")),
+                    (&[0xBF, 0x85, 0x4E][..], test_der_tlv(&[0x02], &[1])),
+                    (&[0xBF, 0x85, 0x4F][..], test_der_tlv(&[0x02], &[1])),
+                ] {
+                    body.extend_from_slice(&test_der_tlv(tag, &value));
+                }
             }
             test_der_tlv(&[0x30], &body)
         }
@@ -1587,6 +1607,9 @@ mod tests {
         ))
         .expect("hardware-enforced usageCountLimit is admitted");
         assert_eq!(hardware.usage_count_limit, Some(1));
+        assert!(hardware.device_properties.is_complete_v2());
+        assert_eq!(hardware.device_properties.manufacturer, "m");
+        assert_eq!(hardware.device_properties.model, "x");
         let mut zero_keymint_version =
             android_key_description_usage_count_fixture(false, true, true);
         let version_offset = zero_keymint_version
@@ -1699,6 +1722,7 @@ mod tests {
             ios_environment: None,
             android_package_name: Some("com.pk.retailwallet".to_owned()),
             android_signing_certificate_sha256: Some(vec![0x55; 32]),
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned(),
             assertion_key_algorithm: OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned(),
@@ -2321,6 +2345,7 @@ mod tests {
             ios_environment: None,
             android_package_name: None,
             android_signing_certificate_sha256: None,
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: "android-keymint".to_owned(),
             assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
@@ -2710,6 +2735,7 @@ mod tests {
         baseline.android_status_snapshot = Some(android_status_snapshot());
         let baseline_bytes = norito::to_bytes(&baseline).expect("baseline policy must encode");
         let mut candidate = baseline.clone();
+        candidate.policy_epoch += 1;
         candidate.android_status_snapshot = None;
 
         offline_test_transaction!(state_transaction);
@@ -2808,7 +2834,7 @@ mod tests {
                         GrantSource::Direct,
                         offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
                     );
-                    candidate.version = 2;
+                    candidate.version = 3;
                     "invalid_attestation_policy"
                 }
                 RejectedPolicyUpdate::MissingTrustedRoots => {

@@ -11404,6 +11404,7 @@ impl TransactionBuilder {
 const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
 const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
 const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+const JINDO_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
 const VEGA_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
 const ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "admission_action";
 const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str = "zk_ams_batch_admission";
@@ -13139,87 +13140,35 @@ fn inspect_signed_privacy_jindo_action_v1_py(
     signed_transaction_versioned: &[u8],
 ) -> PyResult<Py<PyDict>> {
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
-    signed.verify_signature().map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
-    })?;
-    let (transaction_intent_digest, submission) = signed
-        .privacy_transaction_intent_binding_if_present_v1()
-        .map_err(|_| {
-            PyValueError::new_err(
-                "signed_transaction_versioned has an invalid privacy intent binding",
-            )
-        })?
-        .ok_or_else(|| {
-            PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
-        })?;
-    let envelope = &submission.envelope;
-    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 {
-        return Err(PyValueError::new_err(
-            "signed_transaction_versioned is not a Jindo action",
-        ));
-    }
-    envelope
-        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
-        .map_err(|_| {
-            PyValueError::new_err(
-                "signed_transaction_versioned has an invalid Jindo proof envelope",
-            )
-        })?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        "Jindo",
+    )?;
     let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &envelope.statement
     else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Jindo statement",
         ));
     };
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned Jindo statement could not be encoded")
-    })?;
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned Jindo envelope could not be encoded")
-    })?;
-    let statement_bytes = u32::try_from(statement_encoding.len())
-        .map_err(|_| PyValueError::new_err("Jindo statement byte length overflowed"))?;
-    let proof_bytes = u32::try_from(envelope.proof.bytes().as_bytes().len())
-        .map_err(|_| PyValueError::new_err("Jindo proof byte length overflowed"))?;
-    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
-        .map_err(|_| PyValueError::new_err("Jindo envelope byte length overflowed"))?;
-    let adaptive_signed_transaction_bytes =
-        u32::try_from(norito::codec::encode_adaptive(&signed).len())
-            .map_err(|_| PyValueError::new_err("adaptive transaction byte length overflowed"))?;
-    let submitted_versioned_transaction_bytes =
-        u32::try_from(signed_transaction_versioned.len())
-            .map_err(|_| PyValueError::new_err("versioned transaction byte length overflowed"))?;
+    if !matches!(
+        &envelope.proof,
+        PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(_)
+    ) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Jindo proof variant",
+        ));
+    }
     let polynomial_count = u32::try_from(statement.polynomial_commitments.len())
         .map_err(|_| PyValueError::new_err("Jindo polynomial count overflowed"))?;
-    let proof_envelope_hash = Hash::new(&envelope_encoding);
-    let transaction_hash = signed.hash();
-    let result = PyDict::new(py);
-    result.set_item(
-        "transaction_hash",
-        PyBytes::new(py, transaction_hash.as_ref()),
-    )?;
-    result.set_item(
-        "transaction_intent_digest",
-        PyBytes::new(py, transaction_intent_digest.as_bytes()),
-    )?;
-    result.set_item(
-        "statement_digest",
-        PyBytes::new(py, envelope.statement_digest.as_bytes()),
-    )?;
-    result.set_item(
-        "proof_envelope_hash",
-        PyBytes::new(py, proof_envelope_hash.as_ref()),
-    )?;
-    result.set_item("statement_bytes", statement_bytes)?;
-    result.set_item("proof_bytes", proof_bytes)?;
-    result.set_item("encoded_proof_envelope_bytes", encoded_proof_envelope_bytes)?;
-    result.set_item(
-        "adaptive_signed_transaction_bytes",
-        adaptive_signed_transaction_bytes,
-    )?;
-    result.set_item(
-        "submitted_versioned_transaction_bytes",
-        submitted_versioned_transaction_bytes,
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        JINDO_ACTION_EXECUTION_CLASSIFICATION_V1,
+        None,
     )?;
     result.set_item("polynomial_count", polynomial_count)?;
     result.set_item("availability", "available-experimental")?;

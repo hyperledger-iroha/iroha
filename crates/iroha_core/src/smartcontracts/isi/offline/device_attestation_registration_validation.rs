@@ -54,7 +54,7 @@ fn validate_offline_device_attestation_registration(
         authority,
         state_transaction,
     )?;
-    if registration.version != 1 {
+    if registration.version != 2 {
         return Err(labeled_invariant(
             "invalid_attestation",
             "offline device attestation registration version is unsupported",

@@ -228,10 +228,42 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
         self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
         self.assertIn(
-            "PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}",
+            "Bind reviewed Apple privacy mode",
             apple_job,
         )
         self.assertIn(
+            'case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in',
+            apple_job,
+        )
+        self.assertIn(
+            "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false",
+            apple_job,
+        )
+        self.assertIn(
+            'echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"',
+            apple_job,
+        )
+        self.assertIn(
+            "Bind reviewed Android privacy mode",
+            android_job,
+        )
+        self.assertIn(
+            'case "${ANDROID_PRIVACY_PRODUCTION_ENABLED:-}" in',
+            android_job,
+        )
+        self.assertIn(
+            "ANDROID_PRIVACY_PRODUCTION_ENABLED must be exactly true or false",
+            android_job,
+        )
+        self.assertIn(
+            'echo "PRIVACY_PRODUCTION_ENABLED=$ANDROID_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"',
+            android_job,
+        )
+        self.assertNotIn(
+            "PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}",
+            apple_job,
+        )
+        self.assertNotIn(
             "PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}",
             android_job,
         )

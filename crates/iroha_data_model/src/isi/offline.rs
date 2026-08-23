@@ -518,6 +518,7 @@ mod tests {
             ios_environment: None,
             android_package_name: Some("org.hyperledger.iroha.roundtrip".to_owned()),
             android_signing_certificate_sha256: Some(vec![0x51; 32]),
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: "android-keymint".to_owned(),
             assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),

@@ -50,10 +50,14 @@ use iroha_data_model::{
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
-        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1, OFFLINE_REJECTION_REASON_PREFIX,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1,
+        OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2, OFFLINE_REJECTION_REASON_PREFIX,
         OfflineAndroidAppAttestationPolicy, OfflineAndroidAttestationStatusSnapshotV1,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
-        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+        OfflineAndroidAttestedDevicePropertiesV2, OfflineAndroidDeviceSecurityLevelV2,
+        OfflineAndroidDeviceVulnerabilityRuleV2, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationPolicyV1, OfflineDeviceAttestationPolicyViewV1,
+        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
+        OfflineDevicePolicyFinalityBindingV1, OfflineIosAppAttestationPolicy,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     state_path::StatePath,
@@ -1005,7 +1009,16 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_TAG_USAGE_COUNT_LIMIT: u32 = 405;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS: u32 = 600;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ROOT_OF_TRUST: u32 = 704;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_OS_VERSION: u32 = 705;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_OS_PATCH_LEVEL: u32 = 706;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_APPLICATION_ID: u32 = 709;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_BRAND: u32 = 710;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_DEVICE: u32 = 711;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_PRODUCT: u32 = 712;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_MANUFACTURER: u32 = 716;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_MODEL: u32 = 717;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_VENDOR_PATCH_LEVEL: u32 = 718;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_BOOT_PATCH_LEVEL: u32 = 719;
     const OFFLINE_ATTESTATION_ANDROID_VERIFIED_BOOT_STATE_VERIFIED: i64 = 0;
     include!("offline/device_attestation_roots.rs");
     struct IosAppAttestReport {
@@ -1034,12 +1047,31 @@ pub mod isi {
         certificates: Vec<Vec<u8>>,
     }
     struct AndroidKeyDescription {
-        attestation_security_level: i64,
-        keymint_security_level: i64,
         attestation_challenge: Vec<u8>,
         usage_count_limit: Option<i64>,
         all_applications: bool,
         application_id: Option<AndroidAttestationApplicationId>,
+        device_properties: OfflineAndroidAttestedDevicePropertiesV2,
+    }
+    struct AndroidRootOfTrust {
+        verified_boot_key: Vec<u8>,
+        verified_boot_hash: [u8; 32],
+    }
+    #[derive(Default)]
+    struct AndroidAuthorizationList {
+        usage_count_limit: Option<i64>,
+        all_applications: bool,
+        application_id: Option<AndroidAttestationApplicationId>,
+        root_of_trust: Option<AndroidRootOfTrust>,
+        os_version: Option<i64>,
+        os_patch_level: Option<i64>,
+        brand: Option<String>,
+        device: Option<String>,
+        product: Option<String>,
+        manufacturer: Option<String>,
+        model: Option<String>,
+        vendor_patch_level: Option<i64>,
+        boot_patch_level: Option<i64>,
     }
     struct AndroidAttestationApplicationId {
         packages: Vec<AndroidAttestationPackageInfo>,
@@ -1288,11 +1320,44 @@ pub mod isi {
     pub fn production_offline_device_attestation_policy_v1(
         ios_team_id: String,
         ios_bundle_id: String,
+        ios_validation_categories: Vec<u32>,
+        ios_bundle_versions: Vec<String>,
+        android_package_name: String,
+        android_signing_certificate_sha256: Vec<[u8; 32]>,
+        android_status_snapshot: OfflineAndroidAttestationStatusSnapshotV1,
+        evaluation_time_ms: u64,
+    ) -> Result<OfflineDeviceAttestationPolicy, String> {
+        production_offline_device_attestation_policy_v2(
+            1,
+            ios_team_id,
+            ios_bundle_id,
+            ios_validation_categories,
+            ios_bundle_versions,
+            android_package_name,
+            android_signing_certificate_sha256,
+            android_status_snapshot,
+            Vec::new(),
+            evaluation_time_ms,
+        )
+    }
+    /// Build a canonical production policy with a monotonic epoch and reviewed
+    /// Android vulnerability rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an identity, allowlist, rule, status snapshot, or
+    /// built-in production trust root fails native activation validation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn production_offline_device_attestation_policy_v2(
+        policy_epoch: u64,
+        ios_team_id: String,
+        ios_bundle_id: String,
         mut ios_validation_categories: Vec<u32>,
         mut ios_bundle_versions: Vec<String>,
         android_package_name: String,
         mut android_signing_certificate_sha256: Vec<[u8; 32]>,
         android_status_snapshot: OfflineAndroidAttestationStatusSnapshotV1,
+        mut android_vulnerability_rules: Vec<OfflineAndroidDeviceVulnerabilityRuleV2>,
         evaluation_time_ms: u64,
     ) -> Result<OfflineDeviceAttestationPolicy, String> {
         let original_category_count = ios_validation_categories.len();
@@ -1315,8 +1380,17 @@ pub mod isi {
                 "Android signing certificate digests must not contain duplicates".to_owned(),
             );
         }
+        let original_rule_count = android_vulnerability_rules.len();
+        android_vulnerability_rules.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+        android_vulnerability_rules.dedup_by(|left, right| left.rule_id == right.rule_id);
+        if android_vulnerability_rules.len() != original_rule_count {
+            return Err(
+                "Android vulnerability rule identifiers must not contain duplicates".to_owned(),
+            );
+        }
         let policy = OfflineDeviceAttestationPolicy {
-            version: 1,
+            version: OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            policy_epoch,
             trusted_roots: vec![
                 OfflineDeviceAttestationTrustedRoot {
                     platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
@@ -1356,6 +1430,7 @@ pub mod isi {
                     .collect(),
             }],
             android_status_snapshot: Some(android_status_snapshot),
+            android_vulnerability_rules,
             require_ios_app_policy: true,
             require_android_app_policy: true,
         };
@@ -1367,7 +1442,8 @@ pub mod isi {
     pub(super) fn default_offline_device_attestation_policy()
     -> Result<OfflineDeviceAttestationPolicy, Error> {
         Ok(OfflineDeviceAttestationPolicy {
-            version: 1,
+            version: OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            policy_epoch: 1,
             trusted_roots: vec![
                 OfflineDeviceAttestationTrustedRoot {
                     platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
@@ -1392,6 +1468,7 @@ pub mod isi {
             ios_apps: Vec::new(),
             android_apps: Vec::new(),
             android_status_snapshot: None,
+            android_vulnerability_rules: Vec::new(),
             require_ios_app_policy: false,
             require_android_app_policy: false,
         })
@@ -2310,6 +2387,40 @@ pub mod isi {
                 format!("the governed device-attestation policy cannot be hashed: {error}")
             })?;
         Ok((policy, policy_hash))
+    }
+    /// Project the governed policy into the typed finalized query response.
+    ///
+    /// Torii supplies a finality binding produced by its committed-state query
+    /// corridor. This helper reads the exact canonical state bytes, repeats
+    /// native policy validation, and derives the exclusive cache deadline from
+    /// the authenticated Android status snapshot. It deliberately does not
+    /// fabricate a block/QC binding from mutable node-local status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when policy state is absent, corrupt, stale, lacks the
+    /// production freshness source, or disagrees with the supplied finality
+    /// binding.
+    pub fn finalized_offline_device_attestation_policy_view_v1(
+        world: &impl WorldReadOnly,
+        finality: OfflineDevicePolicyFinalityBindingV1,
+        evaluated_at_ms: u64,
+    ) -> Result<OfflineDeviceAttestationPolicyViewV1, String> {
+        let (policy, _) =
+            current_offline_device_attestation_policy_from_world(world, evaluated_at_ms)?;
+        let snapshot = policy.android_status_snapshot.as_ref().ok_or_else(|| {
+            "the governed Offline device-attestation policy has no authenticated freshness snapshot"
+                .to_owned()
+        })?;
+        let freshness_deadline_ms = android_attestation_status_snapshot_fresh_until_ms(snapshot)
+            .map_err(|error| {
+                format!("the governed device-attestation policy freshness is invalid: {error}")
+            })?;
+        if evaluated_at_ms >= freshness_deadline_ms {
+            return Err("the governed Offline device-attestation policy is stale".to_owned());
+        }
+        OfflineDeviceAttestationPolicyViewV1::new_v1(&policy, freshness_deadline_ms, finality)
+            .map_err(|error| format!("cannot project finalized device-attestation policy: {error}"))
     }
     /// Require the governed, canonical anti-rollback spend-authority policy.
     ///
@@ -3881,7 +3992,8 @@ pub mod isi {
                     registration.assertion_scheme != OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
                         || registration.assertion_key_algorithm
                             != OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM
-                        || registration.assertion_usage_count_limit.is_some(),
+                        || registration.assertion_usage_count_limit.is_some()
+                        || registration.android_attested_device_properties.is_some(),
                     "iOS App Attest registrations must use the canonical App Attest assertion profile",
                 );
             }
@@ -4725,49 +4837,94 @@ pub mod isi {
             )
             .into());
         }
-        let (software_usage_count_limit, software_all_applications, software_application_id, _) =
-            parse_android_authorization_list(&software_enforced, false)?;
-        let (
-            hardware_usage_count_limit,
-            hardware_all_applications,
-            hardware_application_id,
-            hardware_root_of_trust,
-        ) = parse_android_authorization_list(&hardware_enforced, true)?;
-        if software_usage_count_limit.is_some() {
+        let software = parse_android_authorization_list(&software_enforced, false)?;
+        let hardware = parse_android_authorization_list(&hardware_enforced, true)?;
+        if software.usage_count_limit.is_some() {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "Android KeyMint usageCountLimit must be hardwareEnforced, not softwareEnforced",
             )
             .into());
         }
-        if software_all_applications && hardware_all_applications {
+        if software.all_applications && hardware.all_applications {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "Android KeyMint authorization lists duplicate allApplications",
             )
             .into());
         }
-        if software_application_id.is_some() && hardware_application_id.is_some() {
+        if software.application_id.is_some() && hardware.application_id.is_some() {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "Android KeyMint authorization lists duplicate attestationApplicationId",
             )
             .into());
         }
-        if !hardware_root_of_trust {
-            return Err(labeled_invariant(
+        let root_of_trust = hardware.root_of_trust.ok_or_else(|| {
+            labeled_invariant(
                 "invalid_attestation",
                 "Android KeyMint attestation must contain exactly one hardware rootOfTrust",
             )
+        })?;
+        if attestation_security_level != keymint_security_level
+            || !is_android_hardware_security_level(attestation_security_level)
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint attestation and key security levels must be the same hardware boundary",
+            )
             .into());
         }
+        let security_level = match keymint_security_level {
+            OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_TRUSTED_ENVIRONMENT => {
+                OfflineAndroidDeviceSecurityLevelV2::TrustedEnvironment
+            }
+            OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_STRONG_BOX => {
+                OfflineAndroidDeviceSecurityLevelV2::StrongBox
+            }
+            _ => unreachable!("hardware security level was checked"),
+        };
+        let positive_u32 = |value: Option<i64>| {
+            value
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or_default()
+        };
+        let attestation_version = u32::try_from(attestation_version).map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint attestation version exceeds the supported range",
+            )
+        })?;
+        let keymint_version = u32::try_from(keymint_version).map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint version exceeds the supported range",
+            )
+        })?;
         Ok(AndroidKeyDescription {
-            attestation_security_level,
-            keymint_security_level,
             attestation_challenge,
-            usage_count_limit: hardware_usage_count_limit,
-            all_applications: software_all_applications || hardware_all_applications,
-            application_id: software_application_id.or(hardware_application_id),
+            usage_count_limit: hardware.usage_count_limit,
+            all_applications: software.all_applications || hardware.all_applications,
+            application_id: software.application_id.or(hardware.application_id),
+            device_properties: OfflineAndroidAttestedDevicePropertiesV2 {
+                version:
+                    iroha_data_model::offline::OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+                attestation_version,
+                keymint_version,
+                security_level,
+                brand: hardware.brand.unwrap_or_default(),
+                device: hardware.device.unwrap_or_default(),
+                product: hardware.product.unwrap_or_default(),
+                manufacturer: hardware.manufacturer.unwrap_or_default(),
+                model: hardware.model.unwrap_or_default(),
+                os_version: positive_u32(hardware.os_version),
+                os_patch_level: positive_u32(hardware.os_patch_level),
+                vendor_patch_level: positive_u32(hardware.vendor_patch_level),
+                boot_patch_level: positive_u32(hardware.boot_patch_level),
+                verified_boot_key: root_of_trust.verified_boot_key,
+                verified_boot_hash: root_of_trust.verified_boot_hash,
+            },
         })
     }
     fn is_android_hardware_security_level(level: i64) -> bool {
@@ -4827,15 +4984,6 @@ pub mod isi {
             )
             .into());
         }
-        if !is_android_hardware_security_level(key_description.attestation_security_level)
-            || !is_android_hardware_security_level(key_description.keymint_security_level)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint attestation must be hardware-backed",
-            )
-            .into());
-        }
         if key_description.usage_count_limit != Some(1) {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -4863,6 +5011,36 @@ pub mod isi {
             &package_name,
             &signing_digest,
         )?;
+        let submitted_properties = registration
+            .android_attested_device_properties
+            .as_ref()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "invalid_attestation",
+                    "Android KeyMint registration V2 must carry the exact attested device properties",
+                )
+            })?;
+        if submitted_properties != &key_description.device_properties {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint registration device properties do not match the hardware KeyDescription",
+            )
+            .into());
+        }
+        let eligibility =
+            policy.evaluate_verified_android_device_v2(Some(submitted_properties), true);
+        if eligibility.outcome
+            != iroha_data_model::offline::OfflineDeviceEligibilityOutcomeV1::Eligible
+        {
+            return Err(labeled_invariant(
+                "drain_only",
+                format!(
+                    "Android KeyMint device is not eligible for new offline activity: {:?}",
+                    eligibility.reason
+                ),
+            )
+            .into());
+        }
         let subject_public_key = x509_subject_public_key_bytes(&attested_certificate);
         if subject_public_key != registration.assertion_public_key {
             return Err(labeled_invariant(
