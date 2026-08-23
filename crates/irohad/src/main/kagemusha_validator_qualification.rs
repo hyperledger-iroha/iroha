@@ -2,14 +2,10 @@
 //! Kagemusha V4 validator qualification seal.
 
 use iroha_core::smartcontracts::isi::offline::{
-    KagemushaValidatorQualificationCatalogCaptureV1,
-    VerifiedKagemushaV4RuntimeEffectiveConfigV1,
+    KagemushaValidatorQualificationCatalogCaptureV1, VerifiedKagemushaV4RuntimeEffectiveConfigV1,
 };
 use iroha_crypto::{KeyPair, PublicKey};
-use iroha_data_model::{
-    offline::KagemushaV4ValidatorQualificationSealV1,
-    peer::PeerId,
-};
+use iroha_data_model::{offline::KagemushaV4ValidatorQualificationSealV1, peer::PeerId};
 use iroha_genesis::GenesisBlock;
 
 /// Same-read startup sources which may be consumed only inside the daemon.
@@ -233,6 +229,14 @@ pub(super) mod tests {
             vec!["41".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x55; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: 1_800_000_000_000,
+                last_modified_ms: Some(1_800_000_000_000),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             1_800_000_000_000,
         )
         .expect("production device policy fixture");

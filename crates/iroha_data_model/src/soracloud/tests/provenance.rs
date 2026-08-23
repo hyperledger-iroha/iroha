@@ -475,7 +475,11 @@ fn runtime_provenance_preimage_validator_rejects_non_v1_framing() {
 }
 #[test]
 fn runtime_provenance_purpose_rejects_unknown_wire_ids() {
-    for unknown in [0, 3, u8::MAX] {
+    assert_eq!(
+        SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(3),
+        Ok(SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw)
+    );
+    for unknown in [0, 4, u8::MAX] {
         assert_eq!(
             SoracloudRuntimeProvenancePurposeV1::try_from_wire_id(unknown),
             Err(SoracloudRuntimeProvenancePurposeErrorV1)
@@ -483,12 +487,29 @@ fn runtime_provenance_purpose_rejects_unknown_wire_ids() {
     }
 }
 #[test]
-fn inrou_host_withdraw_provenance_payload_encodes_account_id() {
+fn inrou_host_withdraw_provenance_payload_is_purpose_bound() {
     let validator_account_id = sample_account_id(0xD1);
     let encoded = encode_inrou_host_withdraw_provenance_payload(&validator_account_id)
         .expect("encode payload");
-    let expected = norito::to_bytes(&validator_account_id).expect("encode account id");
+    let canonical = norito::to_bytes(&validator_account_id).expect("encode account id");
+    let expected = encode_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
+        &canonical,
+    )
+    .expect("encode purpose-bound payload");
     assert_eq!(encoded, expected);
+    validate_soracloud_runtime_provenance_preimage_v1(
+        SoracloudRuntimeProvenancePurposeV1::InrouHostWithdraw,
+        &encoded,
+    )
+    .expect("Inrou withdrawal purpose must validate");
+    assert_eq!(
+        validate_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &encoded,
+        ),
+        Err(SoracloudRuntimeProvenancePreimageErrorV1::PurposeMismatch)
+    );
 }
 fn sample_fhe_policy_reference() -> SoracloudFhePolicyReferenceV1 {
     SoracloudFhePolicyReferenceV1 {

@@ -5,6 +5,31 @@ Last updated: 2026-08-23
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Inrou V1 Taira qualification
+
+- Qualify the always-compiled Inrou runtime on a same-revision, four-validator
+  Taira deployment using the checked PortableVM/HVF profile: one VM, 1,000 CPU
+  millis, 1 GiB memory, and 10 GiB storage per hosting validator.
+- Archive PortableVM/HVF startup preflight, immutable capability adverts,
+  hosted-HTTP canary results, and capability-loss withdrawal and placement-reconciliation
+  evidence together with deployment-specific metrics and alerts.
+- Qualify QEMU under a validator-independent unprivileged identity and an
+  OS-enforced service sandbox. Replace the reserve-and-release loopback port
+  handoff with supervisor-owned forwarding or QMP-attested ownership so host
+  health cannot depend on a transient unowned port.
+
+## SoraNet first-release security qualification
+
+- Exercise the hardened relay, puzzle, DNS, VPN backend, and privileged helper
+  boundaries on Linux with real TUN devices, pidfds, owner-private runtime
+  secrets, DNS rollback, process replacement, partial writes, and hostile local
+  peers. Archive multi-relay loss/replay/rotation evidence and resource-limit
+  telemetry from the release build.
+- Run the full workspace test and strict all-target Clippy matrices, extended
+  handshake/record/FFI fuzzing, and independent cryptographic and deployment
+  review from the immutable release source. Focused security suites are green;
+  they do not substitute for this release qualification.
+
 ## MKHE, Figure 9, and offline-cash evidence-gated completion
 
 - Join the implemented 40-limb qPCS/FRI, private RLWE/source-statement,
@@ -75,15 +100,52 @@ to:
 ## Kagemusha production evidence closeout
 
 The authenticated V4 publisher and phase-separated rollout commands are now
-implemented and fail closed. The remaining work is external evidence and
-release execution:
+implemented and fail closed. The remaining work is internal release
+qualification plus external evidence and execution. The internal blockers
+below cannot be closed by collecting external evidence:
 
-- Restore the physical iPhone lane with the exact pinned Xcode 26.6 toolchain,
-  USB/CoreDevice tunnel and DDI readiness, and a provisioning profile for the
-  fixed App ID that authorizes production App Attest. Then capture and qualify
-  the real assertion against the authority-issued request, reviewed production
-  policy, prepared application root, and immutable candidate; development,
-  simulator, or synthetic evidence is not substitutable.
+- Replace the infeasible authenticated V5 k17 path with a feasible, reviewed
+  shipping recursion backend that meets the release device and memory limits.
+  V7 remains an unreviewed diagnostic experiment, not a fallback; keep
+  promotion hard-failing until a reviewed shipping backend is authenticated.
+- Define and produce a signed candidate-bound internal-validation receipt that
+  binds the immutable source tree, unchanged `Cargo.lock`, toolchain, exact
+  commands and outcomes, full workspace matrix, strict all-target Clippy, fuzz
+  thresholds, release KATs, and log digests. The current focused results do not
+  provide that receipt.
+- Bind the now-validated self-stacking liveness decoder result into the
+  candidate validation receipt. Its nine focused regressions pass without an
+  ambient `RUST_MIN_STACK` override; immutable-candidate execution and receipt
+  publication remain outstanding.
+
+- Configure an Apple developer account in Xcode and install a provisioning
+  profile for the fixed production App Attest App ID. The physical iPhone is
+  already paired and wired with a connected CoreDevice tunnel, available DDI,
+  and Developer Mode; the Xcode 26.2 attempt reached signing but installed no
+  app and created no App Attest key or evidence. Capture and qualify the real
+  assertion only against the release-bound authority request, reviewed policy,
+  prepared application root, and immutable candidate.
+- Provision the exact Xcode 26.6 candidate-lab toolchain and run native build
+  and both physical launches with the same full Xcode build identity and
+  `iphoneos` SDK. Rebuild a fresh same-source Connect artifact at ABI 22; the
+  ignored local ABI 19 bridge manifest is not candidate evidence.
+- Capture a fresh Android Key Attestation status response with the checked
+  fixed-endpoint helper, retain its exact payload and header-bound receipt, and
+  have the promotion controller/governance authority bind the derived snapshot
+  into the immutable candidate. The deterministic freshness, anti-rollback,
+  full-lifetime coverage, exact-root, and factory-versus-RKP rules are
+  implemented; an unsigned local capture or a static TBS revocation digest is
+  not production evidence.
+- Keep tagged and manually dispatched mobile production capability forced
+  false independently for Apple and Android until the workflow authenticates
+  a protected, source-bound receipt for that exact platform. Never let one
+  platform's receipt enable the other platform's artifacts.
+- Freeze a clean immutable source commit with exactly one accepted SSH
+  signature and no tracked or untracked changes. The current unsigned
+  development HEAD and dirty checkout are not candidate source. Qualify the
+  separate root-custodied Xcode 26.2 build `17C52` source-seal/Seatbelt
+  corridor, then run the focused Cargo suites, full workspace matrix, and
+  strict all-target Clippy from that same source.
 - Freeze the exact sixteen-file candidate, install the signed promotion
   reservation and runtime-only keys, publish the seventeenth promotion record
   through the authenticated controller, and collect exactly four protected
@@ -91,19 +153,24 @@ release execution:
   runtime-effective projection. The typed projection and post-genesis producer
   are implemented; only real protected-host artifacts can close this item.
   Mutable-tree or workflow-only checks are not release receipts.
-- With explicit write authorization, execute the journaled activation on the
-  qualified four-validator deployment, prove the exact transaction wire and
-  bounded finality chain, and issue the no-replace receipt. Then have the
-  promotion controller sign the bounded post-receipt canary's permit, minimal
-  non-disclosing exact-hash reservation, and complete private authorization.
-  Journal the complete canary before the separately authorized reservation and
-  canary writes; prove the exact reserved entrypoint committed successfully and
-  issuer-sign its canary evidence. Finally challenge all four qualified direct
-  HTTPS origins with one precommitted random issuer-signed nonce, verify each
-  node signature and one canary-anchored shared finality chain, and publish the
-  no-replace post-canary validator-liveness artifact. A three-of-four commit QC
-  alone is finality context, not evidence that every validator answered. Complete
-  the release-wide workspace tests and strict all-target Clippy from that same
+- Replace one-step activation with a two-phase install/enable lifecycle that
+  cannot expose issuance before liveness closure and that provides an
+  authenticated cancellation or deactivation path when closeout fails. After
+  that internal blocker is closed and explicit write authorization is supplied,
+  stage the qualified release on the four-validator deployment, prove the exact
+  transaction wire and bounded finality chain, and issue the no-replace staging
+  receipt. Have the promotion controller sign the bounded post-receipt canary's
+  permit, minimal non-disclosing exact-hash reservation, and complete private
+  authorization. Journal the complete canary before the separately authorized
+  reservation and canary writes; prove the exact reserved entrypoint committed
+  successfully and issuer-sign its canary evidence. Finally challenge all four
+  qualified direct HTTPS origins with one precommitted random issuer-signed
+  nonce, verify each node signature and one canary-anchored shared finality
+  chain, publish the no-replace post-canary validator-liveness artifact, and
+  only then enable issuance through the second phase. A three-of-four commit QC
+  alone is finality context, not evidence that every validator answered. Cancel
+  or deactivate the staged release on any failed closeout. Complete the
+  release-wide workspace tests and strict all-target Clippy from that same
   immutable source before closing readiness.
 
 ## Workspace review closure
@@ -3739,11 +3806,11 @@ excluded from the first release.
   package/signer/all-applications and ambiguous authorization-list rejection,
   and authorizes future certificates by attested certificate-payload hash. The
   on-chain verifier now has a governed policy instruction for deterministic
-  platform root rotation, certificate-DER revocation digests, and optional
-  iOS/Android app allowlists. Admission fails closed when that governed policy
-  is absent; built-in roots are not a no-policy fallback. Swift, Kotlin/JVM,
-  and Java Android SDK parity now
-  carries the registration model, canonical challenge-preimage hash, and
+  platform root rotation, exact raw-`TBSCertificate`-DER revocation digests,
+  and optional iOS/Android app allowlists. Admission fails closed when that
+  governed policy is absent; built-in roots are not a no-policy fallback.
+  Swift, Kotlin/JVM, and Java Android SDK parity now carries the registration
+  model, canonical challenge-preimage hash, and
   `RegisterOfflineDeviceAttestation` instruction bytes through the shared
   Offline Note V2 interop fixture. Core and the mobile SDKs also reject the
   retired certificate-only `ios-app-attest` /

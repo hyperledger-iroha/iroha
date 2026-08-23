@@ -3957,7 +3957,6 @@ export interface SoranetPuzzleMintOptions {
 
 export interface SoranetTokenMintOptions extends SoranetPuzzleMintOptions {
   flags?: number;
-  issuedAtUnix?: number | bigint | null;
 }
 
 export interface SoranetPuzzleClientOptions {

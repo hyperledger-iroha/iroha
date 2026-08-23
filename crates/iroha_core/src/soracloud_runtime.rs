@@ -900,10 +900,6 @@ impl Default for SoracloudRuntimeSnapshot {
 }
 /// Read-only Soracloud runtime handle exposed to Torii and other consumers.
 pub trait SoracloudRuntimeReadHandle: Send + Sync {
-    /// Return whether this handle is backed by the real embedded runtime manager.
-    fn materialization_available(&self) -> bool {
-        true
-    }
     /// Return the latest node-local runtime materialization snapshot.
     fn snapshot(&self) -> SoracloudRuntimeSnapshot;
     /// Return the local runtime-manager state directory.

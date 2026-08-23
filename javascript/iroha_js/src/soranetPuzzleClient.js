@@ -97,7 +97,6 @@ export class SoranetPuzzleClient {
    * @param {object} [options]
    * @param {number | bigint} [options.ttlSecs]
    * @param {number} [options.flags]
-   * @param {number | bigint} [options.issuedAtUnix]
    * @returns {Promise<{
    *   tokenB64: string,
    *   tokenIdHex: string,
@@ -119,12 +118,6 @@ export class SoranetPuzzleClient {
     }
     if (options.flags !== undefined && options.flags !== null) {
       body.flags = coerceByte(options.flags, "options.flags");
-    }
-    if (options.issuedAtUnix !== undefined && options.issuedAtUnix !== null) {
-      body.issued_at_unix = coerceNonNegativeInteger(
-        options.issuedAtUnix,
-        "options.issuedAtUnix",
-      );
     }
     const payload = await this._request("POST", "/v1/token/mint", body, options);
     return normalizeTokenMintResponse(payload, "token mint response");

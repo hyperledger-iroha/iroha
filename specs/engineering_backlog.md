@@ -9601,16 +9601,16 @@ redistributable schemas, and official trust/revocation bundles.
     follow-ups; the v1 primitive intentionally resolves only between the escrow
     seller and accepted buyer.
 - Carry the Soracloud production posture hardening through the operator-host rollout corridor.
-  - Local focused, portable QEMU, and prior multi-peer load gates are green as of 2026-04-25; the readiness runner now reports missing operator inventory and missing observability evidence as production blockers. Before public rollout, run the mixed-host Inrou smoke with the real operator inventory, attach the real metrics/status/alert/dashboard evidence, and archive a blocker-free readiness report.
-  - The full `irohad` Soracloud binary filter is green as of 2026-05-05 under
-    `--features embedded-soracloud-runtime`. The full readiness profile still
-    requires operator mixed-host inventory and observability evidence before it
-    can produce a blocker-free rollout report.
-  - The affected live deployment is intentionally running the 2026-05-08
-    no-embedded-runtime `iroha3d` binary after the Inrou advert incident. Before
-    any future live Soracloud runtime rollout, add an explicit operator config
-    gate for Inrou enablement and prove that zero-backend hosts do not emit host
-    adverts.
+  - Inrou V1 is always compiled into `iroha3d`. Hosting is selected only by the
+    strict `[soracloud_runtime.inrou]` configuration: an enabled host supplies a
+    non-empty backend allowlist, an explicit PortableVM accelerator when that
+    backend is selected, non-zero capacity, and exact CPU, memory, and storage
+    budgets.
+  - Complete the public rollout corridor with a same-revision Taira deployment,
+    backend-specific smoke evidence, capability-advert and withdrawal evidence,
+    hosted-HTTP canary results, and deployment-specific metrics and alerts.
+    Configured backend preflight must fail startup when unavailable; backend
+    loss must withdraw the advert and reconcile affected placements.
 - Carry the new Taira devex CLI through the opt-in live rollout corridor.
   - The local CLI/Torii/mock-script validation for `iroha taira doctor` and `iroha taira write-canary` is green as of 2026-04-25, but no live Taira write was run from this tree.
   - Before publishing a live receipt, run `iroha taira doctor --public-root https://taira.sora.org` and an operator-approved `iroha taira write-canary --public-root https://taira.sora.org`, preserving only the redacted receipt and any stable failure codes.

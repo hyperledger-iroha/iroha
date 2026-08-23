@@ -83,7 +83,7 @@ The harness binary can also be executed directly:
   missing required capabilities.
 - `summary` — render structured TLV breakdown (required flags, GREASE, etc.).
 - `salt` — emit `SaltAnnouncementV1` payloads for recovery drills.
-- `telemetry` — render `SoraNetTelemetryV1` payloads for telemetry regression tests. Pass `--signature`/`--witness-signature` to supply precomputed envelopes or `--relay-static-sk-hex` to derive deterministic Dilithium3 + Ed25519 signatures.
+- `telemetry` — render `SoraNetTelemetryV1` payloads for telemetry regression tests. Pass `--signature`/`--witness-signature` to supply precomputed envelopes or `--relay-static-sk-file` to derive deterministic Dilithium3 + Ed25519 signatures. Secret inputs are bounded and accepted only from owner-private, direct, single-link files (opened without following the final symlink) or from standard input via `-`; the same rule applies to `simulate` static keys and `kem-validate --secret-file`.
 - `fixtures` — regenerate or verify the reference fixture bundle.
   Current bundle includes `snnet-cap-006-constant-rate` so SDKs can assert the
   expected downgrade warning/telemetry slug when relays omit the constant-rate

@@ -1,7 +1,7 @@
 {
               "schema_version": 1,
-              "app_name": "legacy_docs",
-              "public_url": "https://legacy-docs.sora",
+              "app_name": "missing_publish_mode",
+              "public_url": "https://missing-publish-mode.sora",
               "static_site": {
                 "dist_dir": "site/dist",
                 "mount_path": "/",
@@ -9,7 +9,7 @@
               },
               "services": [
                 {
-                  "service_name": "legacy_docs_api",
+                  "service_name": "missing_publish_mode_api",
                   "container_manifest": "container_manifest.json",
                   "service_manifest": "service_manifest.json"
                 }

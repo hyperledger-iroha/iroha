@@ -794,6 +794,47 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
     assert!(cmd.json);
 }
 #[test]
+fn taira_inrou_canary_cli_requires_artifacts_and_parses_explicit_upgrade() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-canary",
+        "--container",
+        "/tmp/container.json",
+        "--service",
+        "/tmp/service.json",
+        "--bundle-file",
+        "/tmp/service.tgz",
+        "--mode",
+        "upgrade",
+        "--timeout-secs",
+        "90",
+        "--json",
+    ])
+    .expect("parse Taira Inrou canary args");
+    let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
+        panic!("expected taira inrou-canary command");
+    };
+    assert_eq!(cmd.container, std::path::PathBuf::from("/tmp/container.json"));
+    assert_eq!(cmd.service, std::path::PathBuf::from("/tmp/service.json"));
+    assert_eq!(cmd.bundle_file, std::path::PathBuf::from("/tmp/service.tgz"));
+    assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(cmd.timeout_secs, 90);
+    assert!(cmd.json);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-canary",
+        "--container",
+        "/tmp/container.json",
+        "--service",
+        "/tmp/service.json",
+    ])
+    .expect_err("Inrou canary must require canonical bundle bytes");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+}
+#[test]
 fn soracloud_top_level_app_parser_replaces_nested_app_path() {
     Args::try_parse_from([
         "iroha",

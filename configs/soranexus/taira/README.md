@@ -6,10 +6,10 @@ Taira's disposable testnet path is one command:
 python3 scripts/taira_devnet.py up
 ```
 
-It builds the current `kagami`, `iroha3d`, and `iroha` binaries, replaces the
-previous script-owned bundle under `dist/taira-devnet/`, generates exactly four
-fresh-key NPoS validators for the canonical Taira chain, validates every peer
-configuration, starts the peers, and waits for all four nodes to become ready.
+It builds the current `kagami`, `iroha3d_taira`, and `iroha` binaries, replaces
+the previous script-owned bundle under `dist/taira-devnet/`, generates exactly
+four fresh-key NPoS validators for the canonical Taira chain, validates every
+peer configuration, starts the peers, and waits for all four nodes to become ready.
 It then submits one signed `iroha tx ping`, waits for its typed `Applied` status,
 requires all four committed heights to advance and converge, and checks that the
 generated MCP endpoint can initialize and list tools. The build uses the

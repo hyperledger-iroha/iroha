@@ -7,7 +7,8 @@ genesis manifests without juggling per-network knobs.
   from the chain id when NPoS is selected. `iroha3-taira` uses the live chain
   `fc56984b-2be7-431d-840e-21514d1883f0`; `iroha3-nexus` uses chain
   `iroha3-nexus`. Both public profiles require NPoS and an explicit
-  `--vrf-seed-hex`.
+  `--vrf-seed-hex`. Profile chain identities are immutable: an explicit
+  `--chain-id` is accepted only when it exactly repeats the profile's pinned id.
 - Consensus: Sora profile networks (Nexus + dataspaces) require NPoS and disallow staged cutovers; permissioned Iroha3 deployments must run without a Sora profile.
 - Generation: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode <npos|permissioned> [--vrf-seed-hex <hex>] [--xor-asset-definition-id <BASE58>]`. Use `--consensus-mode npos` for Taira and Nexus; `--vrf-seed-hex` is required for both public profiles. Public Taira defaults `xor#universal` to the live canonical XOR id `6TEAJqbb8oEPmLncoNiMRbLEK6tw`; public Nexus requires `--xor-asset-definition-id` because the canonical Nexus XOR id is operator-supplied.
 - Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations for chain id, cadence, consensus mode and VRF seed, PoP coverage, and the normalized consensus fingerprint. Supply `--vrf-seed-hex` only when verifying an NPoS manifest for taira/nexus.

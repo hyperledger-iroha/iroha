@@ -150,15 +150,20 @@ external transaction signing pipeline.
 
 ## Production Gates
 
-Soracloud production deployments must enable `soracloud_runtime.production_mode`
-and build `irohad` with `embedded-soracloud-runtime`. Production mode rejects
-configs that leave Inrou disabled, use proxy-only Inrou host posture, leave
-broad runtime egress open, omit fail-closed egress budgets, or enable Hugging
-Face inference-bridge fallback. Production profiles should state the runtime
-fee payer explicitly; `authority` is the deterministic development default.
+Soracloud production deployments must enable `soracloud_runtime.production_mode`.
+The Inrou V1 runtime is part of every `iroha3d` build. An enabled hosting node
+must configure exactly `backends = ["portable_vm"]`, an explicit
+`portable_vm_acceleration`, non-zero
+`max_concurrent_vms`, and exact `max_cpu_millis`, `max_memory_bytes`, and
+`max_storage_bytes` budgets. Production mode also rejects broad runtime egress,
+missing fail-closed egress budgets, and Hugging Face inference-bridge fallback.
+Production profiles should state the runtime fee payer explicitly; `authority`
+is the deterministic development default.
 
 Production behavior is sourced from configuration, not environment variables.
-Zero-backend or disabled Inrou hosts must not advertise runtime host placement.
+An enabled node fails startup if PortableVm or its configured accelerator is unavailable. A node
+with Inrou hosting disabled does not advertise hosting capacity. Runtime
+backend loss withdraws the host advert and reconciles affected placements.
 
 ## Test Expectations
 
@@ -173,7 +178,9 @@ Focused V1 coverage should include:
   `CanManageSoracloud`;
 - receipt recording rejects non-deterministic uploaded-model formats and
   mismatched manifest, bundle-root, or policy bindings;
-- production config rejects missing Inrou enablement or gas asset;
-- zero-backend Inrou hosts emit no host adverts;
+- production config rejects missing Inrou enablement, backend allowlist,
+  accelerator, resource budgets, or gas asset;
+- unavailable PortableVm capability rejects startup, and capability loss withdraws
+  the host advert and reconciles affected placements;
 - JavaScript Soracloud helpers expose unsigned drafts and do not accept raw
   private keys.

@@ -456,20 +456,28 @@ fn ingest_path(
         }
         match json::from_str::<SoranetPrivacyEventV1>(trimmed) {
             Ok(event) => {
-                aggregator.record_event(&event);
+                aggregator.record_historical_event(&event).map_err(|err| {
+                    format!(
+                        "failed to ingest privacy event from {} line {}: {err}",
+                        path.display(),
+                        idx + 1
+                    )
+                })?;
                 totals.events = totals.events.saturating_add(1);
                 totals.seen_bucket(event.timestamp_unix, bucket_secs);
             }
             Err(event_error) => match json::from_str::<SoranetPrivacyPrioShareV1>(trimmed) {
                 Ok(share) => {
                     let bucket_start_unix = share.bucket_start_unix;
-                    aggregator.ingest_prio_share(share).map_err(|err| {
-                        format!(
-                            "failed to ingest privacy share from {} line {}: {err}",
-                            path.display(),
-                            idx + 1
-                        )
-                    })?;
+                    aggregator
+                        .ingest_historical_prio_share(share)
+                        .map_err(|err| {
+                            format!(
+                                "failed to ingest privacy share from {} line {}: {err}",
+                                path.display(),
+                                idx + 1
+                            )
+                        })?;
                     totals.shares = totals.shares.saturating_add(1);
                     totals.seen_bucket(bucket_start_unix, bucket_secs);
                 }
@@ -477,7 +485,13 @@ fn ingest_path(
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
                         && let Some(event) = parse_fallback_event(&value)
                     {
-                        aggregator.record_event(&event);
+                        aggregator.record_historical_event(&event).map_err(|err| {
+                            format!(
+                                "failed to ingest fallback privacy event from {} line {}: {err}",
+                                path.display(),
+                                idx + 1
+                            )
+                        })?;
                         totals.events = totals.events.saturating_add(1);
                         totals.seen_bucket(event.timestamp_unix, bucket_secs);
                         continue;

@@ -38,6 +38,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
     binaries.mkdir()
     for name in (
         "iroha3d",
+        "iroha3d_taira",
         "sorafs_governance_dag",
         "iroha",
         "kagami",
@@ -276,7 +277,7 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
         assert "rewrite-timestamp=true" in output
         assert "save" not in call
         assert (
-            "BINARIES=iroha3d sorafs_governance_dag iroha kagami "
+            "BINARIES=iroha3d iroha3d_taira sorafs_governance_dag iroha kagami "
             "attachment_sanitizer sorafs_external_software_signer"
         ) in call
 
@@ -472,6 +473,8 @@ def test_image_source_has_no_nondeterministic_docker_archive_path() -> None:
     assert "configs/sorafs/external_software_signer" in source
     assert "configs/sorafs/runtime_provider_broker" in source
     assert "sorafs_external_software_signer" in dockerfile
+    assert 'ARG BINARIES="iroha3d iroha3d_taira ' in dockerfile
+    assert 'test -x "${BIN_PATH}/iroha3d_taira"' in dockerfile
     assert "/usr/local/libexec/iroha-runtime-provider-broker-v1" in dockerfile
     assert "ARG IROHA_RUST_BUILDER_IMAGE\n" in dockerfile
     assert "ARG IROHA_RUNTIME_IMAGE\n" in dockerfile

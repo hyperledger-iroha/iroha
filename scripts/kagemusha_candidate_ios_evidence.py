@@ -28,6 +28,8 @@ REVIEWED_SOURCE_CLOSURE_SCHEMA = "iroha.reviewed-source-closure.v1"
 DEVICE_POLICY = "taira-testnet-physical-ios-xcode-paired-v1"
 RESOURCE_CEILING_BYTES = 6_442_450_944
 BRIDGE_ABI_VERSION = 22
+CANDIDATE_XCODE_VERSION = "Xcode 26.6"
+XCODE_BUILD_VERSION_RE = re.compile(r"Build version [A-Za-z0-9.]+")
 MAX_RAW_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_KEY_BYTES = 64 * 1024
@@ -1615,6 +1617,16 @@ def _validate_native_build_manifest(
             errors.append(
                 f"native build manifest {key} must be a non-empty canonical tool string"
             )
+    xcode_version = manifest.get("xcode_version")
+    xcode_lines = xcode_version.split("\n") if isinstance(xcode_version, str) else []
+    if (
+        len(xcode_lines) != 2
+        or xcode_lines[0] != CANDIDATE_XCODE_VERSION
+        or XCODE_BUILD_VERSION_RE.fullmatch(xcode_lines[1]) is None
+    ):
+        errors.append(
+            "native build manifest xcode_version must be exact Xcode 26.6 with one canonical build-version line"
+        )
     symbols = manifest.get("required_symbols")
     expected_symbols = [
         "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1",

@@ -16,6 +16,12 @@ extern "C" {
 #define SORANET_PQ_ERR_ENCODING -4
 #define SORANET_PQ_ERR_KEYGEN -5
 #define SORANET_PQ_ERR_VERIFICATION_FAILED -6
+#define SORANET_PQ_ERR_BUFFER_OVERLAP -7
+
+/* Lengths use C size_t exactly. Writable ranges must not overlap any other
+ * live input/output range passed to the same call; parameter-output pointers
+ * must also be distinct. A rejected overlap returns
+ * SORANET_PQ_ERR_BUFFER_OVERLAP before any buffer is accessed. */
 
 int soranet_mlkem_parameters(uint32_t suite_id,
                              uint32_t *public_key_len_out,

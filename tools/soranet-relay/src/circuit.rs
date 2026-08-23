@@ -199,7 +199,7 @@ pub fn spawn_padding_task(
     connection: Connection,
     cell_size: u16,
     max_idle_millis: u64,
-    remote: SocketAddr,
+    _remote: SocketAddr,
     metrics: Arc<Metrics>,
     budget: Option<Arc<PaddingBudget>>,
 ) -> Option<JoinHandle<()>> {
@@ -230,14 +230,10 @@ pub fn spawn_padding_task(
             match connection.send_datagram(payload.clone()) {
                 Ok(()) => {
                     metrics.record_padding_cell_sent(safe_cell_size as u64);
-                    debug!(
-                        remote = %remote,
-                        size = safe_cell_size,
-                        "padding datagram sent"
-                    );
+                    debug!(size = safe_cell_size, "padding datagram sent");
                 }
                 Err(error) => {
-                    warn!(remote = %remote, ?error, "failed to send padding datagram");
+                    warn!(?error, "failed to send padding datagram");
                     break;
                 }
             }

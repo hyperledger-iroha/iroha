@@ -116,7 +116,8 @@ the CAR manifest feed into the on-chain record for tamper detection.
 
 ## 3. Client bootstrap
 
-1. Fetch Torii `ResolverDirectoryRecordV1`.
+1. Provision the governance-approved directory builder public key through an
+   independent trusted channel, then fetch Torii `ResolverDirectoryRecordV1`.
 2. Download the referenced SoraFS CAR (preferably via SoraNet transports).
 3. Verify the CAR manifest against the directory record.
 4. For each RAD:
@@ -199,21 +200,36 @@ updates before mutating local caches.
 
 The resolver CLI now exposes tooling for RAD/directory verification:
 
+The live v1 resolver daemon deliberately admits only local proof-bundle and
+RAD snapshots whose exact BLAKE3 digests were provisioned independently in
+its configuration. `torii` and `sorafs` live sources fail configuration
+admission until the daemon implements the operator/governance signature,
+resolver-ID/key binding, validity-window, and Merkle-membership checks in
+section 3. This keeps the current structural validators from being mistaken
+for an authority check.
+
 - `soradns_resolver rad verify --rad <path> [--rad ...]` decodes Norito/JSON
   resolver attestations, enforces the structural constraints defined above,
   and prints the canonical SHA-256 digest (`rad-v1 || canonical_json`). The
   command accepts multiple files, making it easy to lint an entire RAD bundle
   before submitting it to governance.
-- `soradns_resolver directory fetch --record-url <torii-endpoint> --directory-url <http(s)://...> --output <dir>`
+- `soradns_resolver directory fetch --record-url <torii-endpoint> --directory-url <http(s)://...> --builder-public-key <governance-pinned-public-key> --expected-root <governance-pinned-merkle-root> --output <dir>`
   downloads the latest `ResolverDirectoryRecordV1` and matching `directory.json`,
-  canonicalises the listing, verifies the recorded digest/count, and writes
-  both artefacts to the supplied directory. Operators can point this at the
+  canonicalises the listing, verifies the recorded digest/count and signature
+  against the external pinned key, and writes both artefacts to the supplied
+  directory. The key and root embedded in the downloaded record are never
+  their own trust anchors. Requiring the exact expected root prevents a mirror
+  from replaying an older record that still has a valid builder signature;
+  operators must provision the root through an authenticated governance release
+  channel. Operators can point this at the
   Torii `/v1/soradns/directory/latest` endpoint plus the public SoraFS gateway to
   bootstrap a verified cache before enabling resolver clients.
 - Both commands accept offline-friendly flags: `--record-file` and
   `--directory-file` let you validate artifacts that were fetched via other
   channels (for example, the signed release bundle checked into Git), which is
   especially useful in restricted environments or during incident response.
+  `directory verify` requires the same `--builder-public-key` and
+  `--expected-root` trust anchors.
 
 ## 7. Acceptance criteria
 

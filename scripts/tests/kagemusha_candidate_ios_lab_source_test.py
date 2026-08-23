@@ -131,6 +131,26 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
         self.assertIn('"production_capability_enabled": False', source)
         self.assertIn("KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2", source)
 
+    def test_native_builder_and_runner_bind_the_same_exact_xcode(self) -> None:
+        builder = BUILD.read_text(encoding="utf-8")
+        runner = RUNNER.read_text(encoding="utf-8")
+        for source in (builder, runner):
+            self.assertIn('!= "Xcode 26.6"', source)
+            self.assertIn("^Build\\ version\\ [A-Za-z0-9.]+$", source)
+        self.assertIn(
+            'manifest.get("xcode_version") != sys.argv[3]', runner
+        )
+        self.assertIn(
+            'manifest.get("iphoneos_sdk_version") != sys.argv[4]', runner
+        )
+        self.assertIn(
+            'native["xcode_version"] != current_xcode_version', runner
+        )
+        self.assertIn(
+            'native["iphoneos_sdk_version"] != current_iphoneos_sdk_version',
+            runner,
+        )
+
     def test_harness_measures_offline_window_and_two_processes(self) -> None:
         source = TEST.read_text(encoding="utf-8")
         self.assertIn("#if targetEnvironment(simulator)", source)
@@ -198,7 +218,11 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
             manifest = root / "native-build-manifest.json"
             manifest.write_text(
                 json.dumps(
-                    {"files": files},
+                    {
+                        "files": files,
+                        "iphoneos_sdk_version": "26.6",
+                        "xcode_version": "Xcode 26.6\nBuild version 17G1",
+                    },
                     sort_keys=True,
                     separators=(",", ":"),
                 )
@@ -207,7 +231,15 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
             )
             manifest.chmod(0o600)
             subprocess.run(
-                ["/usr/bin/python3", "-I", "-", str(manifest), str(framework)],
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    "-",
+                    str(manifest),
+                    str(framework),
+                    "Xcode 26.6\nBuild version 17G1",
+                    "26.6",
+                ],
                 input=verifier,
                 text=True,
                 check=True,

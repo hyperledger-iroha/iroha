@@ -160,63 +160,23 @@ iroha soracloud service secret-status --container ./container_manifest.json --se
 iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-Before treating a hosted-HTTP release as complete, run both backend-specific
-smokes and the mixed-host placement gate with the same guest asset class you
-plan to publish:
+Before treating a hosted-HTTP release as complete, run the only Inrou V1
+backend smoke against the same guest asset class intended for publication:
 
 ```bash
+eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
-sudo --preserve-env=IROHA_INROU_LINUX_KVM_KERNEL_IMAGE,IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE,IROHA_INROU_LINUX_KVM_INITRD_IMAGE \
-  cargo xtask soracloud-inrou-smoke firecracker
-cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
 
-That validation path exercises the real `HttpService + Inrou` runtime, not the
-local `dev.sh` shim. `PortableVm` attaches shared lease storage as persistent
-block devices in unprivileged userspace, while the Linux/KVM fast path keeps
-the Firecracker NFS transport adapter and explicit tap-scoped deny rules for
-`Isolated` network policy. The mixed gate is expected to cover one Linux
-Firecracker host, one non-Linux PortableVm host, and one proxy-only validator
-that publishes zero hosted capacity while still proxying routed hosted-HTTP
-traffic correctly.
+`PortableVm` is the sole first-release backend; Taira configures it with
+explicit `hvf` acceleration. The retired Firecracker backend and mixed-host
+gate are not configuration, status, placement, or tooling paths. The runtime
+rejects such labels rather than falling back.
 
-The proxy-only host command in the example inventory runs the focused
-`proxy_only_inrou_host` runtime tests instead of a plain compile check, so the
-gate proves that proxy-only nodes fail closed for local Inrou materialization.
-
-For a public release, pass the real operator inventory and the operator
-observability evidence to the readiness runner:
-
-```bash
-scripts/ci/run_soracloud_production_readiness.sh \
-  --profile load \
-  --mixed-host-inventory ./operator-inrou-inventory.toml \
-  --observability-evidence ./operator-soracloud-observability.json
-```
-
-`scripts/ci/check_soracloud_observability_evidence.py` validates that the
-evidence covers the required Soracloud metrics, status fields, alerts, runbooks,
-and dashboards. The sample
-`fixtures/soracloud/production_observability_evidence.example.json` documents
-the expected shape; production runs must use deployment-specific sources.
-
-Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
-`IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
-`IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional
-`IROHA_INROU_PORTABLE_ACCEL=auto|tcg|kvm|hvf|whpx`. Firecracker smoke uses the
-corresponding `IROHA_INROU_LINUX_KVM_*` environment variables; the example
-mixed-host inventory preserves them through `sudo` for the root-only
-Firecracker smoke.
-For local PortableVm validation, prepare verified Debian genericcloud assets
-with `eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"`
-before running `cargo xtask soracloud-inrou-smoke portable`. The helper now
-uses the pinned Debian Bookworm cloud build by default, verifies
-`SHA512SUMS.sign` with GPG and a Debian archive/cloud-image keyring when a
-detached signature is published, and emits the root image used as the backing
-file for the mutable `qcow2` PortableVm root overlay. The current official
-pinned cloud directory does not publish `SHA512SUMS.sign`, so the helper falls
-back only to the hard-pinned SHA512 digest for the exact `20260413-2447` `amd64`
-or `arm64` archive. Unsigned archives without a pinned digest still fail closed.
+PortableVm mounts shared lease storage as persistent block devices. Existing
+volumes are never reformatted after a signature, mount, or health-probe
+failure. The generated scaffold is network-isolated and has no SSH keys; add a
+real key or a nonempty public-endpoint egress allowlist only when required.
 
 Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
 `torii.soracloud_public_max_response_bytes` before buffering. The default is

@@ -12,9 +12,15 @@ is rejected. Events land in two places:
   size (`compliance.max_log_bytes`, default 64 MiB)
 - `pipeline_spool_dir` – per-event JSON blobs ready for downstream shipping
 
-Every event contains a salted hash of the client address plus the negotiated
-capabilities, making it safe to forward into shared audit infrastructure without
-leaking raw network data.
+Every correlation identifier (client address, descriptor, circuit, exit-route
+IDs, bandwidth measurement, relay, verifier, and adapter destination) is
+recorded only as a field-domain-separated keyed BLAKE3 digest. Negotiated
+capability labels and bounded stable reason codes remain in clear text.
+Compliance logging therefore requires
+`compliance.hash_salt_path` to name a direct, owner-private, single-link file
+containing exactly 64 lowercase hexadecimal bytes with no newline. The key path
+is redacted from debug output. The log and optional spool directories must be
+pre-provisioned as owner-owned mode-`0700` directories; files are mode `0600`.
 
 Beyond the handshake lifecycle, the relay also records:
 
@@ -22,11 +28,12 @@ Beyond the handshake lifecycle, the relay also records:
   observed lifetime, negotiated padding/KEM set, restart state, and the
   post-close active circuit count.
 - `exit_route_opened` — emitted whenever an exit adapter accepts a route,
-  capturing the channel/route identifiers, access mode, optional padding
-  budget, and salted hashes of the configured multiaddr and adapter target.
+  capturing keyed hashes of the channel/route/stream/room identifiers, access
+  mode, optional padding budget, and keyed hashes of the configured multiaddr
+  and adapter target.
 - `exit_route_rejected` — emitted when exit routing fails, preserving the
-  stream type, channel (if known), and rejection reason so operators can
-  correlate policy denials with downstream telemetry.
+  stream type, keyed channel hash (if known), and stable rejection code so
+  operators can correlate policy denials without persisting raw identifiers.
 
 These events follow the same hashing rules for remote addresses and are written
 to both the rotating JSONL log and the audit spool directory.
@@ -34,22 +41,34 @@ to both the rotating JSONL log and the audit spool directory.
 ## Shipping the Spool Directory
 
 Use `scripts/soranet_audit_spool_shipper.py` to batch spool files into archives
-and hand them off to your audit transport. The script creates JSONL archives and
-moves the original JSON files into a processed folder, so reruns pick up only
-new events.
+and hand them off to your audit transport. Pre-provision the spool, archive, and
+processed directories as distinct absolute paths owned by the service account
+with mode `0700`; event files must be direct, single-link `0600` regular files.
+The shipper bounds every input and archive, publishes a fully synced archive
+without clobbering, and moves the exact scanned JSON inode only after shipping
+succeeds. The spool and processed directories must share a filesystem: the
+move uses an atomic no-clobber hard-link publication and then removes the spool
+name, rejecting replacements before, during, or after either read. An exclusive
+lock on the validated spool-directory inode covers scanning, shipping, and
+processed publication, so overlapping timer invocations fail instead of
+shipping the same evidence twice.
 
 ```bash
 scripts/soranet_audit_spool_shipper.py \
   --spool-dir /var/spool/soranet/audit \
-  --archive-dir /var/log/soranet/audit-archives \
-  --processed-dir /var/log/soranet/audit-processed \
-  --ship-command 'scp $SORANET_AUDIT_ARCHIVE audit@collector:/srv/audit/inbox'
+  --archive-dir /var/lib/soranet/audit-archives \
+  --processed-dir /var/lib/soranet/audit-processed \
+  --ship-command /usr/bin/scp '{archive}' audit@collector:/srv/audit/inbox
 ```
 
-The command runs once per archive; the example above uses `scp`, but the payload
-is exposed via the `SORANET_AUDIT_ARCHIVE` environment variable so you can plug
-in curl, aws-cli, or any bespoke transport. Add the script to a cron job or
-systemd timer to run every few minutes.
+The command runs once per archive. Its executable must be an absolute, trusted,
+non-link path, and exactly one literal `{archive}` argument is replaced with the
+archive path. No shell parsing or expansion occurs. The same path is also
+available as `SORANET_AUDIT_ARCHIVE` for a purpose-built transport. The child
+receives a minimal fixed environment; explicitly forward a required runtime
+credential or socket with `--ship-env NAME` before `--ship-command`. Dynamic
+loader and language-path variables are never forwarded. Add the script to a
+cron job or systemd timer to run every few minutes.
 
 ### Dry Runs
 
@@ -111,8 +130,9 @@ same invariants (non-zero rotation size, valid paths) still hold.
 
 ## Operational Checklist
 
-1. Ensure `/var/log/soranet/relay_compliance.jsonl` rotates and retains the
-   expected number of backups (default seven).
+1. Provision the log parent and optional spool directory with mode `0700`, and
+   ensure `/var/log/soranet/relay_compliance.jsonl` rotates and retains the
+   expected number of backups (default five).
 2. Schedule the audit shipper to collect archives from
    `/var/spool/soranet/audit`.
 3. Monitor `soranet_guard_descriptor_commit` to confirm guard manifests match

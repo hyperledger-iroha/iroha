@@ -53,7 +53,7 @@
   "compliance": {
     "enable": true,
     "log_path": "/var/log/soranet/relay_compliance.jsonl",
-    "hash_salt_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
+    "hash_salt_path": "/etc/soranet/relay/secrets/compliance-hash-salt.hex",
     "max_log_bytes": 67108864,
     "max_backup_files": 7,
     "pipeline_spool_dir": "/var/spool/soranet/audit"

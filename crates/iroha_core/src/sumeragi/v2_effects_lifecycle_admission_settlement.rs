@@ -649,10 +649,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                                 "lifecycle output admission projection failed: {error:?}"
                             ))
                         }
-                        ProductionLifecycleOutputAdmissionFailureV1::Registry => {
-                            EffectExecutorError::Contract(
-                                "lifecycle output registry settlement failed".to_owned(),
-                            )
+                        ProductionLifecycleOutputAdmissionFailureV1::Registry(error) => {
+                            EffectExecutorError::Contract(format!(
+                                "lifecycle output registry settlement failed: {error:?}"
+                            ))
                         }
                         ProductionLifecycleOutputAdmissionFailureV1::Durability => {
                             EffectExecutorError::Contract(

@@ -38,7 +38,6 @@ external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
-embedded-soracloud-runtime = []
 # Test-network-only inbound consensus message control. This feature is never
 # enabled by a production/default build; `iroha_test_network` builds a separate
 # daemon binary in an isolated target directory when an adversarial network
@@ -76,6 +75,11 @@ profiling-endpoint = ["iroha_torii/profiling"]
 [[bin]]
 name = "iroha3d"
 path = "src/bin/iroha3d.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "iroha3d_taira"
+path = "src/bin/iroha3d_taira.rs"
 required-features = ["daemon"]
 
 [[bin]]

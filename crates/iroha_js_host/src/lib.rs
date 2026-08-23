@@ -13676,9 +13676,15 @@ mod tests {
         assert_eq!(payload["chunkIndex"].as_u64(), Some(4));
         assert_eq!(
             payload["providers"],
-            norito_json!([
-                { "providerId": "alpha", "reason": "score_policy_denied" },
-                { "providerId": "beta", "reason": "score_policy_denied" }
+            Value::Array(vec![
+                norito_json!({
+                    "providerId": "alpha",
+                    "reason": "score_policy_denied",
+                }),
+                norito_json!({
+                    "providerId": "beta",
+                    "reason": "score_policy_denied",
+                }),
             ])
         );
         assert_eq!(payload["retryable"], Value::Bool(false));

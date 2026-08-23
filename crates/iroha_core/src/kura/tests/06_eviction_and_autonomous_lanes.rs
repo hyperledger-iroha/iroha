@@ -626,7 +626,8 @@ fn cache_block_body_rejects_length_mismatch() {
 }
 #[test]
 fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block, block_hash) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -716,7 +717,8 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
 }
 #[test]
 fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let block_hash = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -774,7 +776,8 @@ fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
 }
 #[test]
 fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -815,7 +818,8 @@ fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
 }
 #[test]
 fn strict_init_removes_malformed_sidecar_with_matching_length() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -873,7 +877,8 @@ fn strict_init_removes_malformed_sidecar_with_matching_length() {
 }
 #[test]
 fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (canonical_hash, conflicting_hash, da_path) = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
@@ -931,8 +936,7 @@ fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
 fn block_payload_available_by_hash_requires_local_body_after_eviction() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let config =
-        kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let height = nonzero!(2_usize);
     let block = kura
@@ -970,10 +974,7 @@ fn block_payload_available_by_hash_requires_local_body_after_eviction() {
 fn evicted_blocks_survive_restart() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let config = kura_config_for_dir(
-        &temp_dir,
-        NonZeroUsize::new(1).expect("non-zero"),
-    );
+    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let height = NonZeroUsize::new(2).expect("non-zero");
     let block = kura
@@ -1814,9 +1815,7 @@ fn temporary_kura_fixture() -> ConfiguredKuraFixture {
     )
 }
 
-fn expect_two_lane_storage_fixture(
-    temp_context: &str,
-) -> (TempDir, KuraConfig, RuntimeLaneConfig) {
+fn expect_two_lane_storage_fixture(temp_context: &str) -> (TempDir, KuraConfig, RuntimeLaneConfig) {
     let (temp_dir, config) = kura_storage_fixture(temp_context, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     (temp_dir, config, lane_config)
@@ -2151,9 +2150,8 @@ fn rebind_autonomous_lane_payload_for_kura(
         .iter()
         .zip(&routing_plans)
         .enumerate()
-        .map(|(index, (entrypoint, routing_plan))| {
-
-            LaneQueueReservationKeyV2 {
+        .map(
+            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
@@ -2174,8 +2172,8 @@ fn rebind_autonomous_lane_payload_for_kura(
                     entrypoint.hash().as_ref(),
                 ]),
                 proposal_identity_hash: proposal.proposal_hash,
-            }
-        })
+            },
+        )
         .collect();
     let receipt_slots = vec![None; source.entrypoints.len()];
     LaneExecutablePayloadV1::new_signed_with_reservations(

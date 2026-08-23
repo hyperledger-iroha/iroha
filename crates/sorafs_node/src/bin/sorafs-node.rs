@@ -1,17 +1,21 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
+use iroha_config::base::util::Bytes;
 use norito::json::{self, Map, Value};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_plan_to_json,
-    verifier::CarVerifier,
+    CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload,
+    FilePayload, FilePlan, PayloadSource, chunker_registry, compute_chunk_plan_digest_sha3,
+    fetch_plan::try_chunk_fetch_plan_to_json,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ManifestV1, decode_manifest_v1_canonical,
+    BLAKE3_256_MULTIHASH_CODE, MAX_MANIFEST_ENCODED_BYTES, ManifestV1, PinPolicyConstraints,
+    decode_manifest_v1_canonical,
     por::{
         AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditOutcomeV1, AuditVerdictV1,
         POR_CHALLENGE_MAX_CANONICAL_BYTES_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1, PorChallengeV1,
         PorProofV1, decode_audit_verdict_v1, decode_por_challenge_v1, decode_por_proof_v1,
     },
+    validate_manifest,
 };
 use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
 #[cfg(unix)]
@@ -22,6 +26,10 @@ use std::{
     path::{Path, PathBuf},
     process,
 };
+const OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+const OFFLINE_DIRECTORY_MAX_PAYLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const OFFLINE_DIRECTORY_MAX_ENTRIES: usize = 4096;
+const OFFLINE_DIRECTORY_MAX_DEPTH: usize = 64;
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -48,7 +56,7 @@ fn print_usage() {
     eprintln!(
         "Usage: sorafs-node <command> [options]\n\n\
          Commands:\n  \
-         ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]\n  \
+         ingest --data-dir=<dir> --max-capacity-bytes=<bytes> --manifest=<path> (--payload=<path>|--payload-dir=<dir>) [--plan-json-out=<path>]\n  \
          ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n  \
          export --data-dir=<dir> --manifest-id=<hex> --manifest-out=<path> --payload-out=<path> [--plan-json-out=<path>]\n  \
          --help, -h   Show this help message"
@@ -63,9 +71,16 @@ fn print_por_usage() {
 #[derive(Default)]
 struct IngestOptions {
     data_dir: Option<PathBuf>,
+    max_capacity_bytes: Option<u64>,
     manifest_path: Option<PathBuf>,
     payload_path: Option<PathBuf>,
+    payload_dir: Option<PathBuf>,
     plan_json_out: Option<PathBuf>,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum IngestPayloadSource {
+    File(PathBuf),
+    Directory(PathBuf),
 }
 fn ingest_command(mut args: Vec<String>) -> Result<(), String> {
     if args.first().is_some_and(|first| first == "por") {
@@ -76,10 +91,18 @@ fn ingest_command(mut args: Vec<String>) -> Result<(), String> {
     for arg in args {
         if let Some(rest) = arg.strip_prefix("--data-dir=") {
             opts.data_dir = Some(PathBuf::from(rest));
+        } else if let Some(rest) = arg.strip_prefix("--max-capacity-bytes=") {
+            if opts.max_capacity_bytes.is_some() {
+                return Err("duplicate option --max-capacity-bytes".to_owned());
+            }
+            opts.max_capacity_bytes =
+                Some(parse_nonzero_canonical_u64(rest, "--max-capacity-bytes")?);
         } else if let Some(rest) = arg.strip_prefix("--manifest=") {
             opts.manifest_path = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--payload=") {
             opts.payload_path = Some(PathBuf::from(rest));
+        } else if let Some(rest) = arg.strip_prefix("--payload-dir=") {
+            opts.payload_dir = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--plan-json-out=") {
             opts.plan_json_out = Some(PathBuf::from(rest));
         } else {
@@ -89,43 +112,637 @@ fn ingest_command(mut args: Vec<String>) -> Result<(), String> {
     let data_dir = opts
         .data_dir
         .ok_or_else(|| "missing required option --data-dir".to_string())?;
+    let max_capacity_bytes = opts
+        .max_capacity_bytes
+        .ok_or_else(|| "missing required option --max-capacity-bytes".to_string())?;
     let manifest_path = opts
         .manifest_path
         .ok_or_else(|| "missing required option --manifest".to_string())?;
-    let payload_path = opts
-        .payload_path
-        .ok_or_else(|| "missing required option --payload".to_string())?;
-    ingest(data_dir, manifest_path, payload_path, opts.plan_json_out)
+    let payload_source = require_ingest_payload_source(opts.payload_path, opts.payload_dir)?;
+    ingest(
+        data_dir,
+        max_capacity_bytes,
+        manifest_path,
+        payload_source,
+        opts.plan_json_out,
+    )
+}
+fn parse_nonzero_canonical_u64(value: &str, option: &str) -> Result<u64, String> {
+    if value.is_empty()
+        || value == "0"
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "{option} must be a nonzero canonical unsigned decimal"
+        ));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{option} must fit in an unsigned 64-bit integer"))
+}
+fn offline_ingest_storage_config(data_dir: PathBuf, max_capacity_bytes: u64) -> StorageConfig {
+    StorageConfig::builder()
+        .enabled(true)
+        .data_dir(data_dir)
+        .max_capacity_bytes(Bytes(max_capacity_bytes))
+        .build()
+}
+fn enforce_ingest_capacity(content_length: u64, max_capacity_bytes: u64) -> Result<(), String> {
+    if content_length > max_capacity_bytes {
+        return Err(format!(
+            "manifest payload length {content_length} exceeds --max-capacity-bytes={max_capacity_bytes}"
+        ));
+    }
+    Ok(())
+}
+fn open_exact_file_payload(path: &Path, expected_length: u64) -> Result<FilePayload, String> {
+    let mut source = FilePayload::open(path).map_err(|error| {
+        format!(
+            "failed to open stable no-follow payload file {}: {error}",
+            path.display()
+        )
+    })?;
+    PayloadSource::ensure_exhausted(&mut source, expected_length).map_err(|error| {
+        format!(
+            "payload file {} does not match manifest content length {expected_length}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(source)
+}
+fn require_ingest_payload_source(
+    payload_path: Option<PathBuf>,
+    payload_dir: Option<PathBuf>,
+) -> Result<IngestPayloadSource, String> {
+    match (payload_path, payload_dir) {
+        (Some(path), None) => Ok(IngestPayloadSource::File(path)),
+        (None, Some(path)) => Ok(IngestPayloadSource::Directory(path)),
+        (None, None) => Err(
+            "missing payload source: exactly one of --payload or --payload-dir is required"
+                .to_owned(),
+        ),
+        (Some(_), Some(_)) => Err("--payload and --payload-dir are mutually exclusive".to_owned()),
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OfflineDirectoryFile {
+    path: Vec<String>,
+    size: u64,
+}
+fn offline_directory_inventory(root: &Path) -> Result<Vec<OfflineDirectoryFile>, String> {
+    let root_metadata = fs::symlink_metadata(root).map_err(|error| {
+        format!(
+            "failed to inspect payload directory {}: {error}",
+            root.display()
+        )
+    })?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(format!(
+            "payload directory {} must be one direct directory",
+            root.display()
+        ));
+    }
+    fn visit(
+        current: &Path,
+        logical: &mut Vec<String>,
+        files: &mut Vec<OfflineDirectoryFile>,
+        total_bytes: &mut u64,
+        total_entries: &mut usize,
+    ) -> Result<(), String> {
+        let reader = fs::read_dir(current).map_err(|error| {
+            format!(
+                "failed to read payload directory {}: {error}",
+                current.display()
+            )
+        })?;
+        let mut entries = Vec::new();
+        for entry in reader {
+            if *total_entries >= OFFLINE_DIRECTORY_MAX_ENTRIES {
+                return Err(format!(
+                    "payload directory contains more than {OFFLINE_DIRECTORY_MAX_ENTRIES} total entries"
+                ));
+            }
+            let entry = entry.map_err(|error| {
+                format!(
+                    "failed to read payload directory {}: {error}",
+                    current.display()
+                )
+            })?;
+            *total_entries += 1;
+            entries.push(entry);
+        }
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let component = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| format!("payload directory path is not UTF-8: {}", path.display()))?;
+            if component.is_empty() || matches!(component.as_str(), "." | "..") {
+                return Err(format!(
+                    "payload directory contains a non-canonical component: {}",
+                    path.display()
+                ));
+            }
+            if logical.len() >= OFFLINE_DIRECTORY_MAX_DEPTH {
+                return Err(format!(
+                    "payload directory exceeds {OFFLINE_DIRECTORY_MAX_DEPTH} path components at {}",
+                    path.display()
+                ));
+            }
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!(
+                    "failed to inspect payload entry {}: {error}",
+                    path.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "symbolic links are not allowed in payload directories: {}",
+                    path.display()
+                ));
+            }
+            logical.push(component);
+            if metadata.is_dir() {
+                visit(&path, logical, files, total_bytes, total_entries)?;
+            } else if metadata.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    if metadata.nlink() != 1 {
+                        return Err(format!(
+                            "hard-linked files are not allowed in payload directories: {}",
+                            path.display()
+                        ));
+                    }
+                }
+                *total_bytes = total_bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| "payload directory byte length overflow".to_owned())?;
+                if *total_bytes > OFFLINE_DIRECTORY_MAX_PAYLOAD_BYTES {
+                    return Err(format!(
+                        "payload directory contains {} bytes; maximum is {OFFLINE_DIRECTORY_MAX_PAYLOAD_BYTES}",
+                        *total_bytes
+                    ));
+                }
+                files.push(OfflineDirectoryFile {
+                    path: logical.clone(),
+                    size: metadata.len(),
+                });
+            } else {
+                return Err(format!(
+                    "payload directory entry must be a regular file or directory: {}",
+                    path.display()
+                ));
+            }
+            logical.pop();
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    let mut logical = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut total_entries = 0_usize;
+    visit(
+        root,
+        &mut logical,
+        &mut files,
+        &mut total_bytes,
+        &mut total_entries,
+    )?;
+    if files.is_empty() || total_bytes == 0 {
+        return Err("payload directory must contain at least one non-empty byte".to_owned());
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+struct OfflineSequentialPayloadReader<'a, P> {
+    source: &'a mut P,
+    offset: u64,
+    length: u64,
+}
+impl<'a, P> OfflineSequentialPayloadReader<'a, P> {
+    const fn new(source: &'a mut P, length: u64) -> Self {
+        Self {
+            source,
+            offset: 0,
+            length,
+        }
+    }
+}
+impl<P: PayloadSource> Read for OfflineSequentialPayloadReader<'_, P> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.offset == self.length || buffer.is_empty() {
+            return Ok(0);
+        }
+        let buffer_len = u64::try_from(buffer.len())
+            .map_err(|_| io::Error::other("payload read buffer exceeds u64"))?;
+        let count = usize::try_from((self.length - self.offset).min(buffer_len))
+            .map_err(|_| io::Error::other("payload length exceeds host width"))?;
+        PayloadSource::read_exact(self.source, self.offset, &mut buffer[..count])
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.offset = self
+            .offset
+            .checked_add(count as u64)
+            .ok_or_else(|| io::Error::other("payload reader offset overflow"))?;
+        Ok(count)
+    }
+}
+impl<P: PayloadSource> OfflineSequentialPayloadReader<'_, P> {
+    fn finish(self) -> Result<(), String> {
+        if self.offset != self.length {
+            return Err(format!(
+                "payload reader consumed {} of {} bytes",
+                self.offset, self.length
+            ));
+        }
+        self.source
+            .ensure_exhausted(self.length)
+            .map_err(|error| format!("failed to validate exact payload source: {error}"))
+    }
+}
+fn build_streaming_file_plan<P: PayloadSource>(
+    source: &mut P,
+    content_length: u64,
+    profile: ChunkProfile,
+) -> Result<CarBuildPlan, String> {
+    if content_length == 0 {
+        return Err("payload must not be empty".to_owned());
+    }
+    let mut chunker = sorafs_chunker::Chunker::try_with_profile(profile)
+        .map_err(|error| format!("failed to construct streaming chunker: {error}"))?;
+    let min_size =
+        u64::try_from(profile.min_size).map_err(|_| "chunk minimum size exceeds u64".to_owned())?;
+    let maximum_chunks = content_length.div_ceil(min_size);
+    if maximum_chunks > CAR_PLAN_MAX_CHUNKS as u64 {
+        return Err(format!(
+            "file payload permits {maximum_chunks} chunk slots; maximum is {CAR_PLAN_MAX_CHUNKS}"
+        ));
+    }
+    let maximum_chunks = usize::try_from(maximum_chunks)
+        .map_err(|_| "file chunk inventory exceeds host width".to_owned())?;
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve(maximum_chunks)
+        .map_err(|_| "failed to reserve bounded file chunk inventory".to_owned())?;
+    let mut payload_hasher = blake3::Hasher::new();
+    let mut read_buffer = vec![0_u8; OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES];
+    let pending_capacity = OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES
+        .checked_add(profile.max_size)
+        .ok_or_else(|| "streaming file buffer capacity overflow".to_owned())?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(pending_capacity)
+        .map_err(|_| "failed to reserve bounded streaming file buffer".to_owned())?;
+    let mut read_offset = 0_u64;
+    let mut emitted_offset = 0_usize;
+    while read_offset < content_length {
+        let buffer_len = u64::try_from(read_buffer.len())
+            .map_err(|_| "streaming buffer length exceeds u64".to_owned())?;
+        let count = usize::try_from((content_length - read_offset).min(buffer_len))
+            .map_err(|_| "payload file length exceeds host width".to_owned())?;
+        PayloadSource::read_exact(source, read_offset, &mut read_buffer[..count])
+            .map_err(|error| format!("failed to read stable payload file: {error}"))?;
+        payload_hasher.update(&read_buffer[..count]);
+        pending.extend_from_slice(&read_buffer[..count]);
+        let mut boundaries = Vec::new();
+        chunker.feed(&read_buffer[..count], |boundary| boundaries.push(boundary));
+        let mut consumed = 0_usize;
+        for boundary in boundaries {
+            if boundary.offset != emitted_offset {
+                return Err("streaming file chunker emitted non-contiguous geometry".to_owned());
+            }
+            let end = consumed
+                .checked_add(boundary.length)
+                .ok_or_else(|| "streaming file chunk length overflow".to_owned())?;
+            let bytes = pending
+                .get(consumed..end)
+                .ok_or_else(|| "file chunk exceeded the bounded streaming buffer".to_owned())?;
+            if chunks.len() >= CAR_PLAN_MAX_CHUNKS {
+                return Err(format!("file payload exceeds {CAR_PLAN_MAX_CHUNKS} chunks"));
+            }
+            chunks.push(CarChunk {
+                offset: u64::try_from(boundary.offset)
+                    .map_err(|_| "streaming file chunk offset exceeds u64".to_owned())?,
+                length: u32::try_from(boundary.length)
+                    .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
+                digest: blake3::hash(bytes).into(),
+                taikai_segment_hint: None,
+            });
+            emitted_offset = emitted_offset
+                .checked_add(boundary.length)
+                .ok_or_else(|| "streaming file emitted offset overflow".to_owned())?;
+            consumed = end;
+        }
+        if consumed != 0 {
+            pending.drain(..consumed);
+        }
+        read_offset = read_offset
+            .checked_add(count as u64)
+            .ok_or_else(|| "streaming file read offset overflow".to_owned())?;
+    }
+    let mut boundaries = Vec::new();
+    chunker.finish(|boundary| boundaries.push(boundary));
+    for boundary in boundaries {
+        if boundary.offset != emitted_offset || pending.len() != boundary.length {
+            return Err("streaming file chunker final geometry is not canonical".to_owned());
+        }
+        if chunks.len() >= CAR_PLAN_MAX_CHUNKS {
+            return Err(format!("file payload exceeds {CAR_PLAN_MAX_CHUNKS} chunks"));
+        }
+        chunks.push(CarChunk {
+            offset: u64::try_from(boundary.offset)
+                .map_err(|_| "streaming file chunk offset exceeds u64".to_owned())?,
+            length: u32::try_from(boundary.length)
+                .map_err(|_| "streaming file chunk length exceeds u32".to_owned())?,
+            digest: blake3::hash(&pending).into(),
+            taikai_segment_hint: None,
+        });
+        emitted_offset = emitted_offset
+            .checked_add(boundary.length)
+            .ok_or_else(|| "streaming file emitted offset overflow".to_owned())?;
+        pending.clear();
+    }
+    let emitted_length = u64::try_from(emitted_offset)
+        .map_err(|_| "streaming file emitted length exceeds u64".to_owned())?;
+    if emitted_length != content_length || !pending.is_empty() {
+        return Err("streaming file chunker did not cover the payload exactly".to_owned());
+    }
+    PayloadSource::ensure_exhausted(source, content_length)
+        .map_err(|error| format!("failed to validate stable payload file: {error}"))?;
+    let chunk_count = chunks.len();
+    let plan = CarBuildPlan {
+        chunk_profile: profile,
+        payload_digest: payload_hasher.finalize(),
+        content_length,
+        chunks,
+        files: vec![FilePlan {
+            path: Vec::new(),
+            first_chunk: 0,
+            chunk_count,
+            size: content_length,
+        }],
+    };
+    plan.validate()
+        .map_err(|error| format!("invalid streaming file plan: {error}"))?;
+    Ok(plan)
+}
+fn build_streaming_directory_plan(
+    root: &Path,
+    profile: ChunkProfile,
+) -> Result<CarBuildPlan, String> {
+    let inventory = offline_directory_inventory(root)?;
+    let provisional = inventory
+        .iter()
+        .map(|file| FilePlan {
+            path: file.path.clone(),
+            first_chunk: 0,
+            chunk_count: 0,
+            size: file.size,
+        })
+        .collect::<Vec<_>>();
+    let mut source = DirectoryPayload::new(root, &provisional)
+        .map_err(|error| format!("failed to open exact directory payload: {error}"))?;
+    let mut chunks = Vec::new();
+    let mut files = Vec::with_capacity(provisional.len());
+    let mut payload_hasher = blake3::Hasher::new();
+    let mut global_offset = 0_u64;
+    let mut read_buffer = vec![0_u8; OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES];
+    for provisional_file in provisional {
+        let first_chunk = chunks.len();
+        let mut local_offset = 0_u64;
+        let mut emitted_offset = 0_usize;
+        let mut pending = Vec::with_capacity(
+            OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES.saturating_add(profile.max_size),
+        );
+        let mut chunker = sorafs_chunker::Chunker::try_with_profile(profile)
+            .map_err(|error| format!("failed to construct streaming chunker: {error}"))?;
+        while local_offset < provisional_file.size {
+            let buffer_len = u64::try_from(read_buffer.len())
+                .map_err(|_| "streaming buffer length exceeds u64".to_owned())?;
+            let count = usize::try_from((provisional_file.size - local_offset).min(buffer_len))
+                .map_err(|_| "payload file length exceeds host width".to_owned())?;
+            PayloadSource::read_exact(
+                &mut source,
+                global_offset + local_offset,
+                &mut read_buffer[..count],
+            )
+            .map_err(|error| format!("failed to read exact directory payload bytes: {error}"))?;
+            payload_hasher.update(&read_buffer[..count]);
+            pending.extend_from_slice(&read_buffer[..count]);
+            let mut boundaries = Vec::new();
+            chunker.feed(&read_buffer[..count], |boundary| boundaries.push(boundary));
+            let mut consumed = 0_usize;
+            for boundary in boundaries {
+                if boundary.offset != emitted_offset {
+                    return Err("streaming chunker emitted non-contiguous geometry".to_owned());
+                }
+                let end = consumed
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| "streaming chunk length overflow".to_owned())?;
+                let bytes = pending
+                    .get(consumed..end)
+                    .ok_or_else(|| "chunk exceeded the bounded streaming buffer".to_owned())?;
+                if chunks.len() >= CAR_PLAN_MAX_CHUNKS {
+                    return Err(format!(
+                        "directory payload exceeds {CAR_PLAN_MAX_CHUNKS} chunks"
+                    ));
+                }
+                chunks.push(CarChunk {
+                    offset: global_offset + boundary.offset as u64,
+                    length: u32::try_from(boundary.length)
+                        .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
+                    digest: blake3::hash(bytes).into(),
+                    taikai_segment_hint: None,
+                });
+                emitted_offset = emitted_offset
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| "streaming emitted offset overflow".to_owned())?;
+                consumed = end;
+            }
+            if consumed != 0 {
+                pending.drain(..consumed);
+            }
+            local_offset = local_offset
+                .checked_add(count as u64)
+                .ok_or_else(|| "streaming local offset overflow".to_owned())?;
+        }
+        if provisional_file.size != 0 {
+            let mut boundaries = Vec::new();
+            chunker.finish(|boundary| boundaries.push(boundary));
+            for boundary in boundaries {
+                if boundary.offset != emitted_offset || pending.len() != boundary.length {
+                    return Err("streaming chunker final geometry is not canonical".to_owned());
+                }
+                if chunks.len() >= CAR_PLAN_MAX_CHUNKS {
+                    return Err(format!(
+                        "directory payload exceeds {CAR_PLAN_MAX_CHUNKS} chunks"
+                    ));
+                }
+                chunks.push(CarChunk {
+                    offset: global_offset + boundary.offset as u64,
+                    length: u32::try_from(boundary.length)
+                        .map_err(|_| "streaming chunk length exceeds u32".to_owned())?,
+                    digest: blake3::hash(&pending).into(),
+                    taikai_segment_hint: None,
+                });
+                emitted_offset = emitted_offset
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| "streaming emitted offset overflow".to_owned())?;
+                pending.clear();
+            }
+        }
+        if emitted_offset as u64 != provisional_file.size || !pending.is_empty() {
+            return Err("streaming chunker did not cover one file exactly".to_owned());
+        }
+        files.push(FilePlan {
+            path: provisional_file.path,
+            first_chunk,
+            chunk_count: chunks.len() - first_chunk,
+            size: provisional_file.size,
+        });
+        global_offset = global_offset
+            .checked_add(provisional_file.size)
+            .ok_or_else(|| "streaming global offset overflow".to_owned())?;
+    }
+    PayloadSource::ensure_exhausted(&mut source, global_offset)
+        .map_err(|error| format!("failed to validate exact directory source: {error}"))?;
+    if offline_directory_inventory(root)? != inventory {
+        return Err("payload directory changed while its streaming plan was built".to_owned());
+    }
+    let plan = CarBuildPlan {
+        chunk_profile: profile,
+        payload_digest: payload_hasher.finalize(),
+        content_length: global_offset,
+        chunks,
+        files,
+    };
+    plan.validate()
+        .map_err(|error| format!("invalid streaming directory plan: {error}"))?;
+    Ok(plan)
+}
+fn ensure_streaming_manifest_alignment<P: PayloadSource>(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+    source: &mut P,
+    source_label: &str,
+) -> Result<(), String> {
+    if manifest.content_length != plan.content_length
+        || manifest.chunk_digest_sha3_256 != compute_chunk_plan_digest_sha3(&plan.chunks)
+    {
+        return Err(format!(
+            "manifest geometry differs from the exact {source_label} plan"
+        ));
+    }
+    let mut car_reader = OfflineSequentialPayloadReader::new(&mut *source, plan.content_length);
+    let stats = CarStreamingWriter::new(plan)
+        .write_from_reader(&mut car_reader, io::sink())
+        .map_err(|error| format!("failed to rebuild canonical {source_label} CAR: {error}"))?;
+    car_reader.finish()?;
+    if stats.root_cids != vec![manifest.root_cid.clone()]
+        || stats.dag_codec != manifest.dag_codec.0
+        || stats.payload_bytes != plan.content_length
+        || stats.chunk_count != plan.chunks.len()
+        || stats.car_size != manifest.car_size
+        || stats.car_archive_digest.as_bytes() != &manifest.car_digest
+    {
+        return Err(format!(
+            "manifest CAR commitments differ from the exact {source_label} payload"
+        ));
+    }
+    let mut store = ChunkStore::with_profile(plan.chunk_profile);
+    store
+        .ingest_plan_source(plan, source)
+        .map_err(|error| format!("failed to rebuild {source_label} PoR tree: {error}"))?;
+    PayloadSource::ensure_exhausted(source, plan.content_length)
+        .map_err(|error| format!("failed to validate {source_label} PoR source: {error}"))?;
+    if store.por_tree().root() != &manifest.por_root {
+        return Err(format!(
+            "manifest PoR root differs from the exact {source_label} payload"
+        ));
+    }
+    Ok(())
+}
+fn ensure_streaming_directory_manifest_alignment(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+    payload_dir: &Path,
+) -> Result<(), String> {
+    let mut source = DirectoryPayload::new(payload_dir, &plan.files)
+        .map_err(|error| format!("failed to open exact directory payload: {error}"))?;
+    ensure_streaming_manifest_alignment(manifest, plan, &mut source, "directory")
 }
 fn ingest(
     data_dir: PathBuf,
+    max_capacity_bytes: u64,
     manifest_path: PathBuf,
-    payload_path: PathBuf,
+    payload_source: IngestPayloadSource,
     plan_json_out: Option<PathBuf>,
 ) -> Result<(), String> {
-    let manifest_bytes = fs::read(&manifest_path)
-        .map_err(|err| format!("failed to read manifest {}: {err}", manifest_path.display()))?;
+    let manifest_bytes =
+        read_bounded_por_file(&manifest_path, "manifest", MAX_MANIFEST_ENCODED_BYTES)?;
     let manifest: ManifestV1 = decode_manifest_v1_canonical(&manifest_bytes)
         .map_err(|err| format!("failed to parse manifest: {err}"))?;
+    let policy = PinPolicyConstraints {
+        require_council_signatures: true,
+        ..PinPolicyConstraints::default()
+    };
+    validate_manifest(&manifest, &policy)
+        .map_err(|error| format!("failed to validate manifest: {error}"))?;
+    enforce_ingest_capacity(manifest.content_length, max_capacity_bytes)?;
     let chunk_profile = chunk_profile_from_manifest(&manifest)?;
-    let payload_bytes = fs::read(&payload_path)
-        .map_err(|err| format!("failed to read payload {}: {err}", payload_path.display()))?;
-    if payload_bytes.is_empty() {
-        return Err("payload must not be empty".to_string());
-    }
-    let plan = CarBuildPlan::single_file_with_profile(&payload_bytes, chunk_profile)
-        .map_err(|err| format!("failed to build chunk plan: {err}"))?;
-    ensure_manifest_plan_alignment(&manifest, &plan, &payload_bytes)?;
-    let config = StorageConfig::builder()
-        .enabled(true)
-        .data_dir(data_dir.clone())
-        .build();
+    let mut stable_file_source = match &payload_source {
+        IngestPayloadSource::File(payload_path) => Some(open_exact_file_payload(
+            payload_path,
+            manifest.content_length,
+        )?),
+        IngestPayloadSource::Directory(_) => None,
+    };
+    let config = offline_ingest_storage_config(data_dir.clone(), max_capacity_bytes);
     let backend = StorageBackend::new(config)
         .map_err(|err| format!("failed to open storage backend: {err}"))?;
-    let mut reader = io::Cursor::new(payload_bytes);
-    let manifest_id = backend
-        .ingest_manifest(&manifest, &plan, &mut reader)
-        .map_err(|err| format!("failed to ingest manifest: {err}"))?;
+    let (plan, manifest_id) = match payload_source {
+        IngestPayloadSource::File(payload_path) => {
+            let mut source = stable_file_source
+                .take()
+                .ok_or_else(|| "stable file source was not prepared".to_owned())?;
+            let plan =
+                build_streaming_file_plan(&mut source, manifest.content_length, chunk_profile)
+                    .map_err(|error| {
+                        format!(
+                            "failed to build streaming file chunk plan from {}: {error}",
+                            payload_path.display()
+                        )
+                    })?;
+            ensure_streaming_manifest_alignment(&manifest, &plan, &mut source, "file")?;
+            let mut reader =
+                OfflineSequentialPayloadReader::new(&mut source, manifest.content_length);
+            let manifest_id = backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .map_err(|err| format!("failed to ingest manifest: {err}"))?;
+            reader.finish()?;
+            (plan, manifest_id)
+        }
+        IngestPayloadSource::Directory(payload_dir) => {
+            let plan =
+                build_streaming_directory_plan(&payload_dir, chunk_profile).map_err(|error| {
+                    format!(
+                        "failed to build streaming directory chunk plan from {}: {error}",
+                        payload_dir.display()
+                    )
+                })?;
+            ensure_streaming_directory_manifest_alignment(&manifest, &plan, &payload_dir)?;
+            let mut source = DirectoryPayload::new(&payload_dir, &plan.files)
+                .map_err(|error| format!("failed to open directory ingest source: {error}"))?;
+            let mut reader = OfflineSequentialPayloadReader::new(&mut source, plan.content_length);
+            let manifest_id = backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .map_err(|err| format!("failed to ingest manifest: {err}"))?;
+            reader.finish()?;
+            (plan, manifest_id)
+        }
+    };
     if let Some(path) = plan_json_out {
         let json_value = try_chunk_fetch_plan_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
@@ -551,27 +1168,6 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
         })
     }
 }
-fn ensure_manifest_plan_alignment(
-    manifest: &ManifestV1,
-    plan: &CarBuildPlan,
-    payload_bytes: &[u8],
-) -> Result<(), String> {
-    if manifest.content_length != plan.content_length {
-        return Err(format!(
-            "manifest content length {} differs from plan {}",
-            manifest.content_length, plan.content_length
-        ));
-    }
-    let writer =
-        CarWriter::new(plan, payload_bytes).map_err(|err| format!("failed to build CAR: {err}"))?;
-    let mut car_bytes = Vec::new();
-    writer
-        .write_to(&mut car_bytes)
-        .map_err(|err| format!("failed to materialize CAR: {err}"))?;
-    CarVerifier::verify_full_car_with_plan(manifest, plan, &car_bytes)
-        .map_err(|err| format!("manifest verification failed: {err}"))?;
-    Ok(())
-}
 fn write_json_file(path: &Path, value: Value) -> Result<(), String> {
     let text = json::to_string_pretty(&value).map_err(|err| err.to_string())?;
     write_text(path, &text)
@@ -763,7 +1359,281 @@ fn print_json(map: Map) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use tempfile::TempDir;
+    #[test]
+    fn ingest_capacity_requires_nonzero_canonical_u64() {
+        assert_eq!(
+            parse_nonzero_canonical_u64("1", "--max-capacity-bytes"),
+            Ok(1)
+        );
+        assert_eq!(
+            parse_nonzero_canonical_u64("18446744073709551615", "--max-capacity-bytes"),
+            Ok(u64::MAX)
+        );
+        for invalid in [
+            "",
+            "0",
+            "00",
+            "01",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "1_000",
+            "18446744073709551616",
+        ] {
+            assert!(
+                parse_nonzero_canonical_u64(invalid, "--max-capacity-bytes").is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn ingest_capacity_preflight_rejects_payload_over_exact_cap() {
+        assert_eq!(enforce_ingest_capacity(4096, 4096), Ok(()));
+        assert_eq!(
+            enforce_ingest_capacity(4097, 4096),
+            Err("manifest payload length 4097 exceeds --max-capacity-bytes=4096".to_owned())
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn file_payload_preflight_requires_exact_stable_regular_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("tempdir");
+        let payload = temp.path().join("payload.bin");
+        fs::write(&payload, b"exact").expect("payload");
+        open_exact_file_payload(&payload, 5).expect("exact stable file");
+        let mismatch = open_exact_file_payload(&payload, 4)
+            .err()
+            .expect("length mismatch must fail");
+        assert!(mismatch.contains("manifest content length 4"), "{mismatch}");
+
+        let linked = temp.path().join("linked.bin");
+        symlink(&payload, &linked).expect("symlink");
+        let symlink_error = open_exact_file_payload(&linked, 5)
+            .err()
+            .expect("symlink must fail");
+        assert!(
+            symlink_error.contains("stable no-follow payload file"),
+            "{symlink_error}"
+        );
+
+        let hard_linked = temp.path().join("hard-linked.bin");
+        fs::hard_link(&payload, &hard_linked).expect("hard link");
+        let hard_link_error = open_exact_file_payload(&payload, 5)
+            .err()
+            .expect("multiply linked file must fail");
+        assert!(
+            hard_link_error.contains("stable no-follow payload file"),
+            "{hard_link_error}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn streaming_file_plan_matches_canonical_eager_plan() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("payload.bin");
+        let mut payload = vec![0x5A; OFFLINE_DIRECTORY_STREAM_BUFFER_BYTES + 333_333];
+        payload[777_777..888_888].fill(0xA5);
+        fs::write(&path, &payload).expect("payload");
+        let mut source =
+            open_exact_file_payload(&path, payload.len() as u64).expect("stable payload");
+        let streaming =
+            build_streaming_file_plan(&mut source, payload.len() as u64, ChunkProfile::DEFAULT)
+                .expect("streaming plan");
+        let eager = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)
+            .expect("eager plan");
+        assert_eq!(streaming, eager);
+    }
+    #[test]
+    fn ingest_command_requires_explicit_capacity() {
+        let error = ingest_command(vec![
+            "--data-dir=storage".to_owned(),
+            "--manifest=manifest.to".to_owned(),
+            "--payload=payload.bin".to_owned(),
+        ])
+        .expect_err("ingest capacity must be explicit");
+        assert_eq!(error, "missing required option --max-capacity-bytes");
+
+        let duplicate = ingest_command(vec![
+            "--max-capacity-bytes=1".to_owned(),
+            "--max-capacity-bytes=2".to_owned(),
+        ])
+        .expect_err("duplicate capacity must be rejected");
+        assert_eq!(duplicate, "duplicate option --max-capacity-bytes");
+    }
+    #[test]
+    fn ingest_storage_config_uses_exact_cli_capacity() {
+        let data_dir = PathBuf::from("storage");
+        let config = offline_ingest_storage_config(data_dir.clone(), 10_737_418_240);
+        assert!(config.enabled());
+        assert_eq!(config.data_dir(), &data_dir);
+        assert_eq!(config.max_capacity_bytes().0, 10_737_418_240);
+    }
+    #[test]
+    fn ingest_payload_source_requires_exactly_one_canonical_input() {
+        let file = PathBuf::from("payload.bin");
+        let directory = PathBuf::from("payload");
+        assert_eq!(
+            require_ingest_payload_source(Some(file.clone()), None).expect("file source"),
+            IngestPayloadSource::File(file.clone())
+        );
+        assert_eq!(
+            require_ingest_payload_source(None, Some(directory.clone())).expect("directory source"),
+            IngestPayloadSource::Directory(directory.clone())
+        );
+        assert!(require_ingest_payload_source(None, None).is_err());
+        assert!(require_ingest_payload_source(Some(file), Some(directory)).is_err());
+    }
+    #[test]
+    fn streaming_directory_plan_matches_canonical_eager_plan() {
+        let temp = TempDir::new().expect("tempdir");
+        let nested = temp.path().join("aarch64");
+        fs::create_dir(&nested).expect("nested dir");
+        fs::write(nested.join("initrd.img"), vec![0x11; 333_333]).expect("initrd");
+        fs::write(nested.join("rootfs.ext4"), vec![0x22; 1_500_321]).expect("rootfs");
+        fs::write(nested.join("vmlinuz"), vec![0x33; 700_777]).expect("kernel");
+        let (eager, payload) =
+            CarBuildPlan::from_directory_with_profile(temp.path(), ChunkProfile::DEFAULT)
+                .expect("eager plan");
+        let streaming = build_streaming_directory_plan(temp.path(), ChunkProfile::DEFAULT)
+            .expect("streaming plan");
+        assert_eq!(streaming, eager);
+        assert_eq!(streaming.payload_digest, blake3::hash(&payload));
+    }
+    #[test]
+    fn sparse_taira_scale_inventory_stays_metadata_only() {
+        let temp = TempDir::new().expect("tempdir");
+        let nested = temp.path().join("aarch64");
+        fs::create_dir(&nested).expect("nested dir");
+        let sizes = [27_236_288_u64, 3_085_959_168, 13_923_072];
+        for (name, size) in ["vmlinuz", "rootfs.ext4", "initrd.img"]
+            .into_iter()
+            .zip(sizes)
+        {
+            File::create(nested.join(name))
+                .expect("create sparse guest member")
+                .set_len(size)
+                .expect("size sparse guest member");
+        }
+        let inventory = offline_directory_inventory(temp.path()).expect("large inventory");
+        let total = inventory.iter().map(|file| file.size).sum::<u64>();
+        assert_eq!(inventory.len(), 3);
+        assert_eq!(total, sizes.into_iter().sum::<u64>());
+        assert_eq!(total, 3_127_118_528);
+        assert!(total > 3_000_000_000);
+        assert!(total > 512 * 1024 * 1024);
+    }
+    #[test]
+    fn directory_inventory_accepts_exact_total_entry_boundary() {
+        let temp = TempDir::new().expect("tempdir");
+        for index in 0..(OFFLINE_DIRECTORY_MAX_ENTRIES - 1) {
+            fs::create_dir(temp.path().join(format!("empty-{index:04}")))
+                .expect("boundary empty directory");
+        }
+        fs::write(temp.path().join("payload.bin"), b"payload").expect("boundary payload");
+
+        let inventory = offline_directory_inventory(temp.path()).expect("boundary inventory");
+        assert_eq!(
+            inventory,
+            vec![OfflineDirectoryFile {
+                path: vec!["payload.bin".to_owned()],
+                size: 7,
+            }]
+        );
+    }
+    #[test]
+    fn directory_inventory_rejects_entry_over_limit_before_sorting() {
+        let temp = TempDir::new().expect("tempdir");
+        for index in 0..=OFFLINE_DIRECTORY_MAX_ENTRIES {
+            fs::create_dir(temp.path().join(format!("empty-{index:04}")))
+                .expect("over-limit empty directory");
+        }
+
+        let error = offline_directory_inventory(temp.path())
+            .expect_err("entry count over the bounded inventory must fail");
+        assert_eq!(
+            error,
+            format!(
+                "payload directory contains more than {OFFLINE_DIRECTORY_MAX_ENTRIES} total entries"
+            )
+        );
+    }
+    #[test]
+    fn taira_scale_plan_fits_default_ingest_heap_without_payload_allocation() {
+        let profile = ChunkProfile::DEFAULT;
+        let members = [
+            (
+                vec!["aarch64".to_owned(), "initrd.img".to_owned()],
+                13_923_072_u64,
+            ),
+            (
+                vec!["aarch64".to_owned(), "rootfs.ext4".to_owned()],
+                3_085_959_168_u64,
+            ),
+            (
+                vec!["aarch64".to_owned(), "vmlinuz".to_owned()],
+                27_236_288_u64,
+            ),
+        ];
+        let mut chunks = Vec::new();
+        let mut files = Vec::new();
+        let mut offset = 0_u64;
+        for (path, size) in members {
+            let first_chunk = chunks.len();
+            let mut remaining = size;
+            while remaining != 0 {
+                // The minimum canonical chunk size maximizes metadata and therefore
+                // exercises the worst valid ingest-heap geometry for this payload.
+                let length = remaining.min(profile.min_size as u64);
+                chunks.push(CarChunk {
+                    offset,
+                    length: u32::try_from(length).expect("default chunk length"),
+                    digest: [0xA5; 32],
+                    taikai_segment_hint: None,
+                });
+                offset += length;
+                remaining -= length;
+            }
+            files.push(FilePlan {
+                path,
+                first_chunk,
+                chunk_count: chunks.len() - first_chunk,
+                size,
+            });
+        }
+        assert_eq!(offset, 3_127_118_528);
+        let plan = CarBuildPlan {
+            chunk_profile: profile,
+            payload_digest: blake3::hash(b"metadata-only Taira plan"),
+            content_length: offset,
+            chunks,
+            files,
+        };
+        let validation = plan
+            .validate_for_ingest()
+            .expect("real Taira geometry must fit default ingest heap");
+        assert!(
+            validation.estimated_ingest_heap_bytes()
+                <= sorafs_car::DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn streaming_directory_plan_rejects_symlinked_intermediate_directory() {
+        use std::os::unix::fs::symlink;
+        let temp = TempDir::new().expect("tempdir");
+        let real = temp.path().join("real");
+        fs::create_dir(&real).expect("real dir");
+        fs::write(real.join("rootfs.ext4"), b"payload").expect("payload");
+        symlink(&real, temp.path().join("aarch64")).expect("symlink");
+        let error = build_streaming_directory_plan(temp.path(), ChunkProfile::DEFAULT)
+            .expect_err("symlink must fail");
+        assert!(error.contains("symbolic links"), "{error}");
+    }
     #[test]
     fn bounded_por_file_reader_accepts_boundary_and_rejects_one_over() {
         let temp = TempDir::new().expect("tempdir");

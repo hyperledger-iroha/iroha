@@ -143,13 +143,16 @@ into `ws://` / `wss://` endpoints automatically and append the required `sid`
 and `role` query parameters while keeping secrets out of the URL. Tokens are
 carried via `Authorization: Bearer` headers by default; browser clients get a
 `Sec-WebSocket-Protocol: iroha-connect.token.v1.<b64url(token)>` marker when
-headers are unavailable. When using `http://` Torii bases, pass `allowInsecure: true`
-explicitly; otherwise the helper will reject insecure protocols when a token is
-present. Endpoint overrides must remain on the same host/scheme as the base URL
-to avoid leaking credentials across origins, and `ToriiClient.openConnectWebSocket()`
-inherits `allowInsecure` plus the `insecureTransportTelemetryHook` from the
-client config so dev/test runs can flag insecure opt-ins automatically. Standalone
-callers can pass their own `insecureTransportTelemetryHook` when they need to log or
+headers are unavailable. Header-capable clients must send exactly one
+`Authorization` field containing one non-empty bearer token; duplicate fields
+are rejected with `400` even when each token is valid. When using `http://`
+Torii bases, pass `allowInsecure: true` explicitly; otherwise the helper will
+reject insecure protocols when a token is present. Endpoint overrides must
+remain on the same host/scheme as the base URL to avoid leaking credentials
+across origins, and `ToriiClient.openConnectWebSocket()` inherits
+`allowInsecure` plus the `insecureTransportTelemetryHook` from the client config
+so dev/test runs can flag insecure opt-ins automatically. Standalone callers
+can pass their own `insecureTransportTelemetryHook` when they need to log or
 alert on local `ws://` usage. Notes:
 
 - Ensure Connect URLs use the same host/scheme as the configured Torii base; absolute overrides with credentials are rejected.

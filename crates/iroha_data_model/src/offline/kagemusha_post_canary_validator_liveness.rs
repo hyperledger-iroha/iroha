@@ -38,6 +38,9 @@ pub const KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_ATTESTATION_MAX_BYTES: usi
     8 * 1024 * 1024;
 /// Maximum UTF-8 bytes accepted for one canonical Torii origin.
 pub const KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_ORIGIN_MAX_BYTES: usize = 512;
+// Canonical evidence nests four signed status/finality proof graphs. Keep that
+// reviewed, bounded decoder off ordinary 2 MiB service and test stacks.
+const KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_DECODE_STACK_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum issuer-authorized collection interval.
 pub const KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_MAX_INTERVAL_MS: u64 = 5 * 60 * 1_000;
 /// Maximum elapsed time for one validator request.
@@ -580,11 +583,22 @@ impl KagemushaV4PostCanaryValidatorLivenessEvidenceV1 {
             bytes,
             KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_EVIDENCE_MAX_BYTES,
         )?;
-        let evidence: Self = norito::decode_canonical_with_limits(
-            bytes,
-            norito::canonical_decode_limits(bytes.len()),
-        )
-        .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Decode)?;
+        let evidence: Self = std::thread::scope(|scope| {
+            let decoder = std::thread::Builder::new()
+                .name("kagemusha-liveness-decode".to_owned())
+                .stack_size(KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_DECODE_STACK_BYTES)
+                .spawn_scoped(scope, || {
+                    norito::decode_canonical_with_limits(
+                        bytes,
+                        norito::canonical_decode_limits(bytes.len()),
+                    )
+                    .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Decode)
+                })
+                .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Decode)?;
+            decoder
+                .join()
+                .map_err(|_| KagemushaV4PostCanaryValidatorLivenessValidationError::Decode)?
+        })?;
         evidence.body.validate_structure()?;
         if evidence.schema != KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_EVIDENCE_SCHEMA
             || evidence.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
@@ -1209,7 +1223,7 @@ pub enum KagemushaV4PostCanaryValidatorLivenessValidationError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::num::NonZeroU64;
 
     use crate::{
@@ -1230,6 +1244,29 @@ mod tests {
     use iroha_crypto::{Signature, SignatureOf};
 
     use super::*;
+
+    const LIVENESS_TEST_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+    fn run_liveness_test(test: impl FnOnce() + Send + 'static) {
+        let result = std::thread::Builder::new()
+            .name("kagemusha-post-canary-liveness-test".to_owned())
+            .stack_size(LIVENESS_TEST_STACK_BYTES)
+            .spawn(test)
+            .expect("spawn Kagemusha liveness test with reviewed stack")
+            .join();
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    macro_rules! liveness_test {
+        ($name:ident, $body:ident) => {
+            #[test]
+            fn $name() {
+                run_liveness_test($body);
+            }
+        };
+    }
 
     struct Fixture {
         binding: KagemushaV4PromotionBindingV1,
@@ -1451,6 +1488,18 @@ mod tests {
         }
     }
 
+    pub(crate) fn signed_liveness_evidence_fixture()
+    -> KagemushaV4PostCanaryValidatorLivenessEvidenceV1 {
+        let fixture = Fixture::new();
+        let body = fixture.evidence_body();
+        KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
+            body,
+            &fixture.issuer,
+            &fixture.trust(),
+        )
+        .expect("signed liveness wire fixture")
+    }
+
     fn exact_digest(bytes: &[u8]) -> KagemushaExactBytesDigestV1 {
         KagemushaExactBytesDigestV1::from_bytes(bytes).expect("non-empty fixture bytes")
     }
@@ -1667,8 +1716,7 @@ mod tests {
         observation.attestation_response_norito = exact_digest(&bytes);
     }
 
-    #[test]
-    fn exact_four_validator_evidence_roundtrips_and_verifies() {
+    fn exact_four_validator_evidence_roundtrips_and_verifies_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let body = fixture.evidence_body();
@@ -1703,8 +1751,7 @@ mod tests {
         assert_eq!(verified.validator_ids().len(), 4);
     }
 
-    #[test]
-    fn copied_validator_response_does_not_prove_four_independent_nodes() {
+    fn copied_validator_response_does_not_prove_four_independent_nodes_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let mut body = fixture.evidence_body();
@@ -1722,8 +1769,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stale_or_different_node_challenge_is_rejected() {
+    fn stale_or_different_node_challenge_is_rejected_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let mut body = fixture.evidence_body();
@@ -1739,8 +1785,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn attestation_structure_cannot_hide_an_invalid_finality_qc() {
+    fn attestation_structure_cannot_hide_an_invalid_finality_qc_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let mut body = fixture.evidence_body();
@@ -1777,8 +1822,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shared_chain_must_reach_the_highest_observed_tip_exactly() {
+    fn shared_chain_must_reach_the_highest_observed_tip_exactly_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let mut body = fixture.evidence_body();
@@ -1793,8 +1837,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn response_expiry_is_exclusive() {
+    fn response_expiry_is_exclusive_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let mut body = fixture.evidence_body();
@@ -1810,8 +1853,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn challenge_rejects_noncanonical_or_duplicate_origins_and_retroactive_time() {
+    fn challenge_rejects_noncanonical_or_duplicate_origins_and_retroactive_time_body() {
         let fixture = Fixture::new();
         let mut body = fixture.challenge_body();
         body.targets[0].canonical_torii_origin = "https://127.0.0.1".to_owned();
@@ -1835,8 +1877,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn challenge_rejects_issuer_role_overlap_and_wrong_private_key() {
+    fn challenge_rejects_issuer_role_overlap_and_wrong_private_key_body() {
         let fixture = Fixture::new();
         let mut controller_overlap = fixture.challenge_body();
         let controller = KeyPair::from_seed(vec![0x81; 32], Algorithm::Ed25519);
@@ -1869,8 +1910,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exact_decoders_reject_trailing_bytes_and_outer_signature_splice() {
+    fn exact_decoders_reject_trailing_bytes_and_outer_signature_splice_body() {
         let fixture = Fixture::new();
         let trust = fixture.trust();
         let evidence = KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
@@ -1895,4 +1935,41 @@ mod tests {
             Err(KagemushaV4PostCanaryValidatorLivenessValidationError::Signature)
         );
     }
+
+    liveness_test!(
+        exact_four_validator_evidence_roundtrips_and_verifies,
+        exact_four_validator_evidence_roundtrips_and_verifies_body
+    );
+    liveness_test!(
+        copied_validator_response_does_not_prove_four_independent_nodes,
+        copied_validator_response_does_not_prove_four_independent_nodes_body
+    );
+    liveness_test!(
+        stale_or_different_node_challenge_is_rejected,
+        stale_or_different_node_challenge_is_rejected_body
+    );
+    liveness_test!(
+        attestation_structure_cannot_hide_an_invalid_finality_qc,
+        attestation_structure_cannot_hide_an_invalid_finality_qc_body
+    );
+    liveness_test!(
+        shared_chain_must_reach_the_highest_observed_tip_exactly,
+        shared_chain_must_reach_the_highest_observed_tip_exactly_body
+    );
+    liveness_test!(
+        response_expiry_is_exclusive,
+        response_expiry_is_exclusive_body
+    );
+    liveness_test!(
+        challenge_rejects_noncanonical_or_duplicate_origins_and_retroactive_time,
+        challenge_rejects_noncanonical_or_duplicate_origins_and_retroactive_time_body
+    );
+    liveness_test!(
+        challenge_rejects_issuer_role_overlap_and_wrong_private_key,
+        challenge_rejects_issuer_role_overlap_and_wrong_private_key_body
+    );
+    liveness_test!(
+        exact_decoders_reject_trailing_bytes_and_outer_signature_splice,
+        exact_decoders_reject_trailing_bytes_and_outer_signature_splice_body
+    );
 }

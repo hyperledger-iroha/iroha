@@ -1786,7 +1786,7 @@ impl Drop for StagedRegistryReplacement<'_> {
 }
 /// Closed failure inventory for concrete-work registration and resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RegistryError {
+pub(in crate::sumeragi) enum RegistryError {
     /// The sealed pending authority does not name the supplied effect.
     UnboundEffect,
     /// Owner and ordinal do not form a valid admitted address.
@@ -1805,6 +1805,23 @@ pub(super) enum RegistryError {
     WrongWorkKind,
     /// The coordinator's admitted record did not name exactly one effect slot.
     InvalidAdmissionShape,
+    /// Direct lifecycle-output admission rejected the exact returned owner.
+    /// Keeping the deterministic reason visible avoids collapsing semantic
+    /// drift, foreign ownership, and capacity faults into one opaque crash.
+    LifecycleOutputAdmissionRejected(AdmissionRejection),
+    /// Direct lifecycle-output admission observed a latched coordinator fault.
+    LifecycleOutputAdmissionFailClosed(CoordinatorFault),
+    /// More than one durable output owner, or more than one row in any output
+    /// ownership class, matched the same runtime output. Exact counts remain
+    /// visible at the production error boundary for restart diagnosis.
+    AmbiguousLifecycleOutputOwnership {
+        /// Matching generic `PendingAdapter` rows.
+        installed: usize,
+        /// Matching durable recovered signed-Broadcast carriers.
+        recovered_broadcast: usize,
+        /// Matching successfully terminal direct-output records.
+        terminal_direct_output: usize,
+    },
 }
 /// Deterministic process-local map from admitted slots to concrete effects.
 ///

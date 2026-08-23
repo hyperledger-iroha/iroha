@@ -477,6 +477,43 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_timeout_sign_broadcas
     );
     [parent, child]
 }
+
+/// Build the canonical replay pair for one exact unsigned/signed Prepare-vote edge.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_prepare_sign_broadcast_fixture(
+    context: LifecycleContext,
+    unsigned: wire::Vote,
+    signed: wire::Vote,
+) -> [ReplayCase; 2] {
+    assert_eq!(unsigned.phase, wire::GlobalPhase::Prepare);
+    assert_eq!(signed.phase, wire::GlobalPhase::Prepare);
+    assert!(unsigned.signature.is_empty());
+    assert!(!signed.signature.is_empty());
+    let mut expected = unsigned.clone();
+    expected.signature.clone_from(&signed.signature);
+    assert_eq!(expected, signed);
+    let locator = RecoveredWalFrameIdentity::for_test(90, 91, [0xD9; 32]).persisted_locator();
+    let tag = ReplayEventTagV1::new(unsigned.round.height, unsigned.round.view, 0);
+    let parent = replay_case(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role: ReplayWalRoleV1::PREPARE_INTENT,
+            tag,
+            action: WalReplayActionV1::SignVote(unsigned),
+        }),
+        LifecycleStageKind::SignPrepareVote,
+        DurablePayloadReference::None,
+    );
+    let child = replay_case(
+        context,
+        LifecycleReplaySourceV1::ConsensusBroadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        )),
+        LifecycleStageKind::BroadcastPrepareVote,
+        DurablePayloadReference::None,
+    );
+    [parent, child]
+}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_replay_authority_for_payload_fixture(
     context: LifecycleContext,
     stage: LifecycleStageKind,

@@ -353,3 +353,6 @@ artifacts/*.json
 
 # Runtime output from the interactive setup wizard (may contain private keys).
 /wizard-output/
+
+# Relay tests and local runs create tempfile-backed replay stores and links here.
+tools/soranet-relay/.tmp*

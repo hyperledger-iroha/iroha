@@ -1986,6 +1986,14 @@ mod tests {
         assert_eq!(sk1.algorithm(), sk2.algorithm());
     }
     #[test]
+    fn key_generation_options_redact_secret_material_from_debug() {
+        let seed = super::KeyGenOption::<()>::UseSeed(vec![0xA5; 32]);
+        assert_eq!(format!("{seed:?}"), "UseSeed { len: 32 }");
+
+        let private = super::KeyGenOption::FromPrivateKey("do-not-log-this-private-key");
+        assert_eq!(format!("{private:?}"), "FromPrivateKey([REDACTED])");
+    }
+    #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn prefixed_mismatch_is_error() {
         // Public key: try wrong prefix

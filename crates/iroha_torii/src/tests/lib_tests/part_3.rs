@@ -2289,7 +2289,7 @@ async fn proof_record_get_advertises_cache_and_304() {
         State(app.clone()),
         conditional_headers,
         crate::loopback_connect_info(),
-        axum::extract::Path(id),
+        axum::extract::Path(id.clone()),
     )
     .await
     .expect("conditional proof ok")
@@ -2300,6 +2300,21 @@ async fn proof_record_get_advertises_cache_and_304() {
         .unwrap()
         .to_bytes();
     assert!(empty.is_empty(), "304 responses have no body");
+    let mut wildcard_headers = HeaderMap::new();
+    wildcard_headers.insert(
+        axum::http::header::IF_NONE_MATCH,
+        axum::http::HeaderValue::from_static("*"),
+    );
+    let wildcard = handler_proof_record_get(
+        State(app.clone()),
+        wildcard_headers,
+        crate::loopback_connect_info(),
+        axum::extract::Path(id),
+    )
+    .await
+    .expect("wildcard conditional proof ok")
+    .into_response();
+    assert_eq!(wildcard.status(), StatusCode::NOT_MODIFIED);
 }
 #[tokio::test]
 async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {

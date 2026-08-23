@@ -255,7 +255,7 @@ if (( ${#trusted_buildx_version} == 0 || ${#trusted_buildx_version} > 512 )); th
 fi
 
 if [[ -z "$binaries" ]]; then
-  binaries="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
+  binaries="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 fi
 read -r -a binary_inventory <<< "$binaries"
 if (( ${#binary_inventory[@]} == 0 || ${#binary_inventory[@]} > 32 )); then
@@ -272,6 +272,14 @@ for binary in "${binary_inventory[@]}"; do
   seen_binaries+="$binary "
 done
 binaries="${binary_inventory[*]}"
+required_daemon="iroha3d"
+if [[ "$config" == "taira" ]]; then
+  required_daemon="iroha3d_taira"
+fi
+if [[ "$seen_binaries" != *" $required_daemon "* ]]; then
+  printf 'binary inventory for config %s must include %s\n' "$config" "$required_daemon" >&2
+  exit 1
+fi
 
 if [[ -z "$prebuilt_bin_dir" ]]; then
   printf '%s\n' '--prebuilt-bin-dir is required for deterministic release images' >&2

@@ -94,9 +94,10 @@ fn valid_policy() -> OfflineDeviceAttestationPolicy {
             not_before_ms: None,
             not_after_ms: None,
         }],
-        revoked_certificate_sha256: Vec::new(),
+        revoked_certificate_tbs_sha256: Vec::new(),
         ios_apps: Vec::new(),
         android_apps: Vec::new(),
+        android_status_snapshot: None,
         require_ios_app_policy: false,
         require_android_app_policy: false,
     }

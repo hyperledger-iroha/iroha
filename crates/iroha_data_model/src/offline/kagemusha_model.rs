@@ -900,6 +900,12 @@ mod model {
         /// Domain-separated identity of the immutable candidate and qualification receipt.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
+        /// SHA-256 of the exact canonical runner-signed internal-validation receipt.
+        ///
+        /// Immutable candidates carry zero here; finalized releases require a
+        /// nonzero digest whose exact bytes are retained by the release record.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub internal_validation_receipt_sha256: [u8; 32],
         /// Eq then Ep V4 recursive-step profiles.
         pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
         /// Release-bound validator roster reference.
@@ -920,7 +926,8 @@ mod model {
     /// closure, authenticated source-seal projection, reviewed Cargo/rustc
     /// binaries, network parameters, inline circuit configuration, exact eight
     /// recursive artifacts, and finality roster. Its benchmark, review,
-    /// qualification, and external-evidence digest slots must all be zero.
+    /// qualification, internal-validation, and external-evidence digest slots
+    /// must all be zero.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -1235,6 +1242,9 @@ mod model {
         /// Domain-separated identity of the candidate and qualification receipt.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
+        /// Exact runner-signed internal-validation receipt selected by the release.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub internal_validation_receipt_sha256: [u8; 32],
         /// Exact release generation copied from the V4 manifest.
         pub generation: String,
         /// Exact source revision copied from the V4 manifest.
@@ -1371,6 +1381,9 @@ mod model {
         /// Domain-separated identity of the candidate and qualification receipt.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub qualified_candidate_sha256: [u8; 32],
+        /// SHA-256 of the exact canonical runner-signed internal-validation receipt.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub internal_validation_receipt_sha256: [u8; 32],
         /// SHA-256 of the complete canonical V4 manifest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
@@ -1393,8 +1406,9 @@ mod model {
     }
     /// Complete signed ABI-21 release material persisted by consensus activation.
     ///
-    /// The two evidence fields contain canonical signed summaries, never raw
-    /// device logs, parameters, proving keys, or bootstrap witness payloads.
+    /// The receipt and two external-evidence fields contain canonical signed
+    /// artifacts, never raw device logs, parameters, proving keys, or bootstrap
+    /// witness payloads.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -1403,6 +1417,8 @@ mod model {
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
         /// Role-threshold signatures over the finalized release subject.
         pub release_attestation: KagemushaRecursiveSpendReleaseAttestationV4,
+        /// Exact canonical runner-signed internal-validation receipt bytes.
+        pub internal_validation_receipt: Vec<u8>,
         /// Canonical signed physical-device benchmark summary bytes.
         pub physical_device_benchmark_summary: Vec<u8>,
         /// Canonical signed independent cryptographic-review summary bytes.

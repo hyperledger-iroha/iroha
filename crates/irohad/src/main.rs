@@ -3,12 +3,12 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-/// Fail-closed local seam for one Kagemusha validator qualification seal.
-#[path = "main/kagemusha_validator_qualification.rs"]
-mod kagemusha_validator_qualification;
 /// Secret-free protocol-effective configuration capture for validator seals.
 #[path = "main/kagemusha_runtime_effective_config_projection.rs"]
 mod kagemusha_runtime_effective_config_projection;
+/// Fail-closed local seam for one Kagemusha validator qualification seal.
+#[path = "main/kagemusha_validator_qualification.rs"]
+mod kagemusha_validator_qualification;
 /// Root-custodied inputs and no-replace output for validator qualification.
 #[path = "main/kagemusha_validator_qualification_command.rs"]
 mod kagemusha_validator_qualification_command;
@@ -26,12 +26,7 @@ pub mod runtime_provider_registry;
 /// Exact external credential boundary for authenticated Hugging Face inference.
 pub mod soracloud_hf_credential;
 /// Embedded Soracloud runtime-manager reconciliation.
-#[cfg(feature = "embedded-soracloud-runtime")]
 #[path = "soracloud_runtime.rs"]
-mod soracloud_runtime;
-/// No-op Soracloud runtime used when the full embedded runtime is disabled.
-#[cfg(not(feature = "embedded-soracloud-runtime"))]
-#[path = "soracloud_runtime_stub.rs"]
 mod soracloud_runtime;
 /// Exact external signer boundary for Soracloud runtime mutations.
 pub mod soracloud_runtime_signer;
@@ -59,6 +54,9 @@ mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
+/// Fixed-descriptor Taira runtime signer and deployment launcher.
+#[cfg(unix)]
+pub mod taira_runtime_signer;
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -8924,6 +8922,21 @@ impl Iroha {
         }
         let sorafs_storage_config =
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
+        let soracloud_operator_preseed_store = if config.soracloud_runtime.inrou.enabled
+            && !sorafs_storage_config.enabled()
+        {
+            Some(Arc::new(
+                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
+                    |error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
+                        ))
+                    },
+                )?,
+            ))
+        } else {
+            None
+        };
         let sorafs_repair_config =
             sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
@@ -9552,20 +9565,17 @@ impl Iroha {
         )
         .with_sorafs_node(sorafs_node.clone())
         .with_remote_stream_token_operator_from_config(&config);
+        let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
+            runtime_manager.with_operator_preseed_store(store)
+        } else {
+            runtime_manager
+        };
         let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
             runtime_manager.with_hf_inference_credential_provider(provider)
         } else {
             runtime_manager
         };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
-            #[cfg(feature = "embedded-soracloud-runtime")]
-            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
-                Arc::clone(&queue),
-                Arc::clone(&state),
-                signer,
-                config.soracloud_runtime.submission.clone(),
-            );
-            #[cfg(not(feature = "embedded-soracloud-runtime"))]
             let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
                 Arc::clone(&queue),
                 Arc::clone(&state),
@@ -10683,9 +10693,6 @@ pub enum ConfigError {
     },
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
-    #[cfg(not(feature = "embedded-soracloud-runtime"))]
-    /// Production Soracloud runtime was requested from a binary lacking support.
-    SoracloudRuntimeFeatureRequired,
     /// Embedded `SoraFS` storage was enabled without governed gateway compliance.
     SorafsStorageComplianceRequired,
     /// `SoraFS` gateway automation was enabled while embedded storage was disabled.
@@ -10746,11 +10753,6 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `iroha3d --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
-            #[cfg(not(feature = "embedded-soracloud-runtime"))]
-            Self::SoracloudRuntimeFeatureRequired => write!(
-                f,
-                "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
-            ),
             Self::SorafsStorageComplianceRequired => write!(
                 f,
                 "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
@@ -12545,10 +12547,6 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
     }
 }
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
-    #[cfg(not(feature = "embedded-soracloud-runtime"))]
-    if config.soracloud_runtime.production_mode {
-        emitter.emit(Report::new(ConfigError::SoracloudRuntimeFeatureRequired));
-    }
     let sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
     let sorafs_gateway_compliance_enabled = config.torii.sorafs_gateway.compliance.is_some();
     if sorafs_storage_enabled && !sorafs_gateway_compliance_enabled {
@@ -12678,6 +12676,31 @@ pub fn run_with_runtime_provider_registry(
     registry: &dyn IrohaRuntimeProviderRegistryV1,
 ) -> ReportResult<(), MainError> {
     run_main(Some(registry), None)
+}
+/// Deployment-launcher guard evaluated over the parsed daemon configuration.
+type IrohaLauncherConfigGuardV1 = fn(&Config) -> Result<(), String>;
+/// Run the standard CLI launcher with a deployment-owned configuration guard.
+///
+/// The guard runs after the complete configuration is parsed and before
+/// offline validation, runtime-provider resolution, Tokio construction, or
+/// node startup. This entrypoint is used by deployment launchers whose
+/// `--check-config` operation must enforce a pinned public network profile
+/// without opening runtime-only credentials.
+pub(crate) fn run_with_config_guard(
+    guard: IrohaLauncherConfigGuardV1,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(None, None, Some(guard))
+}
+/// Run the standard CLI launcher with a deployment-owned provider registry and
+/// configuration guard.
+///
+/// The guard remains authoritative over the parsed public network profile,
+/// while the registry remains authoritative over runtime-only providers.
+pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
+    registry: &dyn IrohaRuntimeProviderRegistryV1,
+    guard: IrohaLauncherConfigGuardV1,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(Some(registry), None, Some(guard))
 }
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
@@ -12940,12 +12963,21 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
-#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main(
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(runtime_provider_registry, musubi_publication_factory, None)
+}
+#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
+fn run_main_with_config_guard(
+    runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
+    musubi_publication_factory: Option<
+        Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
+    >,
+    launcher_config_guard: Option<IrohaLauncherConfigGuardV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
     let lang = i18n::detect_language(args.language.as_deref());
@@ -12970,6 +13002,13 @@ fn run_main(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    if let Some(guard) = launcher_config_guard {
+        guard(&config).map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "deployment launcher rejected parsed configuration: {error}"
+            ))
+        })?;
+    }
     if args
         .startup
         .write_kagemusha_validator_qualification_seal
