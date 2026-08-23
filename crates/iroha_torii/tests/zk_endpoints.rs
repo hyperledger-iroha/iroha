@@ -58,7 +58,8 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     }
     transaction.apply();
     block.transactions.insert_block(
-        HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(),
+        HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>>::new(
+        ),
         nonzero!(1_usize),
     );
     let _ = block.commit();

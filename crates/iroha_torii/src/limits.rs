@@ -490,8 +490,13 @@ pub fn key_from_headers(
     use_api_token: bool,
 ) -> String {
     if use_api_token {
-        if let Some(v) = headers.get("x-api-token").and_then(|v| v.to_str().ok()) {
-            return v.to_string();
+        let mut values = headers.get_all("x-api-token").iter();
+        if let Some(value) = values.next()
+            && values.next().is_none()
+            && let Ok(value) = value.to_str()
+            && !value.is_empty()
+        {
+            return value.to_owned();
         }
     }
     if let Some(ip) = effective_remote_ip(headers, remote) {
@@ -1257,6 +1262,22 @@ mod tests {
         assert_eq!(
             key_from_headers(&headers2, None, Some("hint"), false),
             "hint"
+        );
+    }
+    #[test]
+    fn key_from_headers_rejects_ambiguous_token_identity() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-api-token", "first".parse().unwrap());
+        headers.append("x-api-token", "second".parse().unwrap());
+        assert_eq!(
+            key_from_headers(
+                &headers,
+                Some("203.0.113.88".parse().unwrap()),
+                Some("hint"),
+                true,
+            ),
+            "203.0.113.88",
+            "duplicate API-token fields must not choose an attacker-controlled bucket",
         );
     }
     #[test]

@@ -24,6 +24,25 @@ fn soracloud_runtime_json_deserialize_applies_inrou_archive_defaults() {
     );
 }
 #[test]
+fn soracloud_runtime_json_rejects_removed_proxy_only_field() {
+    norito::json::from_json::<SoracloudRuntime>(r#"{"inrou":{"proxy_only":true}}"#)
+        .expect_err("the removed proxy_only field must not be accepted as a compatibility alias");
+}
+#[test]
+fn soracloud_runtime_json_rejects_retired_portable_vm_selectors() {
+    for field in [
+        r#""max_concurrent_vms":1"#,
+        r#""backends":["portable_vm"]"#,
+        r#""portable_vm_acceleration":"kvm""#,
+        r#""portable_vm_supplementary_gids":[108]"#,
+    ] {
+        norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(&format!(
+            "{{{field}}}"
+        ))
+        .expect_err("retired one-value PortableVM selectors must fail closed");
+    }
+}
+#[test]
 fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
     let json = r#"{
             "state_dir":"./runtime/json",
@@ -38,8 +57,9 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
                 "model_weight_bytes":6144
             },
             "inrou":{
-                "max_concurrent_vms":5,
-                "proxy_only":true,
+                "max_cpu_millis":5000,
+                "max_memory_bytes":5368709120,
+                "max_storage_bytes":10737418240,
                 "bundle_archive_max_compressed_bytes":10000,
                 "bundle_archive_max_decoded_bytes":40000,
                 "bundle_archive_max_entries":123,
@@ -84,8 +104,10 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
             .to_string_lossy()
             .ends_with("runtime/json")
     );
-    assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
-    assert!(parsed.inrou.proxy_only);
+    assert_eq!(
+        parsed.inrou.max_cpu_millis.expect("CPU budget").get(),
+        5_000
+    );
     assert_eq!(
         parsed.inrou.bundle_archive_max_compressed_bytes.get(),
         10_000
@@ -193,7 +215,6 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
             },
             "__REMOVED_FIELD__":{},
             "inrou":{
-                "max_concurrent_vms":5,
                 "start_grace_ms":7500,
                 "stop_grace_ms":9500
             },

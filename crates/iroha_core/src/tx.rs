@@ -9,6 +9,7 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
+mod authority_admission;
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
@@ -21,6 +22,11 @@ use crate::{
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
+};
+pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
+pub(crate) use authority_admission::{
+    instructions_allow_direct_kagemusha_lifecycle_authority,
+    instructions_allow_multisig_envelope_authority,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use core::{fmt, str::FromStr as _};
@@ -48,7 +54,6 @@ use iroha_data_model::{
     },
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
 };
-use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
@@ -748,76 +753,6 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
-}
-fn instruction_self_registers_authority(
-    instruction: &InstructionBox,
-    authority: &AccountId,
-) -> bool {
-    let maybe_registration = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::Register<Account>>()
-        .map(|register| register.object())
-        .or_else(|| {
-            instruction
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
-                .and_then(|register| match register {
-                    iroha_data_model::isi::RegisterBox::Account(register) => {
-                        Some(register.object())
-                    }
-                    _ => None,
-                })
-        });
-    let Some(registration) = maybe_registration else {
-        return false;
-    };
-    registration.clone().build(authority).id == *authority
-}
-/// Return whether the executable's first instruction registers its exact authority.
-///
-/// Self-registering transactions are the only single-signature transactions that may enter
-/// admission before their authority exists in world state. Keeping this recognition in Core lets
-/// pre-admission services, such as fee quoting, apply the same instruction-shape rule.
-#[must_use]
-pub fn executable_self_registers_authority(executable: &Executable, authority: &AccountId) -> bool {
-    match executable {
-        Executable::Instructions(instructions) => {
-            let Some((first, _rest)) = instructions.split_first() else {
-                return false;
-            };
-            instruction_self_registers_authority(first, authority)
-        }
-        Executable::ContractCall(_)
-        | Executable::Batch(_)
-        | Executable::IvmProved(_)
-        | Executable::Ivm(_) => false,
-    }
-}
-/// Return whether admission may accept an authority that is absent from world state.
-///
-/// This includes exact first-instruction account self-registration and the existing multisig
-/// proposal envelope path, whose authorisation is established from multisig membership rather
-/// than a materialised authority account.
-#[must_use]
-pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
-    executable_self_registers_authority(executable, authority)
-        || matches!(
-            executable,
-            Executable::Instructions(instructions)
-                if instructions_allow_multisig_envelope_authority(instructions)
-        )
-}
-pub(crate) fn instructions_allow_multisig_envelope_authority(
-    instructions: &[InstructionBox],
-) -> bool {
-    instructions.iter().all(|instruction| {
-        matches!(
-            MultisigInstructionBox::try_from(instruction),
-            Ok(MultisigInstructionBox::Propose(_))
-                | Ok(MultisigInstructionBox::Approve(_))
-                | Ok(MultisigInstructionBox::Cancel(_))
-        )
-    })
 }
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
@@ -2585,6 +2520,8 @@ impl StateBlock<'_> {
                 ),
             ));
         }
+        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -2672,8 +2609,15 @@ impl StateBlock<'_> {
                 | Executable::IvmProved(_)
                 | Executable::Ivm(_) => false,
             };
+            let allows_direct_kagemusha_lifecycle_authority = tx.multisig_signatures().is_some()
+                && matches!(
+                    tx.instructions(),
+                    Executable::Instructions(instructions)
+                        if instructions_allow_direct_kagemusha_lifecycle_authority(instructions)
+                );
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
+                && !allows_direct_kagemusha_lifecycle_authority
             {
                 warn!(
                     authority = %authority,
@@ -5127,6 +5071,7 @@ pub mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
+    include!("tx/kagemusha_lifecycle_admission_tests.rs");
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
@@ -6628,6 +6573,10 @@ pub mod tests {
         assert!(!allows_unregistered_authority(
             &registration_is_not_first,
             &authority
+        ));
+        assert!(!allows_unregistered_authority(
+            &Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            &authority,
         ));
     }
     #[test]

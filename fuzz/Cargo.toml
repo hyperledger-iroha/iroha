@@ -70,5 +70,19 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "kagemusha_v4_release_bundle_parser"
+path = "kagemusha_v4_release_bundle_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kagemusha_v4_recursive_topology"
+path = "kagemusha_v4_recursive_topology.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

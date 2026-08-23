@@ -245,7 +245,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
     assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES
         == KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4;
-    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 24_576;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES == 12 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 9_211;
     assert KagemushaRecursiveSpendProver.MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2 == 24_576;
     assert KagemushaRecursiveSpendProver.MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1 == 2_048;
     assert KagemushaRecursiveSpendProver.PROMOTED_FINALITY_CHECKPOINT_BYTES_V2 == 40;
@@ -1376,14 +1377,48 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaPeerTransport.Payload.decode(
             offerArchive,
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
-    final String text = KagemushaPeerTransport.encode(request);
-    assert text.startsWith("PKK2R.");
-    assert Arrays.equals(offerArchive, KagemushaPeerTransport.decode(text).archive());
+    boolean oversizedTextRejected = false;
+    try {
+      KagemushaPeerTransport.encode(request);
+    } catch (final IllegalArgumentException expected) {
+      oversizedTextRejected = true;
+    }
+    assert oversizedTextRejected;
+    final String oversizedText = KagemushaPeerTransport.RECEIVE_REQUEST_TEXT_PREFIX
+        + KagemushaPeerTransport.base64UrlEncode(offerArchive);
+    assert oversizedText.getBytes(StandardCharsets.UTF_8).length
+        > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES;
+    boolean oversizedTextDecodeRejected = false;
+    try {
+      KagemushaPeerTransport.decode(oversizedText);
+    } catch (final IllegalArgumentException expected) {
+      oversizedTextDecodeRejected = true;
+    }
+    assert oversizedTextDecodeRejected;
+    final byte[] acknowledgementArchive = archive(
+        "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2");
+    final KagemushaPeerTransport.Payload acknowledgement =
+        KagemushaPeerTransport.Payload.decode(
+            acknowledgementArchive,
+            KagemushaPeerTransport.Kind.ACKNOWLEDGEMENT);
+    final String text = KagemushaPeerTransport.encode(acknowledgement);
+    assert text.startsWith("PKK2A.");
+    assert Arrays.equals(
+        acknowledgementArchive,
+        KagemushaPeerTransport.decode(text).archive());
     assert KagemushaPeerTransport.decode(text).kind()
-        == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
+        == KagemushaPeerTransport.Kind.ACKNOWLEDGEMENT;
     assert KagemushaPeerTransport.decodeUserPresented(" \n" + text + "\t",
-        KagemushaPeerTransport.Kind.RECEIVE_REQUEST).kind()
-        == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
+        KagemushaPeerTransport.Kind.ACKNOWLEDGEMENT).kind()
+        == KagemushaPeerTransport.Kind.ACKNOWLEDGEMENT;
+    assert KagemushaPeerTransport.ACKNOWLEDGEMENT_TEXT_PREFIX.length()
+            + KagemushaPeerTransport.base64UrlEncode(
+                new byte[KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES]).length()
+        == KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES;
+    assert KagemushaPeerTransport.ACKNOWLEDGEMENT_TEXT_PREFIX.length()
+            + KagemushaPeerTransport.base64UrlEncode(
+                new byte[KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES + 1]).length()
+        > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES;
     assert KagemushaPeerTransport.RECEIVE_REQUEST_TEXT_PREFIX.equals("PKK2R.");
     assert KagemushaPeerTransport.PAYMENT_TEXT_PREFIX.equals("PKK2P.");
     assert KagemushaPeerTransport.ACKNOWLEDGEMENT_TEXT_PREFIX.equals("PKK2A.");

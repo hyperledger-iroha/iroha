@@ -1,4 +1,5 @@
-
-                seiyaku Greeter {
-                    view fn status(int value) -> int { return value; }
-                }
+seiyaku Greeter {
+    view fn status(int value) -> int {
+        return value;
+    }
+}

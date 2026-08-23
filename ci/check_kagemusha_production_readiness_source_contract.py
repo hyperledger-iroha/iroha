@@ -1,25 +1,29 @@
-"""Always-enforced static source contract for Kagemusha production readiness."""
-
 if globals().get("_KAGEMUSHA_READINESS_SOURCE_CONTRACT_CONTEXT_V1") is not True:
-    raise RuntimeError("readiness source-contract provider must run inside the authenticated gate")
+    raise RuntimeError("detached readiness source contract")
 _source_contract_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_CONTRACT_SOURCE_V1")
 if not isinstance(_source_contract_source, str) or not _source_contract_source:
-    raise RuntimeError("readiness source-contract provider requires its exact loaded source bytes")
+    raise RuntimeError("missing readiness source bytes")
 _source_support_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1")
 if not isinstance(_source_support_source, str) or not _source_support_source:
-    raise RuntimeError("readiness source-contract provider requires its source-support bytes")
+    raise RuntimeError("missing support bytes")
 _source_support_pipeline_errors = globals().get("source_provider_pipeline_errors")
 if not callable(_source_support_pipeline_errors):
-    raise RuntimeError("readiness source-contract provider requires source-support checks")
+    raise RuntimeError("missing support checks")
 _runtime_projection_source_errors = globals().get("runtime_projection_source_errors")
 if not callable(_runtime_projection_source_errors):
-    raise RuntimeError("readiness source-contract provider requires runtime-projection checks")
+    raise RuntimeError("missing runtime checks")
 _canary_source_errors = globals().get("canary_source_errors")
 if not callable(_canary_source_errors):
-    raise RuntimeError("readiness source-contract provider requires canary checks")
+    raise RuntimeError("missing canary checks")
 _recursion_source_contract_evaluator = globals().get("_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1")
 if not callable(_recursion_source_contract_evaluator):
-    raise RuntimeError("readiness source-contract provider requires its recursion evaluator")
+    raise RuntimeError("missing recursion checks")
+_lifecycle_source_contract_source = globals().get("_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1")
+if not isinstance(_lifecycle_source_contract_source, str) or not _lifecycle_source_contract_source:
+    raise RuntimeError("missing lifecycle bytes")
+_lifecycle_source_contract_evaluator = globals().get("_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1")
+if not callable(_lifecycle_source_contract_evaluator):
+    raise RuntimeError("missing lifecycle checks")
 
 def read_override(path: str, errors: list[str], overrides: dict[str, str]) -> str:
     return overrides[path] if path in overrides else read(path, errors)
@@ -30,47 +34,43 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     parent = read(MODEL, errors)
     component = read_override(MODEL_COMPONENT, errors, overrides)
     verifier = read_override(MODEL_VERIFIER_COMPONENT, errors, overrides)
-    promotion_receipt = read_override(MODEL_PROMOTION_RECEIPT_COMPONENT, errors, overrides)
-    canary_evidence = read_override(MODEL_CANARY_EVIDENCE_COMPONENT, errors, overrides)
-    canary_liveness = read_override(MODEL_CANARY_LIVENESS_COMPONENT, errors, overrides)
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
         return parent
     parent = parent.replace(MODEL_INCLUDE, component, 1)
-    if parent.count(MODEL_VERIFIER_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module")
-        return parent
     for marker in ("const VERIFIER_IDENTITY_SCHEMA_V4", "pub fn kagemusha_recursive_spend_verifier_key_id_v4"):
         if verifier.count(marker) != 1:
             errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
-    parent = parent.replace(MODEL_VERIFIER_MODULE, "mod kagemusha_release_verifier {\n" + verifier + "\n}", 1)
-    if parent.count(MODEL_PROMOTION_RECEIPT_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_PROMOTION_RECEIPT_COMPONENT).name} module")
-        return parent
-    parent = parent.replace(MODEL_PROMOTION_RECEIPT_MODULE, "mod kagemusha_promotion_receipt {\n" + promotion_receipt + "\n}", 1)
-    if parent.count(MODEL_CANARY_EVIDENCE_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_EVIDENCE_COMPONENT).name} module")
-        return parent
-    parent = parent.replace(MODEL_CANARY_EVIDENCE_MODULE, "mod kagemusha_canary_evidence {\n" + canary_evidence + "\n}", 1)
-    if parent.count(MODEL_CANARY_LIVENESS_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_LIVENESS_COMPONENT).name} module")
-        return parent
-    return parent.replace(MODEL_CANARY_LIVENESS_MODULE, "mod kagemusha_post_canary_validator_liveness {\n" + canary_liveness + "\n}", 1)
+    for module, relative in (
+        (MODEL_VERIFIER_MODULE, MODEL_VERIFIER_COMPONENT),
+        (MODEL_PROMOTION_RECEIPT_MODULE, MODEL_PROMOTION_RECEIPT_COMPONENT),
+        (
+            MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        ),
+        (MODEL_CANARY_EVIDENCE_MODULE, MODEL_CANARY_EVIDENCE_COMPONENT),
+        (MODEL_CANARY_LIVENESS_MODULE, MODEL_CANARY_LIVENESS_COMPONENT),
+    ):
+        if parent.count(module) != 1:
+            errors.append(f"{MODEL}: expected exactly one reviewed {Path(relative).name} module")
+            continue
+        name = module.removeprefix("mod ").removesuffix(";")
+        source = verifier if relative == MODEL_VERIFIER_COMPONENT else read_override(relative, errors, overrides)
+        parent = parent.replace(module, f"mod {name} {{\n{source}\n}}", 1)
+    return parent
 
 def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
     if CATALOG in overrides:
         return overrides[CATALOG]
     parent = read(CATALOG, errors)
-    component = read_override(CATALOG_COMPONENT, errors, overrides)
-    qualification = read_override(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT, errors, overrides)
     if parent.count(CATALOG_INCLUDE) != 1:
         errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include")
         return parent
-    parent = parent.replace(CATALOG_INCLUDE, component, 1)
+    parent = parent.replace(CATALOG_INCLUDE, read_override(CATALOG_COMPONENT, errors, overrides), 1)
     if parent.count(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE) != 1:
         errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT).name} include")
         return parent
-    return parent.replace(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE, qualification, 1)
+    return parent.replace(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE, read_override(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT, errors, overrides), 1)
 
 def read_reviewed_core(errors: list[str], overrides: dict[str, str]) -> str:
     if CORE in overrides:
@@ -99,12 +99,11 @@ def read_reviewed_node(errors: list[str], overrides: dict[str, str]) -> str:
         (NODE_ROOT_OWNED_PUBLICATION_MODULE, NODE_ROOT_OWNED_PUBLICATION_COMPONENT),
     )
     for module, relative in components:
-        component = read_override(relative, errors, overrides)
         if parent.count(module) != 1:
             errors.append(f"{NODE}: expected exactly one reviewed {Path(relative).name} module")
             continue
         module_name = module.rsplit("mod ", 1)[-1].split(maxsplit=1)[0].rstrip(";{")
-        parent = parent.replace(module, f"mod {module_name} {{\n{component}\n}}", 1)
+        parent = parent.replace(module, f"mod {module_name} {{\n{read_override(relative, errors, overrides)}\n}}", 1)
     return parent
 
 def read_reviewed_authenticated_tool_controller(errors: list[str], overrides: dict[str, str]) -> str:
@@ -114,31 +113,35 @@ def read_reviewed_authenticated_tool_controller(errors: list[str], overrides: di
         (KAGEMUSHA_PYTHON_LAUNCHER_MODULE, KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT),
     )
     for module, relative in components:
-        component = read_override(relative, errors, overrides)
         if parent.count(module) != 1:
             errors.append(f"{AUTHENTICATED_TOOL_CONTROLLER}: expected exactly one reviewed {Path(relative).name} module")
             continue
         module_name = module.rsplit("mod ", 1)[-1].rstrip(";")
-        parent = parent.replace(module, f"mod {module_name} {{\n{component}\n}}", 1)
+        parent = parent.replace(module, f"mod {module_name} {{\n{read_override(relative, errors, overrides)}\n}}", 1)
     return parent
 
 def read_reviewed_offline_cli(errors: list[str], overrides: dict[str, str]) -> str:
     if OFFLINE_CLI in overrides:
         return overrides[OFFLINE_CLI]
     parent = read(OFFLINE_CLI, errors)
-    component = read_override(KAGEMUSHA_ROLLOUT_COMPONENT, errors, overrides)
     if parent.count(KAGEMUSHA_ROLLOUT_MODULE) != 1:
         errors.append(f"{OFFLINE_CLI}: expected exactly one reviewed {Path(KAGEMUSHA_ROLLOUT_COMPONENT).name} module")
         return parent
-    return parent.replace(KAGEMUSHA_ROLLOUT_MODULE, "mod kagemusha_rollout {\n" + component + "\n}", 1)
+    return parent.replace(KAGEMUSHA_ROLLOUT_MODULE, "mod kagemusha_rollout {\n" + read_override(KAGEMUSHA_ROLLOUT_COMPONENT, errors, overrides) + "\n}", 1)
 
 def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     errors: list[str] = []
     overrides = overrides or {}
     try:
-        errors += _recursion_source_contract_evaluator(root, overrides)
+        errors += _recursion_source_contract_evaluator(
+            root, overrides, require_shipping_backend=mode == "promotion"
+        )
     except Exception as error:
         errors.append(f"recursion source contract failed: {error}")
+    try:
+        errors += _lifecycle_source_contract_evaluator(root, overrides)
+    except Exception as error:
+        errors.append(f"lifecycle source contract failed: {error}")
     texts = {
         path: overrides.get(path, read(path, errors))
         for path in (
@@ -152,7 +155,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT,
             CORE_KAGEMUSHA_ACTIVATION_COMPONENT,
             CORE_KAGEMUSHA_CANARY_COMPONENT,
-            CORE_STATE, CORE_COMMITTED_TX_CONTEXT,
+            CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT,
+            *DEVICE_ATTESTATION_SOURCE_PATHS,
+            CORE_TX, CORE_STATE, CORE_COMMITTED_TX_CONTEXT,
             CORE_BLOCK, CORE_EXECUTOR,
             CORE_ISI_MOD,
             STEP_TRANSITION,
@@ -171,6 +176,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             KAGEMUSHA_ROLLOUT_COMPONENT,
             KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT,
             MODEL_PROMOTION_RECEIPT_COMPONENT,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
             MODEL_CANARY_EVIDENCE_COMPONENT,
             MODEL_CANARY_LIVENESS_COMPONENT,
             MODEL_ISI_OFFLINE,
@@ -189,6 +195,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     )
     texts[READINESS_SOURCE_SUPPORT] = overrides.get(
         READINESS_SOURCE_SUPPORT, _source_support_source
+    )
+    texts[READINESS_LIFECYCLE_SOURCE_CONTRACT] = overrides.get(
+        READINESS_LIFECYCLE_SOURCE_CONTRACT, _lifecycle_source_contract_source
     )
     errors += _source_support_pipeline_errors(texts[READINESS])
     texts[MODEL] = read_reviewed_model(errors, overrides)
@@ -221,6 +230,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def read_reviewed_authenticated_tool_controller(",
         "def read_reviewed_offline_cli(",
         "def static_errors(",
+        'require_shipping_backend=mode == "promotion"',
+        "_lifecycle_source_contract_evaluator(root, overrides)",
     )
     require(
         texts[READINESS_SOURCE_SUPPORT],
@@ -231,6 +242,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def source_provider_pipeline_errors(",
         'MODEL = "crates/iroha_data_model/src/offline/mod.rs"',
         "MODEL_PROMOTION_RECEIPT_COMPONENT",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT",
         "MODEL_CANARY_EVIDENCE_COMPONENT",
         "MODEL_CANARY_LIVENESS_COMPONENT",
         "MODEL_ISI_OFFLINE",
@@ -239,7 +251,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT",
         "CORE_KAGEMUSHA_ACTIVATION_COMPONENT",
         "CORE_KAGEMUSHA_CANARY_COMPONENT",
-        "CORE_STATE", "CORE_COMMITTED_TX_CONTEXT",
+        "CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT",
+        "POLICY_TESTS", "POLICY_TESTS_INCLUDE", "QUAL_TESTS",
+        "ANDROID_AUTH", "ANDROID_AUTH_INCLUDE",
+        "ANDROID_CERT", "ANDROID_CERT_FIX", "ANDROID_CERT_TEST",
+        "DEVICE_ATTESTATION_SOURCE_PATHS",
+        "device_attestation_governance_source_errors",
+        "CORE_TX", "CORE_STATE", "CORE_STATE_TESTS", "CORE_COMMITTED_TX_CONTEXT",
         "CORE_BLOCK", "CORE_EXECUTOR",
         "CORE_ISI_MOD",
         "NODE_VALIDATOR_QUALIFICATION_COMPONENT",
@@ -252,6 +270,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT",
         "KAGEMUSHA_ROLLOUT_COMPONENT",
         "KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT",
+        "KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS",
     )
     recursion_bootstrap = texts[READINESS_SOURCE_CONTRACT].split(
         "def static_errors(", 1
@@ -274,20 +293,28 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def expect_static_mutation(",
         "run_bounded_authenticated_process(",
         "expect_static_mutation(READINESS, *mutation)",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT: read(",
         "MODEL_CANARY_EVIDENCE_COMPONENT: read(",
         "MODEL_CANARY_LIVENESS_COMPONENT: read(",
         "MODEL_ISI_OFFLINE: read(",
+        "READINESS_LIFECYCLE_SOURCE_CONTRACT: read(",
+        "LIFECYCLE_SOURCE_PATHS",
+        "CORE_REDEMPTION_POLICY_TESTS",
+        "authenticated lifecycle source-provider boundary",
         "CORE_KAGEMUSHA_CANARY_COMPONENT: read(",
-        "CORE_STATE: read(", "CORE_COMMITTED_TX_CONTEXT: read(",
+        "CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT: read(",
+        "*ATTESTATION_STATIC_MUTATIONS",
+        "CORE_TX: read(", "CORE_STATE: read(", "CORE_STATE_TESTS: read(",
+        "CORE_COMMITTED_TX_CONTEXT: read(",
         "CORE_BLOCK: read(", "CORE_EXECUTOR: read(",
         "CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT: read(",
         "NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT: read(",
         "KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT: read(",
         "KAGEMUSHA_ROLLOUT_COMPONENT: read(",
         "KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT: read(",
-        "activation-bound exact reservation and signed-wire marker",
-        "exact expectations provenance and canary anchor binding",
-        "complete signed canary wire bound at all transaction boundaries",
+        "D_CANARY_MARKER",
+        "D_EXPECTATIONS",
+        "D_WIRE_BOUNDARY",
         "ambient Client enters direct validator collection",
         "direct validator collection transport isolation",
         "configured-or-60s direct client with non-expanding status timeout",
@@ -332,6 +359,50 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         *RETIRED_RECURSIVE_LIFECYCLE_TYPES,
         *RETIRED_RECURSIVE_V3_MARKERS,
+    )
+    internal_validation = texts[MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT]
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r"pub fn decode_canonical\(.*?decode_canonical_with_limits\(bytes, limits\).*?"
+            r"receipt\.validate\(\)\?;.*?if canonical != bytes.*?Ok\(receipt\).*?"
+            r"pub fn validate\(&self\).*?self\.body\.validate\(\)\?;.*?"
+            r"self\.signature\s*\.verify\(&self\.body\.validation_runner_public_key, "
+            r"&self\.body\).*?InvalidSignature"
+        ),
+        "internal-validation receipt canonical signature/body validation",
+    )
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r"impl KagemushaRecursiveSpendInternalValidationReceiptBodyV1.*?"
+            r"pub fn validate\(&self\).*?self\.validate_identity\(\)\?;.*?"
+            r"self\.validate_tools\(\)\?;.*?self\.validate_commands\(\).*?"
+            r"fn validate_commands\(&self\).*?self\.commands\.len\(\).*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1\.len\(\).*?"
+            r"command\.command_id != spec\.command_id.*?!argv_matches.*?"
+            r"command\.exit_code != 0.*?command\.termination_signal\.is_some\(\).*?"
+            r"command\.timed_out.*?fuzz_targets != \[true, true\]"
+        ),
+        "internal-validation exact command outcomes",
+    )
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r'command_id: "core-final-release-inventory".*?program: CARGO,.*?'
+            r'argv: &\[\s*"test",\s*"--locked",\s*"-p",\s*"iroha_core",\s*'
+            r'"--features",\s*"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",\s*'
+            r'"--bin",\s*"kagemusha_recursive_spend_v4_bundle",\s*'
+            r'"final_release_inventory_is_exact_and_includes_both_receipts",\s*\],\s*'
+            r"fuzz_target: None"
+        ),
+        "exact internal-validation final-inventory command",
     )
     forbid(
         "\n".join(
@@ -704,10 +775,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[MODEL_CANARY_EVIDENCE_COMPONENT], texts[MODEL_CANARY_LIVENESS_COMPONENT],
         texts[KAGEMUSHA_ROLLOUT_COMPONENT], texts[KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT],
         texts[MODEL_PROMOTION_RECEIPT_COMPONENT], texts[MODEL_ISI_OFFLINE],
-        texts[MODEL_ISI_MOD], texts[CORE_KAGEMUSHA_CANARY_COMPONENT], texts[CORE_ISI_MOD],
-        texts[CORE_STATE], texts[CORE_COMMITTED_TX_CONTEXT],
+        texts[MODEL_ISI_MOD], texts[CORE], texts[CORE_KAGEMUSHA_CANARY_COMPONENT],
+        texts[CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT], texts[CORE_ISI_MOD],
+        texts[CORE_TX], texts[CORE_STATE], texts[CORE_COMMITTED_TX_CONTEXT],
         texts[CORE_BLOCK], texts[CORE_EXECUTOR],
     )
+    errors += device_attestation_governance_source_errors(texts)
     errors += release_closure_source_errors(
         texts[CORE], texts[SCHEMA_GOLDEN], texts[WORKFLOW], overrides
     )
@@ -768,6 +841,31 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         ),
         "trusted promotion forwarding",
     )
+    require_pattern(
+        qualification_source,
+        qcomp,
+        errors,
+        (
+            r"fn evaluate_stock_launcher_unavailable_v1\(.*?"
+            r"try_build_kagemusha_validator_qualification_v1\(\s*"
+            r"sources,\s*None,\s*None,\s*genesis,\s*None,\s*validator_id,\s*"
+            r"Some\(validator_signer\),\s*\)\?.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Unavailable\(reason\)\s*=>\s*\{\s*"
+            r"require_expected_stock_launcher_unavailable_reason_v1\(reason\)\s*\}.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Signed\(_\)\s*=>\s*Err\(\s*"
+            r'"stock launcher unexpectedly signed a Kagemusha validator qualification '
+            r'without trusted promotion inputs"\s*\.to_owned\(\),\s*\),.*?'
+            r"fn require_expected_stock_launcher_unavailable_reason_v1\(.*?"
+            r"match reason\s*\{\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::SnapshotBootstrap\s*\|\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation\s*"
+            r"=>\s*\{\s*Ok\(\(\)\)\s*\}\s*"
+            r"reason\s*=>\s*Err\(format!\(\s*"
+            r'"stock launcher returned an unexpected Kagemusha qualification outcome: '
+            r'\{reason:\?\}"\s*\)\),'
+        ),
+        "stock-launcher fail-closed qualification outcome",
+    )
     check_config_branch = texts[NODE].split("if args.startup.check_config {", 1)[
         -1
     ].split("// Resolve deployment-owned executable providers", 1)[0]
@@ -825,9 +923,78 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")',
         "KagemushaAuthenticatedReleaseV4::verify",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
-        "if expected.len() != 17",
-        "ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy)",
+        "Self::Candidate => 17",
+        "Self::Promoted => 18",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
+        "if inventory_state.includes_promotion_record() && expected.len() != 18",
+        "ActivateKagemushaRecursiveReleaseV4::new(",
+        "args.runtime_effective_config_sha256",
         r'instruction_count\":1',
+    )
+    require(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        '#[command(name = "prepare-enable-issuance-v4")]',
+        '#[command(name = "prepare-cancel-release-v4")]',
+        '#[command(name = "prepare-deactivate-issuance-v4")]',
+        "fn lifecycle_terminal_commands_publish_exact_typed_instructions_and_reports()",
+        "fn lifecycle_commands_reject_tampered_noncanonical_oversized_and_malformed_inputs()",
+        "fn lifecycle_command_refuses_to_replace_existing_output()",
+        "assert_eq!(\n            report_lines.len(),",
+        '"durability record and preparation report"',
+        'let error = outcome.expect_err("existing lifecycle output must never be replaced");',
+        'b"operator-reviewed sentinel"',
+    )
+    for command, source, maximum, model, constructor in (
+        (
+            "PrepareEnableIssuanceV4",
+            "enable_witness",
+            "KAGEMUSHA_V4_ISSUANCE_ENABLE_WITNESS_MAX_BYTES_V1",
+            "KagemushaV4IssuanceEnableWitnessV1",
+            "EnableKagemushaRecursiveIssuanceV4",
+        ),
+        (
+            "PrepareCancelReleaseV4",
+            "cancellation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseCancellationV1",
+            "CancelKagemushaRecursiveReleaseV4",
+        ),
+        (
+            "PrepareDeactivateIssuanceV4",
+            "deactivation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseDeactivationV1",
+            "DeactivateKagemushaRecursiveIssuanceV4",
+        ),
+    ):
+        require_pattern(
+            texts[KAGAMI],
+            KAGAMI,
+            errors,
+            (
+                rf"Command::{command}\(args\)\s*=>\s*\{{.*?"
+                rf"read_external_bounded\(\s*&args\.{source},\s*{maximum},.*?"
+                rf"{model}::decode_canonical\(&bytes\).*?"
+                rf"prepare_lifecycle_instruction_v4\(.*?"
+                rf"InstructionBox::from\({constructor}::new\("
+            ),
+            f"bounded canonical {command} lifecycle preparation",
+        )
+    require_pattern(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        (
+            r"fn prepare_lifecycle_instruction_v4<.*?"
+            r"let instructions = vec!\[instruction\];.*?"
+            r"let instructions_hash = HashOf::new\(&instructions\);.*?"
+            r"norito::json::to_string\(&instructions\).*?"
+            r"publish_new_durable_file\(writer, output, instruction_json\.as_bytes\(\)\)\?;.*?"
+            r'instruction_count\\":1.*?input_sha256'
+        ),
+        "one-instruction no-replace lifecycle publication",
     )
     require_pattern(
         texts[KAGAMI],
@@ -836,10 +1003,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"fn verify_exact_inventory_v4\(.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
-            r"if expected\.len\(\) != 17.*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.*?"
+            r"if inventory_state\.includes_promotion_record\(\) && expected\.len\(\) != 18.*?"
             r"fn recursive_step_verifier_commitment_v4\("
         ),
-        "17-file verifier inventory",
+        "18-file verifier inventory with both validation receipts",
     )
     authenticated_controller = texts[AUTHENTICATED_TOOL_CONTROLLER]
     promotion_publisher = texts[KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT]
@@ -923,7 +1091,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'const FINAL_NAME: &str = "promotion-record-v4.norito";',
         'const TEMP_PREFIX: &str = ".promotion-record-v4.norito.tmp.";',
         "const COMMIT_UNCERTAIN_EXIT: u8 = 75;",
-        "const CANDIDATE_FILES: [CandidateFileSpec; 16] = [",
+        "const CANDIDATE_FILES: [CandidateFileSpec; 17] = [",
         "fn canonical_report(stdout: &[u8], expected: &CanonicalReportV4)",
         "fn identity_from_file_checked(",
         "fn open_member(",
@@ -1068,11 +1236,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "pinned policy pre/post metadata, digest, parent, and pathname validation",
     )
     candidate_declarations = promotion_publisher.split(
-        "const CANDIDATE_FILES: [CandidateFileSpec; 16] = [", 1
+        "const CANDIDATE_FILES: [CandidateFileSpec; 17] = [", 1
     )[-1].split("const REPORT_ARTIFACTS:", 1)[0]
-    if candidate_declarations.count("CandidateFileSpec {") != 16:
+    if candidate_declarations.count("CandidateFileSpec {") != 17:
         errors.append(
-            f"{KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT}: candidate inventory declaration is not exact sixteen"
+            f"{KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT}: candidate inventory declaration is not exact seventeen"
         )
     candidate_entries = (
         *(f'name: "{name}"' for name in ARTIFACTS),
@@ -1084,6 +1252,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "name: BENCHMARK_NAME",
         "name: REVIEW_NAME",
         'name: "recursive-step-two-qualification-v4.norito"',
+        "name: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
     )
     for entry in candidate_entries:
         if candidate_declarations.count(entry) != 1:
@@ -1100,7 +1269,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"if initial\.len\(\) != CANDIDATE_FILES\.len\(\).*?"
             r"for \(name, expected\) in initial.*?"
-            r"if !stable_identity\(expected, observed\).*?"
+            r"if !stable_candidate_identity\(name, expected, observed\).*?"
             r"let additions = current.*?"
             r"match additions\.as_slice\(\)\s*\{\s*"
             r"\[\] => Ok\(PublicationPhase::Candidate\),\s*"
@@ -1133,14 +1302,14 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"&self\.initial_identities\(\), &self\.current_identities\(\)\?\).*?"
             r"fn verify_committed\(&mut self\).*?"
             r"if self\.phase\(\)\? != PublicationPhase::Committed.*?"
-            r"exact seventeen-file post-state.*?"
+            r"exact eighteen-file post-state.*?"
             r"identity_from_file_checked\(held, true, Some\(\(name, bounds\)\)\)\?.*?"
             r"require_root_custody\(&self\.path\.join\(name\), false\)\?;.*?"
             r"open_member\(&self\.directory, name, bounds, true\)\?;.*?"
             r"require_root_custody\(&self\.path\.join\(FINAL_NAME\), false\)\?;.*?"
             r"open_member\(&self\.directory, FINAL_NAME, final_bounds, true\)\?"
         ),
-        "held and reopened exact sixteen-to-seventeen candidate validation",
+        "held and reopened exact seventeen-to-eighteen candidate validation",
     )
     require_pattern(
         candidate_snapshot,
@@ -1151,7 +1320,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"let names = inventory_names\(&self\.directory\)\?;.*?"
             r"for name in names\s*\{\s*"
             r"let bounds = inventoried_member_bounds\(&name\)\?;\s*"
-            r"let \(_, identity\) = open_member\(&self\.directory, &name, bounds, false\)\?;\s*"
+            r"let hash_contents\s*=\s*"
+            r"name == KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1;\s*"
+            r"let \(_, identity\) = open_member\(&self\.directory, &name, bounds, hash_contents\)\?;\s*"
             r"current\.insert\(name, identity\);"
         ),
         "regular-only bounded temporary and final inventory inspection",
@@ -1252,6 +1423,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"candidate_sha256: hex\(&candidate_sha256\),\s*"
             r"qualification_receipt_sha256: hex\(&qualification_sha256\),\s*"
             r"qualified_candidate_sha256: hex\(&qualified_candidate_sha256\),\s*"
+            r"internal_validation_receipt_sha256: hex\(&internal_validation_sha256\),\s*"
             r"promotion_record_sha256: hex\(&promotion_sha256\),\s*"
             r"release_policy_sha256: hex\(&policy_sha256\),\s*"
             r"authenticated_source_seal_projection_sha256: hex\(\s*"
@@ -1537,7 +1709,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"parent\.sync_all\(\).*?if readback != bytes.*?verify\(&readback\)\?;.*?"
             r"metadata_identity\(&opened\) != metadata_identity\(&path_metadata\).*?"
             r"opened\.mode\(\) & 0o7777 != 0o400.*?"
-            r"ancestry\s*!= validate_owned_ancestry\(parent_path, uid, \"published artifact\"\).*?"
+            r"ancestry\s*!= validate_owned_ancestry\(&parent_path, uid, \"published artifact\"\).*?"
             r"require_no_xattrs\(&staging.*?require_no_macos_acl\(&staging.*?"
             r"post\.map_err\(\|detail\| PublicationError::CommitUncertain"
         ),
@@ -1962,11 +2134,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[BUNDLE],
         BUNDLE,
         errors,
-        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;",
+        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 18;",
         "fn final_release_inventory_v4() -> BTreeSet<String>",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
         "if expected.len() != FINAL_RELEASE_INVENTORY_COUNT_V4",
-        "fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()",
+        "fn final_release_inventory_is_exact_and_includes_both_receipts()",
     )
     require_pattern(
         texts[BUNDLE],
@@ -1974,10 +2147,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         (
             r"fn final_release_inventory_v4\(\).*?\.chain\(\[.*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
             r"\]\).*?\.collect\(\).*?impl PublicationDirectory"
         ),
-        "function-scoped 17-file producer inventory including the qualification receipt",
+        "function-scoped 18-file producer inventory including both validation receipts",
     )
     require_pattern(
         texts[MODEL],
@@ -1999,6 +2173,59 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"384 \* 1024;"
         ),
         "384 KiB absolute V4 proof-pair bound",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"FINAL_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",.*?'
+            r'"recursive-step-two-qualification-v4\.norito",.*?'
+            r'"promotion-record-v4\.norito",.*?'
+            r"\).*?MAX_RELEASE_INVENTORY_ENTRIES = len\(ARTIFACTS \+ FINAL_METADATA\).*?"
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES = 1024 \* 1024"
+        ),
+        "18-file readiness inventory with bounded internal-validation receipt",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"BOUNDED_AUTHENTICATED_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",\s*'
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,.*?"
+            r'\("promotion-record-v4\.norito", MAX_PROMOTION_RECORD_BYTES\),'
+        ),
+        "bounded opaque internal-validation receipt staging",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"def validate_kagami_verification_report\(.*?"
+            r"internal_validation_receipt_sha256: str,.*?"
+            r'"internal_validation_receipt_sha256",.*?'
+            r"report\.get\(\"internal_validation_receipt_sha256\"\)\s*"
+            r"!= internal_validation_receipt_sha256.*?"
+            r'raise ValueError\(\"Kagami verified a different internal-validation receipt\"\)'
+        ),
+        "internal-validation report digest binding",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"internal_validation_receipt_sha256: str \| None = None.*?"
+            r'elif name == "internal-validation-receipt-v1\.norito":\s*'
+            r"internal_validation_receipt_sha256 = hashlib\.sha256\(payload\)\.hexdigest\(\).*?"
+            r"or internal_validation_receipt_sha256 is None.*?"
+            r"internal_validation_receipt_sha256=internal_validation_receipt_sha256,"
+        ),
+        "internal-validation staged-byte digest forwarding",
     )
     opaque_metadata_section = texts[READINESS].split(
         "BOUNDED_AUTHENTICATED_METADATA = (", 1
@@ -2043,7 +2270,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "inherited promotion gate differs from its reviewed SHA-256",
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
         'READINESS_SOURCE_CONTRACT = (',
-        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 128 * 1024",
+        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 140 * 1024",
         "authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}",
         "READINESS_SOURCE_PROVIDERS = (",
         "def pin_authenticated_reviewed_source_file(",
@@ -2076,6 +2303,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "promotion Python runtime closure changed during the production gate",
         "static candidate corridor passed;",
         "production promotion was not evaluated.",
+    )
+    require(
+        texts[IOS_EVIDENCE_MODULE],
+        IOS_EVIDENCE_MODULE,
+        errors,
+        'CANDIDATE_XCODE_VERSION = "Xcode 26.6"',
+        "xcode_version must be exact Xcode 26.6 with one canonical build-version line",
     )
     require(
         texts[PRODUCTION_IOS_EVIDENCE_MODULE],
@@ -2608,18 +2842,15 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "self.device_attestation_policy",
         "impl Execute for TopUpKagemushaRecursiveV4",
         "impl Execute for RedeemKagemushaRecursiveV4",
-        "issuance_active_at",
+        "release.issuance_active",
     )
     require_pattern(
         texts[CORE],
         CORE,
         errors,
         (
-            r"let\s+change_release\s*=\s*request\s*\.offline_change\s*\.as_ref\(\)"
-            r".*?\.transpose\(\)\?\s*;\s*"
-            r"if\s+change_release\.as_ref\(\)\.is_some_and\(\|release\|\s*\{\s*"
-            r"!\s*release\s*\.cached\s*"
-            r"\.issuance_active_at\(state_transaction\.block_height\(\)\)"
+            r"let\s+change_release\s*=.*?\.transpose\(\)\?;.*?"
+            r"is_some_and\(\|release\|\s*!release\.issuance_active\)"
         ),
         "offline-change issuance window",
     )
@@ -2635,33 +2866,20 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "ci/check_kagemusha_production_readiness_source_contract.py",
         "ci/check_kagemusha_production_readiness_source_support.py",
         "ci/check_kagemusha_recursion_source_contract.py",
+        "ci/check_kagemusha_lifecycle_source_contract.py",
         "ci/check_kagemusha_production_readiness_self_test.py",
         "ci/check_kagemusha_recursive_spend_python_sdk.sh --self-test",
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",
         '"crates/iroha_core/src/smartcontracts/isi/offline/**"',
         '"crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle/**"',
         '"specs/sdk/swift/readiness/*kagemusha*.md"',
-        "scripts/tests/build_kagemusha_v4_candidate_bundle_test.py",
-        "scripts/tests/build_kagemusha_production_ios_policy_test.py",
-        "scripts/tests/check_kagemusha_candidate_ios_evidence_test.py",
-        "scripts/tests/kagemusha_app_attest_freshness_authority_test.py",
-        "scripts/tests/kagemusha_production_app_attest_lab_source_test.py",
-        "scripts/tests/measure_kagemusha_production_app_attest_bundle_test.py",
-        "scripts/tests/sign_kagemusha_production_ios_evidence_test.py",
-        "scripts/tests/kagemusha_source_tree_seal_test.py",
-        "scripts/tests/produce_kagemusha_v4_source_seal_projection_test.py",
-        "scripts/tests/kagemusha_staged_resource_guard_test.py",
-        "scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py",
-        "scripts/tests/stage_kagemusha_candidate_android_lab_test.py",
-        "pytests/scripts/run_kagemusha_v4_generation_test.py",
-        "pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py",
         "cargo test -p iroha_data_model receiver_snapshot --lib",
         "cargo test -p iroha_core kagemusha_v4 --lib",
         "cargo test -p iroha_core offline_device_attestation_policy --lib",
         "cargo test -p iroha_core device_registration_ --lib",
         "cargo test -p iroha_core kagemusha_online_registration_ --lib",
         "cargo test -p iroha_core active_receiver_snapshot_ --lib",
-        "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
+        "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_both_receipts",
         "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
         "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
         "cargo test -p iroha_core sequential_append_paths --lib",

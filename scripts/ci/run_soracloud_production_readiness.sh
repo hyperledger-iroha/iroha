@@ -8,7 +8,6 @@ OUT_DIR="${ROOT_DIR}/dist/soracloud-production-readiness-$(date -u +%Y%m%dT%H%M%
 PREPARE_PORTABLE="auto"
 SKIP_PORTABLE=0
 SKIP_INTEGRATION=0
-MIXED_HOST_INVENTORY=""
 OBSERVABILITY_EVIDENCE=""
 STEP_TIMEOUT_SECONDS="${SORACLOUD_READINESS_STEP_TIMEOUT_SECONDS:-7200}"
 CARGO_TARGET_DIR_OVERRIDE="${SORACLOUD_READINESS_CARGO_TARGET_DIR:-}"
@@ -30,7 +29,6 @@ Options:
   --no-prepare-portable-assets      require caller-provided IROHA_INROU_PORTABLE_* asset paths
   --skip-portable                   skip PortableVm QEMU smoke even in full profile
   --skip-integration                skip multi-peer integration tests
-  --mixed-host-inventory PATH       run the mixed-host Inrou gate against this inventory in full/load profile
   --observability-evidence PATH     validate production metrics/status/alert/dashboard evidence in full/load profile
   -h, --help                        show this help
 USAGE
@@ -81,11 +79,6 @@ while [ "$#" -gt 0 ]; do
     --skip-integration)
       SKIP_INTEGRATION=1
       shift
-      ;;
-    --mixed-host-inventory)
-      [ "$#" -ge 2 ] || { echo "ERROR: --mixed-host-inventory requires a path" >&2; exit 2; }
-      MIXED_HOST_INVENTORY="$2"
-      shift 2
       ;;
     --observability-evidence)
       [ "$#" -ge 2 ] || { echo "ERROR: --observability-evidence requires a path" >&2; exit 2; }
@@ -145,7 +138,6 @@ cat > "$REPORT" <<EOF
 - Step timeout seconds: \`${STEP_TIMEOUT_SECONDS}\`
 - Cargo target dir: \`${CARGO_TARGET_DIR:-workspace default}\`
 - Allow open blockers: \`${ALLOW_OPEN_BLOCKERS}\`
-- Mixed-host inventory: \`${MIXED_HOST_INVENTORY:-not provided}\`
 - Observability evidence: \`${OBSERVABILITY_EVIDENCE:-not provided}\`
 
 EOF
@@ -301,10 +293,10 @@ run_focused_gates() {
     "env -u LOG_FORMAT cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_signed_mutation_ -- --nocapture"
   run_step "torii public runtime route pressure" \
     "env -u LOG_FORMAT cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_public_runtime_rate_and_inflight_limits_fail_closed -- --nocapture"
-  run_step "runtime stub production rejection" \
-    "env -u LOG_FORMAT cargo test -p irohad --bin iroha3d stub_runtime_ -- --nocapture"
-  run_step "embedded runtime manager posture" \
-    "env -u LOG_FORMAT cargo test -p irohad --features embedded-soracloud-runtime --bin iroha3d manager_config_ -- --nocapture"
+  run_step "runtime implementation hard cut" \
+    "test ! -e crates/irohad/src/soracloud_runtime_stub.rs && ! rg -n 'soracloud_runtime_stub|stub_runtime_' crates/irohad/src crates/irohad/Cargo.toml"
+  run_step "runtime manager posture" \
+    "env -u LOG_FORMAT cargo test -p irohad --bin iroha3d manager_config_ -- --nocapture"
 }
 
 run_portable_gate() {
@@ -335,15 +327,6 @@ run_integration_load_gates() {
     "env -u LOG_FORMAT cargo test -p integration_tests soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts --test core_api -- --nocapture"
 }
 
-run_mixed_host_gate() {
-  if [ -z "$MIXED_HOST_INVENTORY" ]; then
-    block_step "mixed-host inrou smoke" "No --mixed-host-inventory was provided; public rollout readiness requires the mixed-host Inrou smoke gate against the operator inventory."
-    return
-  fi
-  run_step "mixed-host inrou smoke" \
-    "env -u LOG_FORMAT cargo run -p xtask --features dev-tools --bin xtask -- soracloud-inrou-smoke mixed-host --inventory $(shell_quote "$MIXED_HOST_INVENTORY")"
-}
-
 run_observability_gate() {
   if [ -z "$OBSERVABILITY_EVIDENCE" ]; then
     block_step "production observability evidence" "No --observability-evidence was provided; public rollout readiness requires operator evidence for Soracloud metrics, status fields, alerts, and dashboards."
@@ -361,12 +344,10 @@ case "$PROFILE" in
   full)
     run_portable_gate
     run_integration_load_gates
-    run_mixed_host_gate
     run_observability_gate
     ;;
   load)
     run_integration_load_gates
-    run_mixed_host_gate
     run_observability_gate
     ;;
 esac

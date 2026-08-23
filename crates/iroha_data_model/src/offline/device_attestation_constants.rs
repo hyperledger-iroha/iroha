@@ -11,15 +11,26 @@ pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &s
     "ecdsa-p256-sha256";
 /// Canonical Apple App Attest platform label for Kagemusha.
 pub const OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM: &str = "ios-appattest";
+/// Fixed official Android Key Attestation status-list endpoint.
+pub const OFFLINE_ANDROID_ATTESTATION_STATUS_URL_V1: &str =
+    "https://android.googleapis.com/attestation/status";
+/// Current governed Android Key Attestation status snapshot layout.
+pub const OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1: u16 = 1;
+/// Maximum non-valid certificate serials retained by one governed snapshot.
+pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1: usize = 4_096;
+/// Maximum lowercase hexadecimal bytes accepted for one certificate serial.
+pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1: usize = 40;
+/// Maximum upstream cache lifetime accepted for one governed snapshot.
+pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1: u32 = 86_400;
 /// Maximum canonical Norito bytes for one governed device-attestation policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 /// Maximum trusted roots retained by one governed device-attestation policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1: usize = 8;
 /// Maximum trusted roots retained for either supported platform.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1: usize = 4;
 /// Maximum DER bytes accepted for one trusted attestation root.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1: usize = 16 * 1024;
-/// Maximum revoked-certificate SHA-256 digests retained by one policy.
+/// Maximum revoked `TBSCertificate` DER SHA-256 digests retained by one policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1: usize = 256;
 /// Maximum iOS application identities retained by one policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1: usize = 16;

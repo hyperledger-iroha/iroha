@@ -6750,7 +6750,8 @@ impl Client {
         body_separator: &str,
     ) -> Result<T> {
         Self::ensure_response_status(&response, expected_status, context, body_separator)?;
-        Ok(norito::json::from_slice(response.body())?)
+        let body = response.into_body();
+        Ok(norito::json::from_slice(&body)?)
     }
     fn decode_json_ok<T: norito::json::JsonDeserialize>(
         response: Response<Vec<u8>>,
@@ -10173,7 +10174,7 @@ mod evidence_http_tests {
             }
         })
     }
-    fn local_pipeline_response(status: Value, resolved_from: &str) -> HttpResponse<Vec<u8>> {
+    fn local_pipeline_response(status: &Value, resolved_from: &str) -> HttpResponse<Vec<u8>> {
         let payload = norito::json!({
             "hash": "deadbeef",
             "status": status,
@@ -10246,7 +10247,7 @@ mod evidence_http_tests {
     }
     #[test]
     fn pipeline_status_queued_stays_local_without_committed_query() {
-        let response = local_pipeline_response(norito::json!({ "kind": "Queued" }), "queue");
+        let response = local_pipeline_response(&norito::json!({ "kind": "Queued" }), "queue");
         let (result, snapshots) = captured_pipeline_status(0x23, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
@@ -10302,7 +10303,7 @@ mod evidence_http_tests {
     #[test]
     fn pipeline_status_approved_with_height_stays_local() {
         let response = local_pipeline_response(
-            norito::json!({ "kind": "Approved", "block_height": 9 }),
+            &norito::json!({ "kind": "Approved", "block_height": 9 }),
             "state",
         );
         let (result, snapshots) = captured_pipeline_status(0x24, response, true);
@@ -10317,7 +10318,7 @@ mod evidence_http_tests {
     }
     #[test]
     fn pipeline_status_approved_without_height_stays_local() {
-        let response = local_pipeline_response(norito::json!({ "kind": "Approved" }), "state");
+        let response = local_pipeline_response(&norito::json!({ "kind": "Approved" }), "state");
         let (result, snapshots) = captured_pipeline_status(0x24, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
@@ -10327,10 +10328,6 @@ mod evidence_http_tests {
         assert_status_scope(&snapshots[0], "local");
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test keeps the rejected-status fallback and committed-query binding in one fail-closed protocol flow"
-    )]
     fn pipeline_status_rejection_without_reason_uses_committed_query() {
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
@@ -10382,7 +10379,7 @@ mod evidence_http_tests {
     }
     fn wait_status_case(
         seed: u8,
-        status: Value,
+        status: &Value,
         resolved_from: &str,
         terminal_statuses: Vec<TransactionWaitTerminalStatus>,
         expectation: &str,
@@ -10415,7 +10412,7 @@ mod evidence_http_tests {
     fn wait_for_transaction_terminal_status_returns_configured_rejection() {
         let (outcome, expected_hash, snapshot) = wait_status_case(
             0x31,
-            norito::json!({ "kind": "Rejected" }),
+            &norito::json!({ "kind": "Rejected" }),
             "state",
             vec![TransactionWaitTerminalStatus::Rejected],
             "configured rejection should be returned",
@@ -10429,7 +10426,7 @@ mod evidence_http_tests {
     fn wait_for_transaction_terminal_status_returns_configured_expiry() {
         let (outcome, expected_hash, snapshot) = wait_status_case(
             0x32,
-            norito::json!({ "kind": "Expired" }),
+            &norito::json!({ "kind": "Expired" }),
             "state",
             vec![TransactionWaitTerminalStatus::Expired],
             "configured expiry should be returned",
@@ -10443,7 +10440,7 @@ mod evidence_http_tests {
     fn wait_for_transaction_terminal_status_uses_local_scope_for_non_terminal_target() {
         let (outcome, expected_hash, snapshot) = wait_status_case(
             0x33,
-            norito::json!({ "kind": "Queued" }),
+            &norito::json!({ "kind": "Queued" }),
             "queue",
             vec![TransactionWaitTerminalStatus::Queued],
             "configured queued status should be returned",
@@ -10457,7 +10454,7 @@ mod evidence_http_tests {
     fn wait_for_transaction_terminal_status_uses_local_scope_for_mixed_targets() {
         let (outcome, expected_hash, snapshot) = wait_status_case(
             0x34,
-            norito::json!({ "kind": "Approved", "block_height": 7 }),
+            &norito::json!({ "kind": "Approved", "block_height": 7 }),
             "cache",
             vec![
                 TransactionWaitTerminalStatus::Rejected,
@@ -10639,11 +10636,11 @@ mod evidence_http_tests {
             );
         }
         type JsonRequest = fn(&Client) -> Result<Value>;
-        for (path, expectation, request) in [
+        let requests: [(&str, &str, JsonRequest); 4] = [
             (
                 "/v1/runtime/abi/active",
                 "runtime ABI active JSON",
-                Client::get_runtime_abi_active_json as JsonRequest,
+                Client::get_runtime_abi_active_json,
             ),
             (
                 "/v1/runtime/abi/hash",
@@ -10660,7 +10657,8 @@ mod evidence_http_tests {
                 "Sumeragi evidence count JSON",
                 Client::get_sumeragi_evidence_count_json,
             ),
-        ] {
+        ];
+        for (path, expectation, request) in requests {
             let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
                 request(&client_with_base_url(base_url()))
             });
@@ -14293,6 +14291,108 @@ impl Client {
         norito::json::from_slice(response.body())
             .wrap_err("failed to decode typed fee quote response")
     }
+    /// Quote fees for an exact multisig-authority payload using its detached app-auth witness.
+    ///
+    /// The supplied signatures must be in canonical public-key order and include at least two
+    /// distinct members. This deliberately mirrors the stricter direct Kagemusha lifecycle
+    /// authorization floor instead of accepting a one-member weighted-threshold witness.
+    ///
+    /// # Errors
+    /// Returns an error if the payload, witness, multisig policy, request binding, signatures,
+    /// Torii response, or typed response decoding fails validation.
+    pub fn quote_fees_with_multisig_witness(
+        &self,
+        payload: &TransactionPayload,
+        witness: &CanonicalRequestWitnessV1,
+    ) -> Result<FeeQuoteResponse> {
+        if payload.network_id() != Some(&self.network_id) {
+            return Err(eyre!(
+                "fee-quote payload network differs from the client network"
+            ));
+        }
+        if witness.subject_account != payload.authority {
+            return Err(eyre!(
+                "fee-quote witness subject differs from the payload authority"
+            ));
+        }
+        let AccountController::Multisig(policy) = payload.authority.controller() else {
+            return Err(eyre!(
+                "multisig-witness fee quoting requires a multisig payload authority"
+            ));
+        };
+        if witness.signatures.len() < 2 || witness.signatures.len() > policy.members().len() {
+            return Err(eyre!(
+                "fee-quote witness must contain at least two and no more than the policy member count"
+            ));
+        }
+        if witness
+            .signatures
+            .windows(2)
+            .any(|pair| pair[0].signer >= pair[1].signer)
+        {
+            return Err(eyre!(
+                "fee-quote witness signers must be distinct and in canonical public-key order"
+            ));
+        }
+        let message = canonical_request_witness_message(witness)?;
+        let mut total_weight = 0_u32;
+        for entry in &witness.signatures {
+            let member = policy
+                .members()
+                .iter()
+                .find(|member| member.public_key() == &entry.signer)
+                .ok_or_else(|| eyre!("fee-quote witness includes a nonmember signer"))?;
+            iroha_crypto::verify_signature_for_admission(&entry.signature, &entry.signer, &message)
+                .wrap_err("fee-quote witness signature failed verification")?;
+            total_weight = total_weight
+                .checked_add(u32::from(member.weight()))
+                .ok_or_else(|| eyre!("fee-quote witness weight overflow"))?;
+        }
+        if total_weight < u32::from(policy.threshold()) {
+            return Err(eyre!(
+                "fee-quote witness signatures do not satisfy the multisig threshold"
+            ));
+        }
+
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+        );
+        let body = norito::json::to_vec(&FeeQuoteRequest {
+            payload: payload.clone(),
+        })?;
+        let expected_hash =
+            canonical_network_request_hash(&self.network_id, &HttpMethod::POST, &url, &body)?;
+        if witness.canonical_request_hash != expected_hash {
+            return Err(eyre!(
+                "fee-quote witness does not bind the exact canonical request"
+            ));
+        }
+        let witness_header = canonical_request_witness_header_value(witness)?;
+        let response = self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header(HEADER_WITNESS, &witness_header)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body)
+                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
+        )?;
+        if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "fee quote response exceeds the {} byte limit",
+                FEE_QUOTE_RESPONSE_MAX_BYTES
+            ));
+        }
+        if response.status() != StatusCode::OK {
+            return Err(
+                ResponseReport::with_msg("failed to quote transaction fees", &response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
+        }
+        norito::json::from_slice(response.body())
+            .wrap_err("failed to decode typed fee quote response")
+    }
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
     ///
     /// # Errors
@@ -14813,21 +14913,19 @@ impl Client {
     }
     fn send_da_json_get(&self, path: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, path);
-        Ok(self
-            .default_request(HttpMethod::GET, url)
+        self.default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
-            .send()?)
+            .send()
     }
     fn send_da_json_post(&self, path: &str, body: Vec<u8>) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, path);
-        Ok(self
-            .default_request(HttpMethod::POST, url)
+        self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
             .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
-            .send()?)
+            .send()
     }
     fn decode_da_json_response<T: norito::json::JsonDeserialize>(
         response: &Response<Vec<u8>>,
@@ -21536,6 +21634,10 @@ mod tests {
         Index,
         Account,
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the helper checks all alias read variants against the same signed and unsigned request contract"
+    )]
     fn assert_alias_read_request(fixture: AliasReadFixture, authenticated: bool) {
         let client = client_with_static_canonical_auth_headers();
         let alias = "bright-brook-5859@ubl.sbp"
@@ -21574,49 +21676,48 @@ mod tests {
             })
             .expect("encode aliases-by-account response"),
         };
-        let (_, snapshot) =
-            capture_request(json_response(StatusCode::OK, &response_body), || {
-                match (fixture, authenticated) {
-                    (AliasReadFixture::Alias, false) => {
-                        let resolved = client
-                            .resolve_account_alias_unsigned(&alias)
-                            .expect("unsigned alias resolve request")
-                            .expect("alias exists");
-                        assert_eq!(resolved.alias(), &alias);
-                        assert_eq!(resolved.index(), Some(AliasIndex(7)));
-                    }
-                    (AliasReadFixture::Alias, true) => {
-                        client
-                            .resolve_account_alias_authenticated(&alias)
-                            .expect("signed alias resolve request")
-                            .expect("alias exists");
-                    }
-                    (AliasReadFixture::Index, false) => {
-                        client
-                            .resolve_account_alias_index_unsigned(AliasIndex(42))
-                            .expect("unsigned alias-index resolve request")
-                            .expect("index exists");
-                    }
-                    (AliasReadFixture::Index, true) => {
-                        client
-                            .resolve_account_alias_index_authenticated(AliasIndex(42))
-                            .expect("signed alias-index resolve request")
-                            .expect("index exists");
-                    }
-                    (AliasReadFixture::Account, false) => {
-                        client
-                            .list_account_aliases_unsigned(&by_account)
-                            .expect("unsigned alias-by-account request")
-                            .expect("account aliases exist");
-                    }
-                    (AliasReadFixture::Account, true) => {
-                        client
-                            .list_account_aliases_authenticated(&by_account)
-                            .expect("signed alias-by-account request")
-                            .expect("account aliases exist");
-                    }
+        let ((), snapshot) = capture_request(json_response(StatusCode::OK, &response_body), || {
+            match (fixture, authenticated) {
+                (AliasReadFixture::Alias, false) => {
+                    let resolved = client
+                        .resolve_account_alias_unsigned(&alias)
+                        .expect("unsigned alias resolve request")
+                        .expect("alias exists");
+                    assert_eq!(resolved.alias(), &alias);
+                    assert_eq!(resolved.index(), Some(AliasIndex(7)));
                 }
-            });
+                (AliasReadFixture::Alias, true) => {
+                    client
+                        .resolve_account_alias_authenticated(&alias)
+                        .expect("signed alias resolve request")
+                        .expect("alias exists");
+                }
+                (AliasReadFixture::Index, false) => {
+                    client
+                        .resolve_account_alias_index_unsigned(AliasIndex(42))
+                        .expect("unsigned alias-index resolve request")
+                        .expect("index exists");
+                }
+                (AliasReadFixture::Index, true) => {
+                    client
+                        .resolve_account_alias_index_authenticated(AliasIndex(42))
+                        .expect("signed alias-index resolve request")
+                        .expect("index exists");
+                }
+                (AliasReadFixture::Account, false) => {
+                    client
+                        .list_account_aliases_unsigned(&by_account)
+                        .expect("unsigned alias-by-account request")
+                        .expect("account aliases exist");
+                }
+                (AliasReadFixture::Account, true) => {
+                    client
+                        .list_account_aliases_authenticated(&by_account)
+                        .expect("signed alias-by-account request")
+                        .expect("account aliases exist");
+                }
+            }
+        });
         let (path, body) = match fixture {
             AliasReadFixture::Alias => (
                 "/v1/aliases/resolve",
@@ -23909,7 +24010,7 @@ mod tests {
             });
         let actual = actual.expect("fetch proof policies");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::GET, "/v1/da/proof-policies");
+        assert_request(&snapshot, &HttpMethod::GET, "/v1/da/proof-policies");
     }
     #[test]
     fn get_da_proof_policy_snapshot_fetches_bundle() {
@@ -23921,7 +24022,11 @@ mod tests {
         );
         let actual = actual.expect("fetch proof policy snapshot");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::GET, "/v1/da/proof-policies/snapshot");
+        assert_request(
+            &snapshot,
+            &HttpMethod::GET,
+            "/v1/da/proof-policies/snapshot",
+        );
     }
     #[test]
     fn list_da_commitments_posts_query() {
@@ -23941,7 +24046,7 @@ mod tests {
             });
         let actual = actual.expect("list commitments");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments");
         let posted: DaCommitmentListRequest =
             norito::json::from_slice(&snapshot.body).expect("decode posted request");
         assert_eq!(posted, request);
@@ -23965,7 +24070,7 @@ mod tests {
             });
         let actual = actual.expect("prove commitment");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments/prove");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments/prove");
     }
     #[test]
     fn verify_da_commitment_posts_proof() {
@@ -23982,7 +24087,7 @@ mod tests {
         let actual = actual.expect("verify commitment");
         assert!(actual.valid);
         assert!(actual.error.is_none());
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/commitments/verify");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/commitments/verify");
         let posted: DaCommitmentProof =
             norito::json::from_slice(&snapshot.body).expect("decode posted proof");
         assert_eq!(posted, proof);
@@ -24004,7 +24109,7 @@ mod tests {
         );
         let actual = actual.expect("list pin intents");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents");
         let posted: DaPinIntentListRequest =
             norito::json::from_slice(&snapshot.body).expect("decode posted pin query");
         assert_eq!(posted, request);
@@ -24027,7 +24132,7 @@ mod tests {
         );
         let actual = actual.expect("prove pin intent");
         assert_eq!(actual, expected);
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents/prove");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents/prove");
     }
     #[test]
     fn verify_da_pin_intent_posts_proof() {
@@ -24043,7 +24148,7 @@ mod tests {
         );
         let actual = actual.expect("verify pin intent");
         assert!(actual.valid);
-        assert_request(&snapshot, HttpMethod::POST, "/v1/da/pin-intents/verify");
+        assert_request(&snapshot, &HttpMethod::POST, "/v1/da/pin-intents/verify");
         let posted: DaPinIntentProof =
             norito::json::from_slice(&snapshot.body).expect("decode posted pin proof");
         assert_eq!(posted, proof);
@@ -25219,8 +25324,8 @@ mod tests {
             );
         }
     }
-    fn assert_request(snapshot: &RequestSnapshot, method: HttpMethod, path: &str) {
-        assert_eq!(snapshot.method, method);
+    fn assert_request(snapshot: &RequestSnapshot, method: &HttpMethod, path: &str) {
+        assert_eq!(&snapshot.method, method);
         assert_eq!(snapshot.url.path(), path);
     }
     fn json_ok_response<T: norito::json::JsonSerialize>(
@@ -25234,7 +25339,7 @@ mod tests {
         )
     }
     fn assert_sumeragi_json_request(snapshot: &RequestSnapshot, path: &str) {
-        assert_request(snapshot, HttpMethod::GET, path);
+        assert_request(snapshot, &HttpMethod::GET, path);
         assert!(
             snapshot
                 .headers
@@ -25270,7 +25375,7 @@ mod tests {
         let (result, snapshot) = capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
             client.get_config()
         });
-        result.expect_err("mocked unauthorized response should fail");
+        let _ = result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
         assert_operator_signature_headers(&snapshot);
@@ -25293,16 +25398,12 @@ mod tests {
         let (result, snapshot) = capture_request(empty_response(StatusCode::BAD_REQUEST), || {
             client.set_config(&update)
         });
-        result.expect_err("mocked bad request response should fail");
+        let _ = result.expect_err("mocked bad request response should fail");
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the operator-authentication audit checks every signed header and network binding in one fixture"
-    )]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 1] = [(
@@ -25317,7 +25418,7 @@ mod tests {
                 capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
                     request(&client)
                 });
-            result.expect_err("mocked unauthorized response should fail");
+            let _ = result.expect_err("mocked unauthorized response should fail");
             assert_sumeragi_json_request(&snapshot, path);
             assert_operator_signature_headers(&snapshot);
             let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
@@ -25800,7 +25901,6 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_autonomous_execution() {
-        let client = client_with_base_url(base_url());
         let (mut status, _) = sample_sumeragi_status_with_relay();
         status.autonomous_lane_executions = vec![SumeragiAutonomousLaneExecution {
             lane_id: LaneId::new(1),
@@ -25841,7 +25941,6 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity() {
-        let client = client_with_base_url(base_url());
         let (mut status, _) = sample_sumeragi_status_with_relay();
         let row = SumeragiAutonomousLaneExecution {
             lane_id: LaneId::new(1),
@@ -25968,7 +26067,6 @@ mod tests {
     }
     #[test]
     fn get_sumeragi_diagnostics_rejects_zero_npos_seed() {
-        let client = client_with_base_url(base_url());
         let (mut status, _) = sample_sumeragi_status_with_relay();
         status.npos = Some(
             iroha_data_model::block::consensus::SumeragiNposDiagnostics {
@@ -26343,10 +26441,6 @@ mod tests {
         }
     }
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the hedging and billing audit keeps all endpoint-specific signed-request bindings together"
-    )]
     fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));

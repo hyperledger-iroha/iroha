@@ -14,13 +14,15 @@
 )]
 
 use super::{
-    rns_native_claimed_successor::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
+    rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RnsNativeGlobalLookupVerifiedCoreRootV2,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
     rns_native_source::{ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1},
+    rns_native_zero_padding_commitment::RnsNativeVerifiedZeroPaddingRootV1,
 };
 use crate::vega::sponge::Keccak256;
 
@@ -571,6 +573,33 @@ pub(super) struct ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
     global_lookup_challenge_seed: [u8; 32],
 }
 
+/// Opaque chronology tag attached to the independently recomputed clean
+/// global-lookup root. It binds that root to the exact post-cross transcript
+/// and the sole pre-global capability without exposing either value.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "global-root equality consumes this exact private chronology tag"
+)]
+#[must_use = "a global clean-core chronology tag must remain paired with its verified root"]
+pub(super) struct ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
+    post_cross_field_binding_digest: [u8; 32],
+    pre_global_capability_digest: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
+    pub(super) fn matches_exact_chronology_v2(
+        &self,
+        expected_post_cross_field_binding_digest: [u8; 32],
+        expected_pre_global_capability_digest: [u8; 32],
+    ) -> bool {
+        expected_post_cross_field_binding_digest != [0; 32]
+            && expected_pre_global_capability_digest != [0; 32]
+            && self.post_cross_field_binding_digest == expected_post_cross_field_binding_digest
+            && self.pre_global_capability_digest == expected_pre_global_capability_digest
+    }
+}
+
 impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
     /// Return only a domain-separated commitment to the exact post-cross
     /// binding and global seed. Consumers never receive either raw value.
@@ -587,6 +616,18 @@ impl ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
             return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
         }
         Ok(digest)
+    }
+
+    /// Mint the private equality tag from this exact move-only capability.
+    /// The capability itself remains owned by the successor chronology.
+    pub(super) fn global_lookup_chronology_tag_v2(
+        &self,
+    ) -> Result<ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        Ok(ZkAmsMkheRnsNativeGlobalLookupChronologyTagV2 {
+            post_cross_field_binding_digest: self.post_cross_field_binding_digest,
+            pre_global_capability_digest: self.sole_z_binding_digest_v1()?,
+        })
     }
 }
 
@@ -628,8 +669,8 @@ pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
 }
 
 impl ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
-    /// Consume the obligation against the sealed opaque root. No production
-    /// module can construct this compatibility evidence.
+    /// Consume the obligation against the concrete opaque root owned and
+    /// constructed only by the direct verifier.
     pub(super) fn discharge_v1(
         self,
         recomputed_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,
@@ -641,6 +682,257 @@ impl ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1 {
             return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
         }
         Ok(())
+    }
+}
+
+/// Opaque one-shot obligation equating the provisionally bound global-lookup
+/// root with the root that its successor verifier will recompute.
+///
+/// The only discharge bridge accepts the concrete, membership-derived clean
+/// core root and checks the retained post-cross chronology tag.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "global-root equality remains an opaque one-shot obligation"
+)]
+#[must_use = "a provisional global-lookup root remains non-authorizing until equality is discharged"]
+pub(super) struct ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
+    claimed_root: [u8; 32],
+    post_cross_field_binding_digest: [u8; 32],
+    pre_global_capability_digest: [u8; 32],
+}
+
+/// Opaque one-shot obligation equating the provisionally bound zero-padding
+/// root with the root that its successor verifier will recompute.
+///
+/// No discharge bridge is exposed in this tranche.  The exact post-global
+/// transcript binding is retained so a later bridge cannot validate the root
+/// outside the chronology that derived its challenge.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "zero-root equality remains an opaque one-shot obligation"
+)]
+#[must_use = "a provisional zero-padding root remains non-authorizing until equality is discharged"]
+pub(super) struct ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1 {
+    claimed_root: [u8; 32],
+    post_global_lookup_binding_digest: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
+    fn discharge_v2(
+        self,
+        verified_root: RnsNativeGlobalLookupVerifiedCoreRootV2,
+    ) -> Result<(), ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        if !verified_root.matches_claimed_global_lookup_root_v2(
+            self.claimed_root,
+            self.post_cross_field_binding_digest,
+            self.pre_global_capability_digest,
+        ) {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
+        }
+        Ok(())
+    }
+}
+
+impl ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1 {
+    /// Consume this chronology-owned obligation against verifier-minted,
+    /// session-tagged zero-padding evidence.
+    fn discharge_v1(
+        self,
+        verified_root: RnsNativeVerifiedZeroPaddingRootV1,
+        final_challenge_seeds: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<(), ZkAmsMkheRnsNativeTranscriptErrorV1> {
+        let (expected_final_transcript_tag, expected_composite_binding_challenge_seed) =
+            replay_zero_padding_terminal_suffix_v1(
+                self.post_global_lookup_binding_digest,
+                self.claimed_root,
+            )?;
+        if final_challenge_seeds.zero_padding_root != self.claimed_root
+            || final_challenge_seeds.composite_binding_challenge_seed
+                != expected_composite_binding_challenge_seed
+            || final_challenge_seeds.transcript_digest != expected_final_transcript_tag
+            || !verified_root.matches_claimed_zero_padding_root_v1(
+                self.claimed_root,
+                expected_final_transcript_tag,
+            )
+        {
+            return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Move-only owner awaiting concrete global-root equality discharge. It cannot
+/// accept a raw or generic global root and grants no verification, readiness,
+/// composite, or release authority.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the concrete global-root bridge must consume this owner exactly once"
+)]
+#[must_use = "global-root equality remains pending until concrete verifier-owned evidence is consumed"]
+pub(super) struct ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
+    global_lookup_root_equality_obligation: ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1,
+    zero_padding_root_equality_obligation: ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1,
+    pre_global_capability: ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+}
+
+impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
+    /// Borrow only the opaque pre-global snapshot needed by the successor
+    /// challenge chain. No raw post-cross transcript state or seed escapes.
+    pub(super) const fn pre_global_lookup_capability_v1(
+        &self,
+    ) -> &ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+        &self.pre_global_capability
+    }
+
+    /// Borrow final seeds only for exact inventory/direct context checks.
+    pub(super) const fn final_challenge_seeds_v1(&self) -> &ZkAmsMkheRnsNativeChallengeSeedsV1 {
+        &self.final_challenge_seeds
+    }
+
+    /// Consume the concrete membership-derived clean root and this exact
+    /// chronology. A mismatch burns both and returns no zero-root successor.
+    pub(super) fn discharge_global_lookup_root_equality_v2(
+        self,
+        verified_root: RnsNativeGlobalLookupVerifiedCoreRootV2,
+    ) -> Result<
+        ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1,
+        ZkAmsMkheRnsNativeTranscriptErrorV1,
+    > {
+        let Self {
+            global_lookup_root_equality_obligation,
+            zero_padding_root_equality_obligation,
+            pre_global_capability: _,
+            final_challenge_seeds,
+        } = self;
+        global_lookup_root_equality_obligation.discharge_v2(verified_root)?;
+        Ok(ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
+            zero_padding_root_equality_obligation,
+            final_challenge_seeds,
+        })
+    }
+}
+
+/// Move-only owner produced only after the future concrete global-root bridge.
+///
+/// It retains the exact zero-root obligation and final transcript privately;
+/// neither component has a raw accessor or any authority of its own.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "zero-root equality must consume the obligation and evidence exactly once"
+)]
+#[must_use = "zero-root equality must be discharged before terminal roots are equal"]
+pub(super) struct ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
+    zero_padding_root_equality_obligation: ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1,
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+}
+
+impl ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
+    /// Borrow final seeds only to mint the concrete verified zero-root evidence
+    /// from the exact retained zero-padding prerequisite.
+    pub(super) const fn final_challenge_seeds_v1(&self) -> &ZkAmsMkheRnsNativeChallengeSeedsV1 {
+        &self.final_challenge_seeds
+    }
+
+    /// Consume the pending chronology and the concrete verifier-owned evidence.
+    /// A root or session mismatch consumes both and returns no successor.
+    pub(super) fn discharge_zero_padding_root_equality_v1(
+        self,
+        verified_root: RnsNativeVerifiedZeroPaddingRootV1,
+    ) -> Result<ZkAmsMkheRnsNativeAllTerminalRootsEqualV1, ZkAmsMkheRnsNativeTranscriptErrorV1>
+    {
+        let Self {
+            zero_padding_root_equality_obligation,
+            final_challenge_seeds,
+        } = self;
+        zero_padding_root_equality_obligation
+            .discharge_v1(verified_root, &final_challenge_seeds)?;
+        Ok(ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
+            final_challenge_seeds,
+        })
+    }
+}
+
+/// Opaque chronology fact produced only after all three claimed terminal roots
+/// have passed their concrete equality transitions.
+///
+/// This fact exposes no roots, transcript tags, parts, composite verification,
+/// readiness, or release authority.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the all-roots-equal fact remains a one-shot input to a future non-authorizing stage"
+)]
+#[must_use = "terminal root equality alone is not composite verification or release authority"]
+pub(super) struct ZkAmsMkheRnsNativeAllTerminalRootsEqualV1 {
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+}
+
+/// Atomic move-only owner of the provisional terminal-root chronology.
+///
+/// It keeps all three equality obligations, the exact pre-global capability,
+/// and the final challenge seeds together.  It is chronology evidence only:
+/// none of the retained obligations is discharged and no verification,
+/// readiness, or release authority is granted.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the provisional terminal chronology and its obligations must move atomically"
+)]
+#[must_use = "provisional terminal chronology must remain intact until every root obligation is discharged"]
+pub(super) struct ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
+    cross_field_root_equality_obligation: ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
+    global_lookup_root_equality_obligation: ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1,
+    zero_padding_root_equality_obligation: ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1,
+    pre_global_capability: ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
+    final_challenge_seeds: ZkAmsMkheRnsNativeChallengeSeedsV1,
+}
+
+impl ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
+    /// Borrow the final seeds solely so qPCS can authenticate under the
+    /// already-established transcript domains.
+    pub(super) const fn final_challenge_seeds_v1(&self) -> &ZkAmsMkheRnsNativeChallengeSeedsV1 {
+        &self.final_challenge_seeds
+    }
+
+    /// Compare an authenticated qPCS output with the exact pre-cross-field
+    /// state retained by this chronology without exposing that state.
+    pub(super) fn matches_qpcs_bound_transcript_state_v1(
+        &self,
+        qpcs_bound_transcript_state: [u8; 32],
+    ) -> bool {
+        self.final_challenge_seeds.qpcs_bound_transcript_state_v1() == qpcs_bound_transcript_state
+    }
+
+    /// Atomically move the direct cross-root obligation into the direct
+    /// schedule while retaining the global/zero obligations, pre-global
+    /// capability, and final seeds in one opaque successor chronology.
+    pub(super) fn into_cross_field_obligation_and_global_pending_v1(
+        self,
+    ) -> (
+        ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
+        ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1,
+    ) {
+        let Self {
+            cross_field_root_equality_obligation,
+            global_lookup_root_equality_obligation,
+            zero_padding_root_equality_obligation,
+            pre_global_capability,
+            final_challenge_seeds,
+        } = self;
+        (
+            cross_field_root_equality_obligation,
+            ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
+                global_lookup_root_equality_obligation,
+                zero_padding_root_equality_obligation,
+                pre_global_capability,
+                final_challenge_seeds,
+            },
+        )
     }
 }
 
@@ -731,6 +1023,42 @@ impl ZkAmsMkheRnsNativeTranscriptV1 {
     #[must_use]
     pub const fn binding_digest(&self) -> [u8; 32] {
         self.state
+    }
+
+    /// Return the exact confidential-source layout identity absorbed at start.
+    #[must_use]
+    pub const fn source_binding_digest(&self) -> [u8; 32] {
+        self.context_identities.source_binding_digest
+    }
+
+    /// Return the authenticated main source-snapshot identity absorbed at start.
+    #[must_use]
+    pub const fn main_snapshot_digest(&self) -> [u8; 32] {
+        self.context_identities.main_snapshot_digest
+    }
+
+    /// Return the authenticated nonce source-snapshot identity absorbed at start.
+    #[must_use]
+    pub const fn nonce_snapshot_digest(&self) -> [u8; 32] {
+        self.context_identities.nonce_snapshot_digest
+    }
+
+    /// Return the structural source-receipt identity absorbed at start.
+    #[must_use]
+    pub const fn source_receipt_digest(&self) -> [u8; 32] {
+        self.context_identities.source_receipt_digest
+    }
+
+    /// Return the governed verifier-roster identity absorbed at start.
+    #[must_use]
+    pub const fn governed_roster_digest(&self) -> [u8; 32] {
+        self.context_identities.governed_roster_digest
+    }
+
+    /// Return the public ciphertext/statement-material identity absorbed at start.
+    #[must_use]
+    pub const fn public_ciphertext_digest(&self) -> [u8; 32] {
+        self.context_identities.public_ciphertext_digest
     }
 
     /// Consume the context stage and bind all 43 ordered commitment pairs.
@@ -1373,6 +1701,57 @@ impl ZkAmsMkheRnsNativeQpcsBoundTranscriptV1 {
                 qpcs_bound_transcript_state,
             },
         ))
+    }
+
+    /// Consume the exact qPCS-bound transcript and all three claimed terminal
+    /// roots into one provisional chronology.
+    ///
+    /// The roots are bound in the legacy transcript order and therefore
+    /// derive byte-identical final seeds.  All equality obligations remain
+    /// retained and non-authorizing; this transition does not discharge any
+    /// successor proof.
+    pub(super) fn bind_provisional_terminal_chronology_v1(
+        self,
+        roots: ZkAmsMkheRnsNativeTerminalRootsV1,
+    ) -> Result<
+        ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1,
+        ZkAmsMkheRnsNativeTranscriptErrorV1,
+    > {
+        let (cross_field_claim, remaining_roots) = roots.into_cross_field_claim_v1();
+        let ZkAmsMkheRnsNativeRemainingTerminalRootsV1 {
+            global_lookup_root,
+            zero_padding_root,
+        } = remaining_roots;
+        let (cross_field_transcript, cross_field_root_equality_obligation) =
+            self.bind_claimed_cross_field_root_v1(cross_field_claim)?;
+        let post_cross_field_binding_digest = cross_field_transcript.state;
+        let pre_global_capability = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1 {
+            post_cross_field_binding_digest,
+            global_lookup_challenge_seed: cross_field_transcript.global_lookup_challenge_seed,
+        };
+        let pre_global_capability_digest = pre_global_capability.sole_z_binding_digest_v1()?;
+        let global_lookup_root_equality_obligation =
+            ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1 {
+                claimed_root: global_lookup_root,
+                post_cross_field_binding_digest,
+                pre_global_capability_digest,
+            };
+        let global_lookup_transcript =
+            cross_field_transcript.bind_global_lookup_root(global_lookup_root)?;
+        let zero_padding_root_equality_obligation =
+            ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1 {
+                claimed_root: zero_padding_root,
+                post_global_lookup_binding_digest: global_lookup_transcript.state,
+            };
+        let final_challenge_seeds =
+            global_lookup_transcript.bind_zero_padding_root(zero_padding_root)?;
+        Ok(ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
+            cross_field_root_equality_obligation,
+            global_lookup_root_equality_obligation,
+            zero_padding_root_equality_obligation,
+            pre_global_capability,
+            final_challenge_seeds,
+        })
     }
 
     /// Consume the qPCS stage, bind the cross-field root, and derive the
@@ -2090,6 +2469,47 @@ fn derive_registered_challenge_v1(
     purpose: ChallengePurposeV1,
     subindex: u8,
 ) -> Result<([u8; 32], [u8; 32]), ZkAmsMkheRnsNativeTranscriptErrorV1> {
+    let challenge = derive_challenge_digest_v1(state, ordinal, purpose, subindex)?;
+    digests.insert(challenge)?;
+    let next_state = ratchet_challenge_state_v1(state, ordinal, purpose, subindex, challenge)?;
+    Ok((next_state, challenge))
+}
+
+fn replay_zero_padding_terminal_suffix_v1(
+    post_global_lookup_binding_digest: [u8; 32],
+    claimed_zero_padding_root: [u8; 32],
+) -> Result<([u8; 32], [u8; 32]), ZkAmsMkheRnsNativeTranscriptErrorV1> {
+    if post_global_lookup_binding_digest == [0; 32] || claimed_zero_padding_root == [0; 32] {
+        return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch);
+    }
+    let post_zero_padding_binding_digest = absorb_digest_v1(
+        post_global_lookup_binding_digest,
+        AbsorbKindV1::ZeroPadding,
+        0,
+        claimed_zero_padding_root,
+    );
+    let composite_binding_challenge_seed = derive_challenge_digest_v1(
+        post_zero_padding_binding_digest,
+        27,
+        ChallengePurposeV1::CompositeBinding,
+        0,
+    )?;
+    let final_transcript_tag = ratchet_challenge_state_v1(
+        post_zero_padding_binding_digest,
+        27,
+        ChallengePurposeV1::CompositeBinding,
+        0,
+        composite_binding_challenge_seed,
+    )?;
+    Ok((final_transcript_tag, composite_binding_challenge_seed))
+}
+
+fn derive_challenge_digest_v1(
+    state: [u8; 32],
+    ordinal: u8,
+    purpose: ChallengePurposeV1,
+    subindex: u8,
+) -> Result<[u8; 32], ZkAmsMkheRnsNativeTranscriptErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(TRANSCRIPT_CHALLENGE_DOMAIN_V1);
     hash.update(&[
@@ -2103,8 +2523,16 @@ fn derive_registered_challenge_v1(
     if challenge == [0; 32] || challenge == state {
         return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
     }
-    digests.insert(challenge)?;
+    Ok(challenge)
+}
 
+fn ratchet_challenge_state_v1(
+    state: [u8; 32],
+    ordinal: u8,
+    purpose: ChallengePurposeV1,
+    subindex: u8,
+    challenge: [u8; 32],
+) -> Result<[u8; 32], ZkAmsMkheRnsNativeTranscriptErrorV1> {
     let mut ratchet = Keccak256::new();
     ratchet.update(TRANSCRIPT_RATCHET_DOMAIN_V1);
     ratchet.update(&[
@@ -2119,7 +2547,7 @@ fn derive_registered_challenge_v1(
     if next_state == [0; 32] || next_state == state || next_state == challenge {
         return Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidChallenge);
     }
-    Ok((next_state, challenge))
+    Ok(next_state)
 }
 
 #[cfg(test)]

@@ -696,14 +696,11 @@ fn use_single_handle_envelope(
     vm.set_register(11, touch_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)?;
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, proof);
-    vm.set_register(10, dsid_ptr);
-    vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)?;
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
 }
 fn commit_single_handle_envelope(
@@ -893,8 +890,8 @@ fn core_host_handles_axt_flow() {
     };
     let amount_a = Quantity::from(200_u64);
     let amount_b = Quantity::from(100_u64);
-    // A generic proof remains valid for standalone verification, but a proof
-    // reused by a handle must bind the exact remote-spend statement.
+    // The issuer-authenticated handle path verifies the proof inline and may
+    // reuse it only for another exact remote-spend statement in the same proof.
     let proof = proof_blob_for_remote_spends(
         dsid,
         manifest_root,
@@ -906,14 +903,11 @@ fn core_host_handles_axt_flow() {
         ],
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_a_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_a);
     let intent_a_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_a);
     vm.set_register(10, handle_a_ptr);
     vm.set_register(11, intent_a_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
     let handle_b_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle_b);
     let intent_b_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent_b);
@@ -1120,13 +1114,10 @@ fn axt_handle_allows_configured_clock_skew_window() {
         &amount,
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
 }
 #[test]
@@ -1946,14 +1937,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         &Quantity::from(5_u64),
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
@@ -2006,14 +1994,11 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
@@ -2451,15 +2436,11 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         &Quantity::from(10_u64),
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-        .expect("verify proof");
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     let err = host
         .syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm)
         .expect_err("replay should be rejected after resync");

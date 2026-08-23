@@ -104,8 +104,9 @@ impl LaunchedProductionLifecycleV1 {
     /// Install pending-Kura provenance while ingress and clocks stay closed.
     ///
     /// The consuming transition retains the authenticated expected tip beside
-    /// the launched stack. Verification rejoins it to the already-Ready
-    /// recovered Apply carrier; no cloned Fetch enters runtime ownership.
+    /// the launched stack. Verification rejoins it to the storage-only runtime
+    /// owner and its exact recovered Ready Apply carrier without opening
+    /// ordinary ingress or replaying already revalidated body stages.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn install_pending_kura_apply(
         mut self,
@@ -260,7 +261,6 @@ impl PendingKuraProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_apply_recovery_turn(
         &mut self,
         runner: &mut crate::sumeragi::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
-        _limit: usize,
     ) -> Result<
         ProductionPendingKuraApplyRecoveryProgressV1,
         ProductionPendingKuraApplyRecoveryErrorV1,
@@ -273,6 +273,9 @@ impl PendingKuraProductionLifecycleV1 {
             return Err(ProductionPendingKuraApplyRecoveryErrorV1::MissingEvidence);
         }
         self.with_lifecycle_setup_transaction(runner, |owner, executor, services| {
+            use crate::sumeragi::v2_effects::PendingTipRecoveryAttemptResult as AttemptResult;
+
+            executor.begin_pending_tip_recovery_attempt();
             let stage = executor
                 .pending_kura_apply_recovery_evidence()
                 .map(|evidence| evidence.stage())
@@ -281,9 +284,9 @@ impl PendingKuraProductionLifecycleV1 {
                 if !executor.ready_to_finish() {
                     return Err(ProductionPendingKuraApplyRecoveryErrorV1::IncompleteFinality);
                 }
-                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed {
-                    attempts: executor.pending_tip_recovery_attempts(),
-                });
+                let attempts =
+                    executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed);
+                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts });
             }
 
             use crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage as Stage;
@@ -308,7 +311,7 @@ impl PendingKuraProductionLifecycleV1 {
                     {
                         if !matches!(
                             completion.result(),
-                            RecoveredDecisionApplyWorkerResultV1::Applied(_)
+                            LifecycleDecisionApplyWorkerResultV1::Applied(_)
                         ) {
                             drop(completion);
                             return Err(ProductionPendingKuraApplyRecoveryErrorV1::Lifecycle(
@@ -318,10 +321,10 @@ impl PendingKuraProductionLifecycleV1 {
                         match super::settle_pending_kura_applied_decision_apply_completion(
                             owner, executor, completion,
                         ) {
-                            Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied) => {
+                            Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied) => {
                                 completions = completions.saturating_add(1);
                             }
-                            Ok(ProductionRecoveredDecisionApplyCompletionV1::Deferred(
+                            Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(
                                 deferred,
                             )) => {
                                 drop(deferred);
@@ -385,18 +388,21 @@ impl PendingKuraProductionLifecycleV1 {
                     if !executor.ready_to_finish() {
                         return Err(ProductionPendingKuraApplyRecoveryErrorV1::IncompleteFinality);
                     }
-                    return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed {
-                        attempts: executor.pending_tip_recovery_attempts(),
-                    });
+                    let attempts =
+                        executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed);
+                    return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts });
                 }
                 if stage == Stage::ApplicationDispatched {
-                    let attempts = executor.pending_tip_recovery_attempts();
                     return if completions == 0 {
+                        let attempts =
+                            executor.settle_pending_tip_recovery_attempt(AttemptResult::Waiting);
                         Ok(ProductionPendingKuraApplyRecoveryProgressV1::Waiting {
                             attempts,
                             stage,
                         })
                     } else {
+                        let attempts =
+                            executor.settle_pending_tip_recovery_attempt(AttemptResult::Advanced);
                         Ok(ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
                             completions,
                             effects,
@@ -406,23 +412,42 @@ impl PendingKuraProductionLifecycleV1 {
                     };
                 }
                 if dispatch_ready_apply {
+                    let recovered_apply_ordinal = executor
+                        .pending_kura_apply_recovery_evidence()
+                        .ok_or(ProductionPendingKuraApplyRecoveryErrorV1::MissingEvidence)?
+                        .recovered_apply_ordinal();
                     let fence = executor.lifecycle_reducer_fence_observation();
                     match owner.classify_completion_ready_work(fence) {
                         super::super::ProductionCompletionReadyWorkV1::None => {}
                         super::super::ProductionCompletionReadyWorkV1::CompletionIo => {
-                            match owner.dispatch_completion_with_runner_debt(services, executor, 0)
-                            {
-                                Ok(ProductionCompletionDispatchV1::ApplyQueued { .. }) => {
+                            match owner.dispatch_completion_requiring_ready_ordinal(
+                                services,
+                                executor,
+                                0,
+                                recovered_apply_ordinal,
+                            ) {
+                                Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
+                                    if ordinal == recovered_apply_ordinal =>
+                                {
                                     effects = effects.saturating_add(1);
                                 }
-                                Ok(ProductionCompletionDispatchV1::CapacityUnavailable) => {
-                                    let attempts = executor.pending_tip_recovery_attempts();
+                                Ok(ProductionCompletionDispatchV1::CapacityUnavailable {
+                                    protected_live_apply_ordinal: None,
+                                }) => {
                                     return if completions == 0 {
+                                        let attempts = executor
+                                            .settle_pending_tip_recovery_attempt(
+                                                AttemptResult::Waiting,
+                                            );
                                         Ok(ProductionPendingKuraApplyRecoveryProgressV1::Waiting {
                                             attempts,
                                             stage,
                                         })
                                     } else {
+                                        let attempts = executor
+                                            .settle_pending_tip_recovery_attempt(
+                                                AttemptResult::Advanced,
+                                            );
                                         Ok(ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
                                             completions,
                                             effects,
@@ -449,11 +474,14 @@ impl PendingKuraProductionLifecycleV1 {
                                     "queued pending Apply did not advance its exact stage",
                                 ));
                             }
+                            let stage = evidence.stage();
+                            let attempts = executor
+                                .settle_pending_tip_recovery_attempt(AttemptResult::Advanced);
                             return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
                                 completions,
                                 effects,
-                                attempts: executor.pending_tip_recovery_attempts(),
-                                stage: evidence.stage(),
+                                attempts,
+                                stage,
                             });
                         }
                         super::super::ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast => {
@@ -485,9 +513,9 @@ impl PendingKuraProductionLifecycleV1 {
                 if !executor.ready_to_finish() {
                     return Err(ProductionPendingKuraApplyRecoveryErrorV1::IncompleteFinality);
                 }
-                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed {
-                    attempts: executor.pending_tip_recovery_attempts(),
-                });
+                let attempts =
+                    executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed);
+                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts });
             }
             let evidence = executor
                 .pending_kura_apply_recovery_evidence()
@@ -498,15 +526,18 @@ impl PendingKuraProductionLifecycleV1 {
                 if !executor.ready_to_finish() {
                     return Err(ProductionPendingKuraApplyRecoveryErrorV1::IncompleteFinality);
                 }
-                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed {
-                    attempts: executor.pending_tip_recovery_attempts(),
-                });
+                let attempts =
+                    executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed);
+                return Ok(ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts });
             }
-            let attempts = executor.pending_tip_recovery_attempts();
             let stage = evidence.stage();
             if completions == 0 && effects == 0 {
+                let attempts =
+                    executor.settle_pending_tip_recovery_attempt(AttemptResult::Waiting);
                 Ok(ProductionPendingKuraApplyRecoveryProgressV1::Waiting { attempts, stage })
             } else {
+                let attempts =
+                    executor.settle_pending_tip_recovery_attempt(AttemptResult::Advanced);
                 Ok(ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
                     completions,
                     effects,
@@ -762,6 +793,22 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         attempted: AttemptedProducerTurnV1,
     ) -> Result<(), ProducerTurnTerminalSettlementErrorV1> {
         self.launched.owner.settle_producer_turn_advanced(attempted)
+    }
+
+    /// Close new physical ingress while retaining the no-clock lifecycle for
+    /// a finite terminal-recovery drain before finalized rollover.
+    pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+        &self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        receiver: &Arc<FairV2Ingress>,
+    ) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
+        self.runner_activation.close_ingress(receiver)?;
+        if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+            return Err(
+                crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
+            );
+        }
+        Ok(())
     }
 
     /// Consume a live interrupted-tip height during orderly operator shutdown.

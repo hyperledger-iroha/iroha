@@ -11,6 +11,8 @@ from pathlib import Path
 
 
 ENTRYPOINT_PATH = Path(__file__).resolve().parents[1] / "docker_entrypoint.sh"
+TAIRA_RUNTIME_SIGNER_PATH = "/run/secrets/iroha-taira-runtime-signer.private_key"
+TAIRA_RUNTIME_SIGNER_LAUNCH_PATH = "/storage/private/taira-runtime-signer.fd198"
 
 
 class DockerEntrypointTest(unittest.TestCase):
@@ -29,6 +31,36 @@ class DockerEntrypointTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.irohad_path.chmod(self.irohad_path.stat().st_mode | stat.S_IEXEC)
+        self.taira_path = self.bin_dir / "iroha3d_taira"
+        self.taira_path.write_text(
+            "#!/usr/bin/env bash\n"
+            "signer_bytes=$(wc -c <&198 | tr -d '[:space:]')\n"
+            "printf '%s\\n' \"$0\" \"$@\" \"fd198-bytes=$signer_bytes\"\n",
+            encoding="utf-8",
+        )
+        self.taira_path.chmod(self.taira_path.stat().st_mode | stat.S_IEXEC)
+        self.runtime_signer_path = self.temp_path / "runtime-signer.private_key"
+        self.runtime_signer_path.write_bytes(b"x" * 71)
+        self.runtime_signer_path.chmod(0o600)
+        self.runtime_signer_launch_path = (
+            self.temp_path / "private" / "taira-runtime-signer.fd198"
+        )
+        self.entrypoint_path = self.temp_path / "docker_entrypoint.sh"
+        entrypoint_source = (
+            ENTRYPOINT_PATH.read_text(encoding="utf-8")
+            .replace(
+                TAIRA_RUNTIME_SIGNER_PATH,
+                str(self.runtime_signer_path),
+            )
+            .replace(
+                TAIRA_RUNTIME_SIGNER_LAUNCH_PATH,
+                str(self.runtime_signer_launch_path),
+            )
+        )
+        self.entrypoint_path.write_text(entrypoint_source, encoding="utf-8")
+        self.entrypoint_path.chmod(
+            self.entrypoint_path.stat().st_mode | stat.S_IEXEC
+        )
 
     def _run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         full_env = os.environ.copy()
@@ -36,7 +68,7 @@ class DockerEntrypointTest(unittest.TestCase):
         if env:
             full_env.update(env)
         return subprocess.run(
-            [str(ENTRYPOINT_PATH), *args],
+            [str(self.entrypoint_path), *args],
             capture_output=True,
             text=True,
             env=full_env,
@@ -69,17 +101,29 @@ class DockerEntrypointTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(runtime_config_path.read_text(encoding="utf-8"), config_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            runtime_config_path.read_text(encoding="utf-8"),
+            config_path.read_text(encoding="utf-8"),
+        )
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                str(self.irohad_path),
+                str(self.taira_path),
                 "--sora",
                 "--config",
                 str(runtime_config_path),
                 "--genesis-manifest-json",
                 str(genesis_path),
+                "fd198-bytes=71",
             ],
+        )
+        self.assertEqual(self.runtime_signer_path.read_bytes(), b"x" * 71)
+        self.assertEqual(self.runtime_signer_launch_path.read_bytes(), b"x" * 71)
+        self.assertFalse(
+            self.runtime_signer_path.samefile(self.runtime_signer_launch_path)
+        )
+        self.assertEqual(
+            self.runtime_signer_launch_path.stat().st_mode & 0o7777, 0o600
         )
 
     def test_signed_genesis_override_updates_runtime_config(self) -> None:
@@ -122,14 +166,47 @@ class DockerEntrypointTest(unittest.TestCase):
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                str(self.irohad_path),
+                str(self.taira_path),
                 "--sora",
                 "--config",
                 str(runtime_config_path),
                 "--genesis-manifest-json",
                 str(genesis_path),
+                "fd198-bytes=71",
             ],
         )
+
+    def test_taira_mode_requires_the_fixed_runtime_signer(self) -> None:
+        config_path = self.temp_path / "config.toml"
+        runtime_config_path = self.temp_path / "runtime-config.toml"
+        genesis_path = self.temp_path / "genesis.json"
+        config_path.write_text('chain = "taira"\n', encoding="utf-8")
+        genesis_path.write_text("{}\n", encoding="utf-8")
+        self.runtime_signer_path.unlink()
+
+        result = self._run(
+            env={
+                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
+                "IROHA_TAIRA_CONFIG": str(config_path),
+                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
+                "IROHA_TAIRA_GENESIS": str(genesis_path),
+            }
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing Taira runtime signer", result.stderr)
+        self.assertFalse(runtime_config_path.exists())
+
+    def test_checked_in_taira_entrypoint_has_one_fixed_signer_path(self) -> None:
+        source = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count(TAIRA_RUNTIME_SIGNER_PATH), 1)
+        self.assertEqual(source.count(TAIRA_RUNTIME_SIGNER_LAUNCH_PATH), 1)
+        self.assertIn('exec 198<>"$runtime_signer_launch_path"', source)
+        self.assertNotIn('exec 198<"$runtime_signer_path"', source)
+        self.assertIn('cp "$runtime_signer_path" "$runtime_signer_tmp"', source)
+        self.assertIn("exec iroha3d_taira --sora", source)
+        self.assertNotIn("IROHA_TAIRA_RUNTIME_SIGNER", source)
 
     def test_explicit_command_overrides_profile_defaults(self) -> None:
         result = self._run(

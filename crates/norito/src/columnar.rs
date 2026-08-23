@@ -833,24 +833,32 @@ fn log_two_pass(kind: &str, tag: u8, aos_len: usize, ncb_len: usize, _aos_ns: u6
 }
 
 #[cfg(feature = "adaptive-telemetry")]
+type ProbeTimer = std::time::Instant;
+
+#[cfg(not(feature = "adaptive-telemetry"))]
+struct ProbeTimer;
+
+#[cfg(feature = "adaptive-telemetry")]
 #[inline]
-fn probe_start() -> std::time::Instant {
+fn probe_start() -> ProbeTimer {
     std::time::Instant::now()
 }
 
 #[cfg(not(feature = "adaptive-telemetry"))]
 #[inline]
-fn probe_start() {}
+fn probe_start() -> ProbeTimer {
+    ProbeTimer
+}
 
 #[cfg(feature = "adaptive-telemetry")]
 #[inline]
-fn probe_elapsed(start: std::time::Instant) -> u64 {
+fn probe_elapsed(start: ProbeTimer) -> u64 {
     start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "adaptive-telemetry"))]
 #[inline]
-fn probe_elapsed(_start: ()) -> u64 {
+fn probe_elapsed(_start: ProbeTimer) -> u64 {
     0
 }
 

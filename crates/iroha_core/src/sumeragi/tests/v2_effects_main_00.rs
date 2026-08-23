@@ -1,6 +1,6 @@
 use super::*;
 use crate::sumeragi::{
-    FairV2Ingress, InboundBlockMessage,
+    InboundBlockMessage,
     message::BlockMessage,
     v2::{
         AdapterEquivocationEvidence, AdapterError, AdapterFingerprints,
@@ -10,11 +10,14 @@ use crate::sumeragi::{
     v2_block_sync::{CommitCertificateAdmissionError, V2BlockSyncDiscovery},
     v2_core::Generation,
     v2_lifecycle_coordinator::{
-        CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
-        ProductionIngressCapacityRetry, ProductionIngressCapacityStatus,
-        ProductionIngressSchedulerInputsError, ProductionIngressTurnPreparation,
-        ProductionRecoveredLifecycleSignDispatchErrorV1, ReadyValidatedExecutorCatalogAuthorityV1,
-        WaitSource,
+        CertifiedFetchPostDequeueRuntimeHandoffErrorV1,
+        CertifiedFetchPreLedgerProductiveIngressErrorV1, CertifiedFetchReadyPublicationError,
+        LifecycleDigest, LifecyclePhase, LifecycleState, ProductionIngressCapacityRetry,
+        ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
+        ProductionIngressTurnPreparation, ProductionRecoveredLifecycleSignDispatchErrorV1,
+        ReadyValidatedExecutorCatalogAuthorityV1, SelectedCertifiedResponsePriorityV1, WaitSource,
+        certified_fetch_postdequeue_runtime_receipt,
+        certified_fetch_preledger_productive_ingress_token,
     },
     v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
 };
@@ -24,8 +27,49 @@ use iroha_data_model::{
     merge::MergeQuorumCertificate,
     peer::PeerId,
 };
-use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    num::NonZeroU64,
+    sync::Arc,
+};
 use tempfile::TempDir;
+
+fn regular_file_bytes_below_for_test(
+    root: &std::path::Path,
+) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn visit(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        files: &mut BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        for entry in std::fs::read_dir(directory).expect("read test persistence directory") {
+            let entry = entry.expect("read test persistence entry");
+            let file_type = entry.file_type().expect("read test persistence entry type");
+            let path = entry.path();
+            if file_type.is_dir() {
+                visit(root, &path, files);
+            } else if file_type.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("test persistence entry remains below its root")
+                    .to_path_buf();
+                assert!(
+                    files
+                        .insert(
+                            relative,
+                            std::fs::read(path).expect("read test persistence bytes"),
+                        )
+                        .is_none(),
+                    "test persistence snapshot paths are unique",
+                );
+            }
+        }
+    }
+
+    let mut files = BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
 #[test]
 fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
     let mut outcome = PostFinalityCleanupOutcome::default();
@@ -114,6 +158,7 @@ fn bound_test_apply_ownership(
 #[derive(Default)]
 struct FakeRuntime {
     steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
+    pacemaker_steps: VecDeque<Result<Option<RuntimeStep<AdapterEffect>>, String>>,
     completions: Vec<RuntimeCompletion>,
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
@@ -307,11 +352,24 @@ impl EffectRuntime for FakeRuntime {
         }
         step
     }
-    fn step_recovery_effects(
+    fn step_pacemaker_effects(
         &mut self,
-        now: Instant,
-    ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_effects(now)
+        _now: Instant,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        assert!(!self.panic_step, "model safety-WAL pacemaker step panic");
+        if self.scheduler_ownership_ready {
+            return Err("fake runtime scheduler owner was not consumed".to_owned());
+        }
+        let step = self.pacemaker_steps.pop_front().unwrap_or(Ok(None));
+        if matches!(&step, Ok(Some(RuntimeStep::Advanced(_))))
+            && let Some(decision) = self.decision_on_next_step.take()
+        {
+            self.decided_body = Some(decision);
+        }
+        if matches!(&step, Ok(Some(_))) && !self.omit_scheduler_ownership {
+            self.scheduler_ownership_ready = true;
+        }
+        step
     }
     fn take_effect_ownership(
         &mut self,
@@ -1534,41 +1592,68 @@ impl ProductionTransportFixture {
             executor,
         }
     }
-    fn productive_response_ingress(&self, filename: &str) -> (FairV2Ingress, TempDir) {
+    fn bound_certified_response_ingress(
+        &self,
+    ) -> (
+        TempDir,
+        crate::sumeragi::FairV2Ingress,
+        Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) {
+        let directory = TempDir::new().expect("temporary certified-response ingress gate");
+        let source_bytes =
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let ordinary_bytes = iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES
+            .get()
+            .checked_add(crate::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
+            .expect("default ordinary certified-response partition fits usize");
+        let completion_bytes = source_bytes
+            .checked_sub(crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+            .and_then(|bytes| bytes.checked_sub(crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES))
+            .and_then(|bytes| bytes.checked_sub(ordinary_bytes))
+            .expect("default certified-response source partitions are disjoint");
+        let global_plaintext = iroha_p2p::frame_plaintext_cap(
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+        );
+        let ingress = crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            32,
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+            source_bytes,
+            crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES,
+            completion_bytes,
+            global_plaintext.min(
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+            ),
+            global_plaintext.min(
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+            ),
+            global_plaintext.min(
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+            ),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
+                .get(),
+            None,
+        );
         let roster = self
             .context
             .roster
             .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        );
+            .map(|power| power.validator.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         ingress
             .configure_roster_for_context(
-                roster.clone(),
+                roster.iter().cloned(),
                 &self.context.network_id,
                 self.context.da_layout,
             )
-            .expect("configure productive certified-response ingress");
+            .expect("fixture roster fits the certified-response ingress");
         ingress.require_leader_wire_lifecycle_gate();
-        let directory = TempDir::new().expect("temporary certified-response leader-wire store");
-        let owner = [0xE8; 32];
         let capacity = crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
             roster.len(),
             self.context.da_layout.max_chunk_count,
         )
         .expect("derive certified-response leader-wire capacity");
+        let owner = [0x63; 32];
         let recovery_authority = crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
             self.context.id(),
             self.context.height,
@@ -1578,11 +1663,11 @@ impl ProductionTransportFixture {
         );
         let (gate, restore) =
             crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join(filename),
+                &directory.path().join("certified-response-leader-wire.wal"),
                 self.context.id(),
                 self.context.height,
                 owner,
-                roster.into_iter().collect(),
+                roster,
                 capacity,
                 self.context.da_layout.max_chunk_count,
                 recovery_authority,
@@ -1592,7 +1677,7 @@ impl ProductionTransportFixture {
             .expect("open certified-response leader-wire gate");
         ingress
             .bind_leader_wire_lifecycle_gate(
-                gate,
+                Arc::clone(&gate),
                 restore,
                 self._lifecycle_ordinals.clone(),
                 self.context.id(),
@@ -1601,8 +1686,8 @@ impl ProductionTransportFixture {
             .expect("bind certified-response leader-wire gate");
         ingress
             .open()
-            .expect("open productive certified-response ingress");
-        (ingress, directory)
+            .expect("open bound certified-response ingress");
+        (directory, ingress, gate)
     }
     fn quorum_certificate(
         &self,
@@ -1725,6 +1810,61 @@ impl ProductionTransportFixture {
         .to_vec();
         request
     }
+}
+
+fn queued_leader_wire_ingress_token(
+    ingress: &crate::sumeragi::FairV2Ingress,
+    gate: &crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate,
+    physical_admission_ordinal: u64,
+) -> crate::sumeragi::FairV2IngressLeaderWireToken {
+    let state = ingress.state.lock();
+    let entry = state
+        .lanes
+        .values()
+        .flat_map(|lane| lane.entries.iter())
+        .find(|entry| entry.admission_ordinal == physical_admission_ordinal)
+        .expect("selected certified response remains physically queued");
+    let ownership = entry
+        .inbound
+        .ingress_ownership()
+        .expect("selected certified response retains fair-ingress ownership");
+    assert!(ownership.validate_exact());
+    assert_eq!(
+        ownership.leader_wire_token(),
+        entry.leader_wire_token.as_ref()
+    );
+    assert!(ownership.leader_wire_runtime_receipt().is_none());
+    let token = ownership
+        .leader_wire_token()
+        .cloned()
+        .expect("selected certified response owns a durable Ingress token");
+    let record = state
+        .leader_wire_lifecycles
+        .get(&token.slot)
+        .expect("selected certified response owns one queue lifecycle record");
+    assert_eq!(record.token, token);
+    assert_eq!(
+        record.status,
+        crate::sumeragi::FairV2IngressLeaderWireStatus::Ingress
+    );
+    assert!(gate.exact_record_is_ingress_for_test(&token));
+    token
+}
+
+fn assert_leader_wire_body_terminal(
+    gate: &crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate,
+    token: &crate::sumeragi::FairV2IngressLeaderWireToken,
+) {
+    let receipt = gate
+        .lookup_exact(&token.identity, &token.slot)
+        .expect("read certified-response leader-wire terminal")
+        .expect("certified-response terminal retains its exact gate slot");
+    assert_eq!(receipt.token(), token);
+    assert_eq!(
+        receipt.status(),
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus::Terminal
+    );
+    assert!(gate.exact_record_is_durable_body_terminal_for_test(token));
 }
 #[test]
 fn production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close() {

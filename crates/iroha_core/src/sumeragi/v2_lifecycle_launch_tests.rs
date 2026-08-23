@@ -519,8 +519,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
             "pub(in crate::sumeragi) fn launch(",
-            "let Self { owner, retirement } = self;",
-            "let launched = owner.launch(inputs)?;",
+            "let Self {\n            owner,\n            mut retirement,\n        } = self;",
+            "let mut launched = owner.launch(inputs)?;",
+            "launched\n            .reauthenticate_recovered_complete_tip_successor(&mut retirement)",
             "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n            launched,\n            retirement,",
             "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
             "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
@@ -555,6 +556,11 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert_source_token_count(bound_launch, "owner.launch(inputs)?", 1);
+    assert_source_token_count(
+        bound_launch,
+        "reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+        1,
+    );
 
     assert!(source.contains("authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,"));
     assert_eq!(
@@ -611,14 +617,16 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert!(!launch.contains("reply_route_source_capacity()"));
-    assert!(!launch.contains("restore_lifecycle_ordinal_source"));
+    assert!(!launch.contains("RuntimeLifecycleOrdinalSource::after_high_watermark(0)"));
     assert_source_tokens_in_order(
         launch,
         &[
             "service.matches_lifecycle_launch(",
             "binding.storage_paths_for_launch(inputs.kura.as_ref())",
             ".prepare_leader_wire_launch(launch_storage.wal_path())",
-            "lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water)",
+            "super::authority::lifecycle_ordinal_authorities_after_high_watermark(",
+            "self.coordinator.high_water()",
+            "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".open_gate(",
             "self.body_store\n                        .as_ref()",
@@ -641,7 +649,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
         1,
-        "only service startup consumes the exact auxiliary capacity after ordinal restoration retired"
+        "launch must pass the retained auxiliary capacity exactly once into service startup"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -836,7 +844,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "pending_kura_apply_replay:",
             "recovered_local_proposal_attempt:",
             "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
-            "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
             "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
         ],
     );
@@ -1256,6 +1263,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "&mut self.launched.executor",
             "&mut self.launched.services",
             "local_proposal",
+            "fn close_runner_ingress_for_finalized_drain(",
+            "receiver: &Arc<FairV2Ingress>",
+            "self.runner_activation.close_ingress(receiver)?",
+            "Arc::ptr_eq(",
         ],
     );
     assert_forbidden_source_tokens(
@@ -1364,6 +1375,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
             "if ready_to_finish && !rollover_ready",
+            "if rollover_ready",
+            "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
+            "let drained_terminal_ingress = activated.with_runner_runtime(\n                &mut active_runner,\n                |_owner, executor, services, _local_proposal| {\n                    let drained = drain_decided_lane_recovery_ingress(",
+            "if drained_terminal_ingress",
+            "continue;",
+            "ensure_closed_drained_cut()",
+            "finalize_lifecycle_height(",
         ],
     );
 
@@ -1541,7 +1559,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let mut launched = owner",
             "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
             "ProductionCompletionDispatchV1::ApplyQueued",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+            "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
             ".retain_merge_sidecars_for_global_view(",
@@ -1775,6 +1793,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "ingress_ready: Arc<AtomicBool>",
             "block_ingress: Arc<FairV2Ingress>",
             "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+            "fn close_ingress(",
+            "Finalized rollover uses this to establish a finite ingress cut",
             "fn retire(",
             "retire_lifecycle_runner_ingress(&self.ingress_ready, &self.block_ingress, launched_ingress)",
             "fn retire_lifecycle_runner_ingress(",
@@ -1799,9 +1819,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_token_count(
         activated_runner,
         "self.ingress_ready.store(false, Ordering::Release)",
-        1,
+        2,
     );
-    assert_source_token_count(activated_runner, "self.block_ingress.close()", 1);
+    assert_source_token_count(activated_runner, "self.block_ingress.close()", 2);
     let helper = &activated_runner
         [source_token_position(activated_runner, "fn retire_lifecycle_runner_ingress(")..];
     assert_source_tokens_in_order(
@@ -2222,7 +2242,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     let settlement = source_region(
         source,
         "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "/// Drive and retry one exact missing-sidecar recovered Apply owner.",
+        "/// Drive and retry one exact missing-sidecar lifecycle Decision Apply owner.",
     );
     assert_source_tokens_in_order(
         settlement,
@@ -2259,7 +2279,7 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
         .split_once("fn dispatch_completion_with_runner_debt(")
-        .expect("recovered Completion has one composite dispatch transaction")
+        .expect("lifecycle Completion has one composite dispatch transaction")
         .1
         .split_once(
             "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
@@ -2267,7 +2287,7 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
         .expect("composite dispatch stays a bounded source region")
         .0;
     let census = dispatch
-        .find("capture_recovered_completion_capacity_census(probes)")
+        .find("capture_lifecycle_completion_capacity_census(probes)")
         .expect("the joint physical census is captured");
     let claim = dispatch
         .find("self.coordinator.plan_turn(inputs)")
@@ -2556,6 +2576,68 @@ fn authenticated_current_serve_queue_refresh_retries_without_closing_output() {
             "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ],
     );
+}
+
+#[test]
+fn certified_response_queue_refresh_retries_without_closing_output() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let response_path = source_region(
+        driver,
+        "if !selected_ingress_is_certified_body_response",
+        "fn drive_recovered_ingress_selector",
+    );
+
+    let narrowing = source_region(
+        response_path,
+        "let expected_context = lifecycle_context_for_ingress(self.executor.context());",
+        "match contextual",
+    );
+    let narrowing_retry = source_region(
+        narrowing,
+        "Err((FairIngressQueueCutError::QueueCutChanged, retained))",
+        "Err((error, retained))",
+    );
+    assert_source_tokens_in_order(
+        narrowing_retry,
+        &[
+            "drop(retained);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!narrowing_retry.contains("close_output_for_restart()"));
+
+    let priority = source_region(
+        response_path,
+        "let selected_priority = match self",
+        "match selected_priority",
+    );
+    let ordinary = source_region(
+        response_path,
+        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+    );
+    let recovered = source_region(
+        response_path,
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+        "self.drive_recovered_ingress_selector(selector, runner)",
+    );
+
+    for structural_failure in [
+        source_region(narrowing, "Err((error, retained))", "};"),
+        source_region(priority, "Err(error)", "};"),
+        source_region(ordinary, "Err(error)", "};"),
+        source_region(recovered, "Err(error)", "};"),
+    ] {
+        assert_source_tokens_in_order(
+            structural_failure,
+            &[
+                "close_output_for_restart();",
+                "drop(runner);",
+                "ProductionLifecycleIngressSelectionV1::RestartRequired",
+            ],
+        );
+    }
 }
 
 #[test]

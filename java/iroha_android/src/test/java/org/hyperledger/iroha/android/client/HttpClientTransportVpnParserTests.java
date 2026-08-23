@@ -25,7 +25,7 @@ import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 /** Strict VPN response-schema and successful-status contract coverage. */
 final class HttpClientTransportVpnParserTests {
-  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
+  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(688);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
 
   private HttpClientTransportVpnParserTests() {}

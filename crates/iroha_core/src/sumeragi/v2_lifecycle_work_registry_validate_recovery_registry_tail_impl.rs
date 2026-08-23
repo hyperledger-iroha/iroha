@@ -1,15 +1,15 @@
-// Terminal recovered-Apply and durable-Validate registry transitions.
+// Lifecycle Decision Apply terminal and durable Validate registry transitions.
 
 impl ConcreteLifecycleWorkRegistry {
     /// Bind one guarded Applied worker result to the exact in-flight carrier.
-    pub(super) fn prepare_recovered_decision_apply_terminal_transition(
+    pub(super) fn prepare_lifecycle_decision_apply_terminal_transition(
         &self,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
-        completion: &crate::sumeragi::v2_apply::RecoveredDecisionApplyCompletionV1,
+        completion: &crate::sumeragi::v2_apply::LifecycleDecisionApplyCompletionV1,
     ) -> Option<(
-        PreparedRecoveredDecisionApplyTerminalTransitionV1,
-        crate::sumeragi::v2::RecoveredDecisionApplyAdapterCompletionAuthorityV1,
+        PreparedLifecycleDecisionApplyTerminalTransitionV1,
+        crate::sumeragi::v2::LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     )> {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
@@ -24,58 +24,114 @@ impl ConcreteLifecycleWorkRegistry {
         let (&slot, &digest) = lease.physical_slots().first_key_value()?;
         let address = ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), slot)?;
         let work = self.entries.get(&address)?;
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
-            return None;
-        };
         let dispatch_key = completion.dispatch_key();
-        if work.digest != digest
-            || !work.validates_at(address)
-            || !apply.matches_claimed_record(address, digest, coordinator, lease)
-            || apply.dispatch_key != Some(dispatch_key)
-            || !dispatch_key.matches(coordinator.active_context, address, digest)
-        {
+        if work.digest != digest || !work.validates_at(address) {
             return None;
         }
-        let authority = apply.carrier.project_apply_completion(
-            RecoveredDecisionApplyCompletionProjectionPermit::new(),
-            completion,
-        )?;
+        let (lineage, authority) = match &work.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(apply)
+                if apply.matches_claimed_record(address, digest, coordinator, lease)
+                    && apply.dispatch_key == Some(dispatch_key)
+                    && dispatch_key.matches(
+                        coordinator.active_context,
+                        address,
+                        digest,
+                        LifecycleDecisionApplyLineageV1::Live,
+                    ) =>
+            {
+                (
+                    LifecycleDecisionApplyLineageV1::Live,
+                    apply.project_completion(
+                        LifecycleDecisionApplyCompletionProjectionPermitV1::new(),
+                        completion,
+                    )?,
+                )
+            }
+            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
+                if apply.matches_claimed_record(address, digest, coordinator, lease)
+                    && apply.dispatch_key == Some(dispatch_key)
+                    && dispatch_key.matches(
+                        coordinator.active_context,
+                        address,
+                        digest,
+                        LifecycleDecisionApplyLineageV1::Recovered,
+                    ) =>
+            {
+                (
+                    LifecycleDecisionApplyLineageV1::Recovered,
+                    apply.carrier.project_recovered_apply_completion(
+                        LifecycleDecisionApplyCompletionProjectionPermitV1::new(),
+                        address,
+                        completion,
+                    )?,
+                )
+            }
+            _ => return None,
+        };
         Some((
-            PreparedRecoveredDecisionApplyTerminalTransitionV1 {
+            PreparedLifecycleDecisionApplyTerminalTransitionV1 {
                 address,
                 digest,
                 dispatch_key,
-                _linearity: RecoveredDecisionApplyTerminalTransitionLinearity,
+                lineage,
+                _linearity: LifecycleDecisionApplyTerminalTransitionLinearityV1,
             },
             authority,
         ))
     }
-    /// Publish one exact recovered Apply terminal around LedgerV1 fsync.
+    /// Publish one exact lifecycle Apply terminal around LedgerV1 fsync.
     ///
     /// Every logical and physical check occurs before `publish`. Success is
     /// followed only by the infallible removal of the prevalidated carrier.
-    pub(super) fn publish_recovered_decision_apply_terminal_transition<T, E>(
+    pub(super) fn publish_lifecycle_decision_apply_terminal_transition<T, E>(
         &mut self,
-        prepared: PreparedRecoveredDecisionApplyTerminalTransitionV1,
+        prepared: PreparedLifecycleDecisionApplyTerminalTransitionV1,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
         lease: &TurnLease,
         publish: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, RecoveredDecisionApplyTerminalPublicationError<E>> {
+    ) -> Result<T, LifecycleDecisionApplyTerminalPublicationErrorV1<E>> {
         let Some(work) = self.entries.get(&prepared.address) else {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
+            return Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Preflight(
                 prepared,
             ));
         };
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
-                prepared,
-            ));
+        let carrier_matches = match (&work.kind, prepared.lineage) {
+            (
+                ConcreteLifecycleWorkKind::DurableLiveWalApply(apply),
+                LifecycleDecisionApplyLineageV1::Live,
+            ) => {
+                apply.dispatch_key == Some(prepared.dispatch_key)
+                    && apply.matches_claimed_record(
+                        prepared.address,
+                        prepared.digest,
+                        current,
+                        lease,
+                    )
+            }
+            (
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply),
+                LifecycleDecisionApplyLineageV1::Recovered,
+            ) => {
+                apply.dispatch_key == Some(prepared.dispatch_key)
+                    && apply.matches_claimed_record(
+                        prepared.address,
+                        prepared.digest,
+                        current,
+                        lease,
+                    )
+            }
+            _ => false,
         };
         let exact_current = work.digest == prepared.digest
             && work.validates_at(prepared.address)
-            && apply.dispatch_key == Some(prepared.dispatch_key)
-            && apply.matches_claimed_record(prepared.address, prepared.digest, current, lease);
+            && prepared.dispatch_key.matches(
+                current.active_context,
+                prepared.address,
+                prepared.digest,
+                prepared.lineage,
+            )
+            && carrier_matches;
         let mut expected = current.stage_durable_transaction();
         expected.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
         let same_ledger_target = matches!(
@@ -111,7 +167,7 @@ impl ConcreteLifecycleWorkRegistry {
                         == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
                 });
         if !exact_current || !exact_staged {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
+            return Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Preflight(
                 prepared,
             ));
         }
@@ -120,13 +176,13 @@ impl ConcreteLifecycleWorkRegistry {
                 drop(
                     self.entries
                         .remove(&prepared.address)
-                        .expect("recovered Apply preflight retained the exact carrier"),
+                        .expect("lifecycle Apply preflight retained the exact carrier"),
                 );
                 Ok(value)
             }
-            Err(error) => Err(RecoveredDecisionApplyTerminalPublicationError::Publication(
-                error, prepared,
-            )),
+            Err(error) => {
+                Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Publication(error, prepared))
+            }
         }
     }
     /// Prepare execution of one exact Ready durable Validate completion.

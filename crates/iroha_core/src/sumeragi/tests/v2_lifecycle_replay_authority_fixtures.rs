@@ -4,7 +4,6 @@ use crate::sumeragi::{
     v2::AdapterEquivocationEvidence,
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     v2_core::Generation,
-    v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test,
     v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     v2_transport::authenticate_certified_body_request,
 };
@@ -23,19 +22,6 @@ use std::collections::BTreeSet;
 #[cfg(feature = "bls")]
 use std::num::NonZeroU64;
 use tempfile::TempDir;
-fn replay_authority_source_for_test() -> String {
-    include_str!("../v2_lifecycle_replay_authority.rs")
-        .replacen(
-            "include!(\"v2_lifecycle_replay_authority_live_wal.rs\");\n",
-            include_str!("../v2_lifecycle_replay_authority_live_wal.rs"),
-            1,
-        )
-        .replacen(
-            "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
-            include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
-            1,
-        )
-}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct ReplayCase {
     pub(in crate::sumeragi::v2_lifecycle_coordinator) authority: LifecycleReplayAuthorityV1,
     pub(in crate::sumeragi::v2_lifecycle_coordinator) key: LifecycleKey,
@@ -477,6 +463,43 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_timeout_sign_broadcas
     );
     [parent, child]
 }
+
+/// Build the canonical replay pair for one exact unsigned/signed Prepare-vote edge.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_prepare_sign_broadcast_fixture(
+    context: LifecycleContext,
+    unsigned: wire::Vote,
+    signed: wire::Vote,
+) -> [ReplayCase; 2] {
+    assert_eq!(unsigned.phase, wire::GlobalPhase::Prepare);
+    assert_eq!(signed.phase, wire::GlobalPhase::Prepare);
+    assert!(unsigned.signature.is_empty());
+    assert!(!signed.signature.is_empty());
+    let mut expected = unsigned.clone();
+    expected.signature.clone_from(&signed.signature);
+    assert_eq!(expected, signed);
+    let locator = RecoveredWalFrameIdentity::for_test(90, 91, [0xD9; 32]).persisted_locator();
+    let tag = ReplayEventTagV1::new(unsigned.round.height, unsigned.round.view, 0);
+    let parent = replay_case(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role: ReplayWalRoleV1::PREPARE_INTENT,
+            tag,
+            action: WalReplayActionV1::SignVote(unsigned),
+        }),
+        LifecycleStageKind::SignPrepareVote,
+        DurablePayloadReference::None,
+    );
+    let child = replay_case(
+        context,
+        LifecycleReplaySourceV1::ConsensusBroadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        )),
+        LifecycleStageKind::BroadcastPrepareVote,
+        DurablePayloadReference::None,
+    );
+    [parent, child]
+}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_replay_authority_for_payload_fixture(
     context: LifecycleContext,
     stage: LifecycleStageKind,
@@ -513,6 +536,57 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_execution_commit
     Fixture::for_record(context, seed)
         .prepare_qc
         .execution_commitment
+}
+/// Build one pending certified-Fetch candidate from its real verified fixture inputs.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_pending_certified_fetch_candidate_fixture(
+    verified: &crate::sumeragi::v2::VerifiedHeightContext,
+    effect: &AdapterEffect,
+    pending: &PendingRuntimeEffectBinding,
+) -> Option<CandidateAdmission> {
+    let context = super::super::projection::lifecycle_context(verified.context());
+    let projected = super::super::projection::authority_free_admission_projection(
+        context, verified, effect, pending,
+    )
+    .ok()?;
+    let AdapterEffect::FetchBody {
+        tag,
+        manifest: Some(manifest),
+        certified_sources,
+        certificate: Some(certificate),
+        ..
+    } = effect
+    else {
+        return None;
+    };
+    if verified.verify_quorum_certificate(certificate).is_err()
+        || !certified_sources.iter().eq(verified
+            .context()
+            .roster
+            .iter()
+            .map(|entry| &entry.validator))
+    {
+        return None;
+    }
+    let authority = canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+            origin: BodyPipelineOriginV1::Certified {
+                certificate: certificate.clone(),
+                manifest: manifest.clone(),
+                fetch_manifest_present: true,
+                certified_sources: certified_sources.clone(),
+            },
+        }),
+        LifecycleStageKind::FetchBody,
+        ReplayPayloadBindingV1::None,
+    )?;
+    candidate_from_authorized_projection(
+        context,
+        projected,
+        DurablePayloadReference::None,
+        authority,
+    )
 }
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_recovered_decision_terminal_family_fixture(
     context: LifecycleContext,

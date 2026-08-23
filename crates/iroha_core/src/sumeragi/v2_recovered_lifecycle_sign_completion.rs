@@ -1,54 +1,4 @@
-impl RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
-    /// Bind a dedicated Apply worker result to one exact installed carrier.
-    ///
-    /// The registry-only permit prevents detached result material from
-    /// entering the reducer regardless of whether the Decision arrived live
-    /// or was reconstructed from durable WAL state.
-    pub(in crate::sumeragi) fn from_registry_projection(
-        _permit: RecoveredDecisionApplyCompletionProjectionPermit,
-        context: LifecycleContext,
-        installed_digest: LifecycleDigest,
-        effect: &AdapterEffect,
-        validated_receipt: &ValidatedBodyReceipt,
-        completion: &super::v2_apply::RecoveredDecisionApplyCompletionV1,
-    ) -> Option<Self> {
-        let AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        } = effect
-        else {
-            return None;
-        };
-        let key = completion.dispatch_key();
-        let artifact = completion.artifact();
-        let receipt = completion.receipt();
-        if !key.matches_carrier(context, installed_digest)
-            || completion.subject() != *subject
-            || completion.certificate() != certificate
-            || completion.validated_receipt() != validated_receipt
-            || artifact.validate().is_err()
-            || !key.matches_height_context(&artifact.height_context)
-            || artifact.subject != *subject
-            || &artifact.commit_qc != certificate
-            || receipt.height() != artifact.height_context.height
-            || receipt.context_id() != artifact.height_context.id()
-            || receipt.block_hash() != subject.block_hash
-            || receipt.subject() != *subject
-            || receipt.certificate() != certificate.as_ref()
-            || receipt.artifact_hash() != HashOf::new(artifact)
-        {
-            return None;
-        }
-        Some(Self {
-            tag: *tag,
-            subject: *subject,
-            dispatch_key: key,
-            receipt: receipt.clone(),
-            artifact: artifact.clone(),
-        })
-    }
-
+impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
     /// Check a guarded completion against the exact dispatched pending-Kura replay.
     ///
     /// The registry has already rebound this result to the sole active carrier;
@@ -60,11 +10,13 @@ impl RecoveredDecisionApplyAdapterCompletionAuthorityV1 {
         context: &wire::HeightContext,
         evidence: &super::v2_effects::PendingKuraApplyRecoveryEvidence,
     ) -> bool {
-        evidence.stage()
-            == super::v2_effects::PendingKuraApplyRecoveryStage::ApplicationDispatched
+        self.lineage() == LifecycleDecisionApplyLineageV1::Recovered
+            && evidence.stage()
+                == super::v2_effects::PendingKuraApplyRecoveryStage::ApplicationDispatched
             && evidence.is_exact(context)
             && self.tag == evidence.replay_tag()
             && self.subject == evidence.commit_subject()
+            && self.dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()
             && self.dispatch_key.matches_height_context(context)
             && self.artifact.validate().is_ok()
             && self.artifact.height_context == *context

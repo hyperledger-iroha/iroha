@@ -95,9 +95,11 @@ use iroha_smart_contract::data_model::{
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
         offline::{
-            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
-            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
-            TopUpKagemushaRecursiveV4,
+            ActivateKagemushaRecursiveReleaseV4, AuthorizeKagemushaTairaCanaryV4,
+            CancelKagemushaRecursiveReleaseV4, DeactivateKagemushaRecursiveIssuanceV4,
+            EnableKagemushaRecursiveIssuanceV4, RecordKagemushaTairaCanaryV4,
+            RedeemKagemushaRecursiveV4, RegisterOfflineDeviceAttestation,
+            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
         },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
@@ -1026,6 +1028,21 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
             execute!(executor, isi);
         }
+        if let Some(isi) = any.downcast_ref::<EnableKagemushaRecursiveIssuanceV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CancelKagemushaRecursiveReleaseV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<DeactivateKagemushaRecursiveIssuanceV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<AuthorizeKagemushaTairaCanaryV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RecordKagemushaTairaCanaryV4>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
             execute!(executor, isi);
         }
@@ -1661,17 +1678,17 @@ mod core_authorization_dispatch_tests {
             InstructionBox::from(RegisterOfflineDeviceAttestation::new(
                 offline_attestation_registration(authority.clone()),
             )),
-            InstructionBox::from(SetOfflineDeviceAttestationPolicy::new(
-                OfflineDeviceAttestationPolicy {
-                    version: 1,
-                    trusted_roots: Vec::new(),
-                    revoked_certificate_sha256: Vec::new(),
-                    ios_apps: Vec::new(),
-                    android_apps: Vec::new(),
-                    require_ios_app_policy: false,
-                    require_android_app_policy: false,
-                },
-            )),
+            SetOfflineDeviceAttestationPolicy::new(OfflineDeviceAttestationPolicy {
+                version: 1,
+                trusted_roots: Vec::new(),
+                revoked_certificate_tbs_sha256: Vec::new(),
+                ios_apps: Vec::new(),
+                android_apps: Vec::new(),
+                android_status_snapshot: None,
+                require_ios_app_policy: false,
+                require_android_app_policy: false,
+            })
+            .into(),
         ];
         for instruction in instructions {
             let mut executor = TestExecutor::new(authority.clone());
@@ -1679,6 +1696,31 @@ mod core_authorization_dispatch_tests {
             assert!(
                 executor.verdict().is_ok(),
                 "offline instructions must reach Core authorization"
+            );
+        }
+    }
+    #[test]
+    fn default_executor_forwards_the_complete_kagemusha_canary_lifecycle() {
+        let source = include_str!("mod.rs");
+        let start = source
+            .find("// Core owns offline note/device validation")
+            .expect("Kagemusha dispatch marker");
+        let tail = &source[start..];
+        let end = tail
+            .find("// Core owns the signature, chain/client binding")
+            .expect("Kagemusha dispatch terminator");
+        let dispatch = &tail[..end];
+        for instruction in [
+            "ActivateKagemushaRecursiveReleaseV4",
+            "EnableKagemushaRecursiveIssuanceV4",
+            "CancelKagemushaRecursiveReleaseV4",
+            "DeactivateKagemushaRecursiveIssuanceV4",
+            "AuthorizeKagemushaTairaCanaryV4",
+            "RecordKagemushaTairaCanaryV4",
+        ] {
+            assert!(
+                dispatch.contains(instruction),
+                "default executor Kagemusha dispatch omitted {instruction}"
             );
         }
     }
@@ -3010,6 +3052,10 @@ pub mod account {
         /// Delegates finalization authorisation to the core recovery state machine.
         visit_finalize_account_recovery(FinalizeAccountRecovery);
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive permission match keeps account-association policy auditable"
+    )]
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
         account_id: &AccountId,

@@ -144,10 +144,15 @@ if [[ "$("$XCODEGEN_BINARY" --version)" != "Version: 2.46.0" ]]; then
   echo "[kagemusha-ios-lab] ERROR: exact XcodeGen 2.46.0 is required" >&2
   exit 69
 fi
-if [[ "$("$XCODEBUILD_BINARY" -version | /usr/bin/head -1)" != "Xcode 26.6" ]]; then
-  echo "[kagemusha-ios-lab] ERROR: exact Xcode 26.6 is required" >&2
+XCODE_VERSION="$("$XCODEBUILD_BINARY" -version)"
+if [[ "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '1p')" != "Xcode 26.6" ]] \
+  || [[ ! "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '2p')" =~ ^Build\ version\ [A-Za-z0-9.]+$ ]] \
+  || [[ -n "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '3p')" ]]
+then
+  echo "[kagemusha-ios-lab] ERROR: exact Xcode 26.6 with one build-version line is required" >&2
   exit 69
 fi
+IPHONEOS_SDK_VERSION="$("$XCRUN_BINARY" --sdk iphoneos --show-sdk-version)"
 
 NATIVE_MANIFEST="$NATIVE_BUILD_ROOT/NoritoBridgeCandidateLab.artifacts.json"
 SOURCE_XCFRAMEWORK="$NATIVE_BUILD_ROOT/NoritoBridgeCandidateLab.xcframework"
@@ -174,7 +179,8 @@ done
 
 verify_native_framework() {
   local framework="$1"
-  "$PYTHON3_BINARY" -I - "$NATIVE_MANIFEST" "$framework" <<'PY'
+  "$PYTHON3_BINARY" -I - "$NATIVE_MANIFEST" "$framework" \
+    "$XCODE_VERSION" "$IPHONEOS_SDK_VERSION" <<'PY'
 from pathlib import Path
 import hashlib
 import json
@@ -250,6 +256,10 @@ canonical = (
 )
 if manifest_bytes != canonical:
     raise SystemExit("native build manifest is not canonical JSON")
+if manifest.get("xcode_version") != sys.argv[3]:
+    raise SystemExit("native build manifest Xcode differs from the candidate runner")
+if manifest.get("iphoneos_sdk_version") != sys.argv[4]:
+    raise SystemExit("native build manifest iphoneos SDK differs from the candidate runner")
 files = manifest.get("files")
 expected_manifest_paths = {
     f"NoritoBridgeCandidateLab.xcframework/{relative}" for relative in expected
@@ -422,7 +432,8 @@ verify_native_framework "$XCFRAMEWORK"
 "$PYTHON3_BINARY" -I - \
   "$CANDIDATE_RECORD" "$CANDIDATE_MANIFEST" "$ROSTER" "$ARTIFACT_ROOT" \
   "$SCENARIO_ROOT" "$REVIEWED_SOURCE_CLOSURE" "$NATIVE_MANIFEST" \
-  "$NATIVE_LIBRARY" "$DEVICE_HASHED_JSON" "$RAW_INPUT/session-v1.json" <<'PY'
+  "$NATIVE_LIBRARY" "$DEVICE_HASHED_JSON" "$RAW_INPUT/session-v1.json" \
+  "$XCODE_VERSION" "$IPHONEOS_SDK_VERSION" <<'PY'
 from pathlib import Path
 import hashlib
 import json
@@ -439,6 +450,8 @@ native_manifest_path = Path(sys.argv[7])
 native_library = Path(sys.argv[8])
 device = json.loads(Path(sys.argv[9]).read_text(encoding="ascii"))
 output = Path(sys.argv[10])
+current_xcode_version = sys.argv[11]
+current_iphoneos_sdk_version = sys.argv[12]
 
 artifact_files = (
     "step-eq.params-ipa.krv4",
@@ -551,6 +564,8 @@ if (
     or native["source_repo_dirty"] is not False
     or native["candidate_record_sha256"] != digest(candidate)
     or native["reviewed_source_closure_descriptor_sha256"] != digest(closure)
+    or native["xcode_version"] != current_xcode_version
+    or native["iphoneos_sdk_version"] != current_iphoneos_sdk_version
 ):
     raise SystemExit("native build manifest does not bind exact physical candidate inputs")
 library_relative = (

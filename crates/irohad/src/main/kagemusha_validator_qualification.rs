@@ -2,14 +2,10 @@
 //! Kagemusha V4 validator qualification seal.
 
 use iroha_core::smartcontracts::isi::offline::{
-    KagemushaValidatorQualificationCatalogCaptureV1,
-    VerifiedKagemushaV4RuntimeEffectiveConfigV1,
+    KagemushaValidatorQualificationCatalogCaptureV1, VerifiedKagemushaV4RuntimeEffectiveConfigV1,
 };
 use iroha_crypto::{KeyPair, PublicKey};
-use iroha_data_model::{
-    offline::KagemushaV4ValidatorQualificationSealV1,
-    peer::PeerId,
-};
+use iroha_data_model::{offline::KagemushaV4ValidatorQualificationSealV1, peer::PeerId};
 use iroha_genesis::GenesisBlock;
 
 /// Same-read startup sources which may be consumed only inside the daemon.
@@ -95,7 +91,10 @@ pub(super) enum KagemushaValidatorQualificationUnavailableV1 {
 
 /// Result of the local one-seal seam; it never publishes or collects seals.
 #[derive(Debug)]
-#[allow(variant_size_differences)] // Boxing the one-byte unavailable reason would add a needless allocation.
+#[allow(
+    variant_size_differences,
+    reason = "the boxed signed seal and tiny explicit-unavailable result are intentionally asymmetric; boxing the unavailable reason would add a pointless allocation"
+)]
 pub(super) enum KagemushaValidatorQualificationOutcomeV1 {
     /// Qualification was deliberately unavailable and no signature was made.
     Unavailable(KagemushaValidatorQualificationUnavailableV1),
@@ -189,13 +188,27 @@ pub(super) fn evaluate_stock_launcher_unavailable_v1(
         Some(validator_signer),
     )? {
         KagemushaValidatorQualificationOutcomeV1::Unavailable(reason) => {
-            let _ = reason;
+            require_expected_stock_launcher_unavailable_reason_v1(reason)
         }
-        KagemushaValidatorQualificationOutcomeV1::Signed(seal) => {
-            let _ = seal;
-        }
+        KagemushaValidatorQualificationOutcomeV1::Signed(_) => Err(
+            "stock launcher unexpectedly signed a Kagemusha validator qualification without trusted promotion inputs"
+                .to_owned(),
+        ),
     }
-    Ok(())
+}
+
+fn require_expected_stock_launcher_unavailable_reason_v1(
+    reason: KagemushaValidatorQualificationUnavailableV1,
+) -> Result<(), String> {
+    match reason {
+        KagemushaValidatorQualificationUnavailableV1::SnapshotBootstrap
+        | KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation => {
+            Ok(())
+        }
+        reason => Err(format!(
+            "stock launcher returned an unexpected Kagemusha qualification outcome: {reason:?}"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +246,14 @@ pub(super) mod tests {
             vec!["41".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x55; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: 1_800_000_000_000,
+                last_modified_ms: Some(1_800_000_000_000),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             1_800_000_000_000,
         )
         .expect("production device policy fixture");
@@ -288,6 +309,11 @@ pub(super) mod tests {
             "the stock launcher must accept an explicit unavailable outcome"
         );
         let ordinary = KagemushaStartupQualificationSourcesV1::default();
+        assert!(
+            evaluate_stock_launcher_unavailable_v1(&ordinary, None, &validator_id, &signer,)
+                .is_ok(),
+            "the stock launcher must accept its expected missing-promotion outcome"
+        );
         assert!(matches!(
             try_build_kagemusha_validator_qualification_v1(
                 &ordinary,
@@ -302,6 +328,32 @@ pub(super) mod tests {
                 KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation
             ))
         ));
+    }
+
+    #[test]
+    fn stock_launcher_reason_filter_rejects_every_other_unavailable_outcome() {
+        for reason in [
+            KagemushaValidatorQualificationUnavailableV1::SnapshotBootstrap,
+            KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation,
+        ] {
+            require_expected_stock_launcher_unavailable_reason_v1(reason)
+                .expect("the stock launcher may report only its two reachable unavailable states");
+        }
+
+        for reason in [
+            KagemushaValidatorQualificationUnavailableV1::MissingFlattenedConfigSource,
+            KagemushaValidatorQualificationUnavailableV1::MissingSignedGenesis,
+            KagemushaValidatorQualificationUnavailableV1::MissingRuntimeEffectiveConfig,
+            KagemushaValidatorQualificationUnavailableV1::MissingValidatorSigner,
+            KagemushaValidatorQualificationUnavailableV1::MissingCatalogQualification,
+        ] {
+            let error = require_expected_stock_launcher_unavailable_reason_v1(reason)
+                .expect_err("an unreachable stock-launcher outcome must fail closed");
+            assert!(
+                error.contains(&format!("{reason:?}")),
+                "the diagnostic must name the unexpected outcome: {error}"
+            );
+        }
     }
 
     #[test]

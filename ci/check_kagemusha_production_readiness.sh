@@ -590,9 +590,11 @@ READINESS_SOURCE_SUPPORT = (
     "ci/check_kagemusha_production_readiness_source_support.py"
 )
 READINESS_RECURSION_SOURCE_CONTRACT = "ci/check_kagemusha_recursion_source_contract.py"
+READINESS_LIFECYCLE_SOURCE_CONTRACT = "ci/check_kagemusha_lifecycle_source_contract.py"
 READINESS_SOURCE_PROVIDERS = (
     READINESS_SOURCE_SUPPORT,
     READINESS_RECURSION_SOURCE_CONTRACT,
+    READINESS_LIFECYCLE_SOURCE_CONTRACT,
     READINESS_SOURCE_CONTRACT,
 )
 READINESS_SELF_TEST = "ci/check_kagemusha_production_readiness_self_test.py"
@@ -697,6 +699,7 @@ FINAL_METADATA = (
     "release-attestation-v4.norito",
     "physical-device-benchmark.evidence",
     "cryptographic-review.evidence",
+    "internal-validation-receipt-v1.norito",
     "recursive-step-two-qualification-v4.norito",
     "promotion-record-v4.norito",
 )
@@ -707,11 +710,12 @@ MAX_DIGEST_SIDECAR_BYTES = 65
 MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
 MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
+MAX_INTERNAL_VALIDATION_RECEIPT_BYTES = 1024 * 1024
 MAX_QUALIFICATION_RECEIPT_BYTES = 2 * 384 * 1024 + 16 * 1024
 MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
 MAX_KAGAMI_VERIFIER_BYTES = 512 * 1024 * 1024
 MAX_READINESS_GATE_BYTES = 8 * 1024 * 1024
-MAX_READINESS_SOURCE_CONTRACT_BYTES = 128 * 1024
+MAX_READINESS_SOURCE_CONTRACT_BYTES = 140 * 1024
 MAX_READINESS_SELF_TEST_BYTES = 1024 * 1024
 MAX_REVIEWED_SOURCE_CLOSURE_BYTES = 16 * 1024 * 1024
 MAX_REVIEWED_HELPER_BYTES = 4 * 1024 * 1024
@@ -733,6 +737,10 @@ MAX_CATALOG_AGGREGATE_BYTES = 12 * 1024 * 1024 * 1024
 BOUNDED_AUTHENTICATED_METADATA = (
     ("release-attestation-v4.norito", MAX_RELEASE_ATTESTATION_BYTES),
     ("cryptographic-review.evidence", MAX_CRYPTOGRAPHIC_REVIEW_BYTES),
+    (
+        "internal-validation-receipt-v1.norito",
+        MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,
+    ),
     ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),
 )
 KAGAMI_VERIFIER_PATH_ENV = "KAGEMUSHA_V4_KAGAMI_BIN"
@@ -2579,6 +2587,7 @@ def validate_kagami_verification_report(
     policy_sha256: str,
     promotion_record_sha256: str,
     qualification_receipt_sha256: str,
+    internal_validation_receipt_sha256: str,
     ios_candidate_sha256: str,
 ) -> None:
     """Authenticate the complete machine report emitted by the pinned verifier."""
@@ -2589,6 +2598,7 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "internal_validation_receipt_sha256",
         "authenticated_source_seal_projection_sha256",
         "reviewed_cargo_binary_sha256",
         "reviewed_rustc_binary_sha256",
@@ -2618,6 +2628,11 @@ def validate_kagami_verification_report(
         raise ValueError("Kagami reconstructed a different promotion record")
     if report.get("qualification_receipt_sha256") != qualification_receipt_sha256:
         raise ValueError("Kagami verified a different recursive qualification receipt")
+    if (
+        report.get("internal_validation_receipt_sha256")
+        != internal_validation_receipt_sha256
+    ):
+        raise ValueError("Kagami verified a different internal-validation receipt")
     if report.get("candidate_sha256") != ios_candidate_sha256:
         raise ValueError(
             "signed physical-iOS candidate differs from Kagami's reconstructed candidate"
@@ -2627,6 +2642,7 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "internal_validation_receipt_sha256",
         "authenticated_source_seal_projection_sha256",
         "reviewed_cargo_binary_sha256",
         "reviewed_rustc_binary_sha256",
@@ -4459,6 +4475,7 @@ def promotion_errors() -> list[str]:
         ios_candidate_sha256: str | None = None
         promotion_record_sha256: str | None = None
         qualification_receipt_sha256: str | None = None
+        internal_validation_receipt_sha256: str | None = None
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
@@ -4654,6 +4671,8 @@ def promotion_errors() -> list[str]:
                 )
                 if name == "promotion-record-v4.norito":
                     promotion_record_sha256 = hashlib.sha256(payload).hexdigest()
+                elif name == "internal-validation-receipt-v1.norito":
+                    internal_validation_receipt_sha256 = hashlib.sha256(payload).hexdigest()
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
         evidence_bytes: bytes | None = None
@@ -4733,6 +4752,7 @@ def promotion_errors() -> list[str]:
                 ios_candidate_sha256 is None
                 or promotion_record_sha256 is None
                 or qualification_receipt_sha256 is None
+                or internal_validation_receipt_sha256 is None
             ):
                 errors.append(
                     f"{directory.name}: authenticated verification inputs are incomplete"
@@ -4764,6 +4784,7 @@ def promotion_errors() -> list[str]:
                         policy_sha256=policy_sha256,
                         promotion_record_sha256=promotion_record_sha256,
                         qualification_receipt_sha256=qualification_receipt_sha256,
+                        internal_validation_receipt_sha256=internal_validation_receipt_sha256,
                         ios_candidate_sha256=ios_candidate_sha256,
                     )
                 except (UnicodeError, ValueError, json.JSONDecodeError) as error:
@@ -4880,11 +4901,30 @@ else:
         )
 if not callable(recursion_source_contract_evaluator):
     source_contract_errors.append("recursion source-contract provider evaluator is unavailable")
+lifecycle_source_contract_evaluator: Callable[..., list[str]] | None = None
+lifecycle_bytes = source_contract_bytes.get(READINESS_LIFECYCLE_SOURCE_CONTRACT)
+lifecycle_context: dict[str, object] = {}
+if lifecycle_bytes is None:
+    source_contract_errors.append("lifecycle source-contract provider bytes are unavailable")
+else:
+    try:
+        lifecycle_source = lifecycle_bytes.decode("utf-8")
+        lifecycle_context = {"__name__": "kagemusha_lifecycle_source_contract", "_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_CONTEXT_V1": True, "_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1": lifecycle_source}
+        exec(compile(lifecycle_bytes, READINESS_LIFECYCLE_SOURCE_CONTRACT, "exec"), lifecycle_context)
+        candidate_evaluator = lifecycle_context.get("lifecycle_source_contract_errors")
+        if not callable(candidate_evaluator):
+            raise ValueError("lifecycle source provider did not define its evaluator")
+        lifecycle_source_contract_evaluator = candidate_evaluator
+    except Exception as error:
+        source_contract_errors.append(f"lifecycle source-contract provider failed unexpectedly: {error}")
+if not callable(lifecycle_source_contract_evaluator):
+    source_contract_errors.append("lifecycle source-contract provider evaluator is unavailable")
 primary_bytes = source_contract_bytes.get(READINESS_SOURCE_CONTRACT)
 source_contract_context = dict(support_context)
-source_contract_context["_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1"] = (
-    recursion_source_contract_evaluator
-)
+source_contract_context.update(lifecycle_context)
+source_contract_context["__name__"] = "kagemusha_readiness_source_contract"
+source_contract_context["_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1"] = recursion_source_contract_evaluator
+source_contract_context["_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1"] = lifecycle_source_contract_evaluator
 source_contract_evaluator: Callable[..., list[str]] | None = None
 if primary_bytes is None:
     source_contract_errors.append("readiness source-contract provider bytes are unavailable")
@@ -4955,7 +4995,10 @@ if mode == "candidate":
         "production promotion was not evaluated."
     )
 else:
-    print("Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion corridor passed.")
+    print(
+        "Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion verification "
+        "corridor passed; no publication or activation was performed."
+    )
 PY
 PYTHON_GATE_STATUS=$?
 set -e

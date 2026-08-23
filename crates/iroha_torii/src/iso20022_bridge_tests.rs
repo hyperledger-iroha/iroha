@@ -3655,7 +3655,7 @@ macro_rules! runtime_config_rejection_tests {
         };
     }
 macro_rules! live_pacs008_parse_rejection_tests {
-        ($expected:pat; $($name:ident: $payload:expr => $message:literal;)+) => {
+        ($expected:path; $($name:ident: $payload:expr => $message:literal;)+) => {
             $(
                 #[test]
                 fn $name() {
@@ -4624,7 +4624,7 @@ rejected_signed_payload_tests! {
 }
 #[test]
 fn require_verified_profile_accepts_xades_signing_certificate_v2_binding() {
-    let CertificateChainSignedPayload {
+    let CertificateChainSignedPropertiesPayload {
         payload,
         issuer_sha256,
         ..

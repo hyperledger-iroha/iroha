@@ -70,10 +70,10 @@ inline ulong mul_mod(ulong a, ulong b) {
     return reduce_goldilocks(lo, hi);
 }
 
-inline ulong pow5(ulong x) {
+inline ulong pow7(ulong x) {
     ulong x2 = mul_mod(x, x);
     ulong x4 = mul_mod(x2, x2);
-    return mul_mod(x4, x);
+    return mul_mod(mul_mod(x4, x2), x);
 }
 
 inline ulong pow_mod(ulong base, ulong exponent) {

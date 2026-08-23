@@ -1378,42 +1378,6 @@ BY PendingLockCommitUsesExactCurrentRound,
    DEF ReducerProvenanceInvariant,
        SameRoundLockAndCommitAuthorizationInvariant
 
-\* Compatibility theorems for downstream proof steps. Their conclusions are
-\* aliases of the exact same-round invariant and contain no historical branch.
-THEOREM PendingLowerLockCommitRequiresHistoricalTcAuthorization ==
-  PendingVoteWritesAuthorized
-    => \A request \in pendingLockCommit:
-         request.vote.view < nodeView[request.node]
-           => HistoricalLockedPrepareForCommit(request.node, request.qc)
-BY PendingLockCommitUsesExactCurrentRound
-   DEF HistoricalLockedPrepareForCommit
-
-THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
-  DurableTimeoutsProtectCommits
-    => \A timeoutVote \in timeoutIntents,
-          commitVote \in commitIntents:
-         (/\ timeoutVote.signer \in Honest
-          /\ commitVote.signer = timeoutVote.signer
-          /\ commitVote.context = timeoutVote.context
-          /\ commitVote.phase = "Commit"
-          /\ commitVote.view <= timeoutVote.view
-          /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
-           => InstalledTcAuthorizesCommitVote(commitVote)
-BY DurableTimeoutProtectionIsDirect
-   DEF InstalledTcAuthorizesCommitVote
-
-THEOREM ReducerProvenanceImpliesHistoricalLockedCommitAuthorization ==
-  ReducerProvenanceInvariant
-    => HistoricalLockedCommitAuthorizationInvariant
-BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
-   DEF HistoricalLockedCommitAuthorizationInvariant
-
-THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
-  ReducerProvenanceInvariant
-    => HistoricalTcLockedCommitAuthorizationInvariant
-BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
-   DEF HistoricalTcLockedCommitAuthorizationInvariant
-
 THEOREM UnchangedPendingVoteWriteVarsPreservesAuthorization ==
   PendingVoteWritesAuthorized
     /\ UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
@@ -9082,31 +9046,7 @@ PROOF
         <4> QED BY <4>3
            DEF DurableTimeoutsProtectCommits,
                TimeoutIntentProtectsCommits
-      <3>9. HistoricalTcLockedCommitAuthorizationInvariant'
-        <4>1. \A pending \in pendingLockCommit':
-                 pending.vote.view < nodeView'[pending.node]
-                   => HistoricalLockedPrepareForCommit(
-                        pending.node, pending.qc)'
-          BY <3>2, SMT
-             DEF PendingVoteWritesAuthorized,
-                 CurrentOpenPrepareForCommit
-        <4>2. \A timeoutVote \in timeoutIntents',
-                    commitVote \in commitIntents':
-                 (/\ timeoutVote.signer \in Honest
-                  /\ commitVote.signer = timeoutVote.signer
-                  /\ commitVote.context = timeoutVote.context
-                  /\ commitVote.phase = "Commit"
-                  /\ commitVote.view <= timeoutVote.view
-                  /\ ~TimeoutVoteStrictlyProtectsCommit(
-                         timeoutVote, commitVote))
-                   => InstalledTcAuthorizesCommitVote(commitVote)'
-          BY <3>8, SMT
-             DEF DurableTimeoutsProtectCommits,
-                 TimeoutIntentProtectsCommits,
-                 TimeoutVoteProtectsCommitSet
-        <4> QED BY <4>1, <4>2
-           DEF HistoricalTcLockedCommitAuthorizationInvariant
-      <3>10. HighestAndLockAreCertified'
+      <3>9. HighestAndLockAreCertified'
         <4>1. /\ context' = context
               /\ prepareQCs' = prepareQCs
               /\ lockRank'
@@ -9257,7 +9197,7 @@ PROOF
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>4 DEF HighestAndLockAreCertified
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5,
-                  <3>6, <3>7, <3>8, <3>9, <3>10,
+                  <3>6, <3>7, <3>8, <3>9,
                   <1>1,
                   PersistLockCommitPreservesDurableLockRecoveryProvenance
          DEF ReducerProvenanceInvariant

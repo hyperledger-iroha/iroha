@@ -247,7 +247,9 @@ impl json::JsonSerialize for AssetPermissionManifest {
         self.activation_epoch.json_serialize_to(out)?;
         out.push_str(",\"dataspace\":")?;
         self.dataspace.as_u64().json_serialize_to(out)?;
-        out.push_str(",\"entries\":[")?;
+        out.push_str(",\"entries\":")?;
+        out.begin_container()?;
+        out.push('[')?;
         for (index, entry) in self.entries.iter().enumerate() {
             if index != 0 {
                 out.push(',')?;
@@ -255,6 +257,7 @@ impl json::JsonSerialize for AssetPermissionManifest {
             entry_json_serialize_to(entry, out)?;
         }
         out.push(']')?;
+        out.end_container();
         if let Some(expiry_epoch) = self.expiry_epoch {
             out.push_str(",\"expiry_epoch\":")?;
             expiry_epoch.json_serialize_to(out)?;
@@ -262,7 +265,7 @@ impl json::JsonSerialize for AssetPermissionManifest {
         out.push_str(",\"issued_ms\":")?;
         self.issued_ms.json_serialize_to(out)?;
         out.push_str(",\"uaid\":")?;
-        json::write_json_string_to(&self.uaid.to_string(), out)?;
+        json::write_json_display_to(&self.uaid, out)?;
         out.push_str(",\"version\":")?;
         u64::from(u16::from(self.version)).json_serialize_to(out)?;
         out.push('}')?;
@@ -299,7 +302,7 @@ fn scope_json_serialize_to(
     out.push('{')?;
     let mut has_field = if let Some(asset) = &scope.asset {
         out.push_str("\"asset\":")?;
-        json::write_json_string_to(&asset.to_string(), out)?;
+        json::write_json_display_to(asset, out)?;
         true
     } else {
         false
@@ -317,7 +320,7 @@ fn scope_json_serialize_to(
             out.push(',')?;
         }
         out.push_str("\"method\":")?;
-        json::write_json_string_to(method.as_ref(), out)?;
+        json::write_json_display_to(method, out)?;
         has_field = true;
     }
     if let Some(program) = &scope.program {
@@ -325,7 +328,7 @@ fn scope_json_serialize_to(
             out.push(',')?;
         }
         out.push_str("\"program\":")?;
-        json::write_json_string_to(&program.to_string(), out)?;
+        json::write_json_display_to(program, out)?;
         has_field = true;
     }
     if let Some(role) = scope.role {
@@ -351,7 +354,7 @@ fn effect_json_serialize_to(
             out.begin_container()?;
             if let Some(max_amount) = &allowance.max_amount {
                 out.push_str("\"max_amount\":")?;
-                json::write_json_string_to(&max_amount.to_string(), out)?;
+                json::write_json_display_to(max_amount, out)?;
                 out.push(',')?;
             }
             out.push_str("\"window\":")?;
@@ -477,6 +480,19 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
         field: "manifest".into(),
         message: "manifest must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(
+        manifest_obj,
+        &[
+            "activation_epoch",
+            "dataspace",
+            "entries",
+            "expiry_epoch",
+            "issued_ms",
+            "uaid",
+            "version",
+        ],
+        "manifest",
+    )?;
     let version_value = manifest_obj
         .get("version")
         .ok_or_else(|| json::Error::missing_field("version"))?;
@@ -502,7 +518,10 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
         "activation_epoch",
     )?;
     let expiry_epoch = match manifest_obj.get("expiry_epoch") {
-        None | Some(Value::Null) => None,
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field("expiry_epoch"));
+        }
         Some(value) => Some(parse_u64_field(value, "expiry_epoch")?),
     };
     let entries_value = manifest_obj
@@ -514,7 +533,15 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
             field: "entries".into(),
             message: "entries must be a JSON array".into(),
         })?;
-    let mut entries = Vec::with_capacity(entries_array.len());
+    let entries_bytes = entries_array
+        .len()
+        .checked_mul(core::mem::size_of::<ManifestEntry>())
+        .ok_or(json::Error::DecodeResourceLimit)?;
+    reserve_manifest_decode_allocation(entries_bytes)?;
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(entries_array.len())
+        .map_err(|_| json::Error::AllocationFailed)?;
     for (idx, entry_value) in entries_array.iter().enumerate() {
         entries.push(parse_entry(entry_value, idx)?);
     }
@@ -529,6 +556,34 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
     })
 }
 #[cfg(feature = "json")]
+fn ensure_known_manifest_fields(
+    object: &Map,
+    allowed: &[&str],
+    context: &'static str,
+) -> Result<(), json::Error> {
+    if object
+        .keys()
+        .any(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(json::Error::InvalidField {
+            field: context.into(),
+            message: "object contains an unknown field".into(),
+        });
+    }
+    Ok(())
+}
+#[cfg(feature = "json")]
+fn noncanonical_optional_manifest_field(field: &'static str) -> json::Error {
+    json::Error::InvalidField {
+        field: field.into(),
+        message: "optional manifest fields must be omitted instead of null".into(),
+    }
+}
+#[cfg(feature = "json")]
+fn reserve_manifest_decode_allocation(bytes: usize) -> Result<(), json::Error> {
+    norito::core::reserve_decode_allocation(bytes).map_err(json::Error::from_decode_resource)
+}
+#[cfg(feature = "json")]
 fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error> {
     let Some(raw) = value.as_u64() else {
         return Err(json::Error::InvalidField {
@@ -538,9 +593,9 @@ fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error>
     };
     match raw {
         1 => Ok(ManifestVersion::V1),
-        other => Err(json::Error::InvalidField {
+        _ => Err(json::Error::InvalidField {
             field: "version".into(),
-            message: format!("unsupported manifest version {other}"),
+            message: "unsupported manifest version".into(),
         }),
     }
 }
@@ -552,20 +607,25 @@ fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
             message: "uaid must be a string".into(),
         });
     };
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let Some(hex_literal) = text.strip_prefix("uaid:") else {
         return Err(json::Error::InvalidField {
             field: "uaid".into(),
-            message: "uaid must be a non-empty string".into(),
+            message: "uaid must use the canonical `uaid:<lowercase-hex>` form".into(),
+        });
+    };
+    if hex_literal.len() != Hash::LENGTH * 2
+        || !hex_literal
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(json::Error::InvalidField {
+            field: "uaid".into(),
+            message: "uaid must use the canonical `uaid:<lowercase-hex>` form".into(),
         });
     }
-    let hex_literal = match trimmed.get(..5) {
-        Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
-        _ => trimmed,
-    };
-    let hash = Hash::from_str(hex_literal).map_err(|err| json::Error::InvalidField {
+    let hash = Hash::from_str(hex_literal).map_err(|_| json::Error::InvalidField {
         field: "uaid".into(),
-        message: format!("uaid must be `uaid:<hex>` or 64-hex digest: {err}"),
+        message: "uaid digest is invalid".into(),
     })?;
     Ok(UniversalAccountId::from_hash(hash))
 }
@@ -582,6 +642,7 @@ fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> 
         field: format!("entries[{idx}]"),
         message: "entry must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(entry_obj, &["effect", "notes", "scope"], "manifest entry")?;
     let scope_value = entry_obj
         .get("scope")
         .ok_or_else(|| json::Error::InvalidField {
@@ -597,12 +658,17 @@ fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> 
     let scope = parse_scope(scope_value, idx)?;
     let effect = parse_effect(effect_value, idx)?;
     let notes = match entry_obj.get("notes") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) => Some(text.clone()),
-        Some(other) => {
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field("entries[].notes"));
+        }
+        Some(value @ Value::String(_)) => {
+            Some(<String as json::JsonDeserialize>::json_from_value(value)?)
+        }
+        Some(_) => {
             return Err(json::Error::InvalidField {
                 field: format!("entries[{idx}].notes"),
-                message: format!("notes must be a string or null (got {other:?})"),
+                message: "notes must be a string".into(),
             });
         }
     };
@@ -618,50 +684,79 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
         field: format!("entries[{idx}].scope"),
         message: "scope must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(
+        scope_obj,
+        &["asset", "dataspace", "method", "program", "role"],
+        "manifest scope",
+    )?;
     let dataspace = match scope_obj.get("dataspace") {
-        None | Some(Value::Null) => None,
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field(
+                "entries[].scope.dataspace",
+            ));
+        }
         Some(value) => Some(DataSpaceId::from(parse_u64_field(
             value,
-            &format!("entries[{idx}].scope.dataspace"),
+            "entries[].scope.dataspace",
         )?)),
     };
-    let program = match parse_optional_str(scope_obj, "program", idx)? {
+    let program = match parse_optional_manifest_value(scope_obj, "program")? {
+        Some(value) => Some(SmartContractId::new(parse_canonical_manifest_name(
+            value,
+            "entries[].scope.program",
+        )?)),
+        None => None,
+    };
+    let method = match parse_optional_manifest_value(scope_obj, "method")? {
+        Some(value) => Some(parse_canonical_manifest_name(
+            value,
+            "entries[].scope.method",
+        )?),
+        None => None,
+    };
+    let asset = match parse_optional_manifest_value(scope_obj, "asset")? {
         Some(value) => {
+            let Some(text) = value.as_str() else {
+                return Err(json::Error::InvalidField {
+                    field: "entries[].scope.asset".into(),
+                    message: "asset must be a string".into(),
+                });
+            };
+            if text.trim() != text {
+                return Err(json::Error::InvalidField {
+                    field: "entries[].scope.asset".into(),
+                    message: "asset must use its canonical spelling".into(),
+                });
+            }
             Some(
-                SmartContractId::from_str(value).map_err(|err| json::Error::InvalidField {
-                    field: format!("entries[{idx}].scope.program"),
-                    message: err.to_string(),
-                })?,
+                <AssetDefinitionId as json::JsonDeserialize>::json_from_value(value).map_err(
+                    |error| {
+                        if error.is_decode_resource_limit() {
+                            error
+                        } else {
+                            json::Error::InvalidField {
+                                field: "entries[].scope.asset".into(),
+                                message: "asset must be a canonical asset definition identifier"
+                                    .into(),
+                            }
+                        }
+                    },
+                )?,
             )
         }
         None => None,
     };
-    let method = match parse_optional_str(scope_obj, "method", idx)? {
-        Some(value) => Some(
-            Name::from_str(value).map_err(|err| json::Error::InvalidField {
-                field: format!("entries[{idx}].scope.method"),
-                message: err.to_string(),
-            })?,
-        ),
-        None => None,
-    };
-    let asset =
-        match parse_optional_str(scope_obj, "asset", idx)? {
-            Some(value) => Some(AssetDefinitionId::parse_address_literal(value).map_err(
-                |err| json::Error::InvalidField {
-                    field: format!("entries[{idx}].scope.asset"),
-                    message: err.to_string(),
-                },
-            )?),
-            None => None,
-        };
     let role = match scope_obj.get("role") {
-        None | Some(Value::Null) => None,
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field("entries[].scope.role"));
+        }
         Some(Value::String(text)) => Some(parse_role(text, idx)?),
-        Some(other) => {
+        Some(_) => {
             return Err(json::Error::InvalidField {
                 field: format!("entries[{idx}].scope.role"),
-                message: format!("role must be a string or null (got {other:?})"),
+                message: "role must be a string".into(),
             });
         }
     };
@@ -674,28 +769,50 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
     })
 }
 #[cfg(feature = "json")]
-fn parse_optional_str<'a>(
-    obj: &'a Map,
+fn parse_optional_manifest_value<'a>(
+    object: &'a Map,
     field: &str,
-    idx: usize,
-) -> Result<Option<&'a str>, json::Error> {
-    match obj.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(text)) => Ok(Some(text)),
-        Some(other) => Err(json::Error::InvalidField {
-            field: format!("entries[{idx}].scope.{field}"),
-            message: format!("{field} must be a string or null (got {other:?})"),
-        }),
+) -> Result<Option<&'a Value>, json::Error> {
+    match object.get(field) {
+        None => Ok(None),
+        Some(Value::Null) => Err(noncanonical_optional_manifest_field(
+            "entries[].scope optional field",
+        )),
+        Some(value) => Ok(Some(value)),
     }
+}
+#[cfg(feature = "json")]
+fn parse_canonical_manifest_name(value: &Value, field: &'static str) -> Result<Name, json::Error> {
+    let text = value.as_str().ok_or_else(|| json::Error::InvalidField {
+        field: field.into(),
+        message: "name must be a string".into(),
+    })?;
+    let name = <Name as json::JsonDeserialize>::json_from_value(value).map_err(|error| {
+        if error.is_decode_resource_limit() {
+            error
+        } else {
+            json::Error::InvalidField {
+                field: field.into(),
+                message: "name is invalid".into(),
+            }
+        }
+    })?;
+    if name.as_ref() != text {
+        return Err(json::Error::InvalidField {
+            field: field.into(),
+            message: "name must use its canonical NFC spelling".into(),
+        });
+    }
+    Ok(name)
 }
 #[cfg(feature = "json")]
 fn parse_role(value: &str, idx: usize) -> Result<AmxRole, json::Error> {
     match value {
         "Initiator" => Ok(AmxRole::Initiator),
         "Participant" => Ok(AmxRole::Participant),
-        other => Err(json::Error::InvalidField {
+        _ => Err(json::Error::InvalidField {
             field: format!("entries[{idx}].scope.role"),
-            message: format!("unsupported AMX role {other}"),
+            message: "unsupported AMX role".into(),
         }),
     }
 }
@@ -705,6 +822,7 @@ fn parse_effect(value: &Value, idx: usize) -> Result<ManifestEffect, json::Error
         field: format!("entries[{idx}].effect"),
         message: "effect must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(effect_obj, &["Allow", "Deny"], "manifest effect decision")?;
     if effect_obj.len() != 1 {
         return Err(json::Error::InvalidField {
             field: format!("entries[{idx}].effect"),
@@ -728,6 +846,7 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
         field: format!("entries[{idx}].effect.Allow"),
         message: "Allow effect must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(details, &["max_amount", "window"], "manifest Allow effect")?;
     let window_value = details
         .get("window")
         .ok_or_else(|| json::Error::InvalidField {
@@ -736,7 +855,12 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
         })?;
     let window = parse_window(window_value, idx)?;
     let max_amount = match details.get("max_amount") {
-        None | Some(Value::Null) => None,
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field(
+                "entries[].effect.Allow.max_amount",
+            ));
+        }
         Some(value) => Some(parse_quantity(value, idx)?),
     };
     Ok(Allowance { max_amount, window })
@@ -747,13 +871,21 @@ fn parse_deny(value: &Value, idx: usize) -> Result<DenyDirective, json::Error> {
         field: format!("entries[{idx}].effect.Deny"),
         message: "Deny effect must be a JSON object".into(),
     })?;
+    ensure_known_manifest_fields(details, &["reason"], "manifest Deny effect")?;
     let reason = match details.get("reason") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) => Some(text.clone()),
-        Some(other) => {
+        None => None,
+        Some(Value::Null) => {
+            return Err(noncanonical_optional_manifest_field(
+                "entries[].effect.Deny.reason",
+            ));
+        }
+        Some(value @ Value::String(_)) => {
+            Some(<String as json::JsonDeserialize>::json_from_value(value)?)
+        }
+        Some(_) => {
             return Err(json::Error::InvalidField {
                 field: format!("entries[{idx}].effect.Deny.reason"),
-                message: format!("reason must be a string or null (got {other:?})"),
+                message: "reason must be a string".into(),
             });
         }
     };
@@ -771,36 +903,29 @@ fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Erro
         "PerSlot" => Ok(AllowanceWindow::PerSlot),
         "PerMinute" => Ok(AllowanceWindow::PerMinute),
         "PerDay" => Ok(AllowanceWindow::PerDay),
-        other => Err(json::Error::InvalidField {
+        _ => Err(json::Error::InvalidField {
             field: format!("entries[{idx}].effect.Allow.window"),
-            message: format!("unsupported allowance window {other}"),
+            message: "unsupported allowance window".into(),
         }),
     }
 }
 #[cfg(feature = "json")]
 fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
-    let raw = match value {
-        Value::String(text) => text.clone(),
-        Value::Number(number) => match number {
-            norito::json::native::Number::I64(value) => value.to_string(),
-            norito::json::native::Number::U64(value) => value.to_string(),
-            norito::json::native::Number::F64(_) => {
-                return Err(json::Error::InvalidField {
-                    field: format!("entries[{idx}].effect.Allow.max_amount"),
-                    message: "max_amount must be a string or integer".into(),
-                });
-            }
-        },
-        other => {
-            return Err(json::Error::InvalidField {
+    if !matches!(value, Value::String(_)) {
+        return Err(json::Error::InvalidField {
+            field: format!("entries[{idx}].effect.Allow.max_amount"),
+            message: "max_amount must be a canonical quantity string".into(),
+        });
+    }
+    <Quantity as json::JsonDeserialize>::json_from_value(value).map_err(|error| {
+        if error.is_decode_resource_limit() {
+            error
+        } else {
+            json::Error::InvalidField {
                 field: format!("entries[{idx}].effect.Allow.max_amount"),
-                message: format!("max_amount must be a string or number (got {other:?})"),
-            });
+                message: "max_amount must be a canonical non-negative quantity string".into(),
+            }
         }
-    };
-    Quantity::from_str(&raw).map_err(|err| json::Error::InvalidField {
-        field: format!("entries[{idx}].effect.Allow.max_amount"),
-        message: format!("invalid quantity literal {raw}: {err}"),
     })
 }
 /// Manifest entry describing a scoped allow/deny rule.
@@ -1150,26 +1275,38 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn manifest_json_accepts_raw_hex_or_prefixed_uaid() {
+    fn manifest_json_requires_canonical_uaid_literal() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/space_directory/capability/cbdc_wholesale.manifest.json");
         let fixture = fs::read_to_string(&fixture_path).expect("read fixture JSON");
         let expected = cbdc_manifest_fixture();
         let uaid_hex = expected.uaid.as_hash().to_string();
-        let variants = [
+        let mut value: norito::json::Value =
+            norito::json::from_str(&fixture).expect("parse manifest JSON");
+        let norito::json::Value::Object(map) = &mut value else {
+            panic!("fixture manifest JSON must be an object");
+        };
+        map.insert("uaid".into(), Value::String(expected.uaid.to_string()));
+        let parsed = AssetPermissionManifest::json_from_value(&value)
+            .expect("canonical UAID literal must parse");
+        assert_eq!(parsed.uaid, expected.uaid);
+
+        for literal in [
             uaid_hex.clone(),
             format!("UAID:{}", uaid_hex.to_uppercase()),
-        ];
-        for literal in variants {
+            format!("uaid:{}", uaid_hex.to_uppercase()),
+            format!(" uaid:{uaid_hex}"),
+        ] {
             let mut value: norito::json::Value =
                 norito::json::from_str(&fixture).expect("parse manifest JSON");
             let norito::json::Value::Object(map) = &mut value else {
                 panic!("fixture manifest JSON must be an object");
             };
             map.insert("uaid".into(), norito::json::Value::String(literal));
-            let parsed = AssetPermissionManifest::json_from_value(&value)
-                .expect("parse manifest JSON with UAID variant");
-            assert_eq!(parsed.uaid, expected.uaid);
+            assert!(
+                AssetPermissionManifest::json_from_value(&value).is_err(),
+                "noncanonical UAID spellings must be rejected"
+            );
         }
     }
     #[cfg(feature = "json")]
@@ -1195,6 +1332,213 @@ mod tests {
         assert!(
             AssetPermissionManifest::json_from_value(&value).is_err(),
             "manifest JSON must reject a negative amount cap"
+        );
+    }
+    #[cfg(feature = "json")]
+    fn manifest_json_entry_mut(value: &mut Value, index: usize) -> &mut Map {
+        let Value::Object(root) = value else {
+            panic!("manifest fixture must serialize as an object");
+        };
+        let Value::Array(entries) = root.get_mut("entries").expect("manifest entries") else {
+            panic!("manifest entries must serialize as an array");
+        };
+        let Value::Object(entry) = entries.get_mut(index).expect("manifest entry") else {
+            panic!("manifest entry must serialize as an object");
+        };
+        entry
+    }
+    #[cfg(feature = "json")]
+    fn manifest_json_scope_mut(value: &mut Value, index: usize) -> &mut Map {
+        let entry = manifest_json_entry_mut(value, index);
+        let Value::Object(scope) = entry.get_mut("scope").expect("manifest scope") else {
+            panic!("manifest scope must serialize as an object");
+        };
+        scope
+    }
+    #[cfg(feature = "json")]
+    fn manifest_json_effect_mut(value: &mut Value, index: usize) -> &mut Map {
+        let entry = manifest_json_entry_mut(value, index);
+        let Value::Object(effect) = entry.get_mut("effect").expect("manifest effect") else {
+            panic!("manifest effect must serialize as an object");
+        };
+        effect
+    }
+    #[cfg(feature = "json")]
+    fn manifest_json_effect_details_mut<'a>(
+        value: &'a mut Value,
+        index: usize,
+        decision: &str,
+    ) -> &'a mut Map {
+        let effect = manifest_json_effect_mut(value, index);
+        let Value::Object(details) = effect.get_mut(decision).expect("manifest effect details")
+        else {
+            panic!("manifest effect details must serialize as an object");
+        };
+        details
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_rejects_unknown_fields_at_every_object_level() {
+        let expected = cbdc_manifest_fixture();
+        for level in ["manifest", "entry", "scope", "effect", "allow", "deny"] {
+            let mut value = manifest_to_json_value(&expected);
+            let target = match level {
+                "manifest" => {
+                    let Value::Object(root) = &mut value else {
+                        panic!("manifest fixture must serialize as an object");
+                    };
+                    root
+                }
+                "entry" => manifest_json_entry_mut(&mut value, 0),
+                "scope" => manifest_json_scope_mut(&mut value, 0),
+                "effect" => manifest_json_effect_mut(&mut value, 0),
+                "allow" => manifest_json_effect_details_mut(&mut value, 0, "Allow"),
+                "deny" => manifest_json_effect_details_mut(&mut value, 1, "Deny"),
+                _ => unreachable!(),
+            };
+            target.insert("unknown".into(), Value::String("rejected".into()));
+            assert!(
+                AssetPermissionManifest::json_from_value(&value).is_err(),
+                "unknown {level} fields must be rejected"
+            );
+        }
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_requires_canonical_owned_literals() {
+        let expected = cbdc_manifest_fixture();
+
+        let mut value = manifest_to_json_value(&expected);
+        manifest_json_scope_mut(&mut value, 0)
+            .insert("method".into(), Value::String("e\u{0301}".to_owned()));
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "decomposed Name spelling must be rejected"
+        );
+
+        let mut value = manifest_to_json_value(&expected);
+        manifest_json_effect_details_mut(&mut value, 0, "Allow").insert(
+            "max_amount".into(),
+            Value::Number(norito::json::native::Number::U64(500_000_000)),
+        );
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "quantity numbers must use their canonical string form"
+        );
+
+        let mut value = manifest_to_json_value(&expected);
+        manifest_json_effect_details_mut(&mut value, 0, "Allow")
+            .insert("max_amount".into(), Value::String("0500000000".to_owned()));
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "noncanonical quantity strings must be rejected"
+        );
+
+        let mut value = manifest_to_json_value(&expected);
+        let scope = manifest_json_scope_mut(&mut value, 0);
+        let asset = scope
+            .get("asset")
+            .and_then(Value::as_str)
+            .expect("fixture asset")
+            .to_owned();
+        scope.insert("asset".into(), Value::String(format!(" {asset}")));
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "noncanonical asset whitespace must be rejected"
+        );
+
+        let mut value = manifest_to_json_value(&expected);
+        let Value::Object(root) = &mut value else {
+            panic!("manifest fixture must serialize as an object");
+        };
+        root.insert("expiry_epoch".into(), Value::Null);
+        assert!(
+            AssetPermissionManifest::json_from_value(&value).is_err(),
+            "optional fields must be omitted instead of set to null"
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_value_decode_obeys_exact_allocation_budget() {
+        fn limits(bytes: usize) -> norito::DecodeLimits {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        }
+
+        let expected = cbdc_manifest_fixture();
+        let value = manifest_to_json_value(&expected);
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits(usize::MAX), || {
+                AssetPermissionManifest::json_from_value(&value)
+            });
+        assert_eq!(decoded.expect("measured manifest decode"), expected);
+        let exact = usage.total_allocated_bytes();
+        assert!(
+            exact >= expected.entries.len() * core::mem::size_of::<ManifestEntry>(),
+            "entry storage must be included in the allocation charge"
+        );
+
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            AssetPermissionManifest::json_from_value(&value)
+        });
+        assert_eq!(decoded.expect("exact manifest decode budget"), expected);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            AssetPermissionManifest::json_from_value(&value)
+        });
+        assert!(
+            decoded
+                .expect_err("one-byte-short manifest budget must fail")
+                .is_decode_resource_limit()
+        );
+        assert!(usage.total_allocated_bytes() < exact);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_value_decode_precharges_retained_strings() {
+        fn limits(bytes: usize) -> norito::DecodeLimits {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        }
+
+        let reason = "r".repeat(1_024);
+        let notes = "n".repeat(2_048);
+        let expected = manifest_with_entries(
+            DataSpaceId::new(1),
+            vec![ManifestEntry {
+                scope: CapabilityScope {
+                    dataspace: None,
+                    program: None,
+                    method: None,
+                    asset: None,
+                    role: None,
+                },
+                effect: ManifestEffect::Deny(DenyDirective {
+                    reason: Some(reason.clone()),
+                }),
+                notes: Some(notes.clone()),
+            }],
+        );
+        let value = manifest_to_json_value(&expected);
+        let exact = core::mem::size_of::<ManifestEntry>() + reason.len() + notes.len();
+
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact), || {
+            AssetPermissionManifest::json_from_value(&value)
+        });
+        assert_eq!(decoded.expect("exact retained-string budget"), expected);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits(exact - 1), || {
+            AssetPermissionManifest::json_from_value(&value)
+        });
+        assert!(
+            decoded
+                .expect_err("one-byte-short retained-string budget must fail")
+                .is_decode_resource_limit()
+        );
+        assert_eq!(
+            usage.total_allocated_bytes(),
+            core::mem::size_of::<ManifestEntry>() + reason.len(),
+            "notes storage must be charged before it is allocated"
         );
     }
     fn manifest_with_entries(
@@ -1289,6 +1633,51 @@ mod tests {
         let fixture_value: norito::json::Value =
             norito::json::from_str(&fixture).expect("parse fixture JSON");
         assert_eq!(fixture_value, expected);
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_bounded_json_writer_matches_and_balances_depth() {
+        #[derive(Default)]
+        struct StructuralSink {
+            depth: usize,
+            max_depth: usize,
+        }
+        impl json::JsonWriteSink for StructuralSink {
+            fn push(&mut self, _: char) -> Result<(), json::BoundedJsonError> {
+                Ok(())
+            }
+            fn push_str(&mut self, _: &str) -> Result<(), json::BoundedJsonError> {
+                Ok(())
+            }
+            fn begin_container(&mut self) -> Result<(), json::BoundedJsonError> {
+                self.depth += 1;
+                self.max_depth = self.max_depth.max(self.depth);
+                Ok(())
+            }
+            fn end_container(&mut self) {
+                assert!(self.depth > 0, "container depth must not underflow");
+                self.depth -= 1;
+            }
+        }
+
+        let manifest = cbdc_manifest_fixture();
+        let ordinary = json::to_json(&manifest).expect("ordinary manifest JSON");
+        let bounded = json::to_json_bounded(&manifest, ordinary.len())
+            .expect("exact-size bounded manifest JSON");
+        assert_eq!(bounded, ordinary);
+        assert_eq!(
+            json::to_json_bounded(&manifest, ordinary.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+
+        let mut sink = StructuralSink::default();
+        <AssetPermissionManifest as json::JsonSerialize>::json_serialize_to(&manifest, &mut sink)
+            .expect("structurally tracked manifest JSON");
+        assert_eq!(sink.depth, 0, "all containers must be closed");
+        assert_eq!(
+            sink.max_depth, 5,
+            "root object, entries array, entry, effect, and effect details"
+        );
     }
     #[test]
     fn cbdc_manifest_fixture_roundtrips_json() {

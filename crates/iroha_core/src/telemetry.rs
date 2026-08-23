@@ -88,7 +88,9 @@ pub use iroha_telemetry::metrics::{
     SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
     TxGossipSnapshot, TxGossipStatus,
 };
-use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError, SoranetSecureAggregator};
+use iroha_telemetry::privacy::{
+    PrivacyBucketConfig, PrivacyEventError, PrivacyShareError, SoranetSecureAggregator,
+};
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
 #[cfg(feature = "telemetry")]
@@ -7151,12 +7153,19 @@ impl Telemetry {
         Arc::clone(&self.soranet_privacy)
     }
     /// Record a `SoraNet` privacy telemetry event and publish ready buckets.
-    pub fn record_soranet_privacy_event(&self, event: &SoranetPrivacyEventV1) {
+    ///
+    /// # Errors
+    /// Returns [`PrivacyEventError`] when the event falls outside the bounded live-ingest window.
+    pub fn record_soranet_privacy_event(
+        &self,
+        event: &SoranetPrivacyEventV1,
+    ) -> Result<(), PrivacyEventError> {
         if !self.enabled.load(Ordering::Relaxed) {
-            return;
+            return Ok(());
         }
-        self.soranet_privacy.record_event(event);
+        self.soranet_privacy.record_event(event)?;
         self.publish_ready_soranet_privacy_buckets();
+        Ok(())
     }
     /// Ingest a `SoraNet` privacy Prio share emitted by a collector.
     ///
@@ -7958,7 +7967,6 @@ mod tests {
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
     };
-    use iroha_telemetry::metrics::Collector;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     #[cfg(feature = "telemetry")]

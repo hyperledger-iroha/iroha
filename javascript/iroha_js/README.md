@@ -2507,7 +2507,9 @@ the HTTP transport. The client mirrors the JSON schema described in
 import { SoranetPuzzleClient } from "@iroha/iroha-js";
 
 const puzzle = new SoranetPuzzleClient("http://localhost:8088", {
-  defaultHeaders: { Authorization: `Bearer ${process.env.SORANET_TOKEN}` },
+  defaultHeaders: {
+    Authorization: `Bearer ${process.env.SORANET_PUZZLE_MINT_TOKEN}`,
+  },
   timeoutMs: 5_000,
 });
 
@@ -2539,11 +2541,14 @@ argument and accepts a `signed` flag to request relay-signed credentials; signed
 responses include a `signedTicketFingerprintHex` to help track replay cache
 state across restarts.
 
-`mintAdmissionToken` enforces 32-byte transcript hashes and clamps TTL, flag,
-and issued-at overrides to the relay policy. Use `/v1/token/config` to display
-the active issuer fingerprint and revocation window in operator tooling. Errors
-from the service propagate as `SoranetPuzzleError` with `status`/`body`
-accessors so callers can feed structured logs or retry policies easily.
+The service assigns admission-token issue times from its own clock; callers can
+only request TTL and flags. The mint and token-configuration endpoints require
+the bearer credential stored in the service's `--mint-auth-token-path` file.
+Run the plaintext service on loopback and terminate TLS at a local proxy. Use
+`/v1/token/config` to display the active issuer fingerprint and revocation
+window in operator tooling. Errors from the service propagate as
+`SoranetPuzzleError` with `status`/`body` accessors so callers can feed
+structured logs or retry policies easily.
 
 ## Kaigi Relay Telemetry
 

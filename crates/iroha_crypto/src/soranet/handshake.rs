@@ -29,20 +29,22 @@ use soranet_pq::{
 };
 use std::{
     convert::{TryFrom, TryInto},
-    fmt, fs,
+    fmt, fs, io,
     ops::Deref,
     path::{Path, PathBuf},
     str::FromStr,
 };
+use subtle::ConstantTimeEq as _;
 use tempfile::TempDir;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
 const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
+const NOISE_XX_DH_IKM_DOMAIN: &[u8] = b"soranet.handshake.x25519.xx.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
 /// ALPN used by the public `SoraNet` QUIC transport.
@@ -61,6 +63,46 @@ const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
 const TRANSCRIPT_BINDING_LEN: usize = 32;
+/// Maximum accepted size of one padded runtime-handshake frame.
+///
+/// Iroha's transport prefixes the complete handshake payload with a `u16`
+/// length, so no wire-encodable frame can exceed this value. Individual
+/// length-prefixed fields remain bounded separately, and the aggregate check
+/// prevents a builder from producing a frame that the transport cannot send.
+/// It also prevents an unauthenticated parser from scanning and hashing
+/// arbitrary trailing zero padding.
+pub const MAX_HANDSHAKE_FRAME_LEN: usize = u16::MAX as usize;
+/// Salt announcements contain only fixed-width metadata and one 32-byte salt.
+const SALT_ANNOUNCEMENT_FIXTURE_MAX_BYTES_V1: usize = 16 * 1024;
+/// A generated JSON fixture may hex-encode several maximum-size wire frames.
+/// One MiB bounds admission while leaving room for four `u16`-sized frames plus
+/// JSON field names, public keys, signatures, and formatting overhead.
+const HANDSHAKE_FIXTURE_MAX_BYTES_V1: usize = 1024 * 1024;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraNet handshake fixture loading requires a defined no-follow open flag");
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
 const STEP_NOTE_PQFS_COMMIT: &str = "Client commits NK3 forward-secure material";
@@ -84,6 +126,12 @@ const CAPABILITY_ROLE: u16 = 0x0201;
 const CAPABILITY_PADDING: u16 = 0x0202;
 const CAPABILITY_CONSTANT_RATE: u16 = 0x0203;
 const CAPABILITY_REQUIRED_FLAG: u8 = 0x01;
+const FIRST_RELEASE_PQSIG_ID: u8 = 0x01;
+const FIRST_RELEASE_ROLE_MASK: u8 = 0x07;
+const FIRST_RELEASE_CONSTANT_RATE_VERSION: u8 = 0x01;
+const FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES: u16 = 1_024;
+/// Maximum encoded capability-vector size accepted by the first-release handshake.
+pub const MAX_CAPABILITY_VECTOR_LEN: usize = 4_096;
 /// Negotiated handshake suite identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -122,6 +170,45 @@ impl From<HandshakeSuite> for u8 {
 impl fmt::Display for HandshakeSuite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
+    }
+}
+/// Bounded, cryptographically parsed fields needed by a relay before admission.
+///
+/// This view is produced by the same parser used by [`process_client_hello`],
+/// so transport runtimes do not need a second wire-format implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientHelloMetadata {
+    handshake_suite: HandshakeSuite,
+    kem_id: u8,
+    sig_id: u8,
+    client_capabilities: Vec<u8>,
+    resume_hash: Option<Vec<u8>>,
+}
+impl ClientHelloMetadata {
+    /// Return the handshake suite encoded by the client frame.
+    #[must_use]
+    pub const fn handshake_suite(&self) -> HandshakeSuite {
+        self.handshake_suite
+    }
+    /// Return the requested ML-KEM identifier.
+    #[must_use]
+    pub const fn kem_id(&self) -> u8 {
+        self.kem_id
+    }
+    /// Return the requested signature identifier.
+    #[must_use]
+    pub const fn sig_id(&self) -> u8 {
+        self.sig_id
+    }
+    /// Return the exact client capability vector committed by the frame.
+    #[must_use]
+    pub fn client_capabilities(&self) -> &[u8] {
+        &self.client_capabilities
+    }
+    /// Return the optional resume binding carried by the frame.
+    #[must_use]
+    pub fn resume_hash(&self) -> Option<&[u8]> {
+        self.resume_hash.as_deref()
     }
 }
 #[derive(Debug)]
@@ -177,9 +264,17 @@ pub enum HarnessError {
     /// Supplied capability identifier was not recognised.
     #[error("invalid capability type: {0}")]
     CapabilityType(String),
-    /// Duplicate capability TLV encountered for a singleton type.
+    /// Duplicate capability TLV or repeated algorithm identifier encountered.
     #[error("duplicate capability {0}")]
     DuplicateCapability(String),
+    /// Encoded capability vector exceeded the first-release resource bound.
+    #[error("capability vector is {actual} bytes; first-release maximum is {max} bytes")]
+    CapabilityVectorTooLong {
+        /// Observed encoded byte length.
+        actual: usize,
+        /// Maximum accepted encoded byte length.
+        max: usize,
+    },
     /// Timestamp failed to parse according to RFC3339.
     #[error("invalid timestamp {timestamp}: {source}")]
     Timestamp {
@@ -240,6 +335,28 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(HarnessError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
+    Ok(())
+}
+fn reject_repeated_random_material(
+    operation: &'static str,
+    candidate: &[u8],
+    prior: &[(&'static str, &[u8])],
+) -> Result<(), HarnessError> {
+    if let Some((prior_label, _)) = prior
+        .iter()
+        .find(|(_, prior_bytes)| constant_time_bytes_eq(prior_bytes, candidate))
+    {
+        return Err(HarnessError::RandomBytes {
+            operation,
+            message: format!("rng repeated {prior_label} material"),
+        });
+    }
     Ok(())
 }
 /// Parse a capability vector into structured TLVs.
@@ -247,9 +364,16 @@ fn fill_random<R: TryCryptoRng>(
 /// # Errors
 /// Returns an error when the TLV encoding is truncated or otherwise malformed.
 pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError> {
+    if buf.len() > MAX_CAPABILITY_VECTOR_LEN {
+        return Err(HarnessError::CapabilityVectorTooLong {
+            actual: buf.len(),
+            max: MAX_CAPABILITY_VECTOR_LEN,
+        });
+    }
     let mut offset = 0;
     let mut out = Vec::new();
     let mut seen_singletons = std::collections::BTreeSet::new();
+    let mut seen_algorithms = std::collections::BTreeSet::new();
     while offset < buf.len() {
         let (ty, len) = read_capability_header(buf, &mut offset)?;
         let mut value = read_capability_value(buf, &mut offset, len)?;
@@ -259,7 +383,15 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         }
         if !grease {
             validate_capability_payload(ty, &value)?;
-            if !capability_allows_duplicates(ty) && !seen_singletons.insert(ty) {
+            if capability_allows_duplicates(ty) {
+                let algorithm_id = value[0];
+                if !seen_algorithms.insert((ty, algorithm_id)) {
+                    return Err(HarnessError::DuplicateCapability(format!(
+                        "{} algorithm id 0x{algorithm_id:02x}",
+                        capability_label(ty)
+                    )));
+                }
+            } else if !seen_singletons.insert(ty) {
                 return Err(HarnessError::DuplicateCapability(capability_label(ty)));
             }
         }
@@ -274,6 +406,19 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         return Err(HarnessError::ExtraBytes);
     }
     Ok(out)
+}
+/// Validate a client capability vector, including its canonical type ordering.
+///
+/// Relay vectors intentionally do not use this validator: their wire order is
+/// transcript-bound, while only clients are required to encode capability
+/// types in nondecreasing order.
+///
+/// # Errors
+/// Returns an error when the vector is oversized, malformed, or not in
+/// nondecreasing capability-type order.
+pub fn validate_client_capability_vector(buf: &[u8]) -> Result<(), HarnessError> {
+    let capabilities = parse_capabilities(buf)?;
+    validate_client_capability_order(&capabilities)
 }
 fn read_capability_header(buf: &[u8], offset: &mut usize) -> Result<(u16, usize), HarnessError> {
     let start = *offset;
@@ -383,6 +528,8 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            suite_for_kem_id(value[0])?;
+            validate_capability_flag_bits(ty, value[1])?;
         }
         CAPABILITY_PQSIG => {
             if value.len() != 2 {
@@ -391,6 +538,13 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            if value[0] != FIRST_RELEASE_PQSIG_ID {
+                return Err(HarnessError::Validation(format!(
+                    "unsupported first-release signature identifier {:#04x}",
+                    value[0]
+                )));
+            }
+            validate_capability_flag_bits(ty, value[1])?;
         }
         CAPABILITY_TRANSCRIPT_COMMIT => {
             if value.len() != 32 {
@@ -414,6 +568,12 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            if value[0] == 0 || value[0] & !FIRST_RELEASE_ROLE_MASK != 0 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.role capability uses invalid first-release role bits 0x{:02x}",
+                    value[0]
+                )));
+            }
         }
         CAPABILITY_PADDING => {
             if value.len() != 2 {
@@ -424,14 +584,37 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
             }
         }
         CAPABILITY_CONSTANT_RATE => {
-            if value.len() < 2 {
+            if value.len() != 4 {
                 return Err(HarnessError::Validation(format!(
-                    "snnet.constant_rate capability must be at least 2 bytes, got {}",
+                    "snnet.constant_rate capability must be exactly 4 bytes, got {}",
                     value.len()
+                )));
+            }
+            if value[0] != FIRST_RELEASE_CONSTANT_RATE_VERSION {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.constant_rate capability uses unsupported version 0x{:02x}",
+                    value[0]
+                )));
+            }
+            validate_capability_flag_bits(ty, value[1])?;
+            let cell_bytes = u16::from_le_bytes([value[2], value[3]]);
+            if cell_bytes != FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.constant_rate capability advertises unsupported cell size {cell_bytes}; expected {FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES}"
                 )));
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+fn validate_capability_flag_bits(ty: u16, flags: u8) -> Result<(), HarnessError> {
+    let undefined = flags & !CAPABILITY_REQUIRED_FLAG;
+    if undefined != 0 {
+        return Err(HarnessError::Validation(format!(
+            "{} capability uses undefined flag bits 0x{undefined:02x}",
+            capability_label(ty)
+        )));
     }
     Ok(())
 }
@@ -537,6 +720,16 @@ fn describe_suites(suites: &[HandshakeSuite]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+fn validate_client_capability_order(caps: &[CapabilityTlv]) -> Result<(), HarnessError> {
+    if let Some(pair) = caps.windows(2).find(|pair| pair[0].ty > pair[1].ty) {
+        return Err(HarnessError::Validation(format!(
+            "client capability types must be in nondecreasing order; {} precedes {}",
+            capability_label(pair[0].ty),
+            capability_label(pair[1].ty)
+        )));
+    }
+    Ok(())
+}
 fn handle_both_suite_lists(
     client: &SuiteList,
     relay: &SuiteList,
@@ -581,6 +774,7 @@ fn negotiate_handshake_suite(
     client_caps: &[CapabilityTlv],
     relay_caps: &[CapabilityTlv],
 ) -> Result<HandshakeSuiteNegotiation, HarnessError> {
+    validate_client_capability_order(client_caps)?;
     let client_list = suite_list_capability(client_caps)?;
     let relay_list = suite_list_capability(relay_caps)?;
     match (client_list, relay_list) {
@@ -758,7 +952,6 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
     for cap in entries {
         let mut value = cap.value.clone();
         apply_required_flag(cap.ty, &mut value, cap.required);
-        buf.extend_from_slice(&cap.ty.to_be_bytes());
         let len = u16::try_from(value.len()).map_err(|_| {
             HarnessError::Validation(format!(
                 "capability {} value length {} exceeds u16::MAX",
@@ -766,6 +959,20 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
                 value.len()
             ))
         })?;
+        let encoded_len = buf
+            .len()
+            .checked_add(4)
+            .and_then(|encoded_len| encoded_len.checked_add(value.len()))
+            .ok_or_else(|| {
+                HarnessError::Validation("capability vector length overflowed usize".to_owned())
+            })?;
+        if encoded_len > MAX_CAPABILITY_VECTOR_LEN {
+            return Err(HarnessError::CapabilityVectorTooLong {
+                actual: encoded_len,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            });
+        }
+        buf.extend_from_slice(&cap.ty.to_be_bytes());
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(&value);
     }
@@ -775,7 +982,8 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
 ///
 /// # Errors
 /// Returns [`HarnessError::Validation`] when `suites` is empty, the capability stream is malformed,
-/// or the encoded suite list would exceed a single capability field.
+/// the encoded suite list would exceed a single capability field, or the
+/// resulting capability vector would exceed the first-release aggregate limit.
 pub fn update_suite_list(
     base: &[u8],
     suites: &[HandshakeSuite],
@@ -831,9 +1039,27 @@ impl TranscriptInputs<'_> {
     /// Compute the transcript hash as described in the working draft.
     ///
     /// # Errors
-    /// Returns [`HarnessError::Validation`] when the capability vector length
-    /// cannot be represented in the transcript's fixed `u32` length field.
+    /// Returns [`HarnessError::Validation`] when fixed-width transcript fields
+    /// or suite identifiers are invalid, or when the capability vector length
+    /// cannot be represented in its fixed `u32` length field.
     pub fn compute_hash(&self) -> Result<[u8; 32], HarnessError> {
+        validate_exact_field_len(
+            "descriptor commitment",
+            self.descriptor_commit,
+            TRANSCRIPT_BINDING_LEN,
+        )?;
+        validate_exact_field_len("client nonce", self.client_nonce, TRANSCRIPT_BINDING_LEN)?;
+        validate_exact_field_len("relay nonce", self.relay_nonce, TRANSCRIPT_BINDING_LEN)?;
+        if let Some(resume_hash) = self.resume_hash {
+            validate_exact_field_len("resume hash", resume_hash, TRANSCRIPT_BINDING_LEN)?;
+        }
+        suite_for_kem_id(self.kem_id)?;
+        if self.sig_id != FIRST_RELEASE_PQSIG_ID {
+            return Err(HarnessError::Validation(format!(
+                "unsupported signature identifier {:#04x}",
+                self.sig_id
+            )));
+        }
         let mut hasher = Sha3_256::new();
         Update::update(&mut hasher, TRANSCRIPT_DOMAIN);
         let desc_hash = Sha3_256::digest(self.descriptor_commit);
@@ -998,8 +1224,18 @@ pub struct SaltAnnouncementValidation {
 /// # Errors
 /// Returns an error if the fixture cannot be parsed or fails validation checks.
 pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, HarnessError> {
-    let contents = fs::read_to_string(path)?;
-    let record: SaltAnnouncementRecord = json::from_str(&contents)?;
+    let bytes = read_bounded_direct_fixture(
+        path,
+        SALT_ANNOUNCEMENT_FIXTURE_MAX_BYTES_V1,
+        "salt announcement fixture",
+    )?;
+    let contents = std::str::from_utf8(&bytes).map_err(|error| {
+        HarnessError::Validation(format!(
+            "salt fixture {} is not valid UTF-8: {error}",
+            path.display()
+        ))
+    })?;
+    let record: SaltAnnouncementRecord = json::from_str(contents)?;
     decode_salt_hex(&record.blinded_cid_salt_hex).map_err(|err| match err {
         HarnessError::SaltLength(len) => HarnessError::Validation(format!(
             "salt fixture {}: blinded_cid_salt_hex must decode to 32 bytes, got {len}",
@@ -1231,7 +1467,6 @@ pub struct SimulationResult {
     pub handshake_steps: Vec<HandshakeStep>,
 }
 /// Input parameters for performing a deterministic handshake simulation.
-#[derive(Debug)]
 pub struct SimulationParams<'a> {
     /// Serialized client capability TLVs.
     pub client_capabilities: &'a [u8],
@@ -1254,6 +1489,23 @@ pub struct SimulationParams<'a> {
     /// Selected signature suite identifier.
     pub sig_id: u8,
 }
+impl fmt::Debug for SimulationParams<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SimulationParams")
+            .field("client_capabilities_len", &self.client_capabilities.len())
+            .field("relay_capabilities_len", &self.relay_capabilities.len())
+            .field("client_static_sk", &"[REDACTED]")
+            .field("relay_static_sk", &"[REDACTED]")
+            .field("resume_hash_present", &self.resume_hash.is_some())
+            .field("descriptor_commit_len", &self.descriptor_commit.len())
+            .field("client_nonce_len", &self.client_nonce.len())
+            .field("relay_nonce_len", &self.relay_nonce.len())
+            .field("kem_id", &self.kem_id)
+            .field("sig_id", &self.sig_id)
+            .finish()
+    }
+}
 /// Execute a deterministic Noise XX handshake simulation.
 ///
 /// # Errors
@@ -1273,6 +1525,11 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
     let client_static = validate_static_key("client", params.client_static_sk)?;
     let relay_static = validate_static_key("relay", params.relay_static_sk)?;
+    if bool::from(client_static.ct_eq(&relay_static)) {
+        return Err(HarnessError::Validation(
+            "client and relay static keys must be distinct".into(),
+        ));
+    }
     let transcript_hash = TranscriptInputs {
         descriptor_commit: params.descriptor_commit,
         client_nonce: params.client_nonce,
@@ -1324,6 +1581,20 @@ struct SimulatedKemArtifacts {
     confirmation: Vec<u8>,
     shared_secret: Vec<u8>,
 }
+impl SimulatedKemArtifacts {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_public.zeroize();
+        self.relay_public.zeroize();
+        self.ciphertext.zeroize();
+        self.confirmation.zeroize();
+        self.shared_secret.zeroize();
+    }
+}
+impl Drop for SimulatedKemArtifacts {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 #[derive(Clone, Copy)]
 enum KemVariant {
     Primary,
@@ -1336,14 +1607,44 @@ struct KemLabelSet {
     confirmation: &'static [u8],
     shared: &'static [u8],
 }
+struct NoiseXxDhSecrets {
+    ee: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+    es: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+    se: Zeroizing<[u8; NOISE_SECRET_LEN]>,
+}
+impl NoiseXxDhSecrets {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.ee.zeroize();
+        self.es.zeroize();
+        self.se.zeroize();
+    }
+}
 struct DeterministicHandshakeMaterial {
     client_static_public: [u8; NOISE_SECRET_LEN],
     client_ephemeral_public: [u8; NOISE_SECRET_LEN],
     relay_static_bytes: [u8; NOISE_SECRET_LEN],
     relay_static_public: [u8; NOISE_SECRET_LEN],
     relay_ephemeral_public: [u8; NOISE_SECRET_LEN],
+    noise_xx_dh: NoiseXxDhSecrets,
     primary_kem: SimulatedKemArtifacts,
     forward_secure_kem: SimulatedKemArtifacts,
+}
+impl DeterministicHandshakeMaterial {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_static_public.zeroize();
+        self.client_ephemeral_public.zeroize();
+        self.relay_static_bytes.zeroize();
+        self.relay_static_public.zeroize();
+        self.relay_ephemeral_public.zeroize();
+        self.noise_xx_dh.zeroize_sensitive_fields();
+        self.primary_kem.zeroize_sensitive_fields();
+        self.forward_secure_kem.zeroize_sensitive_fields();
+    }
+}
+impl Drop for DeterministicHandshakeMaterial {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
 }
 fn simulation_relay_identity_key(
     material: &DeterministicHandshakeMaterial,
@@ -1432,25 +1733,32 @@ fn derive_handshake_material(
     relay_static: &[u8; NOISE_SECRET_LEN],
 ) -> Result<DeterministicHandshakeMaterial, HarnessError> {
     let profile = kem_profile(params.kem_id)?;
-    let client_static_public =
-        X25519PublicKey::from(&StaticSecret::from(*client_static)).to_bytes();
-    let relay_static_public = X25519PublicKey::from(&StaticSecret::from(*relay_static)).to_bytes();
-    let client_ephemeral_public = {
+    let client_static_secret = StaticSecret::from(*client_static);
+    let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
+    let relay_static_secret = StaticSecret::from(*relay_static);
+    let relay_static_public = X25519PublicKey::from(&relay_static_secret).to_bytes();
+    let client_ephemeral_secret = {
         let seed = Zeroizing::new(derive_seed(
             b"soranet.noise.client.ephemeral.v1",
             &[client_static.as_ref(), params.client_nonce],
         )?);
-        let secret = StaticSecret::from(*seed);
-        X25519PublicKey::from(&secret).to_bytes()
+        StaticSecret::from(*seed)
     };
-    let relay_ephemeral_public = {
+    let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
+    let relay_ephemeral_secret = {
         let seed = Zeroizing::new(derive_seed(
             b"soranet.noise.relay.ephemeral.v1",
             &[relay_static.as_ref(), params.relay_nonce],
         )?);
-        let secret = StaticSecret::from(*seed);
-        X25519PublicKey::from(&secret).to_bytes()
+        StaticSecret::from(*seed)
     };
+    let relay_ephemeral_public = X25519PublicKey::from(&relay_ephemeral_secret).to_bytes();
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &relay_ephemeral_public,
+        &relay_static_public,
+    )?;
     let primary_kem = derive_kem_artifacts(
         KemVariant::Primary,
         params,
@@ -1471,6 +1779,7 @@ fn derive_handshake_material(
         relay_static_bytes: *relay_static,
         relay_static_public,
         relay_ephemeral_public,
+        noise_xx_dh,
         primary_kem,
         forward_secure_kem,
     })
@@ -1536,10 +1845,6 @@ fn build_nk2_artifacts(
     );
     telemetry_map.insert("kem_id".to_string(), Value::from(params.kem_id));
     telemetry_map.insert("sig_id".to_string(), Value::from(params.sig_id));
-    telemetry_map.insert(
-        "shared_secret_hex".to_string(),
-        Value::from(hex::encode(&primary.shared_secret)),
-    );
     telemetry_map.insert("warning_count".to_string(), Value::from(warnings.len()));
     telemetry_map.insert(
         "resume_hash_present".to_string(),
@@ -1657,10 +1962,6 @@ fn build_nk3_artifacts(
     telemetry_map.insert("kem_id".to_string(), Value::from(params.kem_id));
     telemetry_map.insert("sig_id".to_string(), Value::from(params.sig_id));
     telemetry_map.insert(
-        "shared_secret_hex".to_string(),
-        Value::from(hex::encode(&dual_mix)),
-    );
-    telemetry_map.insert(
         "fs_commitment_hex".to_string(),
         Value::from(hex::encode(&fs_commitment)),
     );
@@ -1728,6 +2029,13 @@ fn validate_static_key(label: &str, key: &[u8]) -> Result<[u8; NOISE_SECRET_LEN]
     }
     let mut out = [0u8; NOISE_SECRET_LEN];
     out.copy_from_slice(key);
+    let repeated = [out[0]; NOISE_SECRET_LEN];
+    if bool::from(out.ct_eq(&repeated)) {
+        out.fill(0);
+        return Err(HarnessError::Validation(format!(
+            "{label} static key must not be an all-zero or repeated-byte degenerate key"
+        )));
+    }
     Ok(out)
 }
 fn suite_for_kem_id(kem_id: u8) -> Result<MlKemSuite, HarnessError> {
@@ -1756,7 +2064,7 @@ fn expand_material(label: &[u8], parts: &[&[u8]], len: usize) -> Vec<u8> {
     }
     let mut reader = hasher.finalize_xof();
     let mut out = vec![0u8; len];
-    reader.read(&mut out);
+    XofReader::read(&mut reader, &mut out);
     out
 }
 fn update_expand_material_component(hasher: &mut Shake256, component: &[u8]) {
@@ -2149,7 +2457,7 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-006-constant-rate",
         description: "Client requires snnet.constant_rate; relay lacking TLV triggers downgrade",
-        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe020300020101",
+        client_hex: "01010002010101020002010101040002840502020002000402030004010100047f100004deadbeef7f110004cafebabe",
         relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
@@ -2157,7 +2465,7 @@ const FIXTURES: &[FixtureSpec] = &[
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "a639850117a5382b48a8f307614be5d05ecdd054b9211eb0e9162bdd5dc71f6c",
+        transcript_hash_hex: "a2ad01866bb231ec5244d7060014fd9c16723e5025f6b1129a8a25f8ec11b1ca",
         warnings: &["relay missing required capability type=0x0203 (snnet.constant_rate)"],
         expected_outcome: "downgrade_abort",
         expected_alarm: None,
@@ -2188,10 +2496,10 @@ const FIXTURES: &[FixtureSpec] = &[
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
         relay_nonce_hex: "cafebabefeedface00112233445566778899aabbccddeeff0011223344556677",
-        resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
+        resume_hash_hex: Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"),
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "84dc1ad92c7bf6c2ee7ec34a6025895b9c4fbf9f0c35befbba6c22696c50d33f",
+        transcript_hash_hex: "656f8dd4c73dca0bcaa3772b3d09e9c278ad514950b5dd119ad6050f66657e0d",
         warnings: &[],
         expected_outcome: "success",
         expected_alarm: None,
@@ -2413,13 +2721,32 @@ struct HandshakeInputs {
     relay_nonce: [u8; NOISE_SECRET_LEN],
     resume_hash: Option<Vec<u8>>,
 }
+impl HandshakeInputs {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_static.zeroize();
+        self.relay_static.zeroize();
+        self.client_nonce.zeroize();
+        self.relay_nonce.zeroize();
+        self.resume_hash.zeroize();
+    }
+}
+impl Drop for HandshakeInputs {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 fn decode_handshake_inputs(spec: &InteropSpec) -> Result<HandshakeInputs, HarnessError> {
     Ok(HandshakeInputs {
         client_static: decode_fixed_hex("client_static_sk_hex", spec.client_static_sk_hex)?,
         relay_static: decode_fixed_hex("relay_static_sk_hex", spec.relay_static_sk_hex)?,
         client_nonce: decode_fixed_hex("client_nonce_hex", spec.client_nonce_hex)?,
         relay_nonce: decode_fixed_hex("relay_nonce_hex", spec.relay_nonce_hex)?,
-        resume_hash: spec.resume_hash_hex.map(decode_hex).transpose()?,
+        resume_hash: spec
+            .resume_hash_hex
+            .map(|hex| {
+                decode_fixed_hex::<TRANSCRIPT_BINDING_LEN>("resume_hash_hex", hex).map(Vec::from)
+            })
+            .transpose()?,
     })
 }
 fn build_simulation_params<'a>(
@@ -2464,6 +2791,20 @@ struct SessionArtifacts {
     forward_shared: Option<Vec<u8>>,
     dual_mix: Option<Vec<u8>>,
 }
+impl SessionArtifacts {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.session_key.zeroize();
+        self.session_confirmation.zeroize();
+        self.primary_shared.zeroize();
+        self.forward_shared.zeroize();
+        self.dual_mix.zeroize();
+    }
+}
+impl Drop for SessionArtifacts {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 fn build_session_artifacts(
     spec: &InteropSpec,
     params: &SimulationParams<'_>,
@@ -2500,6 +2841,7 @@ fn build_session_artifacts(
     let session_inputs = SessionKeyInputs {
         suite: spec.suite,
         transcript_hash,
+        noise_xx_dh: &material.noise_xx_dh,
         primary_shared: material.primary_kem.shared_secret.as_slice(),
         forward_shared: forward_shared.as_deref(),
     };
@@ -2868,14 +3210,25 @@ fn canonical_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 fn compare_fixture(expected: &Path, actual: &Path) -> Result<(), HarnessError> {
-    if !actual.exists() {
-        return Err(HarnessError::Validation(format!(
-            "expected fixture {} to exist; run `cargo xtask soranet-fixtures` to regenerate",
-            actual.display()
-        )));
-    }
-    let expected_bytes = fs::read(expected)?;
-    let actual_bytes = fs::read(actual)?;
+    let expected_bytes = read_bounded_direct_fixture(
+        expected,
+        HANDSHAKE_FIXTURE_MAX_BYTES_V1,
+        "expected handshake fixture",
+    )?;
+    let actual_bytes = match read_bounded_direct_fixture(
+        actual,
+        HANDSHAKE_FIXTURE_MAX_BYTES_V1,
+        "generated handshake fixture",
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(HarnessError::Validation(format!(
+                "expected fixture {} to exist; run `cargo xtask soranet-fixtures` to regenerate",
+                actual.display()
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
     if expected_bytes != actual_bytes {
         return Err(HarnessError::Validation(format!(
             "fixture {} is out of date; run `cargo xtask soranet-fixtures` to refresh",
@@ -2883,6 +3236,127 @@ fn compare_fixture(expected: &Path, actual: &Path) -> Result<(), HarnessError> {
         )));
     }
     Ok(())
+}
+fn read_bounded_direct_fixture(
+    path: &Path,
+    max_bytes: usize,
+    subject: &str,
+) -> io::Result<Vec<u8>> {
+    let named_before = fs::symlink_metadata(path)?;
+    validate_direct_fixture_metadata(&named_before, subject)?;
+    if named_before.len() > max_bytes as u64 {
+        return Err(fixture_too_large(subject, max_bytes));
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "direct handshake fixture loading is unsupported on this platform",
+        ));
+    }
+    #[cfg(any(unix, windows))]
+    let mut file = options.open(path)?;
+    #[cfg(any(unix, windows))]
+    {
+        let opened_before = file.metadata()?;
+        validate_direct_fixture_metadata(&opened_before, subject)?;
+        if !fixture_metadata_identifies_same_file(&named_before, &opened_before)
+            || opened_before.len() != named_before.len()
+            || opened_before.len() > max_bytes as u64
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{subject} changed while it was opened"),
+            ));
+        }
+        let capacity = usize::try_from(opened_before.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{subject} length cannot be addressed on this platform"),
+            )
+        })?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| io::Error::other(format!("failed to reserve memory for {subject}")))?;
+        let mut bounded_reader = io::Read::take(&mut file, (max_bytes as u64).saturating_add(1));
+        io::Read::read_to_end(&mut bounded_reader, &mut bytes)?;
+        if bytes.len() > max_bytes {
+            return Err(fixture_too_large(subject, max_bytes));
+        }
+
+        let opened_after = file.metadata()?;
+        let named_after = fs::symlink_metadata(path)?;
+        validate_direct_fixture_metadata(&opened_after, subject)?;
+        validate_direct_fixture_metadata(&named_after, subject)?;
+        if !fixture_metadata_identifies_same_file(&opened_before, &opened_after)
+            || !fixture_metadata_identifies_same_file(&opened_after, &named_after)
+            || opened_before.len() != opened_after.len()
+            || opened_after.len() != named_after.len()
+            || opened_after.len() != bytes.len() as u64
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{subject} changed while it was read"),
+            ));
+        }
+        Ok(bytes)
+    }
+}
+fn validate_direct_fixture_metadata(metadata: &fs::Metadata, subject: &str) -> io::Result<()> {
+    if fixture_metadata_is_indirect(metadata) || !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{subject} must be a direct regular file"),
+        ));
+    }
+    Ok(())
+}
+fn fixture_metadata_is_indirect(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+#[cfg(unix)]
+fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+#[cfg(windows)]
+fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+fn fixture_too_large(subject: &str, max_bytes: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{subject} exceeds the {max_bytes}-byte first-release limit"),
+    )
 }
 /// Descriptor commitment used in the reference fixture bundle.
 pub const DEFAULT_DESCRIPTOR_COMMIT: [u8; 32] =
@@ -3078,6 +3552,11 @@ pub fn build_client_hello<R: TryCryptoRng>(
         "building client static Noise secret",
         client_static_bytes.as_mut(),
     )?;
+    reject_repeated_random_material(
+        "building client static Noise secret",
+        client_static_bytes.as_ref(),
+        &[("client nonce", client_nonce.as_slice())],
+    )?;
     let client_static_secret = StaticSecret::from(*client_static_bytes);
     let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
     let mut client_ephemeral_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
@@ -3086,10 +3565,37 @@ pub fn build_client_hello<R: TryCryptoRng>(
         "building client ephemeral Noise secret",
         client_ephemeral_bytes.as_mut(),
     )?;
+    reject_repeated_random_material(
+        "building client ephemeral Noise secret",
+        client_ephemeral_bytes.as_ref(),
+        &[
+            ("client nonce", client_nonce.as_slice()),
+            ("client static Noise secret", client_static_bytes.as_ref()),
+        ],
+    )?;
     let client_ephemeral_secret = StaticSecret::from(*client_ephemeral_bytes);
     let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
+    if client_ephemeral_public == client_static_public {
+        return Err(HarnessError::RandomBytes {
+            operation: "building client ephemeral Noise secret",
+            message: "rng produced the same effective client static and ephemeral Noise key"
+                .to_owned(),
+        });
+    }
     let mut kem_seed = Zeroizing::new([0u8; 32]);
     fill_random(rng, "building client ML-KEM seed", kem_seed.as_mut())?;
+    reject_repeated_random_material(
+        "building client ML-KEM seed",
+        kem_seed.as_ref(),
+        &[
+            ("client nonce", client_nonce.as_slice()),
+            ("client static Noise secret", client_static_bytes.as_ref()),
+            (
+                "client ephemeral Noise secret",
+                client_ephemeral_bytes.as_ref(),
+            ),
+        ],
+    )?;
     let mut kem_rng = hedged_chacha20_rng(
         HedgedRngSeed::from_entropy(*kem_seed),
         b"soranet-handshake:client-kem",
@@ -3138,6 +3644,7 @@ fn build_client_hello_nk2(
         client_init.push(0);
     }
     pad_to_noise_block(&mut client_init);
+    validate_handshake_frame_len("NK2 client hello", client_init.len())?;
     let state = materials.into_state(params, HandshakeSuite::Nk2Hybrid, client_init.clone(), None);
     Ok((client_init, state))
 }
@@ -3173,6 +3680,7 @@ fn build_client_hello_nk3(
     }
     append_len_prefixed(&mut client_commit, forward_commitment.as_slice())?;
     pad_to_noise_block(&mut client_commit);
+    validate_handshake_frame_len("NK3 client hello", client_commit.len())?;
     let forward_bundle = Some((forward_secret, forward_public.clone()));
     let state = materials.into_state(
         params,
@@ -3251,6 +3759,7 @@ fn parse_hybrid_relay_response(
     expected_descriptor: &[u8],
     kem_suite: MlKemSuite,
 ) -> Result<HybridRelayParsed, HarnessError> {
+    validate_handshake_frame_len("hybrid relay response", relay_message.len())?;
     let mut cursor = MessageCursor::new(relay_message);
     let msg_type = cursor.read_u8()?;
     if msg_type != HYBRID_RELAY_RESPONSE_TYPE {
@@ -3286,12 +3795,13 @@ fn parse_hybrid_relay_response(
     validate_mlkem_ciphertext(kem_suite, &kem_ciphertext)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let confirmation = cursor.read_len_prefixed()?.to_vec();
+    validate_exact_field_len(
+        "relay confirmation",
+        &confirmation,
+        kem_suite.shared_secret_len(),
+    )?;
     let transcript_bytes = cursor.read_len_prefixed()?.to_vec();
-    if transcript_bytes.len() != 32 {
-        return Err(HarnessError::Validation(
-            "transcript hash must be 32 bytes".to_string(),
-        ));
-    }
+    validate_exact_field_len("transcript hash", &transcript_bytes, TRANSCRIPT_BINDING_LEN)?;
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
@@ -3322,6 +3832,7 @@ fn parse_pqfs_relay_response(
     expected_descriptor: &[u8],
     kem_suite: MlKemSuite,
 ) -> Result<PqfsRelayParsed, HarnessError> {
+    validate_handshake_frame_len("pqfs relay response", relay_message.len())?;
     let mut cursor = MessageCursor::new(relay_message);
     let msg_type = cursor.read_u8()?;
     if msg_type != PQFS_RELAY_RESPONSE_TYPE {
@@ -3364,16 +3875,28 @@ fn parse_pqfs_relay_response(
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let primary_confirmation = cursor.read_len_prefixed()?.to_vec();
     let forward_confirmation = cursor.read_len_prefixed()?.to_vec();
+    validate_exact_field_len(
+        "primary relay confirmation",
+        &primary_confirmation,
+        kem_suite.shared_secret_len(),
+    )?;
+    validate_exact_field_len(
+        "forward relay confirmation",
+        &forward_confirmation,
+        kem_suite.shared_secret_len(),
+    )?;
     let transcript_bytes = cursor.read_len_prefixed()?.to_vec();
-    if transcript_bytes.len() != 32 {
-        return Err(HarnessError::Validation(
-            "transcript hash must be 32 bytes".to_string(),
-        ));
-    }
+    validate_exact_field_len("transcript hash", &transcript_bytes, TRANSCRIPT_BINDING_LEN)?;
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     let dual_mix = cursor.read_len_prefixed()?.to_vec();
+    validate_exact_field_len(
+        "forward commitment",
+        &forward_commitment,
+        TRANSCRIPT_BINDING_LEN,
+    )?;
+    validate_exact_field_len("dual mix", &dual_mix, kem_suite.shared_secret_len())?;
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
     let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
@@ -3431,6 +3954,8 @@ fn handle_nk2_client_finish(
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
+        client_ephemeral_secret,
+        client_static_secret,
         client_kem_secret,
         client_capabilities,
         descriptor_commit,
@@ -3487,6 +4012,12 @@ fn handle_nk2_client_finish(
             "relay transcript hash mismatch in NK2 handshake".to_string(),
         ));
     }
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &parsed.relay_ephemeral_pub,
+        &parsed.relay_static_pub,
+    )?;
     let shared_secret = decapsulate_mlkem(
         profile.suite(),
         client_kem_secret.as_ref(),
@@ -3496,15 +4027,14 @@ fn handle_nk2_client_finish(
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: shared_secret.as_bytes(),
         forward_shared: None,
     })?;
-    if confirmation != parsed.confirmation {
-        return Err(HarnessError::Validation(format!(
-            "relay confirmation mismatch in NK2 handshake (expected {}, got {})",
-            hex::encode(&parsed.confirmation),
-            hex::encode(&confirmation)
-        )));
+    if !constant_time_bytes_eq(&confirmation, &parsed.confirmation) {
+        return Err(HarnessError::Validation(
+            "relay confirmation mismatch in NK2 handshake".to_owned(),
+        ));
     }
     Ok((
         None,
@@ -3590,36 +4120,30 @@ fn decapsulate_nk3_secrets(
         primary_shared.as_bytes(),
         transcript,
     )?;
-    if expected_primary_confirmation != parsed.primary_confirmation {
-        return Err(HarnessError::Validation(format!(
-            "primary confirmation mismatch in NK3 handshake (expected {}, got {})",
-            hex::encode(&parsed.primary_confirmation),
-            hex::encode(&expected_primary_confirmation)
-        )));
+    if !constant_time_bytes_eq(&expected_primary_confirmation, &parsed.primary_confirmation) {
+        return Err(HarnessError::Validation(
+            "primary confirmation mismatch in NK3 handshake".to_owned(),
+        ));
     }
     let expected_forward_confirmation = compute_kem_confirmation(
         NK3_FORWARD_CONFIRM_LABEL,
         forward_shared.as_bytes(),
         transcript,
     )?;
-    if expected_forward_confirmation != parsed.forward_confirmation {
-        return Err(HarnessError::Validation(format!(
-            "forward confirmation mismatch in NK3 handshake (expected {}, got {})",
-            hex::encode(&parsed.forward_confirmation),
-            hex::encode(&expected_forward_confirmation)
-        )));
+    if !constant_time_bytes_eq(&expected_forward_confirmation, &parsed.forward_confirmation) {
+        return Err(HarnessError::Validation(
+            "forward confirmation mismatch in NK3 handshake".to_owned(),
+        ));
     }
     let expected_dual_mix = compute_dual_mix(
         primary_shared.as_bytes(),
         forward_shared.as_bytes(),
         transcript,
     );
-    if expected_dual_mix != parsed.dual_mix {
-        return Err(HarnessError::Validation(format!(
-            "dual-mix mismatch in NK3 handshake (expected {}, got {})",
-            hex::encode(&parsed.dual_mix),
-            hex::encode(&expected_dual_mix)
-        )));
+    if !constant_time_bytes_eq(&expected_dual_mix, &parsed.dual_mix) {
+        return Err(HarnessError::Validation(
+            "dual-mix mismatch in NK3 handshake".to_owned(),
+        ));
     }
     Ok((primary_shared, forward_shared))
 }
@@ -3631,6 +4155,8 @@ fn handle_nk3_client_finish(
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
     let ClientState {
         client_nonce,
+        client_ephemeral_secret,
+        client_static_secret,
         client_kem_secret,
         forward_kem_secret,
         forward_kem_public,
@@ -3675,6 +4201,12 @@ fn handle_nk3_client_finish(
         sig_id,
         resume_hash.as_deref(),
     )?;
+    let noise_xx_dh = derive_client_noise_xx_dh(
+        &client_ephemeral_secret,
+        &client_static_secret,
+        &parsed.relay_ephemeral_pub,
+        &parsed.relay_static_pub,
+    )?;
     let (primary_shared, forward_shared) = decapsulate_nk3_secrets(
         profile.suite(),
         &client_kem_secret,
@@ -3687,6 +4219,7 @@ fn handle_nk3_client_finish(
         derive_session_key_and_confirmation(SessionKeyInputs {
             suite: HandshakeSuite::Nk3PqForwardSecure,
             transcript_hash: &transcript,
+            noise_xx_dh: &noise_xx_dh,
             primary_shared: primary_shared.as_bytes(),
             forward_shared: Some(forward_shared.as_bytes()),
         })?;
@@ -3718,19 +4251,45 @@ fn parse_client_hello(
     client_hello: &[u8],
     expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
+    let parsed = parse_client_hello_unbound(client_hello)?;
+    validate_client_resume_hash(parsed.resume_hash.as_deref(), expected_resume)?;
+    Ok(parsed)
+}
+fn parse_client_hello_unbound(client_hello: &[u8]) -> Result<ClientHelloParsed, HarnessError> {
+    validate_handshake_frame_len("client hello", client_hello.len())?;
     let mut cursor = MessageCursor::new(client_hello);
     let msg_type = cursor.read_u8()?;
     match msg_type {
-        HYBRID_CLIENT_HELLO_TYPE => parse_client_hello_nk2(cursor, expected_resume),
-        PQFS_CLIENT_COMMIT_TYPE => parse_client_hello_nk3(cursor, expected_resume),
+        HYBRID_CLIENT_HELLO_TYPE => parse_client_hello_nk2(cursor),
+        PQFS_CLIENT_COMMIT_TYPE => parse_client_hello_nk3(cursor),
         other => Err(HarnessError::Validation(format!(
             "unexpected client hello message type {other:#04x}"
         ))),
     }
 }
+fn validate_client_resume_hash(
+    actual_resume: Option<&[u8]>,
+    expected_resume: Option<&[u8]>,
+) -> Result<(), HarnessError> {
+    match (expected_resume, actual_resume) {
+        (Some(expected), Some(actual)) if actual != expected => {
+            Err(HarnessError::Validation(format!(
+                "client resume hash mismatch (expected {}, got {})",
+                hex::encode(expected),
+                hex::encode(actual)
+            )))
+        }
+        (Some(_), None) => Err(HarnessError::Validation(
+            "client omitted required resume hash".to_string(),
+        )),
+        (None, Some(_)) => Err(HarnessError::Validation(
+            "client supplied unexpected resume hash".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
 fn parse_client_hello_nk2(
     mut cursor: MessageCursor<'_>,
-    expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
     let client_nonce_bytes = cursor.read_len_prefixed()?;
     if client_nonce_bytes.len() != 32 {
@@ -3740,6 +4299,11 @@ fn parse_client_hello_nk2(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
+    if client_nonce.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(
+            "client nonce must not be all zero".to_string(),
+        ));
+    }
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk2Hybrid {
@@ -3755,32 +4319,7 @@ fn parse_client_hello_nk2(
     let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
-    let resume_flag = cursor.read_u8()?;
-    let resume_hash = if resume_flag == 1 {
-        Some(cursor.read_len_prefixed()?.to_vec())
-    } else {
-        None
-    };
-    match (expected_resume, resume_hash.as_deref()) {
-        (Some(expected), Some(actual)) if actual != expected => {
-            return Err(HarnessError::Validation(format!(
-                "client resume hash mismatch (expected {}, got {})",
-                hex::encode(expected),
-                hex::encode(actual)
-            )));
-        }
-        (Some(_), None) => {
-            return Err(HarnessError::Validation(
-                "client omitted required resume hash".to_string(),
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(HarnessError::Validation(
-                "client supplied unexpected resume hash".to_string(),
-            ));
-        }
-        _ => {}
-    }
+    let resume_hash = read_optional_resume_hash(&mut cursor)?;
     validate_noise_padding(
         "nk2 client hello",
         cursor.buf.len(),
@@ -3802,7 +4341,6 @@ fn parse_client_hello_nk2(
 }
 fn parse_client_hello_nk3(
     mut cursor: MessageCursor<'_>,
-    expected_resume: Option<&[u8]>,
 ) -> Result<ClientHelloParsed, HarnessError> {
     let client_nonce_bytes = cursor.read_len_prefixed()?;
     if client_nonce_bytes.len() != 32 {
@@ -3812,6 +4350,11 @@ fn parse_client_hello_nk3(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
+    if client_nonce.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(
+            "client nonce must not be all zero".to_string(),
+        ));
+    }
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk3PqForwardSecure {
@@ -3828,33 +4371,13 @@ fn parse_client_hello_nk3(
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
-    let resume_flag = cursor.read_u8()?;
-    let resume_hash = if resume_flag == 1 {
-        Some(cursor.read_len_prefixed()?.to_vec())
-    } else {
-        None
-    };
-    match (expected_resume, resume_hash.as_deref()) {
-        (Some(expected), Some(actual)) if actual != expected => {
-            return Err(HarnessError::Validation(format!(
-                "client resume hash mismatch (expected {}, got {})",
-                hex::encode(expected),
-                hex::encode(actual)
-            )));
-        }
-        (Some(_), None) => {
-            return Err(HarnessError::Validation(
-                "client omitted required resume hash".to_string(),
-            ));
-        }
-        (None, Some(_)) => {
-            return Err(HarnessError::Validation(
-                "client supplied unexpected resume hash".to_string(),
-            ));
-        }
-        _ => {}
-    }
+    let resume_hash = read_optional_resume_hash(&mut cursor)?;
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
+    validate_exact_field_len(
+        "forward commitment",
+        &forward_commitment,
+        TRANSCRIPT_BINDING_LEN,
+    )?;
     validate_noise_padding(
         "nk3 client hello",
         cursor.buf.len(),
@@ -3891,6 +4414,11 @@ impl RelayNoiseState {
             "building relay ephemeral Noise secret",
             ephemeral_bytes.as_mut(),
         )?;
+        reject_repeated_random_material(
+            "building relay ephemeral Noise secret",
+            ephemeral_bytes.as_ref(),
+            &[("relay nonce", nonce.as_slice())],
+        )?;
         let ephemeral_secret = StaticSecret::from(*ephemeral_bytes);
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret).to_bytes();
         let mut static_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
@@ -3899,8 +4427,23 @@ impl RelayNoiseState {
             "building relay static Noise secret",
             static_bytes.as_mut(),
         )?;
+        reject_repeated_random_material(
+            "building relay static Noise secret",
+            static_bytes.as_ref(),
+            &[
+                ("relay nonce", nonce.as_slice()),
+                ("relay ephemeral Noise secret", ephemeral_bytes.as_ref()),
+            ],
+        )?;
         let static_secret = StaticSecret::from(*static_bytes);
         let static_public = X25519PublicKey::from(&static_secret).to_bytes();
+        if static_public == ephemeral_public {
+            return Err(HarnessError::RandomBytes {
+                operation: "building relay static Noise secret",
+                message: "rng produced the same effective relay static and ephemeral Noise key"
+                    .to_owned(),
+            });
+        }
         Ok(Self {
             nonce,
             ephemeral_secret,
@@ -4050,6 +4593,7 @@ fn build_hybrid_relay_response(
         params.tls_server_name,
     )?;
     pad_to_noise_block(&mut relay_response);
+    validate_handshake_frame_len("NK2 relay response", relay_response.len())?;
     Ok(relay_response)
 }
 /// Aggregates the inputs needed to serialize a PQFS relay response.
@@ -4102,6 +4646,7 @@ fn build_pqfs_relay_response(
         params.tls_server_name,
     )?;
     pad_to_noise_block(&mut relay_response);
+    validate_handshake_frame_len("NK3 relay response", relay_response.len())?;
     Ok(relay_response)
 }
 struct RelayStateInputs<'params, 'runtime> {
@@ -4180,11 +4725,9 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     kem_suite: MlKemSuite,
     relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
-    if parsed.client_static_public.is_none() {
-        return Err(HarnessError::Validation(
-            "NK2 handshake requires client static key".into(),
-        ));
-    }
+    let client_static_public = parsed.client_static_public.ok_or_else(|| {
+        HarnessError::Validation("NK2 handshake requires client static key".into())
+    })?;
     let client_forward = parsed.forward_kem_public.clone();
     if client_forward.is_some() {
         return Err(HarnessError::Validation(
@@ -4192,12 +4735,19 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         ));
     }
     let noise = RelayNoiseState::generate(rng)?;
+    let noise_xx_dh = derive_relay_noise_xx_dh(
+        &noise.ephemeral_secret,
+        &noise.static_secret,
+        &parsed.client_ephemeral_public,
+        &client_static_public,
+    )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
         compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: None,
     })?;
@@ -4233,12 +4783,13 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
 }
 /// Required payloads carried by the NK3 client hello message.
 struct Nk3HandshakeRequirements {
+    client_static_public: [u8; NOISE_SECRET_LEN],
     forward_public: Vec<u8>,
     forward_commitment: Vec<u8>,
 }
 impl Nk3HandshakeRequirements {
     fn collect(parsed: &ClientHelloParsed) -> Result<Self, HarnessError> {
-        let _client_static_public = parsed.client_static_public.ok_or_else(|| {
+        let client_static_public = parsed.client_static_public.ok_or_else(|| {
             HarnessError::Validation("NK3 handshake requires client static key".into())
         })?;
         let forward_public = parsed.forward_kem_public.clone().ok_or_else(|| {
@@ -4248,6 +4799,7 @@ impl Nk3HandshakeRequirements {
             HarnessError::Validation("NK3 handshake requires forward commitment".into())
         })?;
         Ok(Self {
+            client_static_public,
             forward_public,
             forward_commitment,
         })
@@ -4288,6 +4840,12 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
+    let noise_xx_dh = derive_relay_noise_xx_dh(
+        &noise.ephemeral_secret,
+        &noise.static_secret,
+        &parsed.client_ephemeral_public,
+        &requirements.client_static_public,
+    )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
     let transcript = compute_relay_transcript(
@@ -4304,6 +4862,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     let (session_key, _) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk3PqForwardSecure,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: Some(forward.shared_secret.as_ref()),
     })?;
@@ -4353,6 +4912,27 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     });
     state.requires_client_finish = false;
     Ok((relay_response, state))
+}
+/// Parse an incoming `ClientHello` for bounded relay-side admission preflight.
+///
+/// The parser validates the canonical NK2/NK3 frame shape, padding, fixed-size
+/// fields, Noise public keys, and aggregate frame bound. It intentionally does
+/// not validate ML-KEM public material, which remains behind admission controls
+/// in [`process_client_hello`]. Resume-hash policy is likewise enforced by the
+/// full handshake once the relay has resolved any authenticated resume binding.
+///
+/// # Errors
+/// Returns an error when the frame is malformed or contains invalid cheap-to-
+/// validate handshake material.
+pub fn inspect_client_hello(client_hello: &[u8]) -> Result<ClientHelloMetadata, HarnessError> {
+    let parsed = parse_client_hello_unbound(client_hello)?;
+    Ok(ClientHelloMetadata {
+        handshake_suite: parsed.handshake_suite,
+        kem_id: parsed.kem_id,
+        sig_id: parsed.sig_id,
+        client_capabilities: parsed.client_capabilities,
+        resume_hash: parsed.resume_hash,
+    })
 }
 /// Parse an incoming `ClientHello` and craft the `RelayHello` response.
 ///
@@ -4535,11 +5115,55 @@ fn build_telemetry_payload(
         .map(String::into_bytes)
         .map_err(HarnessError::from)
 }
+fn checked_x25519_dh(
+    contribution: &str,
+    local_secret: &StaticSecret,
+    peer_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<Zeroizing<[u8; NOISE_SECRET_LEN]>, HarnessError> {
+    let peer_public = X25519PublicKey::from(*peer_public);
+    let shared = local_secret.diffie_hellman(&peer_public);
+    let mut output = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
+    output.copy_from_slice(shared.as_bytes());
+    if constant_time_bytes_eq(output.as_slice(), &[0u8; NOISE_SECRET_LEN]) {
+        return Err(HarnessError::Validation(format!(
+            "Noise XX {contribution} X25519 DH output must not be all zero"
+        )));
+    }
+    Ok(output)
+}
+
+fn derive_client_noise_xx_dh(
+    client_ephemeral_secret: &StaticSecret,
+    client_static_secret: &StaticSecret,
+    relay_ephemeral_public: &[u8; NOISE_SECRET_LEN],
+    relay_static_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<NoiseXxDhSecrets, HarnessError> {
+    Ok(NoiseXxDhSecrets {
+        ee: checked_x25519_dh("ee", client_ephemeral_secret, relay_ephemeral_public)?,
+        es: checked_x25519_dh("es", client_ephemeral_secret, relay_static_public)?,
+        se: checked_x25519_dh("se", client_static_secret, relay_ephemeral_public)?,
+    })
+}
+
+fn derive_relay_noise_xx_dh(
+    relay_ephemeral_secret: &StaticSecret,
+    relay_static_secret: &StaticSecret,
+    client_ephemeral_public: &[u8; NOISE_SECRET_LEN],
+    client_static_public: &[u8; NOISE_SECRET_LEN],
+) -> Result<NoiseXxDhSecrets, HarnessError> {
+    Ok(NoiseXxDhSecrets {
+        ee: checked_x25519_dh("ee", relay_ephemeral_secret, client_ephemeral_public)?,
+        es: checked_x25519_dh("es", relay_static_secret, client_ephemeral_public)?,
+        se: checked_x25519_dh("se", relay_ephemeral_secret, client_static_public)?,
+    })
+}
+
 /// Inputs required to derive session keys and confirmation tags.
 #[derive(Clone, Copy)]
 struct SessionKeyInputs<'a> {
     suite: HandshakeSuite,
     transcript_hash: &'a [u8; 32],
+    noise_xx_dh: &'a NoiseXxDhSecrets,
     primary_shared: &'a [u8],
     forward_shared: Option<&'a [u8]>,
 }
@@ -4549,23 +5173,29 @@ fn derive_session_key_and_confirmation(
     let SessionKeyInputs {
         suite,
         transcript_hash,
+        noise_xx_dh,
         primary_shared,
         forward_shared,
     } = inputs;
-    let (session_label, confirm_label) = match suite {
-        HandshakeSuite::Nk2Hybrid => (
-            b"soranet.handshake.nk2.session.v1",
-            b"soranet.handshake.nk2.confirm.v1",
-        ),
+    let (session_label, confirm_label): (&[u8], &[u8]) = match suite {
+        HandshakeSuite::Nk2Hybrid => (b"soranet.handshake.nk2.session.v1", NK2_CONFIRM_LABEL),
         HandshakeSuite::Nk3PqForwardSecure => (
             b"soranet.handshake.nk3.session.v1",
             b"soranet.handshake.nk3.confirm.v1",
         ),
     };
     let hk = match suite {
-        HandshakeSuite::Nk2Hybrid => {
-            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])?
-        }
+        HandshakeSuite::Nk2Hybrid => hkdf_sha3_256_from_ikm_parts(
+            Some(transcript_hash),
+            &[
+                NOISE_XX_DH_IKM_DOMAIN,
+                noise_xx_dh.ee.as_slice(),
+                noise_xx_dh.es.as_slice(),
+                noise_xx_dh.se.as_slice(),
+                primary_shared,
+                transcript_hash,
+            ],
+        )?,
         HandshakeSuite::Nk3PqForwardSecure => {
             let forward = forward_shared.ok_or_else(|| {
                 HarnessError::Validation(
@@ -4580,6 +5210,10 @@ fn derive_session_key_and_confirmation(
             hkdf_sha3_256_from_ikm_parts(
                 Some(transcript_hash),
                 &[
+                    NOISE_XX_DH_IKM_DOMAIN,
+                    noise_xx_dh.ee.as_slice(),
+                    noise_xx_dh.es.as_slice(),
+                    noise_xx_dh.se.as_slice(),
                     dual_mix.as_slice(),
                     primary_shared,
                     forward,
@@ -4591,19 +5225,10 @@ fn derive_session_key_and_confirmation(
     let mut session_key = Zeroizing::new(vec![0u8; 32]);
     hk.expand(session_label, session_key.as_mut_slice())
         .map_err(|_| HarnessError::Kdf)?;
-    let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
-        let mut confirm = Zeroizing::new(vec![0u8; 32]);
-        let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
-        hk_confirm
-            .expand(NK2_CONFIRM_LABEL, confirm.as_mut_slice())
-            .map_err(|_| HarnessError::Kdf)?;
-        confirm.to_vec()
-    } else {
-        let mut confirm = Zeroizing::new(vec![0u8; 32]);
-        hk.expand(confirm_label, confirm.as_mut_slice())
-            .map_err(|_| HarnessError::Kdf)?;
-        confirm.to_vec()
-    };
+    let mut confirm = Zeroizing::new(vec![0u8; 32]);
+    hk.expand(confirm_label, confirm.as_mut_slice())
+        .map_err(|_| HarnessError::Kdf)?;
+    let confirmation = confirm.to_vec();
     Ok((SessionKey::from_zeroizing_vec(session_key), confirmation))
 }
 fn hkdf_sha3_256_from_ikm_parts(
@@ -4647,6 +5272,45 @@ fn compute_dual_mix(
         &[primary_shared, forward_shared, transcript_hash],
         forward_shared.len(),
     )
+}
+fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
+    bool::from(left.ct_eq(right))
+}
+fn validate_exact_field_len(
+    label: &str,
+    bytes: &[u8],
+    expected: usize,
+) -> Result<(), HarnessError> {
+    if bytes.len() != expected {
+        return Err(HarnessError::Validation(format!(
+            "{label} must be {expected} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(())
+}
+fn validate_handshake_frame_len(context: &str, frame_len: usize) -> Result<(), HarnessError> {
+    if frame_len > MAX_HANDSHAKE_FRAME_LEN {
+        return Err(HarnessError::Validation(format!(
+            "{context} frame length {frame_len} exceeds first-release maximum {MAX_HANDSHAKE_FRAME_LEN}"
+        )));
+    }
+    Ok(())
+}
+fn read_optional_resume_hash(
+    cursor: &mut MessageCursor<'_>,
+) -> Result<Option<Vec<u8>>, HarnessError> {
+    match cursor.read_u8()? {
+        0 => Ok(None),
+        1 => {
+            let resume_hash = cursor.read_len_prefixed()?.to_vec();
+            validate_exact_field_len("resume hash", &resume_hash, TRANSCRIPT_BINDING_LEN)?;
+            Ok(Some(resume_hash))
+        }
+        flag => Err(HarnessError::Validation(format!(
+            "resume hash presence flag must be 0 or 1, got {flag}"
+        ))),
+    }
 }
 fn decode_noise_public_key(
     label: &str,

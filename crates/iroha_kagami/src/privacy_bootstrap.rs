@@ -48,7 +48,7 @@ enum Command {
     ValidateTairaV1(ValidateTairaV1Args),
     /// Compose a complete secret-free Taira release plan, config, and genesis.
     #[command(name = "render-taira-release-v1")]
-    RenderTairaReleaseV1(release::RenderTairaReleaseV1Args),
+    RenderTairaReleaseV1(Box<release::RenderTairaReleaseV1Args>),
 }
 #[derive(Debug, ClapArgs)]
 struct EmitTairaV1Args {

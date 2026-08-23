@@ -234,7 +234,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         XCTAssertEqual(payment.archive.count, 12_896)
         XCTAssertEqual(
             sha256Hex(payment.archive),
-            "33eb4ea6836d628fa766bc0bbe619dc14cfefe5f47c104795315e022e42be42d"
+            "37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"
         )
         XCTAssertEqual(
             verifiedRequest.digest.hexEncodedString(),

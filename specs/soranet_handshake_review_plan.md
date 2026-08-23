@@ -32,7 +32,9 @@ meeting-ready agenda.
 
 ## Outcomes (Feb 2026)
 - Chosen transport: QUIC + Noise XX with mandatory ML-KEM-768 key shares.
-- Capability TLV registry finalised (0x0101 pqkem, 0x0102 pqsig, 0x0103 descriptor commit, 0x0201 role, 0x0202 padding).
+- Capability TLV registry finalised (`0x0101` pqkem, `0x0102` pqsig, `0x0103`
+  descriptor commit, `0x0104` suite list, `0x0201` role, `0x0202` padding, and
+  `0x0203` constant rate).
 - Dual Dilithium3 + Ed25519 signatures required for governance artefacts.
 - Salt governance: 3-of-5 Dilithium3 council with emergency ticket logging.
 - Padding/telemetry targets accepted (1024-byte cells, 18% cover-traffic budget, hourly SoraNetTelemetryV1 reports).

@@ -1,8 +1,8 @@
 #[cfg(all(test, feature = "app_api"))]
 #[allow(clippy::await_holding_lock)]
 mod app_api_integration_tests {
-    use std::borrow::Cow;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
+    use super::*;
+    use crate::tests_runtime_handlers::mk_app_state_for_tests;
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -14,9 +14,9 @@ mod app_api_integration_tests {
         sumeragi::network_topology::Topology,
     };
     use norito::json;
+    use std::borrow::Cow;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
     use tower::ServiceExt;
-    use super::*;
-    use crate::tests_runtime_handlers::mk_app_state_for_tests;
     static APP_QUERY_LIMITS_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     fn app_query_limits_guard() -> MutexGuard<'static, ()> {
         APP_QUERY_LIMITS_TEST_LOCK
@@ -42,6 +42,24 @@ mod app_api_integration_tests {
         fn drop(&mut self) {
             set_app_query_limits(self.previous);
         }
+    }
+    #[test]
+    fn manifest_fanout_window_is_limited_to_one_configured_page() {
+        let _limits = AppQueryLimitsOverride::new(AppQueryLimits::new(1, 3, 10, 1));
+        assert_eq!(
+            space_directory_manifest_pagination(Some(2), 2)
+                .expect("the direct route may use the larger fetch window"),
+            (2, 2),
+        );
+        let error = space_directory_manifest_fanout_window(2, 2)
+            .expect_err("fanout currently requires one shard page for the global prefix");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "invalid_pagination",
+                ..
+            }
+        ));
     }
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         crate::json_object(pairs)
@@ -1917,13 +1935,13 @@ mod app_api_integration_tests {
     }
     #[tokio::test]
     async fn asset_holders_query_aggregate_requires_capability_for_remote_projection_hydration() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use axum::{
             Router,
             body::Bytes,
             extract::Path as AxumPath,
             routing::{get, post},
         };
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let _guard = app_query_limits_guard();
         clear_query_projection_archive_cache_for_tests();
         let (state, _, _) = build_asset_holder_aggregate_fixture_state();

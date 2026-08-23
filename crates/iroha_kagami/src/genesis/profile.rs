@@ -10,6 +10,8 @@ pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 pub const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
 /// Live public Taira XOR asset definition id.
 pub const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+/// Canonical decimal scale for public Taira XOR quantities.
+pub const TAIRA_XOR_SCALE: u32 = 9;
 /// Public XOR alias selector used by Nexus/Taira configs.
 pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
 /// Public XOR domain registered in public-profile genesis manifests.
@@ -156,13 +158,19 @@ pub fn resolve_public_xor_asset_definition_id(
         return Ok(None);
     }
     if let Some(configured) = configured {
-        return AssetDefinitionId::parse_address_literal(configured)
-            .map(Some)
-            .map_err(|err| {
+        let parsed = AssetDefinitionId::parse_address_literal(configured).map_err(|err| {
                 eyre!(
                     "invalid --xor-asset-definition-id `{configured}`: {err}; expected canonical unprefixed Base58 asset definition id, not an alias such as `{PUBLIC_XOR_ALIAS}`"
                 )
-            });
+            })?;
+        if profile == GenesisProfile::Iroha3Taira
+            && parsed.to_string() != TAIRA_XOR_ASSET_DEFINITION_ID
+        {
+            return Err(eyre!(
+                "public Taira XOR asset definition id is pinned to `{TAIRA_XOR_ASSET_DEFINITION_ID}`; found `{parsed}`"
+            ));
+        }
+        return Ok(Some(parsed));
     }
     if let Some(default) = default_public_xor_asset_definition_id(profile)? {
         return Ok(Some(default));
@@ -311,6 +319,19 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("expected canonical unprefixed Base58"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn public_xor_resolver_rejects_a_substituted_taira_asset() {
+        let err = resolve_public_xor_asset_definition_id(
+            Some(GenesisProfile::Iroha3Taira),
+            Some("61CtjvNd9T3THAR65GsMVHr82Bjc"),
+            true,
+        )
+        .expect_err("Taira XOR identity must be pinned before first release");
+        assert!(
+            err.to_string().contains(TAIRA_XOR_ASSET_DEFINITION_ID),
             "unexpected error: {err}"
         );
     }

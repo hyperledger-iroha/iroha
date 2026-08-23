@@ -1183,23 +1183,19 @@ fn mtls_present(
 ) -> bool {
     limits::has_trusted_forwarded_header(headers, remote, trusted_proxies, HEADER_MTLS_FORWARD)
 }
+fn single_header_text<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?.to_str().ok()?;
+    values.next().is_none().then_some(value)
+}
 fn session_from_headers(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(HEADER_OPERATOR_SESSION)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
+    single_header_text(headers, HEADER_OPERATOR_SESSION).filter(|value| !value.is_empty())
 }
 fn operator_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(HEADER_OPERATOR_TOKEN)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.trim().is_empty())
+    single_header_text(headers, HEADER_OPERATOR_TOKEN).filter(|value| !value.trim().is_empty())
 }
 fn api_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(HEADER_API_TOKEN)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.trim().is_empty())
+    single_header_text(headers, HEADER_API_TOKEN).filter(|value| !value.trim().is_empty())
 }
 fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
@@ -1956,6 +1952,22 @@ mod tests {
             HeaderValue::from_str(token).expect("api token"),
         );
         headers
+    }
+    #[test]
+    fn operator_credentials_reject_duplicate_header_lines() {
+        for name in [
+            HEADER_OPERATOR_SESSION,
+            HEADER_OPERATOR_TOKEN,
+            HEADER_API_TOKEN,
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.append(name, HeaderValue::from_static("first"));
+            headers.append(name, HeaderValue::from_static("second"));
+            assert!(
+                single_header_text(&headers, name).is_none(),
+                "duplicate {name} header lines must fail closed"
+            );
+        }
     }
     fn extract_challenge(payload: &norito::json::Value) -> String {
         let obj = payload.as_object().expect("payload object");

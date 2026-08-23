@@ -18,6 +18,10 @@ fn copy_rans_tables_writes_seed_table() {
     assert_eq!(bytes, RANS_SEED0_TABLE);
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the profile matrix verifies every generated peer path and isolation invariant within one shared temporary root"
+)]
 fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
     let temp = tempfile::tempdir().expect("tmp dir");
     let profiles = [
@@ -127,9 +131,7 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
             );
             if sora_profile.is_some() {
                 assert_eq!(
-                    sorafs_storage
-                        .get("enabled")
-                        .and_then(toml::Value::as_bool),
+                    sorafs_storage.get("enabled").and_then(toml::Value::as_bool),
                     Some(false),
                     "{label} must opt out of unprovisioned embedded SoraFS storage"
                 );

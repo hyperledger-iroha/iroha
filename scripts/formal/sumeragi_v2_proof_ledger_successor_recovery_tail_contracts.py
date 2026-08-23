@@ -1882,11 +1882,6 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "pending_kura",
             "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         ),
-        (
-            "registry_recovery_impl",
-            "crates/iroha_core/src/sumeragi/"
-            "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
-        ),
         ("effects", "crates/iroha_core/src/sumeragi/v2_effects.rs"),
         ("apply_tests", "crates/iroha_core/src/sumeragi/v2_apply_tests.rs"),
         ("worker", "crates/iroha_core/src/sumeragi/v2_worker.rs"),
@@ -1901,6 +1896,14 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         ),
         (
+            "registry",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        ),
+        (
+            "registry_recovery_impl",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        ),
+        (
             "schema",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
         ),
@@ -1909,10 +1912,18 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
         ),
         (
+            "open_output",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open_output_recovery.rs",
+        ),
+        (
             "coordinator_support",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
         ),
         ("runner", "crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        (
+            "runner_test",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
+        ),
         (
             "ordinary_consumer",
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
@@ -1944,6 +1955,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         (
             "wal_test",
             "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
+        ),
+        (
+            "ledger_recovery_test",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
         ),
     ):
         path, source = load(relative, f"queue-owned ordinary ingress {name}")
@@ -2063,6 +2078,31 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 errors.append(
                     f"{paths[source_name]}:{rust_item.line}: {label} must "
                     f"preserve exact order {markers!r}"
+                )
+                return
+            cursor = position + len(needle)
+
+    def require_source_order(
+        source_name: str,
+        label: str,
+        markers: tuple[str, ...],
+    ) -> None:
+        body = rust_code_tokens(sources[source_name])
+        cursor = 0
+        for marker in markers:
+            needle = rust_code_tokens(marker)
+            position = next(
+                (
+                    index
+                    for index in range(cursor, len(body) - len(needle) + 1)
+                    if body[index : index + len(needle)] == needle
+                ),
+                -1,
+            )
+            if position < 0:
+                errors.append(
+                    f"{paths[source_name]}: {label} must preserve exact order "
+                    f"{markers!r}"
                 )
                 return
             cursor = position + len(needle)
@@ -2217,7 +2257,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1"
     )
     launched_end = launched_fields.find(
-        "/// Result of draining one dedicated recovered Apply worker completion.",
+        "/// Sole parked lifecycle completion owner for this height.",
         launched_start,
     )
     launched_region = (
@@ -2646,7 +2686,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "lifecycle Completion parked/physical pre-gate",
     )
     ready_completion = launched_completion_item(
-        "drive_ready_completion_turn",
+        "drive_ready_completion_turn_with_required_ordinal",
         "lifecycle Completion fresh Ready dispatcher",
     )
     completion = launched_completion_item(
@@ -2894,6 +2934,170 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "ProductionCompletionReadyWorkV1::CompletionIo",
         ),
     )
+    schedulable_broadcast_match = _require_qualified_rust_item(
+        paths["registry"],
+        sources["registry"],
+        "SchedulableRetainedDirectBroadcastAttestationV1",
+        "matches_schedulable_record",
+        errors,
+        "fence-schedulable direct Broadcast row rejoin",
+    )
+    require_order(
+        "registry",
+        schedulable_broadcast_match,
+        "fence-schedulable direct Broadcast row rejoin",
+        (
+            "record.state == self.state",
+            "record.work_class == LifecycleWorkClass::Broadcast",
+            "record.owner == self.address.owner",
+            "record.ordinal == self.address.ordinal",
+            "exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())",
+            "Some((self.address.slot, self.digest))",
+        ),
+    )
+    schedulable_broadcast_carrier = item(
+        "registry", "attest_schedulable_lifecycle_broadcast_carrier"
+    )
+    require_order(
+        "registry",
+        schedulable_broadcast_carrier,
+        "fence-schedulable direct Broadcast carrier authentication",
+        (
+            "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+            "coordinator.records.get(&ordinal)",
+            "record.work_class != LifecycleWorkClass::Broadcast",
+            "super::LifecycleState::Ready",
+            "coordinator.ready_index.contains(&ordinal)",
+            "attest_ready_lifecycle_broadcast_carrier(coordinator, ordinal)",
+            "ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout",
+            "SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout",
+            "super::LifecycleState::Waiting(wait)",
+            "!coordinator.ready_index.contains(&ordinal)",
+            "fence.source()",
+            "super::projection::reducer_fence_wait_source(",
+            "coordinator.active_context",
+            "wait.source() == fence.source()",
+            "wait.observed_generation() < fence.generation()",
+            "coordinator.observed_generation.get(&wait.source())",
+            "Some(&wait.observed_generation())",
+            "exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())",
+            "ConcreteWorkAddress::new(record.owner, ordinal, slot)",
+            "self.entries.get(&address)",
+            "work.digest != digest",
+            "ConcreteLifecycleWorkKind::PendingAdapter",
+            "lifecycle_output_row_matches(coordinator, address, work, effect, pending)",
+            "SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput",
+            "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)",
+        ),
+    )
+    recovered_broadcast_match = _require_qualified_rust_item(
+        paths["open_output"],
+        sources["open_output"],
+        "ReadyRecoveredLifecycleBroadcastAttestationV1",
+        "matches_ready_record",
+        errors,
+        "cold-owner Ready Broadcast row rejoin",
+    )
+    require_order(
+        "open_output",
+        recovered_broadcast_match,
+        "cold-owner Ready Broadcast row rejoin",
+        (
+            "record.owner == self.owner",
+            "record.ordinal == self.ordinal",
+            "record.key == self.key",
+            "record.work_class == super::LifecycleWorkClass::Broadcast",
+            "record.stage == self.stage",
+            "record.state == super::LifecycleState::Ready",
+            "record.physical_slots.len() == 1",
+            "record.physical_slots.get(&self.slot) == Some(&self.digest)",
+            "record.episode.slot_universe.len() == 1",
+            "record.episode.slot_universe.contains(&self.slot)",
+            "record.episode.consumed_slots == record.episode.slot_universe",
+            "record.episode.frozen_predecessors.is_empty()",
+        ),
+    )
+    recovered_broadcast_attestor = item(
+        "open_output", "attest_ready_recovered_lifecycle_broadcast"
+    )
+    require_order(
+        "open_output",
+        recovered_broadcast_attestor,
+        "cold-owner Ready Broadcast authentication",
+        (
+            "self.recovered_lifecycle_outputs.as_ref()?.entries.get(&ordinal)?",
+            "let candidate = output.candidate()",
+            "candidate.work_class != super::LifecycleWorkClass::Broadcast",
+            "!self.coordinator.ready_index.contains(&ordinal)",
+            "!recovered_output_matches_ready_coordinator( &self.verified, &self.coordinator, output, )",
+            "candidate.physical_geometry.normalized().ok()?",
+            "physical.first_key_value()?",
+            "physical.len() != 1",
+            "universe.len() != 1",
+            "!universe.contains(&slot)",
+            "consumed != universe",
+            "ReadyRecoveredLifecycleBroadcastAttestationV1",
+            "owner: output.owner()",
+            "ordinal",
+            "key: candidate.key",
+            "stage: candidate.stage",
+            "slot",
+            "digest",
+        ),
+    )
+    completion_broadcast_attestor = item(
+        "scheduler", "attest_schedulable_completion_broadcast_carrier"
+    )
+    require_order(
+        "scheduler",
+        completion_broadcast_attestor,
+        "exclusive registry-or-cold-owner Broadcast authentication",
+        (
+            "self.attest_ready_recovered_lifecycle_broadcast(ordinal)",
+            "attest_schedulable_lifecycle_broadcast_carrier(&self.coordinator, ordinal, fence)",
+            "(Some(attestation), Err(RegistryError::Missing))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(attestation)",
+            "None, Ok(SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(attestation)",
+            "(None, Ok(SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout))",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "(None, Err(error)) => Err(error)",
+            "(Some(_), Ok(_) | Err(_)) => Err(RegistryError::CorruptWork)",
+        ),
+    )
+    schedulable_completion = item("scheduler", "classify_schedulable_completion_work")
+    require_order(
+        "scheduler",
+        schedulable_completion,
+        "fence-schedulable Completion Broadcast classification",
+        (
+            "for ordinal in schedulable",
+            "record.work_class != LifecycleWorkClass::Broadcast",
+            "self.attest_schedulable_completion_broadcast_carrier(*ordinal, fence)",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(_) | SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(_)",
+            "retained_direct_outputs.insert(*ordinal)",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "classes.push(record.work_class)",
+            "oldest_is_retained_direct_output",
+            "classify_completion_ready_classes(",
+        ),
+    )
+    ready_work = item("scheduler", "classify_completion_ready_work")
+    require_order(
+        "scheduler",
+        ready_work,
+        "fence-schedulable Completion census construction",
+        (
+            "let exact_ready = self.coordinator.records.iter()",
+            "matches!(record.state, LifecycleState::Ready)",
+            "if exact_ready != self.coordinator.ready_index",
+            "let mut schedulable = exact_ready",
+            "matches!( record.state, LifecycleState::Waiting(wait)",
+            "wait.source() == fence.source()",
+            "wait.observed_generation() < fence.generation()",
+            "self.classify_schedulable_completion_work(&schedulable, Some(fence))",
+        ),
+    )
 
     capture = item("ingress", "capture_next_ingress_turn_cut")
     require_tokens(
@@ -2947,6 +3151,22 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "FairIngressTurnContextCut::Lifecycle(cut)",
         ),
     )
+    widen = item("ingress", "into_ordinary_turn_cut")
+    require_order(
+        "ingress",
+        widen,
+        "exact current-context cut widening",
+        (
+            "let Self { queue, _service_guard, physical_cut, bound_context, geometry, selector_occurrences, pending_identities: _, leader_wire_projection, selected_identity, selected_positions, selected_disposition, } = self",
+            "let selected_physical_ordinal = selected_identity.physical_admission_ordinal",
+            "source_for_frozen_ordinal(&geometry, selected_physical_ordinal)",
+            ".position(|source| source == selected_source)",
+            "FairIngressTurnCut {",
+            "queue, _service_guard, physical_cut, geometry, selector_occurrences, leader_wire_projection",
+            "bound_context: Some(bound_context)",
+            "selected_source_index, selected_physical_ordinal, selected_positions, selected_disposition",
+        ),
+    )
     exact_dequeue = item("ingress", "dequeue_exact_retaining")
     require_order(
         "ingress",
@@ -2989,12 +3209,15 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "selected_ingress_is_current_certified_serve(",
             "selected_ingress_is_certified_body_response(",
             "cut.narrow_to_lifecycle(expected_context)",
-            "classify_selected_certified_body_response_owner(&cut)",
-            "SelectedCertifiedBodyResponseOwnerV1::NonPriority",
+            "FairIngressTurnContextCut::Ordinary(cut)",
+            "FairIngressTurnContextCut::Lifecycle(cut)",
+            "classify_selected_certified_response_priority(&cut)",
+            "SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
             "cut.into_ordinary_turn_cut()",
-            "SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
             "capture_lifecycle_ingress_selector(cut)",
-            "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
+            "self.drive_certified_fetch_ingress_selector(selector, runner)",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
             "prepare_recovered_decision_fetch_from_selected_cut(cut)",
             "self.drive_recovered_ingress_selector(selector, runner)",
         ),
@@ -3149,32 +3372,77 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"surface {forbidden!r}"
             )
 
-    selected_family = item(
-        "selector", "classify_selected_certified_body_response_owner"
+    selected_priority_start = sources["selector"].find(
+        "pub(crate) enum SelectedCertifiedResponsePriorityV1 {"
     )
-    require_tokens(
+    selected_priority_end = sources["selector"].find(
+        "impl LifecycleIngressSelectorError", selected_priority_start
+    )
+    selected_priority_region = (
+        sources["selector"][selected_priority_start:selected_priority_end]
+        if selected_priority_start >= 0 and selected_priority_end > selected_priority_start
+        else ""
+    )
+    for token in (
+        "SelectedCertifiedResponsePriorityV1",
+        "DefinitelyNonPriority",
+        "OrdinaryClaimed",
+        "RecoveredClaimed",
+    ):
+        if token not in selected_priority_region:
+            errors.append(
+                f"{paths['selector']}: closed selected certified-response priority "
+                f"enum omits {token!r}"
+            )
+    for source_name in ("selector", "driver"):
+        if "selected_cut_is_recovered_decision_fetch" in sources[source_name]:
+            errors.append(
+                f"{paths[source_name]}: retired boolean certified-response selector remains"
+            )
+
+    selected_family = item(
+        "selector", "classify_selected_certified_response_priority"
+    )
+    require_order(
         "selector",
         selected_family,
-        "selected response-family-only recovery census",
+        "closed selected certified-response priority census",
         (
-            "SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner",
-            "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
-            "if response.request_hash != selected_request_hash { continue; }",
+            "self.validate_lifecycle_ingress_selector_authority()",
+            "cut.selected_identity().context() != context",
+            "let selected_ordinal = cut.selected_identity().physical_admission_ordinal()",
+            "let selected_request_hash = cut.selector_occurrences()",
+            "return Ok(SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority)",
+            "for occurrence in cut.selector_occurrences()",
+            "occurrence.queue_gate() == FairV2IngressQueueGateVerdict::Blocked",
+            "let drainable = occurrence.is_obsolete()",
+            "message.validate_version().is_err()",
+            "if !drainable || message.validate_version().is_err()",
+            "response.request_hash != selected_request_hash",
+            "probe_certified_response_priority(response, responder)",
+            "Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)) => continue",
+            "PreparedCertifiedResponseCandidate::Ordinary(candidate)",
+            "PreparedCertifiedResponseCandidate::Recovered(candidate)",
+            "response_error_is_remote_nonpriority(&error) => continue",
+            "Err(error) =>",
+            "LifecycleIngressSelectorError::ExecutorAuthority",
+            "response_candidates.insert(occurrence.physical_admission_ordinal(), candidate)",
+            ".is_some()",
+            "LifecycleIngressSelectorError::InvalidOccurrenceIdentity",
             "lowest_physical_ordinal_per_family(",
-            "cut.pre_cut_is_intact()",
+            "let mut selected_priority = SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
+            "revalidate_certified_response_priority_candidate(",
+            "revalidate_recovered_decision_fetch_response_candidate(",
+            "if !exact",
+            "LifecycleIngressSelectorError::CandidateRevalidationDrift",
+            "if ordinal == selected_ordinal",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+            "self.validate_lifecycle_ingress_selector_authority()",
+            "if !cut.pre_cut_is_intact()",
+            "Ok(selected_priority)",
         ),
     )
-    if selected_family is not None:
-        nonpriority_count = _token_sequence_count(
-            rust_code_tokens(selected_family.source),
-            rust_code_tokens("SelectedCertifiedBodyResponseOwnerV1::NonPriority"),
-        )
-        if nonpriority_count != 2:
-            errors.append(
-                f"{paths['selector']}:{selected_family.line}: selected response-family-only "
-                "recovery census must retain exactly two NonPriority exits "
-                f"(non-response winner and non-priority selected family); found {nonpriority_count}"
-            )
     family_prepare = item(
         "selector", "prepare_recovered_decision_fetch_from_selected_cut"
     )
@@ -3215,27 +3483,27 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "add_recovered_next_vote_completion_for_test(0xCD)",
             "mixed_sign_ordinal > first_summary.0",
-            "bind_body_store_to_recovered_completion_io_for_test(",
+            "bind_body_store_to_lifecycle_completion_io_for_test(",
             "install_local_signer_for_test(",
             "dispatch_completion_for_test(",
             "ProductionCompletionDispatchV1::SignQueued",
-            "recovered_completion_selection_is_exact_for_test(",
+            "lifecycle_completion_selection_is_exact_for_test(",
             "output_guard.close_admission_for_restart()",
             "output_guard.restart_required()",
             "drop(first)",
             "let mut reopened = reopened",
-            "bind_body_store_to_recovered_completion_io_for_test(",
+            "bind_body_store_to_lifecycle_completion_io_for_test(",
             "dispatch_completion_for_test(",
             "ProductionCompletionDispatchV1::FetchDispatched",
             "services.has_pending_exact_output()",
             "planner_io.detach(&mut services)",
         ),
     )
-    composite_capture = item("worker", "capture_recovered_completion_capacity_census")
+    composite_capture = item("worker", "capture_lifecycle_completion_capacity_census")
     require_order(
         "worker",
         composite_capture,
-        "joint recovered Completion physical-corridor census",
+        "joint lifecycle Completion physical-corridor census",
         (
             "for probe in probes",
             "let fanout = self.recovered_decision_fetch_fanout(&owner)?",
@@ -3248,17 +3516,17 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_tokens(
         "worker",
         composite_capture,
-        "joint recovered Completion physical-corridor census",
+        "joint lifecycle Completion physical-corridor census",
         (
-            "RecoveredCompletionCapacityProbeV1::Validate",
-            "RecoveredCompletionCapacityProbeV1::Apply",
-            "RecoveredCompletionCapacityProbeV1::Sign",
-            "RecoveredCompletionCapacityProbeV1::Fetch",
+            "LifecycleCompletionCapacityProbeV1::Validate",
+            "LifecycleCompletionCapacityProbeV1::Apply",
+            "LifecycleCompletionCapacityProbeV1::Sign",
+            "LifecycleCompletionCapacityProbeV1::Fetch",
             "pending.can_enqueue(fanout)",
         ),
     )
     composite_dispatch = item(
-        "scheduler", "dispatch_completion_with_runner_debt"
+        "scheduler", "dispatch_completion_with_runner_debt_and_required_ordinal"
     )
     require_order(
         "scheduler",
@@ -3268,7 +3536,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let current_ready = self.coordinator.ready_index.clone()",
             "let mut exact_ready = current_ready",
             "for ordinal in &exact_ready",
-            "capture_recovered_completion_capacity_census(probes)",
+            "capture_lifecycle_completion_capacity_census(probes)",
             "authenticated_ready_row_with_physical_capacity(",
             "let inputs = authenticated_scheduler_inputs(",
             "self.coordinator.plan_turn(inputs)",
@@ -3287,6 +3555,31 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "census.select_fetch(ordinal)",
             "registration.commit(prepared, wait_source)",
             "output.commit()",
+        ),
+    )
+    require_order(
+        "scheduler",
+        composite_dispatch,
+        "fence-schedulable direct and cold-owner Broadcast dispatch authentication",
+        (
+            "LifecycleWorkClass::Broadcast",
+            "self.attest_schedulable_completion_broadcast_carrier(*ordinal, Some(fence))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "let retained_direct_output = matches!",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "if retained_direct_output",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "authenticated_schedulable_retained_direct_broadcast_row( &factory, record, attestation, live_debts, )",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "authenticated_ready_recovered_lifecycle_broadcast_row( &factory, record, attestation, live_debts, )",
+            "let generations = if reducer_fence_wakes.is_empty()",
+            "BTreeMap::from([(fence.source(), fence.generation())])",
+            "let inputs = authenticated_scheduler_inputs(factory, generations, ready_rows)",
         ),
     )
     if composite_dispatch is not None:
@@ -3346,7 +3639,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     for source_name, test_name in (
         (
             "worker",
-            "recovered_completion_capacity_census_selects_once_and_drops_fail_stop",
+            "lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop",
         ),
         (
             "scheduler",
@@ -3369,7 +3662,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ],
         "composite recovered Completion Sign selection behavior",
         (
-            "dispatch_completion_with_runner_debt(&services, &mut executor, 0,)",
+            "dispatch_completion_with_runner_debt(&mut services, &mut executor, 0,)",
             "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
             "state.records[&paired].state",
             "LifecycleState::Claimed(_)",
@@ -3378,6 +3671,91 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "state.active_lease.is_some()",
             "state.fault.is_none()",
             "!output_guard.restart_required()",
+        ),
+    )
+    require_source_order(
+        "scheduler",
+        "fence-schedulable direct Broadcast coexistence behavior",
+        (
+            "prospectively_woken_direct_broadcast_is_authenticated_and_sign_is_selected",
+            "defer_direct_timeout_broadcast_for_test(0x71)",
+            "park_direct_broadcast_before_fence_for_test(direct, fence)",
+            "owner.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "dispatch_completion_with_runner_debt(&mut services, &mut executor, 0)",
+            "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
+            "state.records[&direct].state",
+            "LifecycleState::Ready",
+            "state.ready_index.contains(&direct)",
+            "state.fault.is_none()",
+            "!output_guard.restart_required()",
+        ),
+    )
+    require_source_order(
+        "scheduler",
+        "fence-schedulable direct Broadcast tamper rejection",
+        (
+            "prospectively_woken_direct_broadcast_rejects_a_mismatched_carrier",
+            "defer_direct_timeout_broadcast_for_test(0x73)",
+            "park_direct_broadcast_before_fence_for_test(direct, fence)",
+            "corrupt_ready_digest_for_test(direct)",
+            "owner.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "!output_guard.restart_required()",
+        ),
+    )
+    cold_broadcast_retention = item(
+        "ledger_recovery_test",
+        "cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance",
+    )
+    require_order(
+        "ledger_recovery_test",
+        cold_broadcast_retention,
+        "cold-owner Broadcast absence, retention, and terminal progress",
+        (
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "owner.recovered_lifecycle_outputs.take()",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "owner.recovered_lifecycle_outputs = Some(recovered_outputs)",
+            "LifecycleOutputServiceDispositionV1::SourceRetained",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "LifecycleOutputServiceDispositionV1::Accepted",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "!owner.has_recovered_lifecycle_outputs()",
+            "LifecycleState::Terminal(TerminalOutcome::Advanced)",
+        ),
+    )
+    cold_broadcast_ordering = item(
+        "ledger_recovery_test",
+        "later_cold_broadcast_stays_passive_until_an_older_fetch_retires",
+    )
+    require_order(
+        "ledger_recovery_test",
+        cold_broadcast_ordering,
+        "older Fetch progress with a passive later cold-owner Broadcast",
+        (
+            "let fetch_ordinal = 1",
+            "let broadcast_ordinal = 2",
+            "owner.settle_next_recovered_lifecycle_output",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "calls.get()",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "staged.finish_terminal(fetch_ordinal, TerminalOutcome::Cancelled)",
+            "owner.coordinator.persist_exact_staged_successor(&staged)",
+            "owner.registry.registry_mut().rollback_exact(fetch_address, fetch_digest)",
+            "owner.coordinator = staged",
+            "owner.settle_next_recovered_lifecycle_output",
+            "LifecycleOutputServiceDispositionV1::Accepted",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "calls.get()",
+            "!owner.has_recovered_lifecycle_outputs()",
+            "owner.coordinator.records[&broadcast_ordinal].state",
+            "LifecycleState::Terminal(TerminalOutcome::Advanced)",
         ),
     )
     require_order(
@@ -3401,11 +3779,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "worker",
         behavior_items[
-            "recovered_completion_capacity_census_selects_once_and_drops_fail_stop"
+            "lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop"
         ],
-        "composite recovered Completion worker Fetch ownership behavior",
+        "lifecycle Completion worker Fetch ownership behavior",
         (
-            "RecoveredCompletionCapacityProbeV1::Fetch",
+            "LifecycleCompletionCapacityProbeV1::Fetch",
             "fetch_census.select_fetch(13)",
             "returned_owner.dispatch_key()",
             "output.abort_before_claim()",
@@ -3566,7 +3944,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "runner",
         decided_pre_admission,
-        "terminal recovery classifies current Serve as retained",
+        "terminal recovery classifies exact current Serve for guarded service",
         (
             "inbound.message().is_lane_local()",
             "BlockMessage::V2(message)",
@@ -3574,7 +3952,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "request.round.height < active_height",
             "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
             "request.round.height == active_height",
-            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
             "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
         ),
     )
@@ -3592,14 +3970,14 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "runner",
         decided_authorization,
-        "terminal recovery denies current-Serve dequeue authority",
+        "terminal recovery authorizes exact current-Serve service",
         (
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
             "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
             "DecidedLaneRecoveryDrainAuthorization::HistoricalServe",
             "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
             "DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire",
-            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
-            "DecidedLaneRecoveryDrainDecision::Retain",
         ),
     )
     reject_tokens(
@@ -3612,20 +3990,126 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "prepare_exact(",
         ),
     )
+    decided_commit = item("runner", "commit_decided_lane_recovery_drain")
+    require_order(
+        "runner",
+        decided_commit,
+        "terminal current Serve binds ownership before guarded service",
+        (
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            "committer.bind_leader_wire()?",
+            "committer.commit_current_serve()?",
+            "DecidedLaneRecoveryDrainCommitOutcome::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::HistoricalServe",
+            "committer.bind_leader_wire()?",
+            "committer.commit_historical_serve()?",
+        ),
+    )
+    decided_height_scope = item("runner", "permits_height")
+    require_order(
+        "runner",
+        decided_height_scope,
+        "terminal certified Serve exact height scope",
+        (
+            "Self::Current => request == active",
+            "Self::Historical => request < active",
+        ),
+    )
+    decided_subject_scope = item("runner", "permits_subject")
+    require_order(
+        "runner",
+        decided_subject_scope,
+        "terminal current Serve exact decided-subject scope",
+        (
+            "Self::Current => request == decided",
+            "Self::Historical => true",
+        ),
+    )
+    decided_serve = item("runner", "commit_certified_serve")
+    require_order(
+        "runner",
+        decided_serve,
+        "terminal certified Serve guarded durable response",
+        (
+            "self.take_inbound()?",
+            "self.take_bound_leader_wire()?",
+            "message.validate_version()",
+            "ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
+            "scope.permits_height(request.round.height, self.executor.context().height)",
+            "if !scope.permits_subject(request.subject, self.decided_subject)",
+            "mark_leader_wire_volatile(self.receiver, &ingress_ownership)?",
+            "return Ok(())",
+            "let Some(reply_routes) = reply_routes",
+            "reply_routes.semantic_target() != &sender",
+            "let response_peer = sender.clone()",
+            "let terminal_ownership = ingress_ownership.clone()",
+            "serve_block_sync_while_guarded(",
+            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
+            "post_durable_history_response_on_reply_routes_with_permit(",
+            "response_peer",
+            "reply_routes",
+            "ingress_ownership",
+            "response",
+            "permit",
+            "finalize_bound_block_sync_serve(",
+            "|| mark_leader_wire_volatile(self.receiver, &terminal_ownership)",
+        ),
+    )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(
         "runner",
         decided_drain,
-        "live terminal drain retains current Serve before checked dequeue",
+        "live terminal drain directly serves authorized current recovery",
         (
+            "let decided_subject = executor",
+            ".local_proposal_directive()?",
+            ".decided_subject()",
             "receiver.try_recv_if_checked(",
             "prepare_decided_lane_recovery_ingress(inbound, executor.context().height)",
             "authorize_decided_lane_recovery_drain(preparation)",
-            "DecidedLaneRecoveryDrainDecision::Retain => false",
-            "DecidedLaneRecoveryDrainDecision::Authorized(candidate)",
             "authorization.replace(candidate)",
             "ProductionDecidedLaneRecoveryDrainCommitter",
+            "decided_subject,",
             "commit_decided_lane_recovery_drain(authorization, &mut committer)",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        decided_drain,
+        "terminal recovery has no retained current-Serve branch",
+        (
+            "CurrentServeRetain",
+            "DecidedLaneRecoveryDrainDecision",
+        ),
+    )
+    current_serve_test = item(
+        "runner_test", "drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve"
+    )
+    require_order(
+        "runner_test",
+        current_serve_test,
+        "terminal current Serve height and decided-subject behavior",
+        (
+            "let subject = proposal_subject(b\"decided recovery exact subject\")",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            ".permits_height(context.height, context.height)",
+            "DecidedLaneRecoveryServeScope::Current.permits_subject(subject, subject)",
+            "proposal_subject(b\"losing decided recovery subject\")",
+            "DecidedLaneRecoveryServeScope::Historical.permits_subject(",
+        ),
+    )
+    current_serve_commit_test = item(
+        "runner_test", "terminal_current_serve_binds_leader_wire_before_guarded_service"
+    )
+    require_order(
+        "runner_test",
+        current_serve_commit_test,
+        "terminal current Serve checked commit behavior",
+        (
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            "DecidedLaneRecoveryDrainCommitOutcome::CurrentServe",
+            "assert_eq!(probe.0, [\"bind\", \"current\"])",
         ),
     )
     lifecycle_consumer = item("driver", "consume_prepared_ordinary_ingress_turn")
@@ -3656,7 +4140,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_completion_cut,
         "terminal Apply completion batch cut",
         (
-            "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+            "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
         ),
     )
     apply_ingress_barrier = item("height_driver", "blocks_ingress")
@@ -3665,7 +4149,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_ingress_barrier,
         "typed Apply ingress barrier",
         (
-            "Self::AwaitingCompletion | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
+            "Self::AwaitingCompletion | Self::AwaitingValidateSidecar | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
         ),
     )
     apply_yield_barriers = [
@@ -3709,8 +4193,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_tokens(
         "height_driver",
         decided_lane_recovery_projection,
-        "terminal-only decided-lane recovery ingress authority",
-        ("matches!(self, Self::ApplyTerminalSettled)",),
+        "decided Apply barrier recovery ingress authority",
+        ("Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled",),
     )
     apply_barrier_transition = item("height_driver", "observe_completion")
     require_tokens(
@@ -3719,10 +4203,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "typed Apply producer-claim transition",
         (
             "Completion::CompletionIoDispatch(Ok(Dispatch::ApplyQueued { .. })), ) => Ok(Self::AwaitingApplyCompletion)",
-            "Completion::RecoveredDecisionApplyDeferred",
-            "Completion::RecoveredDecisionApplyRequeued",
-            "Completion::RecoveredDecisionApplyCompletionDeferred, ) => Ok(Self::AwaitingApplyCompletion)",
-            "Completion::RecoveredDecisionApplyApplied",
+            "Completion::LifecycleDecisionApplyDeferred",
+            "Completion::LifecycleDecisionApplyRequeued",
+            "Completion::LifecycleDecisionApplyCompletionDeferred, ) => Ok(Self::AwaitingApplyCompletion)",
+            "Completion::LifecycleDecisionApplyApplied",
             "Ok(Self::ApplyTerminalSettled)",
         ),
     )
@@ -3750,13 +4234,31 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
 
     lifecycle_height_driver = item("height_driver", "drain_lifecycle_v2_ingress")
+    settled_apply_output_drain = item(
+        "height_driver", "settled_apply_output_drain_disposition"
+    )
+    require_order(
+        "height_driver",
+        settled_apply_output_drain,
+        "terminal Apply retained-output settlement",
+        (
+            "debug_assert!(producer_claim.apply_terminal_settled())",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(producer_claim)",
+            "RecoveredLifecycleOutputSettlementV1::Empty",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+        ),
+    )
     require_order(
         "height_driver",
         lifecycle_height_driver,
         "durable post-Apply drain cut",
         (
             "if producer_claim.apply_terminal_settled()",
-            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+            "settle_one_recovered_lifecycle_output(",
+            "settled_apply_output_drain_disposition(",
             "let (context_id, height, output_guard)",
         ),
     )
@@ -3774,10 +4276,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "PreGate::Ordinary(ordinary_turn)",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "PreGate::Selected(selected)",
-            "PreGate::Ready(ready)",
-            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
-            "activated.drive_ready_completion_turn(ready)",
-            "producer_claim.observe_completion(&selected)",
+            "PreGate::Ready(ready) if producer_claim.permits_ready_completion()",
+            "producer_claim.required_ready_ordinal()",
+            "drive_ready_completion_turn_requiring_ordinal(ready, ordinal)",
+            "None => activated.drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
             "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(",
             "LifecycleRunnerRankTarget::Runtime",
@@ -3789,6 +4291,61 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "activated.consume_prepared_ordinary_ingress_turn(",
         ),
     )
+    executor_advance = item("runner", "advance_executor")
+    require_order(
+        "runner",
+        executor_advance,
+        "bounded runtime cold-output retry before and after every executor step",
+        (
+            "for _ in 0..limit.max(1)",
+            "settle_one_recovered_lifecycle_output",
+            "executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)",
+            "executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())",
+            "executor.step(Instant::now(), services)",
+            "settle_one_recovered_lifecycle_output",
+            "executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)",
+        ),
+    )
+    recovered_output_yield = item("runner", "recovered_lifecycle_output_requires_yield")
+    require_order(
+        "runner",
+        recovered_output_yield,
+        "cold-output settlement yield and retry classification",
+        (
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "true",
+            "RecoveredLifecycleOutputSettlementV1::Empty",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "false",
+        ),
+    )
+    for source_name, target, token, expected, label in (
+        (
+            "height_driver",
+            lifecycle_height_driver,
+            "settle_one_recovered_lifecycle_output(",
+            2,
+            "terminal and bounded outer-turn cold-output retry",
+        ),
+        (
+            "runner",
+            executor_advance,
+            "settle_one_recovered_lifecycle_output(",
+            2,
+            "pre/post executor-step cold-output retry",
+        ),
+    ):
+        if target is None:
+            continue
+        observed = _token_sequence_count(
+            rust_code_tokens(target.source), rust_code_tokens(token)
+        )
+        if observed != expected:
+            errors.append(
+                f"{paths[source_name]}:{target.line}: {label} must call "
+                f"{token!r} exactly {expected} time(s); found {observed}"
+            )
     require_tokens(
         "height_driver",
         lifecycle_height_driver,
@@ -4241,6 +4798,28 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     lifecycle_active = item("lifecycle_run_inner", "run_lifecycle_active_height")
+    _require_rust_token_sequence(
+        paths["lifecycle_run_inner"],
+        lifecycle_active,
+        """
+let directive = reconcile_executor_locked_body(executor, services)?;
+local_proposal
+    .state
+    .reconcile(LocalProposalOwner::from(directive));
+lane_work.retain_merge_sidecars_for_global_view(
+    directive.tag().view(),
+    directive.locked_subject(),
+    directive.decided_subject(),
+)?;
+executor.acknowledge_runner_decision_cleanup(
+    directive.tag(),
+    directive.decided_subject(),
+)?;
+""",
+        "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
+        errors,
+        count=3,
+    )
     require_order(
         "lifecycle_run_inner",
         lifecycle_active,
@@ -4254,6 +4833,55 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "build_verified_successor(",
             "into_parts_with_lifecycle_storage_authority(",
         ),
+    )
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_active,
+        "ordinary finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+        (
+            "let mut finalized_ingress_closed = false",
+            "loop",
+            "if rollover_ready",
+            "if !finalized_ingress_closed",
+            "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?",
+            "finalized_ingress_closed = true",
+            "drain_decided_lane_recovery_ingress(",
+            "dispatch_lane_work_effects(",
+            "drained.is_some()",
+            "if drained_terminal_ingress",
+            "continue",
+            "receiver.ensure_closed_drained_cut()",
+            "finalize_lifecycle_height(",
+        ),
+    )
+    _require_rust_token_sequence(
+        paths["lifecycle_run_inner"],
+        lifecycle_active,
+        "let mut finalized_ingress_closed = false;",
+        "ordinary finalization ingress close state must be initialized exactly once and never reopened",
+        errors,
+    )
+    ordinary_close = item(
+        "launch", "close_runner_ingress_for_finalized_drain"
+    )
+    _require_exact_rust_tokens(
+        paths["launch"],
+        ordinary_close,
+        """
+pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+    &self,
+    _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    receiver: &Arc<FairV2Ingress>,
+) -> Result<(), super::super::v2_runner::V2RunnerError> {
+    self.runner_activation.close_ingress(receiver)?;
+    if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+        return Err(super::super::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch);
+    }
+    Ok(())
+}
+""",
+        "ordinary finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
+        errors,
     )
     lifecycle_finalization = item("lifecycle_run_inner", "finalize_lifecycle_height")
     require_order(
@@ -4274,15 +4902,18 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let (ready_to_finish, lifecycle_yield) = activated.with_runner_runtime(",
-            "let producer_turn = match activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
-            "if !ready_to_finish || producer_turn.is_some()",
+            "let (ready_to_finish, lifecycle_yield) = if drain_disposition.terminal_settlement_stops_runtime()",
+            "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
+            "if apply_terminal_settled && !ready_to_finish",
+            "let producer_turn = if apply_terminal_settled",
+            "match activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
+            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "dispatch_lane_work_effects(",
             "if let Some(claimed) = producer_turn",
             "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
             "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
-            "if ready_to_finish",
+            "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
             "finalize_lifecycle_height(",
         ),
     )
@@ -4606,7 +5237,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"omit {required!r}"
             )
     for forbidden in (
-        "derive(Clone)",
+        "#[derive(Clone)]",
         "derive(Copy)",
         "pub startup:",
         "pub expected:",
@@ -4633,7 +5264,107 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             f"{paths['pending_kura']}: inert pending-Kura provenance must not "
             "own the move-only recovered Decision Fetch"
         )
-
+    bind_pending = item("pending_kura", "bind_pending_kura_apply")
+    require_order(
+        "pending_kura",
+        bind_pending,
+        "pending-Kura startup context binding",
+        (
+            "expected.context_id() != self.adapter.wire_context.id()",
+            "expected.height() != self.adapter.wire_context.height",
+            "Err((AdapterError::RecoveredPendingKuraApplyMismatch, self))",
+            "Ok(PendingKuraRecoveredAdapterStartupV1 { startup: self, expected, })",
+        ),
+    )
+    pending_auth = item(
+        "pending_kura", "authenticate_final_wal_startup_authority"
+    )
+    require_order(
+        "pending_kura",
+        pending_auth,
+        "pending-Kura retained Decision-Fetch authentication and inert provenance clone",
+        (
+            "startup.authenticate_final_wal_startup_authority()",
+            "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority",
+            "if !effects.is_empty()",
+            "AdapterEffect::FetchBody { subject, .. } if subject.block_hash == expected.block_hash()",
+            "let replay = RecoveredPendingKuraApplyReplayV1",
+            "wal_identity: fetch.wal_identity",
+            "replay_evidence: fetch.replay_evidence.clone()",
+            "effect: fetch.effect.clone()",
+            "apply_carrier: None",
+            "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)",
+            "replay,",
+        ),
+    )
+    reject_tokens(
+        "pending_kura",
+        pending_auth,
+        "pending-Kura authentication retains the move-only Decision Fetch",
+        ("authority: RecoveredWalStartupAuthorityV1::None",),
+    )
+    pending_runtime = item("pending_kura", "into_serialized_runtime")
+    require_order(
+        "pending_kura",
+        pending_runtime,
+        "pending-Kura inert provenance beside empty runtime ownership",
+        (
+            "let pending = pending_kura_apply",
+            "let RecoveredPendingKuraApplyReplayV1 { expected, wal_identity, replay_evidence, effect, apply_carrier, } = replay",
+            "replay_evidence.exactly_matches_recovered_decision_fetch",
+            "let apply_carrier = apply_carrier.ok_or(",
+            "PreparedRecoveredPendingKuraApplyReplayV1 { expected, verified, wal_identity, replay_evidence, effect, apply_carrier, }",
+            ".transpose()?",
+            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
+            "adapter, Vec::new(),",
+            "if !returned_effects.is_empty()",
+            "Ok((runtime, pending, local_proposal_attempt))",
+        ),
+    )
+    reject_tokens(
+        "pending_kura",
+        pending_runtime,
+        "pending-Kura runtime owns no cloned Fetch effect",
+        (
+            "let RecoveredWalDecisionFetch",
+            "vec![effect]",
+            "returned_effects.len() == 1",
+            "take_effect_ownership(",
+        ),
+    )
+    pending_attach = item("pending_kura", "with_pending_kura_apply_replay")
+    require_order(
+        "pending_kura",
+        pending_attach,
+        "pending-Kura pristine storage-only startup attachment",
+        (
+            "ProductionLifecycleAdapterStartupStateV1::Recovered {",
+            "leader_wire_launch_prepared: false",
+            "if effects.is_empty() && pending_kura_apply.is_none()",
+            "*pending_kura_apply = Some(replay)",
+            "ProductionLifecycleAdapterStartupStateV1::Recovered { .. }",
+            "panic!(",
+        ),
+    )
+    pending_install = item("pending_kura", "install")
+    require_order(
+        "pending_kura",
+        pending_install,
+        "pending-Kura carrier-gated verification-only install",
+        (
+            "executor.context() != verified.context()",
+            "replay_evidence.exactly_matches_recovered_decision_fetch",
+            "let effects = vec![effect]",
+            "executor.verify_pending_kura_recovered_apply_replay( expected, &effects, apply_carrier, )?",
+            "Ok(InstalledPendingKuraApplyV1 { expected, genesis })",
+        ),
+    )
+    reject_tokens(
+        "pending_kura",
+        pending_install,
+        "pending-Kura install does not replay runtime Fetch/Store/Validate",
+        ("services: &mut",),
+    )
     adapter_source = sources["adapter"]
     decision_fetch_start = adapter_source.find(
         "pub(crate) struct RecoveredWalDecisionFetch"
@@ -4674,45 +5405,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"{paths['adapter']}: move-only recovered Decision Fetch "
                 f"exposes forbidden surface {forbidden!r}"
             )
-    bind_pending = item("pending_kura", "bind_pending_kura_apply")
-    require_order(
-        "pending_kura",
-        bind_pending,
-        "pending-Kura startup context binding",
-        (
-            "expected.context_id() != self.adapter.wire_context.id()",
-            "expected.height() != self.adapter.wire_context.height",
-            "Err((AdapterError::RecoveredPendingKuraApplyMismatch, self))",
-            "Ok(PendingKuraRecoveredAdapterStartupV1 { startup: self, expected, })",
-        ),
-    )
-    pending_auth = item(
-        "pending_kura", "authenticate_final_wal_startup_authority"
-    )
-    require_order(
-        "pending_kura",
-        pending_auth,
-        "pending-Kura retained Decision-Fetch authentication and inert provenance clone",
-        (
-            "startup.authenticate_final_wal_startup_authority()",
-            "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority",
-            "if !effects.is_empty()",
-            "AdapterEffect::FetchBody { subject, .. } if subject.block_hash == expected.block_hash()",
-            "let replay = RecoveredPendingKuraApplyReplayV1",
-            "wal_identity: fetch.wal_identity",
-            "replay_evidence: fetch.replay_evidence.clone()",
-            "effect: fetch.effect.clone()",
-            "apply_carrier: None",
-            "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)",
-            "replay,",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_auth,
-        "pending-Kura authentication retains the move-only Decision Fetch",
-        ("authority: RecoveredWalStartupAuthorityV1::None",),
-    )
+
     pending_carrier_bind = item(
         "pending_kura", "bind_recovered_apply_carrier"
     )
@@ -4724,71 +5417,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "self.apply_carrier.is_none()",
             "self.apply_carrier = Some(permit)",
             "self",
-        ),
-    )
-    pending_runtime = item("pending_kura", "into_serialized_runtime")
-    require_order(
-        "pending_kura",
-        pending_runtime,
-        "pending-Kura inert provenance beside empty runtime ownership",
-        (
-            "let pending = pending_kura_apply",
-            "let RecoveredPendingKuraApplyReplayV1 { expected, wal_identity, replay_evidence, effect, apply_carrier, } = replay",
-            "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "let apply_carrier = apply_carrier.ok_or(",
-            "PreparedRecoveredPendingKuraApplyReplayV1 { expected, verified, wal_identity, replay_evidence, effect, apply_carrier, }",
-            ".transpose()?",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
-            "adapter, Vec::new(),",
-            "if !returned_effects.is_empty()",
-            "Ok((runtime, pending, local_proposal_attempt))",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_runtime,
-        "pending-Kura runtime owns no cloned Fetch effect",
-        (
-            "let RecoveredWalDecisionFetch",
-            "vec![effect]",
-            "returned_effects.len() == 1",
-            "take_effect_ownership(",
-        ),
-    )
-    pending_attach = item("pending_kura", "with_pending_kura_apply_replay")
-    require_order(
-        "pending_kura",
-        pending_attach,
-        "pending-Kura pristine recovered-Apply startup attachment",
-        (
-            "ProductionLifecycleAdapterStartupStateV1::Recovered {",
-            "leader_wire_launch_prepared: false",
-            "if effects.is_empty() && pending_kura_apply.is_none()",
-            "*pending_kura_apply = Some(replay)",
-            "ProductionLifecycleAdapterStartupStateV1::Recovered { .. }",
-            "panic!(",
-        ),
-    )
-    pending_install = item("pending_kura", "install")
-    require_order(
-        "pending_kura",
-        pending_install,
-        "pending-Kura carrier-gated verification-only install",
-        (
-            "executor.context() != verified.context()",
-            "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "let effects = vec![effect]",
-            "executor.verify_pending_kura_recovered_apply_replay( expected, &effects, apply_carrier, )?",
-            "Ok(InstalledPendingKuraApplyV1 { expected, genesis })",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_install,
-        "pending-Kura install does not replay runtime Fetch/Store/Validate",
-        (
-            "consume_pending_tip_recovery_effects(",
-            "services: &mut",
         ),
     )
 
@@ -4804,54 +5432,63 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
     permit_tokens = rust_code_tokens(permit_declaration)
     for required in (
-        "struct RecoveredPendingKuraApplyCarrierPermitV1 { _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1, }",
+        "struct RecoveredPendingKuraApplyCarrierPermitV1 { lifecycle_ordinal: u128, _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1, }",
         "struct RecoveredPendingKuraApplyCarrierPermitLinearityV1;",
         "impl Drop for RecoveredPendingKuraApplyCarrierPermitLinearityV1",
-        "fn consume_for_executor(self) -> bool { true }",
+        "fn consume_for_executor(self) -> u128 { self.lifecycle_ordinal }",
     ):
         if not _token_sequence_count(permit_tokens, rust_code_tokens(required)):
             errors.append(
-                f"{paths['coordinator_support']}: opaque recovered Apply "
+                f"{paths['coordinator_support']}: ordinal-bound recovered Apply "
                 f"carrier permit omits {required!r}"
             )
     for forbidden in (
         "derive(Clone)",
         "derive(Copy)",
+        "pub lifecycle_ordinal:",
+        "pub(crate) lifecycle_ordinal:",
+        "pub(in crate::sumeragi) lifecycle_ordinal:",
         "pub _linearity:",
         "pub(crate) _linearity:",
         "pub(in crate::sumeragi) _linearity:",
     ):
         if _token_sequence_count(permit_tokens, rust_code_tokens(forbidden)):
             errors.append(
-                f"{paths['coordinator_support']}: opaque recovered Apply "
+                f"{paths['coordinator_support']}: ordinal-bound recovered Apply "
                 f"carrier permit exposes {forbidden!r}"
             )
-    pending_owner = item("coordinator_support", "with_pending_kura_apply_replay")
-    require_order(
-        "coordinator_support",
-        pending_owner,
-        "exact recovered-Apply owner census and opaque permit retention",
-        (
-            "self.registry.exactly_covers_recovered_decision_apply_ready_work(&self.coordinator)",
-            "RecoveredPendingKuraApplyCarrierPermitV1 {",
-            "replay.bind_recovered_apply_carrier(",
-            "self.adapter_startup.take()",
-            "startup.with_pending_kura_apply_replay(replay)",
-        ),
-    )
+
     pending_owner_oracle = item(
         "registry_recovery_impl",
-        "exactly_covers_recovered_decision_apply_ready_work",
+        "exact_recovered_decision_apply_ready_ordinal",
     )
     require_order(
         "registry_recovery_impl",
         pending_owner_oracle,
-        "exact recovered Decision-Apply startup owner oracle",
+        "exact recovered Decision-Apply startup ordinal oracle",
         (
-            "let Some(extra @ RecoveredWalRegistrySlotV1::DecisionApply(_))",
+            "let Some(extra @ RecoveredWalRegistrySlotV1::DecisionApply(address))",
             "self.exact_recovered_wal_registry_slot()",
-            "return false",
+            "return None",
             "self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)",
+            ".then_some(address.ordinal)",
+        ),
+    )
+
+    pending_owner = item("coordinator_support", "with_pending_kura_apply_replay")
+    require_order(
+        "coordinator_support",
+        pending_owner,
+        "exact recovered-Apply owner census and ordinal permit retention",
+        (
+            "self.registry.exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
+            ".ok_or(",
+            "RecoveredPendingKuraApplyCarrierPermitV1 {",
+            "lifecycle_ordinal,",
+            "replay.bind_recovered_apply_carrier(apply_carrier)",
+            "self.adapter_startup.take()",
+            "startup.with_pending_kura_apply_replay(replay)",
+            "Ok(self)",
         ),
     )
     pending_factory = item(
@@ -4886,32 +5523,89 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "effects",
         pending_apply_startup,
-        "carrier-gated pending-Kura direct-Apply refinement",
+        "ordinal-gated pending-Kura direct-Apply refinement",
         (
-            "self.verify_pending_kura_apply_replay(expected, startup_effects)",
-            "self.pending_tip_recovery.take()",
-            "evidence.stage = PendingKuraApplyRecoveryStage::Apply",
+            "self.ensure_open()?",
+            "self.pending_tip_recovery.is_some()",
+            "let decision = self.runtime.replayed_decision_key()",
+            "let [ AdapterEffect::FetchBody",
+            "self.runtime.verify_certificate(&self.context, certificate)",
+            "let recovered_apply_ordinal = apply_carrier.consume_for_executor()",
+            "if recovered_apply_ordinal == 0",
+            "let (genesis_context, evidence) = verify_pending_kura_apply_parts(",
+            "recovered_apply_ordinal,",
+            "if !evidence.is_exact(&self.context)",
             "evidence.recovery_refinement_projection()",
             "ProductionDecisionApplyStartupTraceProjection",
-            "apply_carrier.consume_for_executor()",
+            "apply_carrier_installed: true",
             "check_production_decision_apply_startup_transition(startup)",
             "checked.into_projection()",
             "self.pending_tip_recovery = Some(evidence)",
         ),
     )
-    reject_tokens(
+    evidence_source = sources["effects"]
+    evidence_start = evidence_source.find(
+        "pub(crate) struct PendingKuraApplyRecoveryEvidence"
+    )
+    evidence_end = evidence_source.find(
+        "impl PendingKuraApplyRecoveryEvidence", evidence_start
+    )
+    evidence_declaration = (
+        evidence_source[evidence_start:evidence_end]
+        if evidence_start >= 0 and evidence_end > evidence_start
+        else ""
+    )
+    evidence_tokens = rust_code_tokens(evidence_declaration)
+    for required in (
+        "pub(crate) struct PendingKuraApplyRecoveryEvidence",
+        "recovered_apply_ordinal: u128",
+        "stage: PendingKuraApplyRecoveryStage",
+    ):
+        if not _token_sequence_count(evidence_tokens, rust_code_tokens(required)):
+            errors.append(
+                f"{paths['effects']}: direct pending-Kura evidence omits {required!r}"
+            )
+    for forbidden in (
+        "recovered_apply_ordinal: Option<u128>",
+        "pub recovered_apply_ordinal:",
+        "pub(crate) recovered_apply_ordinal:",
+        "pub(in crate::sumeragi) recovered_apply_ordinal:",
+    ):
+        if _token_sequence_count(evidence_tokens, rust_code_tokens(forbidden)):
+            errors.append(
+                f"{paths['effects']}: direct pending-Kura evidence exposes {forbidden!r}"
+            )
+    generic_begin_apply = item("effects", "begin_apply")
+    require_order(
         "effects",
-        pending_apply_startup,
-        "carrier-gated pending-Kura direct-Apply refinement",
-        ("consume_pending_tip_recovery_effects(",),
+        generic_begin_apply,
+        "generic runtime Apply rejection of pending-Kura ownership",
+        (
+            "if self.pending_tip_recovery.is_some()",
+            '"generic Apply cannot consume pending-Kura lifecycle ownership"',
+            "if tag.height() != self.context.height",
+        ),
+    )
+    generic_complete_application = item("effects", "complete_application")
+    require_order(
+        "effects",
+        generic_complete_application,
+        "generic runtime application completion rejection of pending-Kura ownership",
+        (
+            "self.ensure_open()?",
+            "if self.pending_tip_recovery.is_some()",
+            '"generic Apply completion cannot consume pending-Kura lifecycle ownership"',
+            "services,",
+            "if !self.pending_applications.contains_key(&completion.work_id)",
+        ),
     )
     apply_runtime_readiness = item(
-        "runtime", "recovered_decision_apply_dispatch_available"
+        "runtime", "lifecycle_decision_apply_dispatch_available"
     )
     require_order(
         "runtime",
         apply_runtime_readiness,
-        "recovered Apply runtime mutation-frontier readiness",
+        "lifecycle Apply runtime mutation-frontier readiness",
         (
             "!self.fail_closed",
             "self.pending_effect_ownership.is_none()",
@@ -4920,12 +5614,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     apply_dispatch_readiness = item(
-        "effects", "recovered_decision_apply_dispatch_available"
+        "effects", "lifecycle_decision_apply_dispatch_available"
     )
     require_order(
         "effects",
         apply_dispatch_readiness,
-        "recovered Apply dispatch quiescence gate",
+        "lifecycle Apply dispatch quiescence gate",
         (
             "self.ensure_open()?",
             "let queued_ingress_is_allowed = self.pending_tip_recovery.is_none() || self.runtime.queued_commands() == 0",
@@ -4935,72 +5629,101 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "self.parked_effect_batch.is_none()",
             "self.finality_completion.is_none()",
             "queued_ingress_is_allowed",
-            "self.runtime.recovered_decision_apply_dispatch_available()",
+            "self.runtime.lifecycle_decision_apply_dispatch_available()",
+        ),
+    )
+    pending_apply_registry_projection = item(
+        "registry", "exactly_matches_pending_kura_recovery"
+    )
+    require_order(
+        "registry",
+        pending_apply_registry_projection,
+        "exact pending-Kura lifecycle Apply registry projection",
+        (
+            "self.key.matches_height_context(context)",
+            "self.task.as_ref().is_some_and(|task|",
+            "task.dispatch_key() == self.key",
+            "task.exact_tag() == tag",
+            "task.subject() == subject",
+            "task.certificate() == certificate",
+            "task.validated_receipt() == validated_receipt",
         ),
     )
     pending_apply_executor_dispatch = item(
-        "effects", "prepare_recovered_decision_apply_executor_dispatch"
+        "effects", "prepare_lifecycle_decision_apply_executor_dispatch"
     )
     require_order(
         "effects",
         pending_apply_executor_dispatch,
-        "exact pending-Kura Apply executor dispatch preflight",
+        "exact pending-Kura lifecycle Apply executor dispatch preflight",
         (
             "self.ensure_open()?",
-            "self.recovered_decision_apply_dispatch_available()?",
+            "self.lifecycle_decision_apply_dispatch_available()?",
             "evidence.stage() == PendingKuraApplyRecoveryStage::Apply",
             "evidence.is_exact(&self.context)",
             "evidence.replay_tag() == self.current_tag()",
+            "prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
             "prepared.exactly_matches_pending_kura_recovery(",
-            "PendingKuraApplyDispatchTransitionV1 { evidence, last_result: pending_tip_recovery_last_result, }",
+            "PendingKuraApplyDispatchTransitionV1 { evidence }",
         ),
     )
     pending_apply_scheduler = item(
-        "scheduler", "dispatch_completion_with_runner_debt"
+        "scheduler", "dispatch_completion_with_runner_debt_and_required_ordinal"
     )
     require_order(
         "scheduler",
         pending_apply_scheduler,
-        "recovered Apply executor-readiness capacity probe",
+        "lifecycle Apply executor-readiness capacity probe",
         (
             "LifecycleWorkClass::Apply",
-            "let executor_available = executor.recovered_decision_apply_dispatch_available()",
-            "RecoveredCompletionCapacityProbeV1::Apply",
+            "let executor_available = executor.lifecycle_decision_apply_dispatch_available()",
+            "LifecycleCompletionCapacityProbeV1::Apply",
             "executor_available",
-            "capture_recovered_completion_capacity_census(probes)",
+            "capture_lifecycle_completion_capacity_census(probes)",
         ),
     )
     require_order(
         "scheduler",
         pending_apply_scheduler,
-        "joined recovered Apply scheduler and worker publication",
+        "required recovered Apply ordinal scheduler selection",
+        (
+            "let plan = match required_ordinal",
+            "Some(ordinal) => self.coordinator.plan_turn_requiring_ordinal(inputs, ordinal)",
+            "None => self.coordinator.plan_turn(inputs)",
+            "let lease = match plan",
+        ),
+    )
+    require_order(
+        "scheduler",
+        pending_apply_scheduler,
+        "joined lifecycle Apply scheduler and worker publication",
         (
             "LifecycleWorkClass::Apply",
-            "prepare_recovered_decision_apply_dispatch(&self.coordinator, &lease)",
+            "prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
             "reservation.preflight(&prepared)",
-            "executor.prepare_recovered_decision_apply_executor_dispatch(&prepared)",
+            "executor.prepare_lifecycle_decision_apply_executor_dispatch(&prepared)",
             "reservation.commit(prepared, executor_dispatch)",
             "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
         ),
     )
     apply_capacity_census = item(
-        "worker_services", "capture_recovered_completion_capacity_census"
+        "worker_services", "capture_lifecycle_completion_capacity_census"
     )
     require_order(
         "worker_services",
         apply_capacity_census,
-        "recovered Apply executor/worker capacity conjunction",
+        "lifecycle Apply executor/worker capacity conjunction",
         (
-            "RecoveredCompletionCapacityProbeV1::Apply { ordinal, key, executor_available, }",
-            "RecoveredCompletionPreparedCapacityV1::Apply { key, available: executor_available, }",
-            "RecoveredCompletionPreparedCapacityV1::Apply { key, available }",
-            "*available = *available && io.command_tx.queue.recovered_completion_worker_capacity(state)",
+            "LifecycleCompletionCapacityProbeV1::Apply { ordinal, key, executor_available, }",
+            "LifecycleCompletionPreparedCapacityV1::Apply { key, available: executor_available, }",
+            "LifecycleCompletionPreparedCapacityV1::Apply { key, available }",
+            "*available = *available && io.command_tx.queue.lifecycle_completion_worker_capacity(state)",
         ),
     )
     pending_worker_commit_context = (
         (
             "impl",
-            "RecoveredDecisionApplyCapacityReservationV1",
+            "LifecycleDecisionApplyCapacityReservationV1",
             "<",
             "'",
             "_",
@@ -5014,7 +5737,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
     if len(pending_worker_commits) != 1:
         errors.append(
-            f"{paths['worker']}: recovered Apply worker publication must "
+            f"{paths['worker']}: lifecycle Apply worker publication must "
             "retain exactly one qualified reservation commit; found "
             f"{len(pending_worker_commits)}"
         )
@@ -5024,11 +5747,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "worker",
         pending_worker_commit,
-        "recovered Apply worker publication before stage advance",
+        "lifecycle Apply worker publication before stage advance",
         (
             "let task = prepared.commit_for_worker()",
-            "state.recovered_decision_applies.insert(",
-            ".push_back(V2IoCommand::RecoveredDecisionApply(task))",
+            "state.lifecycle_decision_applies.insert(",
+            ".push_back(V2IoCommand::LifecycleDecisionApply(task))",
             "executor_dispatch.commit_after_worker_dispatch()",
             "drop(state)",
             "self.queue.ready.notify_all()",
@@ -5039,12 +5762,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "effects",
         pending_dispatch_commit,
-        "physical Apply publication advances the pending stage once",
+        "physical lifecycle Apply publication advances pending stage once",
         (
             "let Some(pending) = self.pending else { return; }",
             "PendingKuraApplyRecoveryStage::Apply",
             "pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched",
-            "*pending.last_result = Some(PendingTipRecoveryAttemptResult::Advanced)",
         ),
     )
     pending_completion_classifier = item(
@@ -5106,7 +5828,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "pending_lifecycle",
         pending_apply_turn,
-        "one-item closed-ingress pending-Kura Apply completion turn",
+        "one-item closed-ingress pending-Kura lifecycle Apply completion turn",
         (
             "self.launched.pending_kura_apply_replay.is_some()",
             "close_admission_for_restart()",
@@ -5118,9 +5840,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "LifecycleCompletionTakeV1::Apply(completion)",
             "stage == Stage::ApplicationDispatched",
             "settle_pending_kura_applied_decision_apply_completion(",
+            "let recovered_apply_ordinal = executor.pending_kura_apply_recovery_evidence()",
             "owner.classify_completion_ready_work(fence)",
-            "owner.dispatch_completion_with_runner_debt(services, executor, 0)",
-            "ProductionCompletionDispatchV1::ApplyQueued",
+            "owner.dispatch_completion_requiring_ready_ordinal( services, executor, 0, recovered_apply_ordinal, )",
+            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
+            "if ordinal == recovered_apply_ordinal",
             "evidence.stage() != Stage::ApplicationDispatched",
         ),
     )
@@ -5136,7 +5860,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             if count != 1:
                 errors.append(
                     f"{paths['pending_lifecycle']}:{pending_apply_turn.line}: "
-                    "pending-Kura Apply recovery must retain exactly one "
+                    "pending-Kura lifecycle Apply recovery must retain exactly one "
                     f"{token!r} seam; found {count}"
                 )
     reject_tokens(
@@ -5152,19 +5876,19 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     pending_apply_finality = item(
-        "effects", "commit_recovered_decision_apply_finality"
+        "effects", "commit_lifecycle_decision_apply_finality"
     )
     require_order(
         "effects",
         pending_apply_finality,
-        "exact pending-Kura Apply completion reaches Completed after finality ownership",
+        "exact pending-Kura lifecycle Apply reaches Completed after finality ownership",
         (
             "finality.consume_for_executor(",
             "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
+            "dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
             "self.finality_completion = Some(FinalityCompletion",
-            "FinalityCompletionOwner::RecoveredDecisionApply(dispatch_key)",
+            "FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)",
             "evidence.stage = PendingKuraApplyRecoveryStage::Completed",
-            "PendingTipRecoveryAttemptResult::Completed",
         ),
     )
     pending_lane = item("pending_lifecycle", "prepare_lane_recovery")
@@ -5232,6 +5956,30 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "lane_work",
         ),
     )
+    pending_close = item(
+        "pending_lifecycle", "close_runner_ingress_for_finalized_drain"
+    )
+    _require_exact_rust_tokens(
+        paths["pending_lifecycle"],
+        pending_close,
+        """
+pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+    &self,
+    _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    receiver: &Arc<FairV2Ingress>,
+) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
+    self.runner_activation.close_ingress(receiver)?;
+    if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+        return Err(
+            crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
+        );
+    }
+    Ok(())
+}
+""",
+        "pending-Kura finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
+        errors,
+    )
     missing_pending = item("preactivation", "missing_pending_kura_replay")
     require_order(
         "preactivation",
@@ -5284,7 +6032,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let launched = owner.launch(launch_inputs)?",
             "ProductionLifecyclePendingKuraRunnerActivationV1::mint_for_recovered_runner(",
             "launched.install_pending_kura_apply(&mut setup_runner)?",
-            "pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)?",
+            "pending.drive_apply_recovery_turn(&mut setup_runner)?",
             "reconcile_pending_lane_startup(",
             "pending.prepare_lane_recovery(",
             "prepared.activate_no_clock(activation)?",
@@ -5329,6 +6077,34 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "post_output.retire_lifecycle_stores()?",
             "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
         ),
+    )
+    require_order(
+        "pending_runner",
+        pending_live,
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+        (
+            "let mut finalized_ingress_closed = false",
+            "loop",
+            "if !rollover_ready",
+            "continue",
+            "if !finalized_ingress_closed",
+            "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?",
+            "finalized_ingress_closed = true",
+            "drain_decided_lane_recovery_ingress(",
+            "dispatch_lane_work_effects(",
+            "drained.is_some()",
+            "if drained_terminal_ingress",
+            "continue",
+            "receiver.ensure_closed_drained_cut()",
+            "activated.into_finalized_rollover(&mut active_runner)?",
+        ),
+    )
+    _require_rust_token_sequence(
+        paths["pending_runner"],
+        pending_live,
+        "let mut finalized_ingress_closed = false;",
+        "pending-Kura finalization ingress close state must be initialized exactly once and never reopened",
+        errors,
     )
     reject_tokens(
         "pending_runner",
@@ -5388,7 +6164,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "installed_status.pending_stores, 0",
             "installed_status.pending_validations, 0",
             "installed_status.pending_applications, 0",
-            ".drive_apply_recovery_turn(&mut setup_runner, 64)",
+            ".drive_apply_recovery_turn(&mut setup_runner)",
             "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
             "recovery_stages.ends_with(&[Stage::ApplicationDispatched, Stage::Completed])",
             ".prepare_lane_recovery(",

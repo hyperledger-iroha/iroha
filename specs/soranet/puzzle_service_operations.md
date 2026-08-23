@@ -23,6 +23,19 @@ It exposes five HTTP endpoints:
 - `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
   resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
+`POST /v1/puzzle/mint`, `GET /v1/token/config`, and
+`POST /v1/token/mint` require `Authorization: Bearer <token>`, where the token is
+loaded from the mandatory private `--mint-auth-token-path` file. The service
+accepts only loopback listeners because this HTTP hop is plaintext; terminate
+TLS and any remote client authentication at a local proxy. The token minting
+endpoint assigns `issued_at` from the service clock and never accepts a
+caller-supplied issuance timestamp. Protected responses send
+`Cache-Control: no-store` and `Pragma: no-cache` so proxies do not retain minted
+credentials or token-policy output. Relay identity is taken only from the
+verified SRCv2 certificate, whose descriptor commitment must match
+`handshake.descriptor_commit_hex`; do not mount the relay's private descriptor
+manifest into this service.
+
 Tickets produced by the service are verified in the
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`
 integration test, which also exercises relay throttles during volumetric DoS
@@ -87,16 +100,22 @@ Pass the issuer secret key to the puzzle service via the CLI flags:
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
-  --relay-config /etc/soranet/relay/relay.entry.json \
+  --config /etc/soranet/relay/relay.entry.json \
+  --mint-auth-token-path /etc/soranet/relay/puzzle_mint_auth.token \
   --token-secret-path /etc/soranet/relay/token_issuer_secret.hex \
   --token-revocation-file /etc/soranet/relay/token_revocations.json \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
-coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
-revocation state.
+Create both credential files with mode `0600` and grant access only to the
+service account. The relay verifier schema contains no issuer-private-key field;
+the puzzle service accepts that key only through `--token-secret-path`, so it
+cannot leak through process arguments or distributed relay configuration. Secret
+key files contain exactly the lowercase hex encoding, with no newline or other
+whitespace and no all-zero placeholder. The
+revocation file watcher keeps
+`/v1/token/config` current; coordinate updates with the
+`soranet-admission-token revoke` command to avoid lagging revocation state.
 
 ## Signed-ticket revocation store
 
@@ -132,9 +151,15 @@ can pin the verifier key. Signed tickets are validated against the relay ID and 
 bindings and still share the same revocation store. Relays with a configured
 signed-ticket verifier key reject raw 74-byte PoW tickets; raw tickets are only
 accepted by relays that do not configure a signed-ticket verifier key.
-Pass the signer secret via `--signed-ticket-secret-hex` or `--signed-ticket-secret-path` when
+For both raw and signed tickets, the 32-byte `client_nonce` field carries the
+domain-separated commitment to the exact descriptor, relay ID, and admission
+transcript. Relays compare it in constant time before Argon2 work, so a wrong
+relay or transcript fails deterministically rather than with the puzzle's
+probabilistic false-accept rate.
+Pass the signer secret via the private `--signed-ticket-secret-path` file when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
-validate against `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepts
+validate against `pow.signed_ticket_public_key_hex`. The same exact lowercase-hex,
+no-whitespace file rule applies. `POST /v1/puzzle/mint` accepts
 `"signed": true` together with the required `"transcript_hash_hex"` to return a
 Norito-encoded signed ticket alongside the raw ticket bytes; responses include
 `signed_ticket_b64` and

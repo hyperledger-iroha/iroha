@@ -5,7 +5,9 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
 import { crc64Xz } from "./crc64Xz.js";
-import { networkIdBytes } from "./networkId.js";
+import { NetworkId, networkIdBytes } from "./networkId.js";
+
+export { NetworkId };
 
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
@@ -1264,6 +1266,7 @@ function verifyApproval(preview, control, relayToken) {
   if (!ed25519.verify(control.signature.signature, preimage, publicKey)) {
     throw new Error("Connect approval signature verification failed");
   }
+  return publicKey;
 }
 
 function buildAad(sidBytes, dir, seq) {
@@ -1371,6 +1374,7 @@ function rejectDeferred(deferred, error) {
 function copyConnectApproval(approval) {
   return Object.freeze({
     accountId: approval.accountId,
+    signingPublicKey: Uint8Array.from(approval.signingPublicKey),
     walletPublicKey: Uint8Array.from(approval.walletPublicKey),
     signature: Uint8Array.from(approval.signature),
   });
@@ -1515,13 +1519,14 @@ export function createConnectAppSession(options = {}) {
             }
             return;
           }
-          verifyApproval(preview, control, session.tokenRelay);
+          const signingPublicKey = verifyApproval(preview, control, session.tokenRelay);
           keys = deriveDirectionKeys(
             x25519.getSharedSecret(preview.appKeyPair.privateKey, control.walletPublicKey),
             preview.sidBytes,
           );
           approved = Object.freeze({
             accountId: control.accountId,
+            signingPublicKey: Uint8Array.from(signingPublicKey),
             walletPublicKey: Uint8Array.from(control.walletPublicKey),
             signature: Uint8Array.from(control.signature.signature),
           });

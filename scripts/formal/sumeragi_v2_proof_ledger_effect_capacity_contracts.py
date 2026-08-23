@@ -204,17 +204,17 @@ for pending in self.pending_applications.values() {
 if let Some(finality) = &self.finality_completion {
     match &finality.ownership {
         FinalityCompletionOwner::Runtime(ownership) => insert(ownership)?,
-        FinalityCompletionOwner::RecoveredDecisionApply(key)
+        FinalityCompletionOwner::LifecycleDecisionApply(key)
             if key.matches_height_context(&self.context) => {}
-        FinalityCompletionOwner::RecoveredDecisionApply(_) => {
+        FinalityCompletionOwner::LifecycleDecisionApply(_) => {
             return Err(EffectExecutorError::Contract(
-                "recovered Apply finality changed its height context".to_owned(),
+                "lifecycle Apply finality changed its height context".to_owned(),
             ));
         }
     }
 }
 """,
-        "pending and durable Apply ownership must retain the exact runtime owner while recovered finality stays bound to this height context",
+        "pending and durable Apply ownership must retain the exact runtime owner while lifecycle finality stays bound to this height context",
         errors,
     )
 
@@ -544,9 +544,9 @@ if !runtime_terminal_commits.is_empty() {
             and len(terminal_schedule_positions) == 1
             and len(terminal_commit_positions) == 1
             and len(count_positions) == 1
-            and len(admission_positions) == 4
-            and len(projection_positions) == 4
-            and len(checked_positions) == 4
+            and len(admission_positions) == 5
+            and len(projection_positions) == 5
+            and len(checked_positions) == 5
             and len(fetch_adoption_positions) == 1
             and len(body_stage_adoption_positions) == 1
             and len(match_positions) == 1
@@ -555,6 +555,9 @@ if !runtime_terminal_commits.is_empty() {
             and admission_positions[0]
             < projection_positions[0]
             < checked_positions[0]
+            < admission_positions[1]
+            < projection_positions[1]
+            < checked_positions[1]
             < validate_retry_publication_positions[0]
             < exact_incumbent_positions[0]
             and exact_incumbent_positions[0]
@@ -562,17 +565,17 @@ if !runtime_terminal_commits.is_empty() {
             < terminal_plan_positions[0]
             < terminal_adoption_positions[0]
             < count_positions[0]
-            < admission_positions[1]
-            < projection_positions[1]
-            < checked_positions[1]
-            < fetch_adoption_positions[0]
             < admission_positions[2]
             < projection_positions[2]
             < checked_positions[2]
-            < body_stage_adoption_positions[0]
+            < fetch_adoption_positions[0]
             < admission_positions[3]
             < projection_positions[3]
             < checked_positions[3]
+            < body_stage_adoption_positions[0]
+            < admission_positions[4]
+            < projection_positions[4]
+            < checked_positions[4]
             < match_positions[0]
             < publication_positions[-1]
             < terminal_schedule_positions[0]
@@ -697,7 +700,7 @@ self.finality_completion = Some(FinalityCompletion {
     consume_effects = _require_rust_item(
         effects_path,
         source,
-        "consume_effects",
+        "consume_effects_with_runner_decision_cleanup",
         errors,
     )
     _require_rust_item_context(
@@ -725,6 +728,783 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         _consume_effects_replay_transfer_order_errors(
             effects_path, consume_effects
         )
+    )
+
+    consume_effects_wrapper = _require_rust_item(
+        effects_path,
+        source,
+        "consume_effects",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        consume_effects_wrapper,
+        generic_executor_context,
+        "ordinary effect-consumer Decision-cleanup delegation",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        consume_effects_wrapper,
+        """
+pub(crate) fn consume_effects<S: V2EffectServices>(
+    &mut self,
+    effects: Vec<AdapterEffect>,
+    services: &mut S,
+) -> Result<usize, EffectExecutorError> {
+    self.consume_effects_with_runner_decision_cleanup(effects, services, None)
+}
+""",
+        "ordinary effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_effects,
+        """
+self.ensure_open()?;
+if self.pending_runner_decision_cleanup.is_some() {
+    return Err(self.close(
+        EffectExecutorError::Contract(
+            "reducer effects overtook pending runner Decision cleanup".to_owned(),
+        ),
+        services,
+    ));
+}
+if let Some(pending) = pending_runner_decision_cleanup {
+    if !Self::new_decision_batch_has_only_exact_apply(
+        &effects,
+        pending.decision,
+        Some(pending.owner_tag),
+    ) {
+        return Err(self.close(
+            EffectExecutorError::Contract(
+                "new Decision Apply handoff changed its exact retained suffix".to_owned(),
+            ),
+            services,
+        ));
+    }
+}
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+""",
+        "ordinary first-Decision consumption must validate its planned owner and exact cleanup fence before taking reducer ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_effects,
+        """
+self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
+if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+    return Err(self.close_after_transferring_runtime_terminals(error, services));
+}
+if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+    return Err(self.close(error, services));
+}
+let count = self
+    .drain_retained_effect_batch(services, true)
+""",
+        "ordinary first-Decision consumption must install the runner-cleanup fence before any retained Apply dispatch",
+        errors,
+    )
+
+    exact_apply = _require_rust_item(
+        effects_path,
+        source,
+        "new_decision_batch_has_only_exact_apply",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        exact_apply,
+        generic_executor_context,
+        "first-Decision exact Apply suffix predicate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        exact_apply,
+        """
+let mut apply_count = 0usize;
+for effect in effects {
+    let AdapterEffect::Apply {
+        tag,
+        subject,
+        certificate,
+    } = effect
+    else {
+        continue;
+    };
+    apply_count = apply_count.saturating_add(1);
+    if apply_count > 1
+        || Some(*tag) != authoritative_tag
+        || *subject != decision.2
+        || certificate.phase != wire::GlobalPhase::Commit
+        || certificate.round != decision.0
+        || certificate.proposal_round != decision.1
+        || certificate.subject != decision.2
+        || certificate.execution_commitment != decision.3
+    {
+        return false;
+    }
+}
+true
+""",
+        "a first Decision must accept zero or one Apply and require its exact authoritative tag and Commit certificate tuple",
+        errors,
+    )
+
+    cleanup_plan = _require_rust_item(
+        effects_path,
+        source,
+        "plan_runner_decision_cleanup",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        cleanup_plan,
+        generic_executor_context,
+        "first-Decision runner-cleanup owner plan",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        cleanup_plan,
+        """
+let (None, Some(decision)) = (before, after) else {
+    return Ok(None);
+};
+let owner_tag = self.runtime.authoritative_tag().ok_or_else(|| {
+    EffectExecutorError::Contract(
+        "new Decision omitted its exact local runner owner".to_owned(),
+    )
+})?;
+if owner_tag.height() != decision.0.height {
+    return Err(EffectExecutorError::Contract(
+        "new Decision changed height across its local runner owner".to_owned(),
+    ));
+}
+Ok(Some(PendingRunnerDecisionCleanup {
+    decision,
+    owner_tag,
+}))
+""",
+        "only the first Decision transition may mint cleanup debt, bound to its authoritative same-height runner owner",
+        errors,
+    )
+
+    acknowledge_cleanup = _require_rust_item(
+        effects_path,
+        source,
+        "acknowledge_runner_decision_cleanup",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        acknowledge_cleanup,
+        generic_executor_context,
+        "runner Decision-cleanup acknowledgment",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        acknowledge_cleanup,
+        """
+let (retained_apply_count, exact_retained_apply_count) = self
+    .retained_effect_batch
+    .as_ref()
+    .into_iter()
+    .chain(self.parked_effect_batch.as_ref())
+    .flat_map(|batch| batch.effects.iter())
+    .fold((0_usize, 0_usize), |(count, exact_count), owned| {
+        let AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } = &owned.effect
+        else {
+            return (count, exact_count);
+        };
+        let exact = *tag == pending.owner_tag
+            && *subject == decision.2
+            && certificate.phase == wire::GlobalPhase::Commit
+            && certificate.round == decision.0
+            && certificate.proposal_round == decision.1
+            && certificate.subject == decision.2
+            && certificate.execution_commitment == decision.3;
+        (count + 1, exact_count + usize::from(exact))
+    });
+""",
+        "runner cleanup acknowledgment must census zero or one exact retained/parked Apply against the planned owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        acknowledge_cleanup,
+        """
+if runtime_decision != Some(decision)
+    || self.protected_decision != Some(decision)
+    || runner_tag != pending.owner_tag
+    || self.runtime.authoritative_tag() != Some(pending.owner_tag)
+    || pending.owner_tag.height() != decision.0.height
+    || decided_subject != Some(decision.2)
+    || retained_apply_count > 1
+    || retained_apply_count != exact_retained_apply_count
+{
+    return Err(EffectExecutorError::Contract(
+        "runner Decision cleanup changed the exact Decision handoff".to_owned(),
+    ));
+}
+self.pending_runner_decision_cleanup = None;
+Ok(())
+""",
+        "runner cleanup acknowledgment must validate the exact live Decision and Apply census before clearing the fence",
+        errors,
+    )
+
+    dispatch_available = _require_rust_item(
+        effects_path,
+        source,
+        "lifecycle_decision_apply_dispatch_available",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        dispatch_available,
+        production_executor_context,
+        "lifecycle Decision Apply dispatch capacity fence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        dispatch_available,
+        """
+Ok(self.pending_work() == 0
+    && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+    && self.retained_effect_batch.is_none()
+    && self.parked_effect_batch.is_none()
+    && self.finality_completion.is_none()
+    && queued_ingress_is_allowed
+    && self.runtime.lifecycle_decision_apply_dispatch_available())
+""",
+        "lifecycle Apply dispatch must freeze every executor mutation owner and the runtime barrier",
+        errors,
+    )
+
+    prepare_dispatch = _require_rust_item(
+        effects_path,
+        source,
+        "prepare_lifecycle_decision_apply_executor_dispatch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        prepare_dispatch,
+        production_executor_context,
+        "exact lifecycle Decision Apply executor dispatch preparation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_dispatch,
+        """
+if !self.lifecycle_decision_apply_dispatch_available()? {
+    return Err(EffectExecutorError::Contract(
+        "lifecycle Apply dispatch overtook retained executor work".to_owned(),
+    ));
+}
+let Some(evidence) = self.pending_tip_recovery.as_ref() else {
+    return Ok(PreparedLifecycleDecisionApplyExecutorDispatchV1 { pending: None });
+};
+""",
+        "ordinary lifecycle Apply dispatch must remain inert unless exact pending-Kura evidence exists",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_dispatch,
+        """
+let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
+    && evidence.is_exact(&self.context)
+    && evidence.replay_tag() == self.current_tag()
+    && prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()
+    && prepared.exactly_matches_pending_kura_recovery(
+        &self.context,
+        evidence.replay_tag(),
+        evidence.commit_subject(),
+        evidence.commit_qc(),
+        evidence.validated_receipt(),
+    );
+""",
+        "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, ordinal, Decision, and receipt",
+        errors,
+    )
+
+    prepare_completion = _require_rust_item(
+        effects_path,
+        source,
+        "prepare_lifecycle_decision_apply_completion",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        prepare_completion,
+        production_executor_context,
+        "lineage-authenticated lifecycle Decision Apply completion preparation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_completion,
+        """
+let lineage_owner_is_exact = match authority.lineage() {
+    LifecycleDecisionApplyLineageV1::Live => self
+        .live_lifecycle_decision_apply
+        .as_ref()
+        .is_some_and(|owner| {
+            owner.exactly_matches_completion(
+                authority.dispatch_key(),
+                authority.tag(),
+                authority.subject(),
+                authority.receipt(),
+                authority.artifact(),
+            )
+        }),
+    LifecycleDecisionApplyLineageV1::Recovered => {
+        self.live_lifecycle_decision_apply.is_none()
+    }
+};
+""",
+        "lifecycle Apply completion must distinguish exact live ownership from recovered non-substitution",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_completion,
+        """
+if self.pending_work() != 0
+    || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
+    || self.retained_effect_batch.is_some()
+    || self.parked_effect_batch.is_some()
+    || !pending_recovery_is_exact
+    || self.finality_completion.is_some()
+    || (recovered_requires_empty_ingress && self.runtime.queued_commands() != 0)
+    || !lineage_owner_is_exact
+{
+""",
+        "lifecycle Apply completion preparation must reject every competing executor owner",
+        errors,
+    )
+
+    commit_finality = _require_rust_item(
+        effects_path,
+        source,
+        "commit_lifecycle_decision_apply_finality",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        commit_finality,
+        production_executor_context,
+        "post-Ledger lifecycle Decision Apply finality commit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        commit_finality,
+        """
+let (dispatch_key, tag, receipt, artifact, committed_status) =
+    finality.consume_for_executor(LifecycleDecisionApplyExecutorFinalityPermitV1::new());
+""",
+        "lifecycle Apply finality must consume the move-only post-Ledger permit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        commit_finality,
+        """
+assert!(
+    lineage_owner_is_exact
+        && self.finality_completion.is_none()
+        && self.pending_work() == 0
+        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+        && pending_recovery_is_exact
+        && dispatch_key.matches_height_context(&self.context)
+        && artifact.height_context == self.context
+        && artifact.subject == receipt.subject()
+        && receipt.context_id() == self.context.id()
+        && receipt.height() == self.context.height
+        && receipt.artifact_hash() == HashOf::new(&artifact)
+        && self.runtime.driver().ready_to_finish(),
+    "pre-Ledger lifecycle Apply finality proof remains exact"
+);
+self.finality_completion = Some(FinalityCompletion {
+    tag,
+    receipt,
+    artifact,
+    ownership: FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key),
+});
+""",
+        "lifecycle Apply finality must install only an exact drained lineage-owned tombstone",
+        errors,
+    )
+
+    drain_effects = _require_rust_item(
+        effects_path,
+        source,
+        "drain_retained_effect_batch",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain_effects,
+        """
+if let (
+    Some(owner),
+    AdapterEffect::Apply {
+        subject,
+        certificate,
+        ..
+    },
+) = (
+    self.live_lifecycle_validate_successor.as_ref(),
+    &owned.effect,
+) {
+    if !owner.exactly_matches_apply(*subject, certificate) {
+        return Err(EffectExecutorError::Contract(
+            "reducer Apply conflicts with the retained Validate successor".to_owned(),
+        ));
+    }
+    break;
+}
+""",
+        "preliminary Validate-to-Apply ownership must retain the exact reducer Apply at the FIFO head",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain_effects,
+        """
+if matches!(&owned.effect, AdapterEffect::Apply { .. })
+    && (self.pending_runner_decision_cleanup.is_some()
+        || !self.pending_durable_validate_admissions.is_empty()
+        || self.pending_live_wal_sign_admission.is_some()
+        || !self.pending_lifecycle_output_admissions.is_empty())
+{
+    break;
+}
+let pending_work_producer = Self::pending_work_producer(&owned.effect);
+match self.consume_one(owned.effect, owned.ownership, services)
+""",
+        "retained Apply dispatch must stop at the runner-cleanup fence before entering consume_one",
+        errors,
+    )
+
+    ready_to_finish = _require_rust_item(
+        effects_path,
+        source,
+        "ready_to_finish",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        ready_to_finish,
+        """
+self.finality_completion.is_some()
+    && self.pending_runner_decision_cleanup.is_none()
+    && self.live_lifecycle_decision_apply.is_none()
+    && self.live_lifecycle_validate_successor.is_none()
+    && self.retained_effect_batch.is_none()
+    && self.parked_effect_batch.is_none()
+""",
+        "finalized rollover must retain the runner cleanup fence and no live lifecycle Apply owner",
+        errors,
+    )
+
+    consume_pacemaker_wrapper = _require_rust_item(
+        effects_path,
+        source,
+        "consume_pacemaker_effects",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        consume_pacemaker_wrapper,
+        generic_executor_context,
+        "pacemaker effect-consumer Decision-cleanup delegation",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        effects_path,
+        consume_pacemaker_wrapper,
+        """
+fn consume_pacemaker_effects<S: V2EffectServices>(
+    &mut self,
+    effects: Vec<AdapterEffect>,
+    services: &mut S,
+) -> Result<usize, EffectExecutorError> {
+    self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
+}
+""",
+        "pacemaker effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        errors,
+    )
+    consume_pacemaker = _require_rust_item(
+        effects_path,
+        source,
+        "consume_pacemaker_effects_with_runner_decision_cleanup",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        consume_pacemaker,
+        generic_executor_context,
+        "pacemaker first-Decision cleanup-aware consumer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_pacemaker,
+        """
+self.ensure_open()?;
+if self.pending_runner_decision_cleanup.is_some() {
+    return Err(self.close(
+        EffectExecutorError::Contract(
+            "pacemaker effects overtook pending runner Decision cleanup".to_owned(),
+        ),
+        services,
+    ));
+}
+if let Some(pending) = pending_runner_decision_cleanup
+    && !Self::new_decision_batch_has_only_exact_apply(
+        &effects,
+        pending.decision,
+        Some(pending.owner_tag),
+    )
+{
+    return Err(self.close(
+        EffectExecutorError::Contract(
+            "pacemaker Decision Apply handoff changed its exact retained suffix".to_owned(),
+        ),
+        services,
+    ));
+}
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+""",
+        "pacemaker first-Decision consumption must arm the exact cleanup fence before taking reducer ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_pacemaker,
+        """
+if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
+    return Err(self.close(error, services));
+}
+self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
+if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
+    return Err(self.close_after_transferring_runtime_terminals(error, services));
+}
+if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+    return Err(self.close(error, services));
+}
+let count = self
+    .drain_retained_effect_batch(services, false)
+""",
+        "pacemaker first-Decision consumption must install the runner-cleanup fence before any retained Apply dispatch",
+        errors,
+    )
+
+    step_pacemaker = _require_rust_item(
+        effects_path,
+        source,
+        "step_pacemaker_once",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step_pacemaker,
+        """
+if self.pending_runner_decision_cleanup.is_some() {
+    let count = self
+        .drain_retained_effect_batch(services, false)
+        .map_err(|error| {
+            self.close_after_transferring_runtime_terminals(error, services)
+        })?;
+    if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+        return Err(self.close(error, services));
+    }
+    return Ok(if count == 0 {
+        EffectExecutorStep::Idle
+    } else {
+        EffectExecutorStep::Advanced { effects: count }
+    });
+}
+""",
+        "pending runner cleanup must stop pacemaker runtime admission while allowing only non-Apply retained debt to drain",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step_pacemaker,
+        """
+let decision_before_step = self
+    .runtime
+    .decided_body()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+let wal_step = self
+    .output_guard
+    .begin_fail_stop_operation()
+""",
+        "pacemaker turns must snapshot Decision state before entering the reducer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step_pacemaker,
+        """
+if let Err(error) = self.finish_runtime_step_reconciliation(services) {
+    return Err(self.close(error, services));
+}
+let decision_after_step = self
+    .runtime
+    .decided_body()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+let pending_runner_decision_cleanup = self
+    .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+    .map_err(|error| self.close(error, services))?;
+match step {
+""",
+        "pacemaker turns must snapshot Decision state after runtime reconciliation and plan its exact runner owner before branching on emitted effects",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step_pacemaker,
+        """
+None | Some(RuntimeStep::Idle) => {
+    self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
+    if self.retained_effect_batch.is_none() && self.parked_effect_batch.is_some() {
+""",
+        "a first pacemaker Decision with no emitted effects must still install runner cleanup debt",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step_pacemaker,
+        """
+Some(RuntimeStep::Advanced(effects)) => {
+    let count = self.consume_pacemaker_effects_with_runner_decision_cleanup(
+        effects,
+        services,
+        pending_runner_decision_cleanup,
+    )?;
+    Ok(EffectExecutorStep::Advanced { effects: count })
+}
+""",
+        "the first pacemaker Decision must flow only into the cleanup-aware consumer",
+        errors,
+    )
+
+    step = _require_rust_item(
+        effects_path,
+        source,
+        "step",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+if self.pending_runner_decision_cleanup.is_some()
+    && self.retained_effect_batch.is_none()
+    && self.parked_effect_batch.is_none()
+{
+    return Ok(EffectExecutorStep::Idle);
+}
+""",
+        "a split Decision without its later Apply must stop ordinary runtime admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+if count != 0 {
+    return Ok(EffectExecutorStep::Advanced { effects: count });
+}
+if self.pending_runner_decision_cleanup.is_some() {
+    return Ok(EffectExecutorStep::Idle);
+}
+if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_none() {
+""",
+        "a retained or parked Apply at the runner-cleanup fence must not fall through to pacemaker or ordinary runtime admission",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+let decision_before_step = self
+    .runtime
+    .decided_body()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+let wal_step = self
+    .output_guard
+    .begin_fail_stop_operation()
+""",
+        "ordinary turns must snapshot Decision state before entering the reducer",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+if let Err(error) = self.finish_runtime_step_reconciliation(services) {
+    return Err(self.close(error, services));
+}
+let decision_after_step = self
+    .runtime
+    .decided_body()
+    .map_err(EffectExecutorError::Runtime)
+    .map_err(|error| self.close(error, services))?;
+let pending_runner_decision_cleanup = self
+    .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+    .map_err(|error| self.close(error, services))?;
+match step {
+""",
+        "ordinary turns must snapshot Decision state after runtime reconciliation and plan its exact runner owner before branching on emitted effects",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
+""",
+        "a first ordinary Decision with no emitted effects must still install runner cleanup debt",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        step,
+        """
+let count = self.consume_effects_with_runner_decision_cleanup(
+    effects,
+    services,
+    pending_runner_decision_cleanup,
+)?;
+Ok(EffectExecutorStep::Advanced { effects: count })
+""",
+        "the first ordinary Decision, including a split zero-Apply batch, must flow only into the cleanup-aware consumer",
+        errors,
     )
 
     effect_runtime_context = (

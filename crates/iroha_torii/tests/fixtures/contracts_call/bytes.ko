@@ -1,32 +1,31 @@
-
 seiyaku ContractViewBytesTest {
+    state AssetDefinitionId Asset;
+    state bytes Target;
+    fn configure_impl(AssetDefinitionId asset_input, bytes target_bytes) {
+        Asset = asset_input;
+        Target = target_bytes;
+    }
 
-  state AssetDefinitionId Asset;
-  state bytes Target;
+    hajimari(AssetDefinitionId asset_input) {
+        Asset = asset_input;
+        Target = b"";
+    }
 
-  fn configure_impl(AssetDefinitionId asset_input, bytes target_bytes) {
-    Asset = asset_input;
-    Target = target_bytes;
-  }
+    kotoage fn configure(AssetDefinitionId asset_input, bytes target_bytes) authorize(
+        "CanEnactGovernance"
+    ) {
+        configure_impl(asset_input: asset_input, target_bytes: target_bytes);
+    }
 
-  hajimari(AssetDefinitionId asset_input) {
-    Asset = asset_input;
-    Target = b"";
-  }
+    view fn literal() -> bytes {
+        return b"risk";
+    }
 
-  kotoage fn configure(AssetDefinitionId asset_input, bytes target_bytes) authorize("CanEnactGovernance") {
-    configure_impl(asset_input: asset_input, target_bytes: target_bytes);
-  }
+    view fn target() -> bytes {
+        return Target;
+    }
 
-  view fn literal() -> bytes {
-    return b"risk";
-  }
-
-  view fn target() -> bytes {
-    return Target;
-  }
-
-  view fn config() -> (AssetDefinitionId, bytes) {
-    return (Asset, Target);
-  }
+    view fn config() -> (AssetDefinitionId, bytes) {
+        return (Asset, Target);
+    }
 }

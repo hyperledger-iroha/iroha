@@ -19,10 +19,10 @@ Usage: check_sumeragi_v2_replay_trace.sh [options]
 
 Options:
   --formal-only                 run the only supported V1 replay corridor
-  --output-root PATH            persist a create-only diagnostic receipt
+  --output-root PATH            persist a create-only release-signing payload
   --help                        show this help
 
-Without --output-root the verified diagnostic receipt is temporary. The
+Without --output-root the inspected release-signing payload is temporary. The
 wrapper never creates TLAPM compatibility symlinks; TLAPM_PROJECTION must
 already be a canonical sealed regular-file projection.
 USAGE
@@ -160,18 +160,29 @@ sumeragi_v2_tlc_assert_replay_tool_result \
 checker_stdout="${run_dir}/checker.stdout"
 checker_stderr="${run_dir}/checker.stderr"
 checker_args=("$receipt_path")
-if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" "${checker_args[@]}" \
-  >"$checker_stdout" 2>"$checker_stderr"; then
+set +e
+"$RESOLVED_PYTHON" -B -I -S "$CHECKER" "${checker_args[@]}" \
+  >"$checker_stdout" 2>"$checker_stderr"
+checker_status=$?
+set -e
+if ((checker_status != 2)); then
+  cat "$checker_stdout" >&2
   cat "$checker_stderr" >&2
-  echo "Sumeragi V2 replay receipt verification failed" >&2
+  echo "release checker accepted a receipt without detached signature inputs" >&2
   exit 1
 fi
-[[ ! -s "$checker_stderr" ]] || {
-  cat "$checker_stderr" >&2
-  echo "replay receipt checker emitted stderr" >&2
+[[ ! -s "$checker_stdout" ]] || {
+  cat "$checker_stdout" >&2
+  echo "signing-request checker attempt emitted stdout" >&2
   exit 1
 }
-cat "$checker_stdout"
+readonly EXPECTED_SIGNING_BLOCKER='Sumeragi V2 replay receipt verification failed: release verification requires every detached SSHSIG input'
+[[ "$(cat "$checker_stderr")" == "$EXPECTED_SIGNING_BLOCKER" ]] || {
+  cat "$checker_stderr" >&2
+  echo "signing-request checker attempt did not require detached SSHSIG inputs" >&2
+  exit 1
+}
+echo "Sumeragi V2 replay execution validated; detached release SSHSIG required"
 if ((persist_receipt)); then
   echo "receipt: ${receipt_path}"
 fi

@@ -8,11 +8,12 @@ use crate::vpn::{
     read_frame as read_padded_frame, schedule_frames, send_scheduled_frames_with_adapter,
     write_frame as write_padded_frame,
 };
-use blake3::Hasher;
 use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
+use rand::{TryRngCore as _, rngs::OsRng};
+use std::{fmt, sync::Arc};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Batch parameters for building data-class VPN frames.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VpnDataFrameBatch<'a> {
     /// Circuit identifier carried by the frames.
     pub circuit_id: [u8; 16],
@@ -27,20 +28,36 @@ pub struct VpnDataFrameBatch<'a> {
     /// Payloads to emit as data-class frames.
     pub payloads: &'a [Vec<u8>],
 }
+impl fmt::Debug for VpnDataFrameBatch<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnDataFrameBatch")
+            .field("circuit_id", &"<redacted>")
+            .field("flow_label", &"<redacted>")
+            .field("start_sequence", &self.start_sequence)
+            .field("ack", &self.ack)
+            .field("flags", &self.flags)
+            .field("payload_count", &self.payloads.len())
+            .finish()
+    }
+}
 /// Lightweight adapter that wires a VPN session and overlay into async IO.
 #[derive(Debug, Clone)]
 pub struct VpnAdapter {
     session: VpnSession,
-    overlay: VpnOverlay,
+    overlay: Arc<VpnOverlay>,
 }
 impl VpnAdapter {
     /// Create a new adapter over the given session and overlay.
-    pub fn new(session: VpnSession, overlay: VpnOverlay) -> Self {
-        Self { session, overlay }
+    pub fn new(session: VpnSession, overlay: impl Into<Arc<VpnOverlay>>) -> Self {
+        Self {
+            session,
+            overlay: overlay.into(),
+        }
     }
     /// Access the overlay used for padding and framing.
     pub fn overlay(&self) -> &VpnOverlay {
-        &self.overlay
+        self.overlay.as_ref()
     }
     /// Access the underlying VPN session state.
     pub fn session(&self) -> &VpnSession {
@@ -152,11 +169,22 @@ impl VpnAdapter {
         writer: &mut W,
         batch: VpnDataFrameBatch<'_>,
     ) -> Result<(), VpnFrameIoError> {
+        let frame_count = u64::try_from(batch.payloads.len())
+            .map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
+        batch
+            .start_sequence
+            .checked_add(frame_count)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?;
         for (idx, payload) in batch.payloads.iter().enumerate() {
+            let offset = u64::try_from(idx).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
+            let sequence = batch
+                .start_sequence
+                .checked_add(offset)
+                .ok_or(VpnFrameBuildError::SequenceExhausted)?;
             let cell = self.overlay.data_cell(
                 batch.circuit_id,
                 batch.flow_label,
-                batch.start_sequence.saturating_add(idx as u64),
+                sequence,
                 batch.ack,
                 batch.flags,
                 payload.clone(),
@@ -174,22 +202,26 @@ impl VpnAdapter {
         seed: [u8; 32],
     ) -> Result<(), VpnFrameIoError> {
         let mut data_cells = Vec::with_capacity(batch.payloads.len());
-        for (idx, payload) in batch.payloads.iter().enumerate() {
+        for payload in batch.payloads {
             let cell = self.overlay.data_cell(
                 batch.circuit_id,
                 batch.flow_label,
-                batch.start_sequence.saturating_add(idx as u64),
+                0,
                 batch.ack,
                 batch.flags,
                 payload.clone(),
             )?;
             data_cells.push(cell);
         }
+        let cover_meta = CoverFrameMeta {
+            start_sequence: batch.start_sequence,
+            ..cover_meta
+        };
         let schedule = schedule_frames(&self.overlay, data_cells, cover_meta, seed)?;
         send_scheduled_frames_with_adapter(&schedule, writer, Some(self), Some(&self.session)).await
     }
 }
-/// Outcome of a bridge send operation. Outcome of a bridge send operation.
+/// Outcome of a bridge send operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VpnBridgeSendOutcome {
     /// Number of user data frames emitted.
@@ -198,42 +230,54 @@ pub struct VpnBridgeSendOutcome {
     pub cover_frames: usize,
 }
 /// Helper that owns circuit identifiers and sequences for a tunnel bridge.
-#[derive(Debug, Clone)]
 pub struct VpnBridge {
     adapter: VpnAdapter,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
     next_sequence: u64,
-    next_cover_sequence: u64,
     ack: u64,
     flags: VpnCellFlagsV1,
     cover_flags: VpnCellFlagsV1,
     cover_seed: [u8; 32],
 }
-fn default_cover_seed(circuit_id: [u8; 16], flow_label: VpnFlowLabelV1) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(b"soranet-vpn-cover-seed");
-    hasher.update(&circuit_id);
-    hasher.update(&flow_label.bytes);
-    let digest = hasher.finalize();
+fn random_cover_seed() -> Result<[u8; 32], VpnFrameBuildError> {
     let mut seed = [0u8; 32];
-    seed.copy_from_slice(digest.as_bytes());
-    seed
+    OsRng
+        .try_fill_bytes(&mut seed)
+        .map_err(|_| VpnFrameBuildError::CoverRandomnessUnavailable)?;
+    if seed.iter().all(|byte| *byte == 0) {
+        seed.fill(0);
+        std::hint::black_box(&mut seed);
+        return Err(VpnFrameBuildError::CoverRandomnessUnavailable);
+    }
+    Ok(seed)
 }
 impl VpnBridge {
+    fn clear_cover_seed(&mut self) {
+        self.cover_seed.fill(0);
+        std::hint::black_box(&mut self.cover_seed);
+    }
+
     /// Construct a new bridge bound to a circuit and flow label.
-    pub fn new(adapter: VpnAdapter, circuit_id: [u8; 16], flow_label: VpnFlowLabelV1) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// Returns an error when the operating system cannot provide a nonzero
+    /// cover-scheduling seed.
+    pub fn new(
+        adapter: VpnAdapter,
+        circuit_id: [u8; 16],
+        flow_label: VpnFlowLabelV1,
+    ) -> Result<Self, VpnFrameBuildError> {
+        Ok(Self {
             adapter,
             circuit_id,
             flow_label,
             next_sequence: 0,
-            next_cover_sequence: 0,
             ack: 0,
             flags: VpnCellFlagsV1::new(false, false, false, false),
             cover_flags: VpnCellFlagsV1::new(true, false, false, false),
-            cover_seed: default_cover_seed(circuit_id, flow_label),
-        }
+            cover_seed: random_cover_seed()?,
+        })
     }
     /// Update the ACK value propagated on subsequent frames.
     pub fn set_ack(&mut self, ack: u64) {
@@ -247,17 +291,21 @@ impl VpnBridge {
     pub fn set_cover_flags(&mut self, flags: VpnCellFlagsV1) {
         self.cover_flags = flags;
     }
-    /// Update the deterministic seed used for cover scheduling.
-    pub fn set_cover_seed(&mut self, seed: [u8; 32]) {
+    /// Update the seed used for cover scheduling.
+    ///
+    /// # Errors
+    /// Returns an error when `seed` is all zero.
+    pub fn set_cover_seed(&mut self, seed: [u8; 32]) -> Result<(), VpnFrameBuildError> {
+        if seed.iter().all(|byte| *byte == 0) {
+            return Err(VpnFrameBuildError::InvalidCoverSeed);
+        }
+        self.clear_cover_seed();
         self.cover_seed = seed;
+        Ok(())
     }
     /// Return the underlying adapter.
     pub fn adapter(&self) -> &VpnAdapter {
         &self.adapter
-    }
-    /// Split the bridge into its adapter and fixed identifiers.
-    pub fn into_parts(self) -> (VpnAdapter, [u8; 16], VpnFlowLabelV1) {
-        (self.adapter, self.circuit_id, self.flow_label)
     }
     /// Maximum payload supported by a single VPN data cell.
     pub fn max_payload_len(&self) -> usize {
@@ -276,14 +324,13 @@ impl VpnBridge {
             });
         }
         let start_sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.saturating_add(payloads.len() as u64);
         let overlay = self.adapter.overlay();
         let mut data_cells = Vec::with_capacity(payloads.len());
-        for (idx, payload) in payloads.iter().enumerate() {
+        for payload in payloads {
             data_cells.push(overlay.data_cell(
                 self.circuit_id,
                 self.flow_label,
-                start_sequence.saturating_add(idx as u64),
+                0,
                 self.ack,
                 self.flags,
                 payload.clone(),
@@ -298,12 +345,16 @@ impl VpnBridge {
             flow_label: self.flow_label,
             ack: self.ack,
             flags: cover_flags,
-            start_sequence: self.next_cover_sequence,
+            start_sequence,
         };
         let schedule = schedule_frames(overlay, data_cells, cover_meta, self.cover_seed)
             .map_err(VpnFrameIoError::Build)?;
         let cover_frames = schedule.iter().filter(|frame| frame.is_cover).count();
-        self.next_cover_sequence = self.next_cover_sequence.saturating_add(cover_frames as u64);
+        let frame_count =
+            u64::try_from(schedule.len()).map_err(|_| VpnFrameBuildError::SequenceExhausted)?;
+        self.next_sequence = start_sequence
+            .checked_add(frame_count)
+            .ok_or(VpnFrameBuildError::SequenceExhausted)?;
         send_scheduled_frames_with_adapter(
             &schedule,
             writer,
@@ -386,6 +437,11 @@ impl VpnBridge {
         }
     }
 }
+impl Drop for VpnBridge {
+    fn drop(&mut self) {
+        self.clear_cover_seed();
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,18 +449,66 @@ mod tests {
     use iroha_data_model::soranet::vpn::VpnCellHeaderV1;
     use std::sync::Arc;
     #[test]
-    fn bridge_derives_default_cover_seed() {
+    fn bridge_draws_nonzero_cover_seed_and_rejects_inert_override() {
         let metrics = Arc::new(Metrics::new());
         let overlay = VpnOverlay::from_config(Default::default());
         let session = VpnSession::from_parts(Arc::clone(&metrics));
         let adapter = VpnAdapter::new(session, overlay);
         let circuit_id = [0xA5; 16];
         let flow_label = VpnFlowLabelV1::from_u32(0x1234).expect("flow label");
-        let bridge = VpnBridge::new(adapter, circuit_id, flow_label);
-        let expected = default_cover_seed(circuit_id, flow_label);
-        assert_eq!(expected, bridge.cover_seed);
+        let mut bridge =
+            VpnBridge::new(adapter, circuit_id, flow_label).expect("random cover seed");
         assert_ne!([0u8; 32], bridge.cover_seed);
+        assert!(matches!(
+            bridge.set_cover_seed([0; 32]),
+            Err(VpnFrameBuildError::InvalidCoverSeed)
+        ));
+        bridge.clear_cover_seed();
+        assert_eq!([0u8; 32], bridge.cover_seed);
     }
+
+    #[test]
+    fn data_batch_debug_redacts_identifiers_and_payloads() {
+        let payloads = [vec![0xA5; 4]];
+        let batch = VpnDataFrameBatch {
+            circuit_id: [0xA5; 16],
+            flow_label: VpnFlowLabelV1::from_u32(1).expect("flow label"),
+            start_sequence: 1,
+            ack: 0,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            payloads: &payloads,
+        };
+        let rendered = format!("{batch:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(rendered.contains("payload_count: 1"));
+        assert!(!rendered.contains("165, 165"));
+    }
+
+    #[tokio::test]
+    async fn bridge_rejects_sequence_wrap_before_writing() {
+        let metrics = Arc::new(Metrics::new());
+        let overlay = VpnOverlay::from_config(Default::default());
+        let session = VpnSession::from_parts(metrics);
+        let adapter = VpnAdapter::new(session, overlay);
+        let mut bridge = VpnBridge::new(
+            adapter,
+            [0xA5; 16],
+            VpnFlowLabelV1::from_u32(1).expect("flow label"),
+        )
+        .expect("random cover seed");
+        bridge.next_sequence = u64::MAX;
+        let (mut writer, _reader) = tokio::io::duplex(VpnCellV1::max_payload_len());
+        let error = bridge
+            .send_payloads(&mut writer, &[vec![0xAA]])
+            .await
+            .expect_err("sequence wrap must fail");
+        assert!(matches!(
+            error,
+            VpnFrameIoError::Build(VpnFrameBuildError::SequenceExhausted)
+        ));
+        assert_eq!(u64::MAX, bridge.next_sequence);
+    }
+
     #[test]
     fn adapter_counts_cover_cells_on_encode() {
         let metrics = Arc::new(Metrics::new());

@@ -3506,7 +3506,14 @@ where
     K: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
     P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
     Prepare: FnOnce() -> Result<F, ZkAmsMkheErrorV1>,
-    F: FnOnce(&[[u8; 32]], &[i64], &[i64], &[i64], &[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+    F: FnOnce(
+        &mut P,
+        &[[u8; 32]],
+        &[i64],
+        &[i64],
+        &[i64],
+        &[u8; 32],
+    ) -> Result<(), ZkAmsMkheErrorV1>,
 {
     let profile = release_profile_v1();
     authority.validate_release_v1()?;
@@ -3555,6 +3562,7 @@ where
         // the established no-local-allocation-after-entropy invariant remains
         // intact. Output publication cannot begin until this call succeeds.
         before_output_publication(
+            ciphertext_publisher,
             active.kernel.canonical_plaintext,
             active.kernel.ephemeral.as_slice(),
             active.kernel.error_zero.as_slice(),
@@ -3604,9 +3612,32 @@ where
         random,
         key_provider,
         ciphertext_publisher,
-        || Ok(|_: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
+        || Ok(|_: &mut P, _: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
 }
+// This additive 38-to-40-limb arithmetic child is private and non-authorizing.
+// Its compiled V1 coordinator proves the pre-entropy callback chronology, but
+// the production/Phase-23 owner, source adapter, and release gates remain
+// false.
+#[path = "incremental_source_rns_native_basis_extension_v2.rs"]
+mod incremental_source_rns_native_basis_extension_v2;
+// This private child consumes the genuine basis-extension tails into exact
+// CAS publication receipts, an inhabited V1 callback coordinator, and a typed
+// existing-reader contract. The live Phase-23 owner, provider integration,
+// resource evidence, readiness, and release gates remain unavailable.
+#[path = "incremental_source_rns_native_tail_publication_v2.rs"]
+mod incremental_source_rns_native_tail_publication_v2;
+pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::RnsNativeClaimedDirectNumericOriginV2;
+// This V2 assembler is deliberately private and non-authorizing. Its live
+// owner/provider/reader adapters remain uninhabited and every integration,
+// readiness, and release flag stays false.
+#[path = "incremental_source_rns_native_publication_assembler_v2.rs"]
+mod incremental_source_rns_native_publication_assembler_v2;
+// TODO: Reconnect the private Phase-23 source prototype after its confidential
+// spool dependency can enter the authorized workspace lock graph.
+#[cfg(any())]
+#[path = "incremental_source_phase23.rs"]
+mod incremental_source_phase23;
 #[cfg(test)]
 #[path = "incremental_source_tests.rs"]
 mod tests;

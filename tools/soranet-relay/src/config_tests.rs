@@ -25,9 +25,26 @@ fn write_config(json: &str) -> PathBuf {
     file.into_temp_path().keep().expect("persist temp file")
 }
 fn write_manifest(json: &str) -> NamedTempFile {
-    let file = NamedTempFile::new().expect("create manifest file");
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create manifest file");
     std::fs::write(file.path(), json).expect("write manifest");
     file
+}
+fn write_vpn_secret(byte: u8) -> NamedTempFile {
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create VPN secret file");
+    std::fs::write(file.path(), hex::encode([byte; 32])).expect("write VPN secret file");
+    file
+}
+fn vpn_config_with_secret(byte: u8) -> (VpnConfig, NamedTempFile) {
+    let file = write_vpn_secret(byte);
+    let config = VpnConfig {
+        enabled: true,
+        helper_ticket_secret_path: Some(file.path().to_path_buf()),
+        backend_bootstrap_secret_path: Some(file.path().to_path_buf()),
+        ..VpnConfig::default()
+    };
+    (config, file)
 }
 fn assert_config_json_admission_rejected(bytes: &[u8]) {
     let file = NamedTempFile::new().expect("create admission input");
@@ -97,13 +114,105 @@ fn relay_config_rejects_path_replacement_race() {
 #[test]
 fn private_file_reader_rejects_group_permissions_inside_the_identity_chain() {
     use std::os::unix::fs::PermissionsExt as _;
-    let file = NamedTempFile::new().expect("create private input");
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create private input");
     std::fs::write(file.path(), b"private material").expect("write private input");
     std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
         .expect("set unsafe private input permissions");
     let error = read_bounded_private_regular_file(file.path(), 64, "private test input")
         .expect_err("group-readable private input must fail in the bounded reader");
     assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+#[cfg(unix)]
+#[test]
+fn private_file_reader_rejects_unsafe_parent_custody() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let directory = tempfile::Builder::new()
+        .prefix("relay-unsafe-private-parent-")
+        .tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create private input directory");
+    let path = directory.path().join("secret");
+    std::fs::write(&path, b"private material").expect("write private input");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .expect("protect private input");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o777))
+        .expect("make parent unsafe");
+    let error = read_bounded_private_regular_file(&path, 64, "private test input")
+        .expect_err("other-writable parent must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+#[cfg(unix)]
+#[test]
+fn private_file_ancestor_policy_accepts_root_sticky_boundary_only() {
+    let effective_uid = 1_000;
+    assert!(trusted_private_ancestor(
+        effective_uid,
+        0o700,
+        effective_uid
+    ));
+    assert!(trusted_private_ancestor(0, 0o1777, effective_uid));
+    assert!(!trusted_private_ancestor(2_000, 0o755, effective_uid));
+    assert!(!trusted_private_ancestor(
+        effective_uid,
+        0o777,
+        effective_uid
+    ));
+}
+#[cfg(unix)]
+#[test]
+fn private_file_reader_rejects_hard_linked_secret() {
+    let directory = tempfile::Builder::new()
+        .prefix("relay-linked-private-file-")
+        .tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create private input directory");
+    let path = directory.path().join("secret");
+    let alias = directory.path().join("secret-alias");
+    std::fs::write(&path, b"private material").expect("write private input");
+    std::fs::hard_link(&path, &alias).expect("create hard link");
+    let error = read_bounded_private_regular_file(&path, 64, "private test input")
+        .expect_err("hard-linked private input must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+#[cfg(not(unix))]
+#[test]
+fn private_file_reader_fails_closed_without_unix_custody_checks() {
+    let error = trusted_private_file_path(Path::new("secret"), "private test input")
+        .expect_err("platform without an equivalent private ACL policy must fail closed");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+}
+#[test]
+fn manifest_json_string_scrubber_overwrites_nested_values() {
+    let mut value = norito::json!({
+        "secret": "identity-secret",
+        "nested": ["kem-secret", { "public": "public-material" }],
+        "number": 7,
+    });
+    clear_manifest_json_strings(&mut value);
+    let object = value.as_object().expect("manifest object");
+    assert_eq!(
+        object["secret"].as_str(),
+        Some("\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+    );
+    let nested = object["nested"].as_array().expect("nested manifest array");
+    assert_eq!(nested[0].as_str(), Some("\0\0\0\0\0\0\0\0\0\0"));
+    assert!(
+        nested[1].as_object().expect("nested object")["public"]
+            .as_str()
+            .expect("scrubbed public value")
+            .bytes()
+            .all(|byte| byte == 0)
+    );
+    assert_eq!(object["number"].as_u64(), Some(7));
+}
+#[test]
+fn bounded_reader_sensitive_buffer_can_be_explicitly_cleared() {
+    let mut buffer = SensitiveReadBuffer(vec![0xA5; 32]);
+    buffer.clear();
+    assert!(buffer.0.iter().all(|byte| *byte == 0));
+
+    let mut probe = SensitiveReadProbe([0xA5]);
+    probe.clear();
+    assert_eq!(probe.0, [0]);
 }
 #[test]
 fn relay_config_preflight_rejects_depth_count_and_string_budgets() {
@@ -137,7 +246,8 @@ fn relay_config_preflight_rejects_depth_count_and_string_budgets() {
 }
 #[test]
 fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
-    let exact = NamedTempFile::new().expect("create exact manifest");
+    let exact = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create exact manifest");
     let mut manifest = format!(
         r#"{{"identity":{{"ed25519_private_key_hex":"{}"}}}}"#,
         "11".repeat(32)
@@ -155,7 +265,8 @@ fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
             .expect("exact-limit manifest must load"),
         Some([0x11; 32])
     );
-    let plus_one = NamedTempFile::new().expect("create oversized manifest");
+    let plus_one = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create oversized manifest");
     plus_one
         .as_file()
         .set_len(
@@ -187,6 +298,50 @@ fn descriptor_manifest_preflight_bounds_recursive_lookup() {
         .expect_err("deep manifest must fail before Value allocation");
     assert!(
         matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("JSON admission failed")),
+        "unexpected error: {error:?}"
+    );
+}
+#[cfg(unix)]
+#[test]
+fn descriptor_manifest_requires_private_direct_file() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let directory = tempfile::Builder::new()
+        .prefix("relay-private-manifest-")
+        .tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create manifest directory");
+    let target = directory.path().join("relay-manifest.json");
+    let link = directory.path().join("relay-manifest.link");
+    std::fs::write(
+        &target,
+        format!(
+            r#"{{"identity":{{"ed25519_private_key_hex":"{}"}}}}"#,
+            "11".repeat(32)
+        ),
+    )
+    .expect("write manifest");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
+        .expect("set group-readable permissions");
+    let mut policy = HandshakePolicy {
+        descriptor_manifest_path: Some(target.clone()),
+        ..HandshakePolicy::default()
+    };
+    let error = policy
+        .manifest_secrets()
+        .expect_err("group-readable manifest must fail closed");
+    assert!(
+        matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("group or other")),
+        "unexpected error: {error:?}"
+    );
+
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+        .expect("protect manifest");
+    symlink(&target, &link).expect("create manifest symlink");
+    policy.descriptor_manifest_path = Some(link);
+    let error = policy
+        .manifest_secrets()
+        .expect_err("manifest symlink must fail closed");
+    assert!(
+        matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("regular file")),
         "unexpected error: {error:?}"
     );
 }
@@ -257,26 +412,56 @@ fn certificate_issuer_fields_are_length_checked_before_hex_decode() {
 #[test]
 fn handshake_validation_enforces_producer_collection_limit() {
     let mut policy = HandshakePolicy {
-        kem: std::iter::repeat_with(|| KemPolicyEntry {
-            id: "ml-kem-768".to_string(),
-            required: true,
+        grease: std::iter::repeat_with(|| GreasePolicyEntry {
+            typ: 0x7F10,
+            value_hex: String::new(),
         })
         .take(RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1)
         .collect(),
         ..HandshakePolicy::default()
     };
-    policy
+    let error = policy
         .validate()
-        .expect("producer collection at exact limit must validate");
-    policy.kem.push(KemPolicyEntry {
-        id: "ml-kem-768".to_string(),
-        required: true,
+        .expect_err("wire semantics must reject an aggregate above the capability limit");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("capability vector")),
+        "unexpected error: {error:?}"
+    );
+    policy.grease.push(GreasePolicyEntry {
+        typ: 0x7F10,
+        value_hex: String::new(),
     });
     let error = policy
         .validate()
         .expect_err("producer list limit + 1 must fail");
     assert!(
         matches!(error, ConfigError::Handshake(ref message) if message.contains("first-release limit")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn handshake_validation_bounds_worst_case_relay_capability_vector() {
+    // The canonical worst-case v1 response occupies 73 bytes before GREASE:
+    // KEM, signature, descriptor, role, padding, constant-rate, and two suites.
+    // One GREASE TLV adds a four-byte header, leaving 4,019 value bytes.
+    let mut policy = HandshakePolicy {
+        grease: vec![GreasePolicyEntry {
+            typ: 0x7F10,
+            value_hex: "aa".repeat(4_019),
+        }],
+        ..HandshakePolicy::default()
+    };
+    policy
+        .validate()
+        .expect("capability vector at the exact wire limit must validate");
+
+    policy.grease[0].value_hex.push_str("aa");
+    let error = policy
+        .validate()
+        .expect_err("capability vector one byte above the wire limit must fail");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message)
+            if message.contains("4097 bytes") && message.contains("4096 bytes")),
         "unexpected error: {error:?}"
     );
 }
@@ -370,6 +555,32 @@ fn manifest_requires_complete_ml_kem_pair() {
     }
 }
 #[test]
+fn manifest_secret_debug_is_redacted_and_private_material_can_be_cleared() {
+    let mut ml_kem = MlKemKeys {
+        public: vec![1, 2, 3],
+        private: vec![222; 4],
+    };
+    let rendered = format!("{ml_kem:?}");
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("222"));
+    ml_kem.clear_private_material();
+    assert_eq!(ml_kem.private, vec![0; 4]);
+
+    let mut secrets = ManifestSecrets {
+        identity_private_key: Some([171; 32]),
+        ml_kem_private_key: Some(vec![205; 4]),
+        ml_kem_public_key: Some(vec![7; 5]),
+    };
+    let rendered = format!("{secrets:?}");
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("171"));
+    assert!(!rendered.contains("205"));
+    secrets.clear_private_material();
+    assert_eq!(secrets.identity_private_key, Some([0; 32]));
+    assert_eq!(secrets.ml_kem_private_key, Some(vec![0; 4]));
+    assert_eq!(secrets.ml_kem_public_key, Some(vec![7; 5]));
+}
+#[test]
 fn load_self_signed_config() {
     let json = config_fixture!("self_signed.json");
     let path = write_config(json);
@@ -419,48 +630,43 @@ fn assert_vpn_config_error(config_json: &str, expected: &str) {
 }
 #[test]
 fn vpn_requires_exit_role_and_persistent_transport_trust() {
-    let helper_secret = "aa".repeat(32);
-    let entry = format!(
-        r#"{{
+    let entry = r#"{
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
-                "vpn": {{
+                "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
-                }}
-            }}"#
-    );
-    assert_vpn_config_error(&entry, "relay mode Exit");
-    let missing_tls = format!(
-        r#"{{
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
+                }
+            }"#;
+    assert_vpn_config_error(entry, "relay mode Exit");
+    let missing_tls = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
-                "vpn": {{
+                "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
-                }}
-            }}"#
-    );
-    assert_vpn_config_error(&missing_tls, "persistent tls.certificate_path");
-    let missing_certificate = format!(
-        r#"{{
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
+                }
+            }"#;
+    assert_vpn_config_error(missing_tls, "persistent tls.certificate_path");
+    let missing_certificate = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
-                "tls": {{
+                "tls": {
                     "certificate_path": "/run/secrets/relay-cert.pem",
                     "private_key_path": "/run/secrets/relay-key.pem"
-                }},
-                "vpn": {{
+                },
+                "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
-                }}
-            }}"#
-    );
-    assert_vpn_config_error(&missing_certificate, "verified handshake.certificate");
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
+                }
+            }"#;
+    assert_vpn_config_error(missing_certificate, "verified handshake.certificate");
 }
 #[test]
 fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
-    let helper_secret = "aa".repeat(32);
     let issuer_mldsa = "bb".repeat(MlDsaSuite::MlDsa65.public_key_len());
     let certificate = format!(
         r#"{{
@@ -481,7 +687,8 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                 "handshake": {{ "certificate": {certificate} }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#
     );
@@ -495,15 +702,15 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                     "private_key_path": "/run/secrets/relay-key.pem"
                 }},
                 "handshake": {{
-                    "identity_private_key_hex": "{}",
+                    "descriptor_manifest_path": "/run/secrets/relay-descriptor-manifest.json",
                     "certificate": {certificate}
                 }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#,
-        "dd".repeat(32),
     );
     assert_vpn_config_error(&missing_directory, "authenticated guard_directory");
     let permissive_directory = format!(
@@ -515,7 +722,7 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                     "private_key_path": "/run/secrets/relay-key.pem"
                 }},
                 "handshake": {{
-                    "identity_private_key_hex": "{}",
+                    "descriptor_manifest_path": "/run/secrets/relay-descriptor-manifest.json",
                     "certificate": {certificate}
                 }},
                 "guard_directory": {{
@@ -525,10 +732,10 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                 }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_hex": "{helper_secret}"
+                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#,
-        "dd".repeat(32),
         "ee".repeat(32),
     );
     assert_vpn_config_error(
@@ -715,6 +922,38 @@ fn exit_routing_validation_rejects_plain_http() {
         }
         other => panic!("unexpected error {other:?}"),
     }
+}
+#[test]
+fn exit_routing_validation_requires_bounded_canonical_gar_categories() {
+    assert!(is_canonical_gar_category_v1("stream.norito.read_only"));
+    assert!(!is_canonical_gar_category_v1("Stream.Norito.ReadOnly"));
+
+    let mut routing = ExitRoutingConfig {
+        norito_stream: Some(NoritoStreamRoutingConfig {
+            torii_ws_url: "wss://localhost:8080/ws".into(),
+            connect_timeout_millis: 0,
+            padding_target_millis: 0,
+            gar_category_read_only: Some("Stream.Norito.ReadOnly".into()),
+            gar_category_authenticated: None,
+            spool_dir: None,
+            route_refresh_secs: 0,
+        }),
+        ..ExitRoutingConfig::default()
+    };
+    let error = routing.validate().expect_err("mixed-case label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
+
+    routing
+        .norito_stream
+        .as_mut()
+        .expect("route retained")
+        .gar_category_read_only = Some("a".repeat(GAR_CATEGORY_MAX_BYTES_V1 + 1));
+    let error = routing.validate().expect_err("oversized label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
 }
 #[test]
 fn exit_routing_validation_rejects_kaigi_plain_http() {
@@ -1171,6 +1410,54 @@ fn rejects_unknown_kem_identifier() {
     }
 }
 #[test]
+fn kem_zero_wire_id_is_ml_kem_512_and_classic_alias_is_rejected() {
+    assert_eq!(
+        parse_kem_id("ml-kem-512"),
+        Some(capability::KemId::MlKem512)
+    );
+    assert_eq!(capability::KemId::MlKem512.code(), 0x00);
+    assert_eq!(
+        capability::KemId::from_code(0x00),
+        Some(capability::KemId::MlKem512)
+    );
+    assert_eq!(capability::KemId::MlKem512.to_string(), "ml-kem-512");
+    assert_eq!(parse_kem_id("classic"), None);
+}
+#[test]
+fn only_dilithium3_is_accepted_as_a_transcript_signature() {
+    assert_eq!(
+        parse_signature_id("dilithium3"),
+        Some(capability::SignatureId::Dilithium3)
+    );
+    assert_eq!(capability::SignatureId::Dilithium3.code(), 0x01);
+    assert_eq!(
+        capability::SignatureId::from_code(0x01),
+        Some(capability::SignatureId::Dilithium3)
+    );
+    assert_eq!(capability::SignatureId::from_code(0x00), None);
+    assert_eq!(capability::SignatureId::from_code(0x02), None);
+    assert_eq!(parse_signature_id("ed25519"), None);
+    assert_eq!(parse_signature_id("falcon512"), None);
+}
+#[test]
+fn handshake_policy_rejects_duplicate_algorithm_identifiers() {
+    let mut duplicate_kem = HandshakePolicy::default();
+    duplicate_kem.kem.push(duplicate_kem.kem[0].clone());
+    assert!(matches!(
+        duplicate_kem.validate(),
+        Err(ConfigError::Handshake(message)) if message.contains("duplicate KEM identifier")
+    ));
+
+    let mut duplicate_signature = HandshakePolicy::default();
+    duplicate_signature
+        .signatures
+        .push(duplicate_signature.signatures[0].clone());
+    assert!(matches!(
+        duplicate_signature.validate(),
+        Err(ConfigError::Handshake(message)) if message.contains("duplicate signature identifier")
+    ));
+}
+#[test]
 fn rejects_oversized_handshake_grease_value() {
     let value_hex = "aa".repeat(usize::from(u16::MAX) + 1);
     let json = format!(
@@ -1203,16 +1490,10 @@ fn pow_defaults_populate_missing_fields() {
     assert_eq!(cfg.pow_config().min_ticket_ttl_secs, 30);
 }
 #[test]
-fn rejects_identity_private_key_with_wrong_length() {
+fn rejects_removed_inline_identity_private_key_field() {
     let json = config_fixture!("short_identity_key.json");
     let path = write_config(json);
-    let err = RelayConfig::load(path).expect_err("config should fail");
-    match err {
-        ConfigError::Handshake(message) => {
-            assert!(message.contains("identity_private_key_hex"));
-        }
-        other => panic!("unexpected error variant: {other:?}"),
-    }
+    RelayConfig::load(path).expect_err("removed private-key field must be unknown");
 }
 #[test]
 fn custom_congestion_config_validates() {
@@ -1264,6 +1545,7 @@ fn compliance_requires_log_path_when_enabled() {
 #[test]
 fn compliance_salt_decodes() {
     let salt_hex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+    let salt_file = write_manifest(salt_hex);
     let json = format!(
         r#"{{
                 "mode": "Entry",
@@ -1271,12 +1553,13 @@ fn compliance_salt_decodes() {
                 "compliance": {{
                     "enable": true,
                     "log_path": "/tmp/logger.jsonl",
-                    "hash_salt_hex": "{salt_hex}",
+                    "hash_salt_path": "{}",
                     "max_log_bytes": 123456,
                     "max_backup_files": 3,
                     "pipeline_spool_dir": "/tmp/spool"
                 }}
-            }}"#
+            }}"#,
+        salt_file.path().display()
     );
     let path = write_config(&json);
     let cfg = RelayConfig::load(path).expect("load config");
@@ -1296,6 +1579,82 @@ fn compliance_salt_decodes() {
             .to_string(),
         "/tmp/spool"
     );
+}
+#[test]
+fn compliance_enabled_requires_private_salt_path_and_debug_redacts_it() {
+    let mut config = ComplianceConfig {
+        enable: true,
+        log_path: Some("/var/log/soranet/compliance.jsonl".into()),
+        ..ComplianceConfig::default()
+    };
+    let error = config
+        .apply_defaults()
+        .expect_err("enumerable unsalted endpoint hashes must fail closed");
+    assert!(
+        matches!(error, ConfigError::Compliance(message) if message.contains("hash_salt_path"))
+    );
+
+    config.hash_salt_path = Some("/run/secrets/compliance-hash-salt.hex".into());
+    let rendered = format!("{config:?}");
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("compliance-hash-salt.hex"));
+}
+#[test]
+fn compliance_rejects_retired_inline_hash_salt() {
+    let json = r#"{
+        "mode": "Entry",
+        "listen": "127.0.0.1:0",
+        "compliance": {
+            "enable": false,
+            "hash_salt_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+    }"#;
+    let path = write_config(json);
+    RelayConfig::load(path).expect_err("inline compliance secrets must not be accepted");
+}
+#[cfg(unix)]
+#[test]
+fn compliance_salt_rejects_permissions_symlinks_and_noncanonical_encoding() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let canonical = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+    let salt_file = write_manifest(canonical);
+    let mut config = ComplianceConfig {
+        hash_salt_path: Some(salt_file.path().to_path_buf()),
+        ..ComplianceConfig::default()
+    };
+    assert_eq!(
+        config.hash_salt_bytes().expect("private salt"),
+        Some(<[u8; 32]>::from_hex(canonical).expect("canonical salt"))
+    );
+    std::fs::set_permissions(salt_file.path(), std::fs::Permissions::from_mode(0o640))
+        .expect("make salt group-readable");
+    assert!(config.hash_salt_bytes().is_err());
+    std::fs::set_permissions(salt_file.path(), std::fs::Permissions::from_mode(0o600))
+        .expect("restore private salt permissions");
+
+    let link_path = salt_file.path().with_extension("link");
+    symlink(salt_file.path(), &link_path).expect("create salt symlink");
+    config.hash_salt_path = Some(link_path);
+    assert!(config.hash_salt_bytes().is_err());
+
+    let uppercase = write_manifest(&canonical.to_ascii_uppercase());
+    config.hash_salt_path = Some(uppercase.path().to_path_buf());
+    let error = config
+        .hash_salt_bytes()
+        .expect_err("uppercase salt encoding is not canonical");
+    assert!(matches!(error, ConfigError::Compliance(message) if message.contains("lowercase")));
+
+    for degenerate in ["00".repeat(32), "ab".repeat(32)] {
+        let file = write_manifest(&degenerate);
+        config.hash_salt_path = Some(file.path().to_path_buf());
+        let error = config
+            .hash_salt_bytes()
+            .expect_err("degenerate salt key must fail closed");
+        assert!(
+            matches!(error, ConfigError::Compliance(message) if message.contains("degenerate"))
+        );
+    }
 }
 #[test]
 fn identity_manifest_is_loaded() {
@@ -1378,11 +1737,11 @@ fn deploy_sample_config_validates() {
             .to_string(),
         "/var/log/soranet/relay_compliance.jsonl"
     );
-    assert!(
-        cfg.compliance_config()
-            .hash_salt_bytes()
-            .expect("salt bytes")
-            .is_some()
+    assert_eq!(
+        cfg.compliance_config().hash_salt_path.as_deref(),
+        Some(Path::new(
+            "/etc/soranet/relay/secrets/compliance-hash-salt.hex"
+        ))
     );
     assert_eq!(cfg.compliance_config().max_log_bytes, 67_108_864);
     assert_eq!(cfg.compliance_config().max_backup_files, 7);
@@ -1613,12 +1972,27 @@ fn privacy_config_validates_force_flush_ordering() {
         other => panic!("unexpected error {other:?}"),
     }
 }
+
+#[test]
+fn privacy_config_rejects_zero_force_flush_window() {
+    let mut config = PrivacyTelemetryConfig {
+        flush_delay_buckets: 0,
+        force_flush_buckets: 0,
+        ..PrivacyTelemetryConfig::default()
+    };
+    assert!(matches!(
+        config.apply_defaults(),
+        Err(ConfigError::Privacy(message))
+            if message == "privacy.force_flush_buckets must be greater than zero"
+    ));
+}
 #[test]
 fn privacy_config_enforces_first_release_memory_limits() {
     let mut exact = PrivacyTelemetryConfig {
         flush_delay_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
         force_flush_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
         max_completed_buckets: PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+        expected_shares: PRIVACY_MAX_EXPECTED_SHARES_V1,
         event_buffer_capacity: PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1,
         ..PrivacyTelemetryConfig::default()
     };
@@ -1634,6 +2008,12 @@ fn privacy_config_enforces_first_release_memory_limits() {
     assert!(matches!(
         overflow.apply_defaults(),
         Err(ConfigError::Privacy(message)) if message.contains("event_buffer_capacity")
+    ));
+    let mut overflow = exact.clone();
+    overflow.expected_shares = PRIVACY_MAX_EXPECTED_SHARES_V1 + 1;
+    assert!(matches!(
+        overflow.apply_defaults(),
+        Err(ConfigError::Privacy(message)) if message.contains("expected_shares")
     ));
     let mut overflow = exact;
     overflow.force_flush_buckets = PRIVACY_MAX_OPEN_BUCKETS_V1 + 1;
@@ -1682,41 +2062,32 @@ fn vpn_dns_override_rejects_non_ip() {
 }
 #[test]
 fn vpn_cover_ratio_allows_zero_when_enabled() {
-    let mut cfg = VpnConfig {
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.cover = VpnCoverTrafficConfig {
         enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        cover: VpnCoverTrafficConfig {
-            enabled: true,
-            cover_to_data_per_mille: 0,
-            heartbeat_ms: 10,
-            max_cover_burst: 1,
-            max_jitter_millis: 1,
-        },
-        ..VpnConfig::default()
+        cover_to_data_per_mille: 0,
+        heartbeat_ms: 10,
+        max_cover_burst: 1,
+        max_jitter_millis: 1,
     };
     cfg.validate().expect("vpn config should validate");
     assert_eq!(cfg.cover.cover_to_data_per_mille, 0);
 }
 #[test]
-fn vpn_helper_ticket_secret_normalizes_hex() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some(format!("0X{}", "AB".repeat(32))),
-        ..VpnConfig::default()
-    };
+fn vpn_helper_ticket_secret_loads_private_file() {
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
     cfg.validate().expect("vpn config should validate");
-    assert_eq!(cfg.helper_ticket_secret_hex, Some("ab".repeat(32)));
-    assert_eq!(cfg.helper_ticket_secret_bytes(), Some([0xAB; 32]));
+    assert_eq!(
+        cfg.try_helper_ticket_secret_bytes()
+            .expect("read helper secret"),
+        Some([0xAB; 32])
+    );
 }
 #[test]
 fn vpn_helper_ticket_replay_store_defaults_are_mandatory() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        helper_ticket_replay_store_capacity: 0,
-        helper_ticket_replay_store_path: PathBuf::new(),
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.helper_ticket_replay_store_capacity = 0;
+    cfg.helper_ticket_replay_store_path = PathBuf::new();
     cfg.validate().expect("VPN replay-store defaults validate");
     assert_eq!(
         cfg.helper_ticket_replay_store_capacity,
@@ -1729,15 +2100,10 @@ fn vpn_helper_ticket_replay_store_defaults_are_mandatory() {
 }
 #[test]
 fn vpn_helper_ticket_replay_store_preserves_operator_settings() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        helper_ticket_replay_store_capacity: 32_768,
-        helper_ticket_replay_store_path: PathBuf::from(
-            "/var/lib/soranet/vpn-helper-replays.norito",
-        ),
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.helper_ticket_replay_store_capacity = 32_768;
+    cfg.helper_ticket_replay_store_path =
+        PathBuf::from("/var/lib/soranet/vpn-helper-replays.norito");
     cfg.validate().expect("custom VPN replay store validates");
     assert_eq!(cfg.helper_ticket_replay_store_capacity, 32_768);
     assert_eq!(
@@ -1766,79 +2132,128 @@ fn vpn_helper_ticket_replay_capacity_enforces_first_release_ceiling() {
     ));
 }
 #[test]
-fn vpn_helper_ticket_secret_rejects_short_hex() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(16)),
+fn vpn_helper_ticket_secret_rejects_short_file() {
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create short VPN secret");
+    std::fs::write(file.path(), "ab".repeat(16)).expect("write short VPN secret");
+    let cfg = VpnConfig {
+        helper_ticket_secret_path: Some(file.path().to_path_buf()),
         ..VpnConfig::default()
     };
     let err = cfg
-        .validate()
-        .expect_err("expected helper ticket secret validation failure");
-    match err {
-        ConfigError::Vpn(message) => {
-            assert!(
-                message.contains("helper_ticket_secret_hex"),
-                "unexpected vpn helper ticket error: {message}"
-            );
-        }
-        other => panic!("unexpected error {other:?}"),
+        .try_helper_ticket_secret_bytes()
+        .expect_err("short helper ticket secret must fail");
+    assert!(
+        matches!(err, ConfigError::Vpn(message) if message.contains("64 lowercase hexadecimal"))
+    );
+}
+#[test]
+fn vpn_shared_secrets_require_canonical_nonzero_encoding() {
+    for (contents, expected) in [
+        ("AB".repeat(32), "lowercase"),
+        (format!("{}\n", "ab".repeat(32)), "no newline"),
+        ("00".repeat(32), "all-zero"),
+    ] {
+        let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+            .expect("create noncanonical VPN secret");
+        std::fs::write(file.path(), contents).expect("write noncanonical VPN secret");
+        let config = VpnConfig {
+            helper_ticket_secret_path: Some(file.path().to_path_buf()),
+            ..VpnConfig::default()
+        };
+        let error = config
+            .try_helper_ticket_secret_bytes()
+            .expect_err("noncanonical VPN secret must fail closed");
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for {expected}: {error}"
+        );
+    }
+}
+#[test]
+fn vpn_rejects_retired_inline_secrets() {
+    for field in ["helper_ticket_secret_hex", "backend_bootstrap_secret_hex"] {
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "vpn": {{ "{field}": "{}" }}
+            }}"#,
+            "ab".repeat(32)
+        );
+        let path = write_config(&json);
+        RelayConfig::load(path).expect_err("removed inline VPN secret field must be unknown");
     }
 }
 #[test]
 fn vpn_backend_endpoint_normalizes_unix_endpoint() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        backend_endpoint: Some(" unix:/tmp/sora-vpn-backend.sock ".to_string()),
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.backend_endpoint = Some(" unix:/run/sora-vpn-backend.sock ".to_string());
     cfg.validate().expect("vpn config should validate");
     assert_eq!(
         cfg.backend_endpoint,
-        Some("unix:/tmp/sora-vpn-backend.sock".to_string())
+        Some("unix:/run/sora-vpn-backend.sock".to_string())
     );
     assert_eq!(
         cfg.backend_endpoint(),
         Some(VpnBackendEndpoint::Unix(PathBuf::from(
-            "/tmp/sora-vpn-backend.sock"
+            "/run/sora-vpn-backend.sock"
         )))
     );
 }
 #[test]
-fn vpn_backend_endpoint_requires_tcp_secret() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        backend_endpoint: Some("tcp://127.0.0.1:19090".to_string()),
-        ..VpnConfig::default()
-    };
+fn vpn_backend_endpoint_requires_secret_for_unix_and_tcp() {
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.backend_bootstrap_secret_path = None;
+    let unix_error = cfg
+        .validate()
+        .expect_err("Unix endpoint must require bootstrap authentication");
+    assert!(
+        matches!(unix_error, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_path"))
+    );
+    cfg.backend_endpoint = Some("tcp://127.0.0.1:19090".to_string());
     let err = cfg
         .validate()
         .expect_err("expected tcp bootstrap secret validation failure");
     assert!(
-        matches!(err, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_hex"))
+        matches!(err, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_path"))
     );
-    cfg.backend_bootstrap_secret_hex = Some("cd".repeat(32));
+    let bootstrap_secret = write_vpn_secret(0xCD);
+    cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
     cfg.validate().expect("tcp endpoint with secret");
     assert_eq!(
         cfg.backend_endpoint(),
         Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
     );
-    assert_eq!(cfg.backend_bootstrap_secret_bytes(), Some([0xCD; 32]));
+    assert_eq!(
+        cfg.try_backend_bootstrap_secret_bytes()
+            .expect("read bootstrap secret"),
+        Some([0xCD; 32])
+    );
 }
 #[test]
-fn vpn_fallible_accessors_decode_valid_normalized_values() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some(format!("0X{}", "AB".repeat(32))),
-        backend_endpoint: Some(" tcp://127.0.0.1:19090 ".to_string()),
-        backend_bootstrap_secret_hex: Some(format!("0X{}", "CD".repeat(32))),
-        billing: VpnBillingConfig {
-            meter_hash_hex: "ef".repeat(32),
-            ..VpnBillingConfig::default()
-        },
-        ..VpnConfig::default()
+fn vpn_backend_tcp_endpoint_rejects_non_loopback_transport() {
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let bootstrap_secret = write_vpn_secret(0xCD);
+    cfg.backend_endpoint = Some("tcp://192.0.2.1:19090".to_string());
+    cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
+    let err = cfg
+        .validate()
+        .expect_err("remote TCP backend must fail closed");
+    assert!(
+        matches!(&err, ConfigError::Vpn(message) if message.contains("loopback")),
+        "unexpected remote backend error: {err:?}"
+    );
+}
+#[test]
+fn vpn_fallible_accessors_decode_valid_private_files() {
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let bootstrap_secret = write_vpn_secret(0xCD);
+    cfg.backend_endpoint = Some(" tcp://127.0.0.1:19090 ".to_string());
+    cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
+    cfg.billing = VpnBillingConfig {
+        meter_hash_hex: "ef".repeat(32),
+        ..VpnBillingConfig::default()
     };
     cfg.validate().expect("vpn config validates");
     assert_eq!(cfg.try_meter_hash_bytes().expect("meter hash"), [0xEF; 32]);
@@ -1860,14 +2275,18 @@ fn vpn_fallible_accessors_decode_valid_normalized_values() {
 }
 #[test]
 fn vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic() {
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create invalid helper secret");
+    std::fs::write(file.path(), "not-hex").expect("write invalid helper secret");
     let cfg = VpnConfig {
         enabled: true,
-        helper_ticket_secret_hex: Some("not-hex".to_string()),
+        helper_ticket_secret_path: Some(file.path().to_path_buf()),
+        backend_bootstrap_secret_path: Some(file.path().to_path_buf()),
         ..VpnConfig::default()
     };
     match VpnOverlay::try_from_config(cfg) {
         Err(ConfigError::Vpn(message)) => assert!(
-            message.contains("vpn.helper_ticket_secret_hex"),
+            message.contains("64 lowercase hexadecimal"),
             "unexpected vpn config error: {message}"
         ),
         other => panic!("expected vpn config error, got {other:?}"),
@@ -1875,12 +2294,8 @@ fn vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic() {
 }
 #[test]
 fn vpn_backend_endpoint_rejects_invalid_endpoint() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        backend_endpoint: Some("not-a-socket".to_string()),
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.backend_endpoint = Some("not-a-socket".to_string());
     let err = cfg
         .validate()
         .expect_err("expected backend endpoint validation failure");
@@ -1896,12 +2311,8 @@ fn vpn_backend_endpoint_rejects_invalid_endpoint() {
 }
 #[test]
 fn vpn_receipt_spool_dir_preserves_operator_path() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        receipt_spool_dir: Some(PathBuf::from("/var/spool/soranet/vpn-receipts")),
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.receipt_spool_dir = Some(PathBuf::from("/var/spool/soranet/vpn-receipts"));
     cfg.validate().expect("vpn config should validate");
     assert_eq!(
         cfg.receipt_spool_dir.as_deref(),
@@ -1910,14 +2321,10 @@ fn vpn_receipt_spool_dir_preserves_operator_path() {
 }
 #[test]
 fn vpn_control_plane_threads_routes_and_dns() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        lease_secs: 45,
-        helper_ticket_secret_hex: Some("ab".repeat(32)),
-        route_push: vec!["10.0.0.0/24".to_string()],
-        dns_overrides: vec!["1.1.1.1".to_string()],
-        ..VpnConfig::default()
-    };
+    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    cfg.lease_secs = 45;
+    cfg.route_push = vec!["10.0.0.0/24".to_string()];
+    cfg.dns_overrides = vec!["1.1.1.1".to_string()];
     cfg.validate().expect("vpn config validates");
     let overlay = VpnOverlay::from_config(cfg);
     let entry_guard = [0xAA; 32];

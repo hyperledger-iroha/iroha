@@ -7,8 +7,9 @@ use crate::SessionKey;
 use aead::{AeadInOut, KeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use hkdf::Hkdf;
+use parking_lot::Mutex;
 use sha2::Sha256;
-use std::fmt;
+use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 mod io;
@@ -26,8 +27,9 @@ const SESSION_KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const KDF_SALT: &[u8] = b"iroha.soranet.record.hkdf-sha256.v1";
 const KDF_INFO: &[u8] = b"iroha.soranet.record.chacha20poly1305.key.v1";
+const MAX_STREAM_CONTEXTS_V1: usize = 65_536;
 /// Endpoint role used to assign unambiguous wire directions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RecordEndpoint {
     /// The endpoint that initiated the `SoraNet` connection.
@@ -36,7 +38,7 @@ pub enum RecordEndpoint {
     Relay = 1,
 }
 /// QUIC stream directionality committed into record-key derivation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RecordStreamKind {
     /// A bidirectional QUIC stream.
@@ -45,7 +47,7 @@ pub enum RecordStreamKind {
     Unidirectional = 1,
 }
 /// Stable QUIC stream identity used for per-stream key separation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RecordStreamContext {
     initiator: RecordEndpoint,
     kind: RecordStreamKind,
@@ -111,6 +113,18 @@ pub enum RecordError {
     /// Record sequence space is exhausted
     #[error("record sequence space is exhausted")]
     SequenceExhausted,
+    /// A stream context was already used to derive this session's record keys.
+    #[error("record stream context was already opened for this session")]
+    StreamContextReused,
+    /// The per-session stream-key registry reached its first-release limit.
+    #[error("record stream context capacity {maximum} is exhausted")]
+    StreamContextCapacity {
+        /// Maximum distinct stream contexts supported by one session.
+        maximum: usize,
+    },
+    /// The stream-key registry could not reserve another entry.
+    #[error("record stream context registry allocation failed")]
+    StreamContextAllocation,
     /// Record body length {actual} does not match the expected length {expected}
     #[error("record body length {actual} does not match the expected length {expected}")]
     LengthMismatch {
@@ -136,6 +150,7 @@ enum WireDirection {
 pub struct RecordLayer {
     endpoint: RecordEndpoint,
     session_key: Zeroizing<[u8; SESSION_KEY_LEN]>,
+    used_streams: Mutex<HashSet<RecordStreamContext>>,
 }
 impl fmt::Debug for RecordLayer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -164,14 +179,34 @@ impl RecordLayer {
         Ok(Self {
             endpoint,
             session_key: key,
+            used_streams: Mutex::new(HashSet::new()),
         })
     }
     /// Derive independent sending and receiving state for one QUIC stream.
     ///
     /// # Errors
     ///
-    /// Returns [`RecordError::KeyDerivation`] if HKDF cannot produce a key.
+    /// Returns [`RecordError::StreamContextReused`] if this context already
+    /// consumed the session's nonce space, a capacity/allocation error if the
+    /// bounded uniqueness registry cannot retain it, or
+    /// [`RecordError::KeyDerivation`] if HKDF cannot produce a key.
     pub fn stream(&self, context: RecordStreamContext) -> Result<DuplexRecordLayer, RecordError> {
+        {
+            let mut used_streams = self.used_streams.lock();
+            if used_streams.contains(&context) {
+                return Err(RecordError::StreamContextReused);
+            }
+            if used_streams.len() >= MAX_STREAM_CONTEXTS_V1 {
+                return Err(RecordError::StreamContextCapacity {
+                    maximum: MAX_STREAM_CONTEXTS_V1,
+                });
+            }
+            used_streams
+                .try_reserve(1)
+                .map_err(|_| RecordError::StreamContextAllocation)?;
+            let inserted = used_streams.insert(context);
+            debug_assert!(inserted, "stream registry changed while exclusively locked");
+        }
         let (send_direction, receive_direction) = match self.endpoint {
             RecordEndpoint::Client => (WireDirection::ClientToRelay, WireDirection::RelayToClient),
             RecordEndpoint::Relay => (WireDirection::RelayToClient, WireDirection::ClientToRelay),
@@ -492,6 +527,24 @@ mod tests {
             relay_first.opener.open(&reflection),
             Err(RecordError::Authentication)
         ));
+    }
+    #[test]
+    fn stream_context_cannot_rederive_a_used_key_and_nonce_space() {
+        let (client, _) = layers();
+        let context =
+            RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 7);
+        client.stream(context).expect("first stream derivation");
+        assert!(matches!(
+            client.stream(context),
+            Err(RecordError::StreamContextReused)
+        ));
+        client
+            .stream(RecordStreamContext::new(
+                RecordEndpoint::Client,
+                RecordStreamKind::Bidirectional,
+                8,
+            ))
+            .expect("a distinct stream context remains usable");
     }
     #[test]
     fn tampering_and_replay_fail_closed_without_advancing_state() {

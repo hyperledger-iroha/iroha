@@ -56,6 +56,8 @@ fn valid_report() -> (Vec<u8>, CanonicalReportV4) {
     let digest = "11".repeat(32);
     let candidate = candidate();
     let qualification = hex(&candidate["recursive-step-two-qualification-v4.norito"].sha256);
+    let internal_validation =
+        hex(&candidate[KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1].sha256);
     let artifacts = REPORT_ARTIFACTS
         .iter()
         .enumerate()
@@ -78,6 +80,7 @@ fn valid_report() -> (Vec<u8>, CanonicalReportV4) {
         candidate_sha256: digest.clone(),
         qualification_receipt_sha256: qualification,
         qualified_candidate_sha256: digest.clone(),
+        internal_validation_receipt_sha256: internal_validation,
         promotion_record_sha256: hex(&promotion),
         release_policy_sha256: hex(&policy),
         authenticated_source_seal_projection_sha256: digest.clone(),
@@ -142,8 +145,12 @@ fn temporary_name_grammar_is_exact() {
 }
 
 #[test]
-fn exact_inventory_allows_only_sixteen_to_one_temp_to_seventeen() {
+fn exact_inventory_allows_only_seventeen_to_one_temp_to_eighteen() {
     let initial = candidate();
+    assert_eq!(initial.len(), 17);
+    assert!(
+        initial.contains_key(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1)
+    );
     assert_eq!(
         classify_inventory(&initial, &initial).expect("candidate"),
         PublicationPhase::Candidate
@@ -171,6 +178,27 @@ fn exact_inventory_allows_only_sixteen_to_one_temp_to_seventeen() {
 }
 
 #[test]
+fn candidate_contract_requires_the_exact_bounded_internal_validation_receipt() {
+    let receipt = CANDIDATE_FILES
+        .iter()
+        .find(|spec| {
+            spec.name == KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1
+        })
+        .expect("internal-validation receipt is mandatory");
+    assert_eq!(
+        usize::try_from(receipt.maximum),
+        Ok(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1)
+    );
+    assert_eq!(receipt.exact_size, None);
+
+    let initial = candidate();
+    let mut missing = initial.clone();
+    missing.remove(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1);
+    assert!(classify_inventory(&missing, &missing).is_err());
+    assert!(classify_inventory(&initial, &missing).is_err());
+}
+
+#[test]
 fn inventory_rejects_every_candidate_mutation_and_existing_final() {
     let initial = candidate();
     for name in initial.keys() {
@@ -181,6 +209,13 @@ fn inventory_rejects_every_candidate_mutation_and_existing_final() {
     let mut existing_final = initial.clone();
     existing_final.insert(FINAL_NAME.to_owned(), identity(99));
     assert!(classify_inventory(&existing_final, &existing_final).is_err());
+
+    let mut substituted_receipt = initial.clone();
+    substituted_receipt
+        .get_mut(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1)
+        .expect("required receipt")
+        .sha256[0] ^= 1;
+    assert!(classify_inventory(&initial, &substituted_receipt).is_err());
 }
 
 #[test]
@@ -219,6 +254,15 @@ fn source_path_swap_and_snapshot_digest_mismatch_fail_closed() {
             _ => observed.sha256[0] ^= 1,
         }
         assert_ne!(expected, observed, "mutation {mutation}");
+        assert!(
+            !stable_candidate_identity(
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+                &expected,
+                &observed,
+            ),
+            "stable receipt identity accepted mutation {mutation}"
+        );
+        assert_eq!(stable_identity(&expected, &observed), mutation == 9);
     }
     assert_ne!(
         parse_sha256(&"11".repeat(32), "snapshot").expect("digest"),
@@ -290,6 +334,10 @@ fn report_cross_checks_exact_fields_inventory_and_digests() {
         (
             "qualified_candidate_sha256",
             expected.qualified_candidate_sha256.as_str(),
+        ),
+        (
+            "internal_validation_receipt_sha256",
+            expected.internal_validation_receipt_sha256.as_str(),
         ),
         (
             "promotion_record_sha256",

@@ -285,7 +285,7 @@ and its count-and-power assumptions must not be imported into the current
 protocol.
 
 This note gives the deductive protocol argument corresponding to
-`SumeragiV2.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
+`SumeragiV2Inductive.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
 the paper argument from its mechanization status: the lemmas below explain the
 conditional target, while `SumeragiV2Proofs.tla`, `verus_proofs.rs`, and
 `proof_coverage.json` record what is actually machine checked. A theorem is not
@@ -1696,7 +1696,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
+`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
 The separate source-sealed G-UNIT inventory contains 522 focused tests,
 including 316 `iroha_core` tests. Its 523-line
 canonical TSV has SHA-256

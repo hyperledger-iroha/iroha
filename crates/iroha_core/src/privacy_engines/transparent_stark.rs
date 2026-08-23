@@ -15,6 +15,7 @@ use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use thiserror::Error;
+use zeroize::Zeroize as _;
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
 /// `2^64 - p = 2^32 - 1`, used for division-free canonical reduction.
@@ -124,6 +125,10 @@ impl GoldilocksFieldV1 {
     /// Canonical residue as a `u64`.
     pub(crate) const fn value(self) -> u64 {
         self.0
+    }
+    /// Reliably overwrite this field element before releasing secret-bearing storage.
+    pub(crate) fn zeroize_v1(&mut self) {
+        self.0.zeroize();
     }
     /// Field addition.
     pub(crate) fn add(self, rhs: Self) -> Self {
@@ -260,6 +265,12 @@ impl GoldilocksFp4V1 {
         self.coefficients
             .iter()
             .all(|coefficient| coefficient.0 < GOLDILOCKS_MODULUS_V1)
+    }
+    /// Reliably overwrite every coefficient before releasing secret-bearing storage.
+    pub(crate) fn zeroize_v1(&mut self) {
+        for coefficient in &mut self.coefficients {
+            coefficient.zeroize_v1();
+        }
     }
     /// Field addition.
     pub(crate) fn add(self, rhs: Self) -> Self {
@@ -717,6 +728,12 @@ pub(crate) fn goldilocks_fp4_evaluate_coset_v1(
 pub(crate) fn goldilocks_batch_invert_v1(
     values: &mut [GoldilocksFieldV1],
 ) -> Result<(), TransparentStarkErrorV1> {
+    if values.is_empty() {
+        return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
+    if values.iter().any(|value| value.0 >= GOLDILOCKS_MODULUS_V1) {
+        return Err(TransparentStarkErrorV1::NonCanonicalField);
+    }
     let mut prefixes = Vec::new();
     prefixes
         .try_reserve_exact(values.len())
@@ -792,6 +809,12 @@ pub(crate) fn masked_trace_coefficients_with_mask_v1(
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
     if mask.is_empty() {
         return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
+    if mask
+        .iter()
+        .any(|coefficient| coefficient.0 >= GOLDILOCKS_MODULUS_V1)
+    {
+        return Err(TransparentStarkErrorV1::NonCanonicalField);
     }
     let base_size = 1_usize
         .checked_shl(u32::from(base_log_size))
@@ -872,7 +895,9 @@ impl ReplayableTraceMaskV1 {
 }
 impl Drop for ReplayableTraceMaskV1 {
     fn drop(&mut self) {
-        self.coefficients.fill(GoldilocksFieldV1::ZERO);
+        for coefficient in &mut self.coefficients {
+            coefficient.zeroize_v1();
+        }
     }
 }
 /// Sample and retain the exact mask coefficients for one replayable column.
@@ -923,7 +948,11 @@ impl Sha256MerkleTreeV1 {
         leaves: Vec<[u8; 32]>,
         node_domain: &'static [u8],
     ) -> Result<Self, TransparentStarkErrorV1> {
-        if leaves.is_empty() || !leaves.len().is_power_of_two() || node_domain.is_empty() {
+        if leaves.is_empty()
+            || !leaves.len().is_power_of_two()
+            || node_domain.is_empty()
+            || u16::try_from(node_domain.len()).is_err()
+        {
             return Err(TransparentStarkErrorV1::InvalidMerkleShape);
         }
         let mut levels = vec![leaves];
@@ -977,7 +1006,10 @@ pub(crate) fn verify_sha256_merkle_path_v1(
     path: &[[u8; 32]],
     expected_depth: usize,
 ) -> Result<(), TransparentStarkErrorV1> {
-    if node_domain.is_empty() || path.len() != expected_depth {
+    if node_domain.is_empty()
+        || u16::try_from(node_domain.len()).is_err()
+        || path.len() != expected_depth
+    {
         return Err(TransparentStarkErrorV1::InvalidMerkleShape);
     }
     for sibling in path {
@@ -1842,10 +1874,13 @@ mod tests {
         let rejected = GoldilocksFp4V1::ZERO;
         let accepted = fp4([9, 10, 11, 12]);
         let mut attempts = 0_u64;
+        let mut retry_frames = Vec::new();
         let sampled = predicate_retry
             .challenge_fp4_with_oracle_and_predicate(
                 b"deep-point",
-                |_, _, _, _| {
+                |_, label, counter, attempt| {
+                    assert_eq!(label, b"deep-point");
+                    retry_frames.push((counter, attempt));
                     attempts += 1;
                     Ok(if attempts == 1 {
                         rejected.to_be_bytes()
@@ -1857,6 +1892,7 @@ mod tests {
             )
             .expect("nonzero predicate accepts the second candidate");
         assert_eq!(attempts, 2);
+        assert_eq!(retry_frames, [(0, 0), (0, 1)]);
         assert_eq!(sampled, accepted);
         let mut direct =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
@@ -1875,10 +1911,27 @@ mod tests {
         );
         let mut predicate_exhausted =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
+        let initial_state = predicate_exhausted.state();
+        let mut exhausted_frames = Vec::new();
         assert_eq!(
-            predicate_exhausted.challenge_fp4_where(b"deep-point", |_| false),
+            predicate_exhausted.challenge_fp4_with_oracle_and_predicate(
+                b"deep-point",
+                |_, label, counter, attempt| {
+                    assert_eq!(label, b"deep-point");
+                    exhausted_frames.push((counter, attempt));
+                    Ok(rejected.to_be_bytes())
+                },
+                |candidate| candidate != GoldilocksFp4V1::ZERO,
+            ),
             Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
         );
+        assert_eq!(
+            exhausted_frames,
+            (0..MAX_FIELD_REJECTION_ATTEMPTS_V1)
+                .map(|attempt| (0, attempt))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(predicate_exhausted.state(), initial_state);
         let mut first_rng = StdRng::from_seed([0x44; 32]);
         let mut replay_rng = StdRng::from_seed([0x44; 32]);
         assert_eq!(
@@ -1997,6 +2050,10 @@ mod tests {
             Err(TransparentStarkErrorV1::InvalidDomain)
         );
         assert_eq!(
+            masked_trace_coefficients_with_mask_v1(&base, 4, &[GoldilocksFieldV1(u64::MAX)],),
+            Err(TransparentStarkErrorV1::NonCanonicalField)
+        );
+        assert_eq!(
             masked_trace_coefficients_on_coset_v1(&coefficients, 4, 4),
             Err(TransparentStarkErrorV1::InvalidDomain)
         );
@@ -2048,6 +2105,16 @@ mod tests {
         );
         assert_eq!(
             verify_sha256_merkle_path_v1(b"other", &tree.root(), leaves[3], 3, &path, 3),
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
+        );
+        let oversized_domain: &'static [u8] =
+            Box::leak(vec![0_u8; usize::from(u16::MAX) + 1].into_boxed_slice());
+        assert!(matches!(
+            Sha256MerkleTreeV1::from_leaves(vec![[0; 32]; 2], oversized_domain),
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
+        ));
+        assert_eq!(
+            verify_sha256_merkle_path_v1(oversized_domain, &tree.root(), leaves[3], 3, &path, 3,),
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
@@ -2108,6 +2175,21 @@ mod tests {
         assert_eq!(
             fri_fold_pair_v1(low, high, beta, GoldilocksFieldV1::ZERO),
             Err(TransparentStarkErrorV1::DivisionByZero)
+        );
+    }
+    #[test]
+    fn batch_inversion_rejects_empty_and_noncanonical_inputs() {
+        assert_eq!(
+            goldilocks_batch_invert_v1(&mut []),
+            Err(TransparentStarkErrorV1::InvalidDomain)
+        );
+        let mut noncanonical = [
+            GoldilocksFieldV1::ONE,
+            GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1),
+        ];
+        assert_eq!(
+            goldilocks_batch_invert_v1(&mut noncanonical),
+            Err(TransparentStarkErrorV1::NonCanonicalField)
         );
     }
     #[test]

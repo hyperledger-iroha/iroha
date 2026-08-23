@@ -1161,7 +1161,7 @@ public sealed record class ToriiVpnReceiptListResponse
 
 internal static class ToriiVpnDirectMetadata
 {
-    internal const int HelperTicketByteLength = 664;
+    internal const int HelperTicketByteLength = 696;
 
     internal static ulong RequirePositive(ulong value, string paramName)
     {

@@ -41,7 +41,7 @@ DERIVE_LINE_CEILING = 5_129
 COLUMNAR_MAX_LINE_LENGTH = 120
 DERIVE_MAX_LINE_LENGTH = 180
 COLUMNAR_SHA256 = "640e4ed77080e46d61128dae3342ccfae5cee9cc08b3e5ec26ba05c8750ef0e9"
-DERIVE_SHA256 = "b15a2a40703ff268b4e2ce728abe60abe76f5af11a9ebd448d9290e8d8b249e2"
+DERIVE_SHA256 = "099c821fcf75c8a93937444bb13d3c7a3b35685e24ca5ccdac6e7990f314fa20"
 ATTRIBUTE_HELPERS_SHA256 = (
     "c546dd7ed13e22c26b398a45cb5779f6f5e97fdd6c1e1ba7a0b1887f3f364f4c"
 )
@@ -56,7 +56,7 @@ COLUMNAR_HELPER_SURFACE_SHA256 = (
     "ae32ff076c39cc6c721ef8f244adeab11c0cbee0c6aca67ed9da293003bfd9bf"
 )
 DERIVE_HELPER_SURFACE_SHA256 = (
-    "762360143dcb2c52df9529c38f4e0115e51bb392fcef189ddca923dcd6a3bba3"
+    "75c1f4dcce25d13f507d29d9d77cd4d492f96075afe8fef439a1eb2e4c12884d"
 )
 
 COLUMNAR_HELPERS = (
@@ -102,6 +102,7 @@ DERIVE_HELPERS = (
     "fast_json_vec_field",
     "fast_json_option_field",
     "fast_json_field_parser",
+    "binary_field_value_with_default",
 )
 
 COLUMNAR_TESTS = (
@@ -690,7 +691,7 @@ def _validate(
         ("try_reserve_exact", 2, "allocation guards"),
         ("serialize_to_writer_exact", 1, "exact writer route"),
         ("encoded_payload_len", 1, "exact payload length route"),
-        ("write_len_prefixed_exact", 7, "length-prefixed exact routes"),
+        ("write_len_prefixed_exact", 5, "length-prefixed exact routes"),
         ("fn write_json_to", 4, "bounded JSON writers"),
         ("unknown_field(key.as_str())", 3, "key-bearing unknown-field diagnostics"),
         ("u8_array_len(&field.field.ty).is_some()", 3, "typed struct u8 classifiers"),

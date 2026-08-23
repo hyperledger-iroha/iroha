@@ -1,11 +1,11 @@
 // Privacy-release evidence regression tests.
 //
 // Included by `privacy_release_evidence::tests` to preserve exact libtest names.
-use iroha_primitives::json::Json;
 use super::*;
 use crate::privacy_engines::vega::{
     build_signed_vega_privacy_action_with_rng_v1, sign_prepared_vega_privacy_action_v1,
 };
+use iroha_primitives::json::Json;
 const RAYON_POOL_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_RAYON_POOL_CHILD_V1";
 fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1); 5] {
     [
@@ -17,38 +17,43 @@ fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1);
     ]
 }
 #[test]
-fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
-    for protocol_id in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-    ] {
-        let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
-        let baseline =
+fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest() {
+    let zk_ace = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    assert_eq!(
+        compiled_privacy_profile_v1(zk_ace),
+        Err(
+            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: zk_ace,
+            }
+        )
+    );
+
+    let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+    let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
+    let baseline = norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
+        &profile,
+        release_network_id_from_genesis_hash([0xa7; 32]),
+        3,
+        PrivacyTransactionIntentDigestV1::new([0x51; 32]),
+    ))
+    .expect("release context");
+    for mutate in compiled_profile_digest_mutations_v1() {
+        let mut changed = profile;
+        mutate(&mut changed);
+        let changed =
             norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
-                &profile,
+                &changed,
                 release_network_id_from_genesis_hash([0xa7; 32]),
                 3,
                 PrivacyTransactionIntentDigestV1::new([0x51; 32]),
             ))
-            .expect("release context");
-        for mutate in compiled_profile_digest_mutations_v1() {
-            let mut changed = profile;
-            mutate(&mut changed);
-            let changed =
-                norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
-                    &changed,
-                    release_network_id_from_genesis_hash([0xa7; 32]),
-                    3,
-                    PrivacyTransactionIntentDigestV1::new([0x51; 32]),
-                ))
-                .expect("changed release context");
-            assert_ne!(
-                changed,
-                baseline,
-                "{} release context omitted one compiled-profile digest",
-                protocol_id.canonical_label()
-            );
-        }
+            .expect("changed release context");
+        assert_ne!(
+            changed,
+            baseline,
+            "{} release context omitted one compiled-profile digest",
+            protocol_id.canonical_label()
+        );
     }
 }
 #[test]
@@ -1408,6 +1413,25 @@ fn jindo_release_descriptor_does_not_condition_individual_s35_challenges_on_unit
     assert!(descriptor.contains("split-challenge=uniform-nonzero-Fp-star"));
     assert!(!descriptor.contains("S35-unit"));
 }
+
+#[test]
+fn zk_ace_release_stages_fail_closed_without_an_activatable_profile() {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
+    assert!(descriptor.contains("activation=disabled"));
+    assert!(descriptor.contains("commitment-binding-ceiling=32-bits"));
+    for case_kind in PrivacyReleaseCaseKindV1::ALL {
+        assert_eq!(
+            run_privacy_release_stage_v1(protocol_id, case_kind),
+            Err(PrivacyReleaseEvidenceErrorV1 {
+                protocol_id,
+                case_kind,
+                class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+            })
+        );
+    }
+}
+
 #[test]
 #[ignore = "operator-only native proof construction for the complete Bootle/Lantern release stage"]
 fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection() {

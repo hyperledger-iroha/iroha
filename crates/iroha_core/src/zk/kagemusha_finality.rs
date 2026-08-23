@@ -815,6 +815,7 @@ mod tests {
             generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
             qualification_receipt_sha256: [0; 32],
             qualified_candidate_sha256: [0; 32],
+            internal_validation_receipt_sha256: [0; 32],
             profiles: vec![
                 profile(KagemushaPastaCycleParityV1::StepEq, 0x20),
                 profile(KagemushaPastaCycleParityV1::StepEp, 0x30),
@@ -845,6 +846,7 @@ mod tests {
                 candidate.sha256().expect("candidate digest"),
                 manifest.qualification_receipt_sha256,
             );
+        manifest.internal_validation_receipt_sha256 = [0x75; 32];
         manifest.benchmark_evidence_sha256 = [0x71; 32];
         manifest.cryptographic_review_sha256 = [0x72; 32];
         manifest.release_attestation_sha256 = [0x73; 32];

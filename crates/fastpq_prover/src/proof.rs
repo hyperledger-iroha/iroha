@@ -16,6 +16,13 @@ use iroha_crypto::Hash;
 use norito::{NoritoDeserialize, NoritoSerialize};
 /// Protocol version advertised by the V1 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
+/// First catalogue version using coherent trace/LDE roots with the bijective
+/// Goldilocks `x^7` Poseidon S-box.
+///
+/// Versions 1 and 2 used the non-permuting `x^5` S-box. Versions 3 and 4 used
+/// independently generated trace/LDE roots, so a blowup-stride AIR opening did
+/// not reach the next trace point. All four are intentionally rejected.
+const X7_PARAMS_VERSION_BASE: u16 = 5;
 /// Domain tag for permission root fallback commitments.
 const PERM_ROOT_DOMAIN: &[u8] = b"fastpq:v1:perm_root";
 /// Domain tag for transaction set hash fallback commitments.
@@ -80,7 +87,9 @@ pub struct FriRoundOpening {
     pub round: u32,
     /// Index inside the current round domain.
     pub index: u32,
-    /// Full arity-sized group opened at this round.
+    /// Multiplicative-coset values ordered as `f(x · ζ^k)` for increasing `k`.
+    ///
+    /// The final reduction may use an effective arity smaller than the configured arity.
     pub values: Vec<u64>,
     /// Folded value carried into the next round.
     pub folded_value: u64,
@@ -97,7 +106,10 @@ pub struct FriQueryOpening {
     pub rounds: Vec<FriRoundOpening>,
     /// Index inside the final FRI layer.
     pub final_index: u32,
-    /// Final FRI leaf values authenticated under the terminal root.
+    /// Complete terminal-domain evaluations authenticated under the terminal root.
+    ///
+    /// V1 stops before the terminal layer would collapse to one value, so this
+    /// vector is interpolated and checked against the reduced degree bound.
     pub final_values: Vec<u64>,
     /// Merkle authentication path for `final_values` under the terminal root.
     pub final_merkle_path: Vec<u64>,
@@ -323,12 +335,12 @@ impl Prover {
     }
 
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
+        let params_version = canonical_params_version(&self.params)
+            .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
         let permission_hashes = collect_permission_hashes(batch)?;
         let public_io = build_public_io(batch, ordering, permission_hashes);
-        let params_version = canonical_params_version(&self.params)
-            .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
         let artifact = self
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
@@ -389,6 +401,7 @@ pub fn verify_with_limits_and_semantics(
     // Bound attacker-controlled batch/proof scans before inspecting profile semantics or
     // rebuilding transcript commitments.
     enforce_verify_limits(batch, proof, limits)?;
+    validate_canonical_goldilocks_elements(proof)?;
     validate_batch_semantics(batch, semantics)?;
     verify_after_limits(batch, proof)
 }
@@ -413,7 +426,174 @@ fn verify_with_limits_raw(
     limits: VerifyLimits,
 ) -> Result<()> {
     enforce_verify_limits(batch, proof, limits)?;
+    validate_canonical_goldilocks_elements(proof)?;
     verify_after_limits(batch, proof)
+}
+
+fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
+    validate_canonical_goldilocks_roots(proof)?;
+    validate_canonical_goldilocks_transcript_scalars(proof)?;
+    validate_canonical_goldilocks_queries(proof)?;
+    validate_canonical_goldilocks_air_openings(proof)?;
+    validate_canonical_goldilocks_fri_openings(proof)
+}
+
+fn validate_canonical_goldilocks_roots(proof: &Proof) -> Result<()> {
+    ensure_canonical_goldilocks_encoding(&proof.trace_root, "trace_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.air_trace_root, "air_trace_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.air_composition_root, "air_composition_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.lookup_root, "lookup_root", &[])?;
+    for (index, root) in proof.fri_layers.iter().enumerate() {
+        ensure_canonical_goldilocks_encoding(root, "fri_layers", &[index])?;
+    }
+    for (index, hash) in proof.public_io.permission_hashes.iter().enumerate() {
+        ensure_canonical_goldilocks_encoding(hash, "public_io.permission_hashes", &[index])?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
+    ensure_canonical_goldilocks(proof.lookup_grand_product, "lookup_grand_product", &[])?;
+    ensure_canonical_goldilocks(proof.lookup_challenge, "lookup_challenge", &[])?;
+    for (index, &alpha) in proof.alphas.iter().enumerate() {
+        ensure_canonical_goldilocks(alpha, "alphas", &[index])?;
+    }
+    for (index, &beta) in proof.betas.iter().enumerate() {
+        ensure_canonical_goldilocks(beta, "betas", &[index])?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_queries(proof: &Proof) -> Result<()> {
+    for (query_index, query) in proof.queries.iter().enumerate() {
+        ensure_canonical_goldilocks(query.value, "queries.value", &[query_index])?;
+        for (value_index, &value) in query.chunk_values.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "queries.chunk_values",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in query.merkle_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "queries.merkle_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_air_openings(proof: &Proof) -> Result<()> {
+    for (query_index, opening) in proof.air_openings.iter().enumerate() {
+        for (value_index, &value) in opening.current_row.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "air_openings.current_row",
+                &[query_index, value_index],
+            )?;
+        }
+        for (value_index, &value) in opening.next_row.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "air_openings.next_row",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in opening.current_row_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.current_row_path",
+                &[query_index, path_index],
+            )?;
+        }
+        for (path_index, &sibling) in opening.next_row_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.next_row_path",
+                &[query_index, path_index],
+            )?;
+        }
+        ensure_canonical_goldilocks(
+            opening.composition_value,
+            "air_openings.composition_value",
+            &[query_index],
+        )?;
+        for (path_index, &sibling) in opening.composition_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.composition_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_fri_openings(proof: &Proof) -> Result<()> {
+    for (query_index, query) in proof.fri_queries.iter().enumerate() {
+        for (round_index, round) in query.rounds.iter().enumerate() {
+            for (value_index, &value) in round.values.iter().enumerate() {
+                ensure_canonical_goldilocks(
+                    value,
+                    "fri_queries.rounds.values",
+                    &[query_index, round_index, value_index],
+                )?;
+            }
+            ensure_canonical_goldilocks(
+                round.folded_value,
+                "fri_queries.rounds.folded_value",
+                &[query_index, round_index],
+            )?;
+            for (path_index, &sibling) in round.merkle_path.iter().enumerate() {
+                ensure_canonical_goldilocks(
+                    sibling,
+                    "fri_queries.rounds.merkle_path",
+                    &[query_index, round_index, path_index],
+                )?;
+            }
+        }
+        for (value_index, &value) in query.final_values.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "fri_queries.final_values",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in query.final_merkle_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "fri_queries.final_merkle_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_canonical_goldilocks(value: u64, context: &'static str, indices: &[usize]) -> Result<()> {
+    if value >= GOLDILOCKS_MODULUS {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context,
+            indices: indices.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_canonical_goldilocks_encoding(
+    bytes: &[u8; 32],
+    context: &'static str,
+    indices: &[usize],
+) -> Result<()> {
+    if field_norito::core::from_bytes(bytes).is_none() {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context,
+            indices: indices.to_vec(),
+        });
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -530,6 +710,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     );
     let fri_layer_lengths =
         expected_fri_layer_lengths(lde_domain_size, params.fri.arity, params.fri.max_reductions)?;
+    let terminal_degree_bound = fri_terminal_degree_bound(
+        lde_domain_size,
+        params.fri.blowup_factor,
+        params.fri.arity,
+        &fri_layer_lengths,
+    )?;
     if proof.fri_layers.len() != fri_layer_lengths.len() {
         return Err(Error::FriLayerLengthMismatch {
             expected: fri_layer_lengths.len(),
@@ -594,6 +780,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     let lde_leaf_count = leaf_count_for_values(lde_domain_size, lde_chunk_size)?;
     let lde_path_len = merkle_path_len_for_leaf_count(lde_leaf_count)?;
     let air_path_len = merkle_path_len_for_leaf_count(lde_domain_size)?;
+    let fri_domain = backend::FriDomain::from_lde_parameters(
+        params.lde_root,
+        params.lde_log_size,
+        lde_domain_size,
+        params.omega_coset,
+    )?;
     for (pos, (&expected_idx, query)) in expected_queries.iter().zip(&proof.queries).enumerate() {
         let expected_index =
             u32::try_from(expected_idx).map_err(|_| Error::QueryIndexOverflow {
@@ -684,7 +876,9 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
                 fri_layers: &proof.fri_layers,
                 betas: &proof.betas,
                 fri_layer_lengths: &fri_layer_lengths,
+                terminal_degree_bound,
                 arity: params.fri.arity,
+                domain: fri_domain,
             },
         )?;
     }
@@ -839,8 +1033,22 @@ struct FriQueryVerification<'a> {
     fri_layers: &'a [[u8; 32]],
     betas: &'a [u64],
     fri_layer_lengths: &'a [usize],
+    terminal_degree_bound: usize,
     arity: u32,
+    domain: backend::FriDomain,
 }
+
+#[derive(Clone, Copy)]
+struct FriFinalVerification<'a> {
+    query_pos: usize,
+    index: usize,
+    value: u64,
+    root: &'a [u8; 32],
+    length: usize,
+    round: usize,
+    arity: usize,
+}
+
 fn verify_fri_query_chain(
     fri_query: &FriQueryOpening,
     context: FriQueryVerification<'_>,
@@ -852,7 +1060,9 @@ fn verify_fri_query_chain(
         fri_layers,
         betas,
         fri_layer_lengths,
+        terminal_degree_bound,
         arity,
+        mut domain,
     } = context;
     let arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
     if arity == 0 {
@@ -880,19 +1090,20 @@ fn verify_fri_query_chain(
         if index >= round_len {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let leaf_index = index / arity;
-        let expected_values_len = expected_leaf_value_len(round_len, arity, leaf_index)?;
+        let round_arity = backend::fri_round_arity(round_len, arity)?;
+        let output_len = round_len / round_arity;
+        let leaf_index = index % output_len;
         if usize::try_from(opening.round).ok() != Some(round)
             || usize::try_from(opening.index).ok() != Some(index)
-            || opening.values.len() != expected_values_len
+            || opening.values.len() != round_arity
         {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let offset = index % arity;
-        if opening.values.get(offset).copied() != Some(value) {
+        let position = index / output_len;
+        if opening.values.get(position).copied() != Some(value) {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let round_leaf_count = leaf_count_for_values(round_len, arity)?;
+        let round_leaf_count = output_len;
         let round_path_len = merkle_path_len_for_leaf_count(round_leaf_count)?;
         if opening.merkle_path.len() != round_path_len {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
@@ -903,38 +1114,75 @@ fn verify_fri_query_chain(
         if !backend::verify_merkle_path(root, leaf, leaf_index, &opening.merkle_path)? {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
         }
-        let folded = fold_fri_values(&opening.values, betas[round]);
+        let folded = fold_fri_values(
+            &opening.values,
+            betas[round],
+            domain.point(leaf_index),
+            domain.coset_generator(output_len),
+        )?;
         if folded != opening.folded_value {
             return Err(Error::QueryMismatch { index: query_pos });
         }
         index = leaf_index;
         value = folded;
+        domain = domain.folded(round_arity);
     }
     let final_len = *fri_layer_lengths
         .last()
         .expect("FRI layer lengths checked non-empty");
-    if usize::try_from(fri_query.final_index).ok() != Some(index) || index >= final_len {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
-    let final_leaf_index = index / arity;
-    let final_offset = index % arity;
-    let expected_final_values_len = expected_leaf_value_len(final_len, arity, final_leaf_index)?;
-    if fri_query.final_values.len() != expected_final_values_len {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
-    if fri_query.final_values.get(final_offset).copied() != Some(value) {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
     let final_round = betas.len();
-    let final_leaf_count = leaf_count_for_values(final_len, arity)?;
+    verify_fri_final_opening(
+        fri_query,
+        FriFinalVerification {
+            query_pos,
+            index,
+            value,
+            root: &fri_layers[final_round],
+            length: final_len,
+            round: final_round,
+            arity,
+        },
+    )?;
+    if !domain.evaluations_have_degree_below(&fri_query.final_values, terminal_degree_bound)? {
+        return Err(Error::FriTerminalDegreeMismatch {
+            degree_bound: terminal_degree_bound,
+        });
+    }
+    Ok(())
+}
+
+fn verify_fri_final_opening(
+    fri_query: &FriQueryOpening,
+    context: FriFinalVerification<'_>,
+) -> Result<()> {
+    let FriFinalVerification {
+        query_pos,
+        index,
+        value,
+        root,
+        length,
+        round,
+        arity,
+    } = context;
+    if usize::try_from(fri_query.final_index).ok() != Some(index) || index >= length {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    let final_arity = backend::fri_round_arity(length, arity)?;
+    let final_leaf_count = length / final_arity;
+    let final_leaf_index = index % final_leaf_count;
+    let final_position = index / final_leaf_count;
+    if fri_query.final_values.len() != final_arity
+        || fri_query.final_values.get(final_position).copied() != Some(value)
+    {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
     let final_path_len = merkle_path_len_for_leaf_count(final_leaf_count)?;
     if fri_query.final_merkle_path.len() != final_path_len {
         return Err(Error::QueryMerklePathMismatch { index: query_pos });
     }
-    let final_root = field_norito::core::from_bytes(&fri_layers[final_round])
-        .ok_or(Error::FriLayerMismatch { round: final_round })?;
-    let final_leaf =
-        backend::hash_fri_chunk(final_round, final_leaf_index, &fri_query.final_values)?;
+    let final_root =
+        field_norito::core::from_bytes(root).ok_or(Error::FriLayerMismatch { round })?;
+    let final_leaf = backend::hash_fri_chunk(round, final_leaf_index, &fri_query.final_values)?;
     if !backend::verify_merkle_path(
         final_root,
         final_leaf,
@@ -958,14 +1206,66 @@ fn expected_fri_layer_lengths(
     let mut current = domain_size;
     let mut rounds = 0usize;
     let mut lengths = Vec::new();
-    while current > 1 && rounds < max_rounds {
-        current = pad_len_to_arity(current, arity)?;
+    while current > arity && rounds < max_rounds {
         lengths.push(current);
-        current /= arity;
+        let round_arity = backend::fri_round_arity(current, arity)?;
+        current /= round_arity;
         rounds += 1;
+    }
+    if current > arity {
+        return Err(Error::FriReductionLimit {
+            max_reductions,
+            remaining: current,
+            arity,
+        });
     }
     lengths.push(current);
     Ok(lengths)
+}
+
+fn fri_terminal_degree_bound(
+    domain_size: usize,
+    blowup_factor: u32,
+    arity: u32,
+    layer_lengths: &[usize],
+) -> Result<usize> {
+    let blowup = usize::try_from(blowup_factor).expect("FRI blowup factor fits usize");
+    if blowup == 0 || domain_size % blowup != 0 || layer_lengths.is_empty() {
+        return Err(Error::FriDomainSize {
+            length: domain_size,
+            arity: blowup,
+        });
+    }
+    let configured_arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
+    let trace_len = domain_size / blowup;
+    // Every implemented FASTPQ residue is at most quadratic in trace columns.
+    // A trace column has degree < trace_len, so 2 * trace_len is a conservative
+    // exclusive bound for the unquotiented composition polynomial.
+    let mut degree_bound = trace_len
+        .checked_mul(backend::AIR_MAX_CONSTRAINT_DEGREE_V1)
+        .ok_or(Error::TraceLengthOverflow { rows: trace_len })?;
+    for lengths in layer_lengths.windows(2) {
+        let current = lengths[0];
+        let next = lengths[1];
+        let round_arity = backend::fri_round_arity(current, configured_arity)?;
+        if current / round_arity != next {
+            return Err(Error::FriLayerLengthMismatch {
+                expected: current / round_arity,
+                actual: next,
+            });
+        }
+        degree_bound = degree_bound.div_ceil(round_arity);
+    }
+    let terminal_len = *layer_lengths
+        .last()
+        .expect("non-empty FRI layer schedule checked above");
+    if degree_bound == 0 || degree_bound >= terminal_len {
+        return Err(Error::FriTerminalDegreeBound {
+            degree_bound,
+            domain_len: terminal_len,
+        });
+    }
+    Ok(degree_bound)
 }
 fn pad_len_to_arity(len: usize, arity: usize) -> Result<usize> {
     if arity == 0 {
@@ -1028,22 +1328,8 @@ fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
     }
 }
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-fn fold_fri_values(values: &[u64], challenge: u64) -> u64 {
-    let mut acc = 0u64;
-    let mut power = 1u64;
-    for &value in values {
-        acc = add_mod(acc, mul_mod(value, power));
-        power = mul_mod(power, challenge);
-    }
-    acc
-}
-fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = u128::from(a) + u128::from(b);
-    u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
-}
-fn mul_mod(a: u64, b: u64) -> u64 {
-    let product = u128::from(a) * u128::from(b);
-    u64::try_from(product % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
+fn fold_fri_values(values: &[u64], challenge: u64, x: u64, coset_generator: u64) -> Result<u64> {
+    backend::fold_fri_coset(values, challenge, x, coset_generator)
 }
 fn batch_size_hint(batch: &TransitionBatch) -> usize {
     let mut total = batch.parameter.len();
@@ -1302,8 +1588,9 @@ fn collect_permission_hashes(batch: &TransitionBatch) -> Result<Vec<[u8; 32]>> {
 fn canonical_params_version(params: &StarkParameterSet) -> Option<u16> {
     CANONICAL_PARAMETER_SETS
         .iter()
-        .position(|candidate| candidate.name == params.name)
-        .and_then(|idx| u16::try_from(idx + 1).ok())
+        .position(|candidate| candidate == params)
+        .and_then(|idx| u16::try_from(idx).ok())
+        .and_then(|idx| X7_PARAMS_VERSION_BASE.checked_add(idx))
 }
 mod hash_norito {
     pub mod core {
@@ -1326,9 +1613,8 @@ mod field_norito {
             if bytes[8..].iter().any(|byte| *byte != 0) {
                 return None;
             }
-            Some(u64::from_le_bytes(
-                bytes[..8].try_into().expect("slice length is 8"),
-            ))
+            let value = u64::from_le_bytes(bytes[..8].try_into().expect("slice length is 8"));
+            (value < super::super::GOLDILOCKS_MODULUS).then_some(value)
         }
     }
 }
@@ -1336,6 +1622,18 @@ mod field_norito {
 mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
+
+    fn add_mod(a: u64, b: u64) -> u64 {
+        let sum = u128::from(a) + u128::from(b);
+        u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
+    }
+
+    fn mul_mod(a: u64, b: u64) -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        u64::try_from(product % u128::from(GOLDILOCKS_MODULUS))
+            .expect("modulus reduction fits in u64")
+    }
+
     fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         verify_with_limits_raw(batch, proof, VerifyLimits::default())
     }
@@ -1468,6 +1766,29 @@ mod tests {
             vec![sibling],
         )
     }
+    fn fold_fri_group_for_test(
+        values: &[u64],
+        beta: u64,
+        layer_len: usize,
+        leaf_index: usize,
+    ) -> u64 {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            layer_len,
+            params.omega_coset,
+        )
+        .expect("test FRI domain");
+        let output_len = layer_len / values.len();
+        fold_fri_values(
+            values,
+            beta,
+            domain.point(leaf_index),
+            domain.coset_generator(output_len),
+        )
+        .expect("test FRI fold")
+    }
     fn assert_verify_rejects<F, M>(
         batch: &TransitionBatch,
         proof: &Proof,
@@ -1481,6 +1802,23 @@ mod tests {
         mutate(&mut tampered);
         let err = verify(batch, &tampered).unwrap_err();
         assert!(matches_err(&err), "unexpected verifier error: {err:?}");
+    }
+    fn assert_noncanonical_goldilocks_rejected(
+        proof: &Proof,
+        expected_context: &'static str,
+        expected_indices: &[usize],
+        mutate: impl FnOnce(&mut Proof),
+    ) {
+        let mut tampered = proof.clone();
+        mutate(&mut tampered);
+        let err = validate_canonical_goldilocks_elements(&tampered).unwrap_err();
+        match err {
+            Error::NonCanonicalGoldilocksElement { context, indices } => {
+                assert_eq!(context, expected_context);
+                assert_eq!(indices, expected_indices);
+            }
+            other => panic!("unexpected verifier error: {other:?}"),
+        }
     }
     fn target_public_io_for(batch: &TransitionBatch) -> PublicIO {
         let ordering = ordering::ordering_hash(batch).unwrap();
@@ -1562,6 +1900,36 @@ mod tests {
         fri_layer_lengths: &[usize],
         arity: u32,
     ) -> Result<()> {
+        verify_fri_query_chain_with_terminal_bound_for_test(
+            initial_index,
+            initial_value,
+            fri_query,
+            fri_layers,
+            betas,
+            fri_layer_lengths,
+            fri_layer_lengths.last().copied().unwrap_or(1),
+            arity,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn verify_fri_query_chain_with_terminal_bound_for_test(
+        initial_index: usize,
+        initial_value: u64,
+        fri_query: &FriQueryOpening,
+        fri_layers: &[[u8; 32]],
+        betas: &[u64],
+        fri_layer_lengths: &[usize],
+        terminal_degree_bound: usize,
+        arity: u32,
+    ) -> Result<()> {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain_size = fri_layer_lengths.first().copied().unwrap_or(1);
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            domain_size,
+            params.omega_coset,
+        )?;
         verify_fri_query_chain(
             fri_query,
             FriQueryVerification {
@@ -1571,7 +1939,9 @@ mod tests {
                 fri_layers,
                 betas,
                 fri_layer_lengths,
+                terminal_degree_bound,
                 arity,
+                domain,
             },
         )
     }
@@ -2014,15 +2384,33 @@ mod tests {
     fn canonical_params_versions_track_catalogue_order() {
         let sets = Prover::canonical_parameter_sets();
         assert_eq!(sets, CANONICAL_PARAMETER_SETS.as_slice());
+        assert_eq!(
+            sets.iter()
+                .map(canonical_params_version)
+                .collect::<Vec<_>>(),
+            vec![Some(5), Some(6)]
+        );
         for (idx, params) in sets.iter().enumerate() {
             assert_eq!(
                 canonical_params_version(params),
-                Some(u16::try_from(idx + 1).expect("test catalogue version fits u16"))
+                Some(
+                    X7_PARAMS_VERSION_BASE
+                        + u16::try_from(idx).expect("test catalogue version fits u16")
+                )
             );
         }
         let mut custom = sets[0];
         custom.name = "fastpq-local-test-parameter";
         assert_eq!(canonical_params_version(&custom), None);
+
+        let mut same_name_custom = sets[0];
+        same_name_custom.trace_root ^= 1;
+        assert_eq!(canonical_params_version(&same_name_custom), None);
+        let prover = Prover::new(same_name_custom);
+        assert!(matches!(
+            prover.prove_raw_statement(&sample_batch()),
+            Err(Error::UnknownParameter(parameter)) if parameter == sets[0].name
+        ));
     }
     #[test]
     fn materialise_proof_maps_backend_artifact_fields() {
@@ -2165,25 +2553,57 @@ mod tests {
             &batch,
             &proof,
             |tampered| tampered.trace_root[8] = 1,
-            |err| matches!(err, Error::TraceRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "trace_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.lookup_root[8] = 1,
-            |err| matches!(err, Error::LookupRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "lookup_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.air_trace_root[8] = 1,
-            |err| matches!(err, Error::AirTraceRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "air_trace_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.air_composition_root[8] = 1,
-            |err| matches!(err, Error::AirCompositionRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "air_composition_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
     }
     #[test]
@@ -2452,17 +2872,23 @@ mod tests {
         assert!(matches!(err, Error::CommitmentMismatch));
     }
     #[test]
-    fn verify_rejects_trace_root_before_malformed_deep_roots() {
+    fn verify_rejects_noncanonical_deep_root_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = field_norito::core::to_bytes(42);
         proof.lookup_root[8] = 1;
         proof.air_trace_root[8] = 1;
         proof.air_composition_root[8] = 1;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::TraceRootMismatch),
+            matches!(
+                &err,
+                Error::NonCanonicalGoldilocksElement {
+                    context: "air_trace_root",
+                    indices,
+                } if indices.is_empty()
+            ),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2731,7 +3157,10 @@ mod tests {
     fn verify_rejects_spoofed_permission_hashes_with_explicit_perm_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let mut batch = sample_batch_with_permission();
-        let spoofed_hashes = vec![[0x11; 32], [0x22; 32]];
+        let spoofed_hashes = vec![
+            field_norito::core::to_bytes(0x11),
+            field_norito::core::to_bytes(0x22),
+        ];
         batch.public_inputs.perm_root = perm_root_from_permission_hashes(&spoofed_hashes);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert_eq!(proof.public_io.perm_root, batch.public_inputs.perm_root);
@@ -2837,6 +3266,7 @@ mod tests {
     #[test]
     fn verify_rejects_empty_and_malformed_fri_layer_roots() {
         let (batch, proof) = sample_proof_with_size(32);
+        let terminal_round = proof.fri_layers.len() - 1;
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2861,7 +3291,15 @@ mod tests {
                     .expect("expected terminal FRI root");
                 root[8] = 1;
             },
-            |err| matches!(err, Error::FriLayerMismatch { .. }),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "fri_layers",
+                        indices,
+                    } if indices.as_slice() == [terminal_round]
+                )
+            },
         );
     }
     #[test]
@@ -3831,6 +4269,51 @@ mod tests {
         assert!(matches!(err, Error::FriArity(0)));
     }
     #[test]
+    fn balanced_fri_schedule_preserves_a_complete_terminal_domain() {
+        let params = fastpq_isi::params::FASTPQ_CANONICAL_BALANCED;
+        let lengths = expected_fri_layer_lengths(
+            1usize << params.lde_log_size,
+            params.fri.arity,
+            params.fri.max_reductions,
+        )
+        .expect("balanced FRI schedule");
+        assert_eq!(
+            lengths,
+            vec![1 << 19, 1 << 16, 1 << 13, 1 << 10, 1 << 7, 1 << 4, 2]
+        );
+        assert_eq!(
+            fri_terminal_degree_bound(
+                1usize << params.lde_log_size,
+                params.fri.blowup_factor,
+                params.fri.arity,
+                &lengths,
+            )
+            .expect("balanced terminal degree bound"),
+            1
+        );
+    }
+    #[test]
+    fn latency_fri_schedule_authenticates_a_linear_terminal_bound() {
+        let params = fastpq_isi::params::FASTPQ_CANONICAL_LATENCY;
+        let lengths = expected_fri_layer_lengths(
+            1usize << params.lde_log_size,
+            params.fri.arity,
+            params.fri.max_reductions,
+        )
+        .expect("latency FRI schedule");
+        assert_eq!(lengths, vec![1 << 20, 1 << 16, 1 << 12, 1 << 8, 1 << 4]);
+        assert_eq!(
+            fri_terminal_degree_bound(
+                1usize << params.lde_log_size,
+                params.fri.blowup_factor,
+                params.fri.arity,
+                &lengths,
+            )
+            .expect("latency terminal degree bound"),
+            2
+        );
+    }
+    #[test]
     fn verify_fri_query_chain_accepts_terminal_leaf_without_rounds() {
         let final_values = vec![42];
         let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
@@ -3845,10 +4328,38 @@ mod tests {
         verify_fri_query_chain_for_test(0, 42, &fri_query, &fri_layers, &[], &[1], 2).unwrap();
     }
     #[test]
+    fn verify_fri_query_chain_rejects_authenticated_terminal_high_degree() {
+        let final_values = vec![42, 43];
+        let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
+        let fri_layers = vec![final_root];
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values,
+            final_merkle_path: final_path,
+        };
+        let error = verify_fri_query_chain_with_terminal_bound_for_test(
+            0,
+            42,
+            &fri_query,
+            &fri_layers,
+            &[],
+            &[2],
+            1,
+            2,
+        )
+        .expect_err("non-constant terminal evaluations must violate degree < 1");
+        assert!(matches!(
+            error,
+            Error::FriTerminalDegreeMismatch { degree_bound: 1 }
+        ));
+    }
+    #[test]
     fn verify_fri_query_chain_accepts_single_fold_round() {
         let beta = 3;
         let round_values = vec![10, 20];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -3874,8 +4385,8 @@ mod tests {
         let beta = 5;
         let round_values = vec![12, 34];
         let sibling_values = vec![77, 88];
-        let sibling_folded = fold_fri_values(&sibling_values, beta);
-        let folded = fold_fri_values(&round_values, beta);
+        let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
+        let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
         let (round_root, round_path) =
             two_fri_leaf_root_and_path(0, 1, &round_values, &sibling_values);
@@ -3901,7 +4412,7 @@ mod tests {
     fn verify_fri_query_chain_rejects_single_fold_round_mismatch() {
         let beta = 3;
         let round_values = vec![10, 20];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -3937,8 +4448,8 @@ mod tests {
         let beta = 5;
         let round_values = vec![12, 34];
         let sibling_values = vec![77, 88];
-        let sibling_folded = fold_fri_values(&sibling_values, beta);
-        let folded = fold_fri_values(&round_values, beta);
+        let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
+        let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
         let (round_root, round_path) =
             two_fri_leaf_root_and_path(0, 1, &round_values, &sibling_values);
@@ -3995,7 +4506,7 @@ mod tests {
             }
         ));
         let round_values = vec![1, 2];
-        let folded = fold_fri_values(&round_values, 7);
+        let folded = fold_fri_group_for_test(&round_values, 7, 2, 0);
         let fri_query = FriQueryOpening {
             initial_index: 0,
             rounds: vec![FriRoundOpening {
@@ -4023,7 +4534,7 @@ mod tests {
     fn verify_fri_query_chain_rejects_malformed_round_and_final_roots() {
         let beta = 7;
         let round_values = vec![1, 2];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -4100,20 +4611,22 @@ mod tests {
     fn modular_fri_folding_wraps_in_goldilocks_field() {
         assert_eq!(add_mod(GOLDILOCKS_MODULUS - 1, 2), 1);
         assert_eq!(mul_mod(GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS - 1), 1);
-        let values = [3, 4, 5];
-        let challenge = 7;
-        let expected = values.iter().enumerate().fold(0u128, |acc, (idx, value)| {
-            let power = (0..idx).fold(1u128, |power, _| {
-                (power * u128::from(challenge)) % u128::from(GOLDILOCKS_MODULUS)
-            });
-            (acc + u128::from(*value) * power) % u128::from(GOLDILOCKS_MODULUS)
-        });
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            2,
+            params.omega_coset,
+        )
+        .expect("two-point FRI domain");
+        let x = domain.point(0);
+        let zeta = domain.coset_generator(1);
+        let values = [GOLDILOCKS_MODULUS - 1, 2];
+        assert_eq!(fold_fri_values(&values, x, x, zeta).unwrap(), values[0]);
         assert_eq!(
-            fold_fri_values(&values, challenge),
-            u64::try_from(expected).unwrap()
+            fold_fri_values(&values, mul_mod(x, zeta), x, zeta).unwrap(),
+            values[1]
         );
-        let wrapped = fold_fri_values(&[GOLDILOCKS_MODULUS - 1, 2], GOLDILOCKS_MODULUS - 1);
-        assert_eq!(wrapped, GOLDILOCKS_MODULUS - 3);
     }
     #[test]
     fn verify_rejects_wrong_air_next_row_opening() {
@@ -4302,9 +4815,179 @@ mod tests {
         assert_eq!(field_norito::core::from_bytes(&encoded), Some(value));
     }
     #[test]
-    fn field_norito_from_bytes_rejects_nonzero_tail() {
+    fn field_norito_from_bytes_rejects_noncanonical_encodings() {
         let mut encoded = field_norito::core::to_bytes(7);
         encoded[8] = 1;
         assert_eq!(field_norito::core::from_bytes(&encoded), None);
+        assert_eq!(
+            field_norito::core::from_bytes(&field_norito::core::to_bytes(GOLDILOCKS_MODULUS)),
+            None
+        );
+    }
+    #[test]
+    fn public_verifier_preflight_rejects_noncanonical_merkle_sibling() {
+        let batch = sample_batch();
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.queries[0].merkle_path = vec![GOLDILOCKS_MODULUS];
+        let err = super::verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::NonCanonicalGoldilocksElement {
+                context: "queries.merkle_path",
+                indices,
+            } if indices == [0, 0]
+        ));
+    }
+    fn proof_with_every_goldilocks_container() -> Proof {
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.public_io.permission_hashes = vec![field_norito::core::to_bytes(22)];
+        proof.betas = vec![23];
+        proof.queries[0].merkle_path = vec![24];
+        proof.air_openings[0].current_row = vec![25];
+        proof.air_openings[0].next_row = vec![26];
+        proof.air_openings[0].current_row_path = vec![27];
+        proof.air_openings[0].next_row_path = vec![28];
+        proof.air_openings[0].composition_path = vec![29];
+        proof.fri_queries[0].rounds = vec![FriRoundOpening {
+            round: 0,
+            index: 0,
+            values: vec![30],
+            folded_value: 31,
+            merkle_path: vec![32],
+        }];
+        proof.fri_queries[0].final_merkle_path = vec![33];
+        validate_canonical_goldilocks_elements(&proof).unwrap();
+        proof
+    }
+
+    #[test]
+    fn canonical_preflight_covers_roots_and_transcript_scalars() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "trace_root", &[], |proof| {
+            proof.trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "air_trace_root", &[], |proof| {
+            proof.air_trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "air_composition_root", &[], |proof| {
+            proof.air_composition_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_root", &[], |proof| {
+            proof.lookup_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "fri_layers", &[0], |proof| {
+            proof.fri_layers[0] = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "public_io.permission_hashes",
+            &[0],
+            |proof| {
+                proof.public_io.permission_hashes[0] =
+                    field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+            },
+        );
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
+            proof.lookup_grand_product = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
+            proof.lookup_challenge = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "alphas", &[0], |proof| {
+            proof.alphas[0] = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "betas", &[0], |proof| {
+            proof.betas[0] = GOLDILOCKS_MODULUS;
+        });
+    }
+
+    #[test]
+    fn canonical_preflight_covers_query_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.value", &[0], |proof| {
+            proof.queries[0].value = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.chunk_values", &[0, 0], |proof| {
+            proof.queries[0].chunk_values[0] = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.merkle_path", &[0, 0], |proof| {
+            proof.queries[0].merkle_path[0] = GOLDILOCKS_MODULUS
+        });
+    }
+
+    #[test]
+    fn canonical_preflight_covers_air_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.current_row",
+            &[0, 0],
+            |proof| proof.air_openings[0].current_row[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.next_row",
+            &[0, 0],
+            |proof| proof.air_openings[0].next_row[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.current_row_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].current_row_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.next_row_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].next_row_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.composition_value",
+            &[0],
+            |proof| proof.air_openings[0].composition_value = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.composition_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].composition_path[0] = GOLDILOCKS_MODULUS,
+        );
+    }
+
+    #[test]
+    fn canonical_preflight_covers_fri_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.values",
+            &[0, 0, 0],
+            |proof| proof.fri_queries[0].rounds[0].values[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.folded_value",
+            &[0, 0],
+            |proof| proof.fri_queries[0].rounds[0].folded_value = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.merkle_path",
+            &[0, 0, 0],
+            |proof| proof.fri_queries[0].rounds[0].merkle_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.final_values",
+            &[0, 0],
+            |proof| proof.fri_queries[0].final_values[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.final_merkle_path",
+            &[0, 0],
+            |proof| proof.fri_queries[0].final_merkle_path[0] = GOLDILOCKS_MODULUS,
+        );
     }
 }

@@ -191,45 +191,31 @@ async fn handler_proof_record_get(
         "public, max-age={}",
         app.proof_limits.cache_max_age.as_secs().max(1)
     );
-    if let Some(if_none_match) = headers
-        .get(axum::http::header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-    {
-        let token = if_none_match
-            .trim()
-            .trim_start_matches("W/")
-            .trim_matches('"');
-        if token.eq_ignore_ascii_case(etag_value.trim_matches('"')) {
-            app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_proof_cache_hit("/v1/proofs/{id}");
-                tel.observe_torii_proof_request(
-                    "/v1/proofs/{id}",
-                    "not_modified",
-                    0,
-                    start.elapsed(),
-                )
-            });
-            let mut resp = axum::response::Response::builder()
-                .status(axum::http::StatusCode::NOT_MODIFIED)
-                .body(axum::body::Body::empty())
-                .map_err(|err| {
-                    Error::Query(iroha_data_model::ValidationFail::InternalError(
-                        err.to_string(),
-                    ))
-                })?;
-            if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
-                resp.headers_mut()
-                    .insert(axum::http::header::CACHE_CONTROL, cache_header);
-            }
-            if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
-                resp.headers_mut().insert(axum::http::header::ETAG, etag);
-            }
-            insert_routed_by_header(&mut resp, routed_by);
-            return Ok(hold_query_fanout_memory_in_response_body(
-                with_torii_fanout_headers(resp, diagnostics),
-                fanout_reservation,
-            ));
+    if crate::utils::if_none_match_matches(&headers, &etag_value) {
+        app.telemetry.with_metrics(|tel| {
+            tel.inc_torii_proof_cache_hit("/v1/proofs/{id}");
+            tel.observe_torii_proof_request("/v1/proofs/{id}", "not_modified", 0, start.elapsed())
+        });
+        let mut resp = axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_MODIFIED)
+            .body(axum::body::Body::empty())
+            .map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    err.to_string(),
+                ))
+            })?;
+        if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
+            resp.headers_mut()
+                .insert(axum::http::header::CACHE_CONTROL, cache_header);
         }
+        if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
+            resp.headers_mut().insert(axum::http::header::ETAG, etag);
+        }
+        insert_routed_by_header(&mut resp, routed_by);
+        return Ok(hold_query_fanout_memory_in_response_body(
+            with_torii_fanout_headers(resp, diagnostics),
+            fanout_reservation,
+        ));
     }
     let response_budget = ToriiRoutedReadMemoryBudget::new(
         app.query_fanout_working_set_bytes,

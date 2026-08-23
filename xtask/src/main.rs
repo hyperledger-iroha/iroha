@@ -1897,47 +1897,14 @@ where
         "-h" | "--help" => Ok(CommandKind::Help),
         "soracloud-inrou-smoke" => {
             let Some(mode) = args.next() else {
-                return Err(
-                    "soracloud-inrou-smoke requires a mode (portable|firecracker|mixed-host)"
-                        .into(),
-                );
+                return Err("soracloud-inrou-smoke requires mode `portable`".into());
             };
             match mode.as_str() {
                 "portable" => Ok(CommandKind::SoracloudInrouSmoke {
                     mode: soracloud_inrou::CommandMode::Portable,
                 }),
-                "firecracker" => Ok(CommandKind::SoracloudInrouSmoke {
-                    mode: soracloud_inrou::CommandMode::Firecracker,
-                }),
-                "mixed-host" => {
-                    let mut inventory: Option<PathBuf> = None;
-                    let mut pending = args.peekable();
-                    while let Some(arg) = pending.next() {
-                        match arg.as_str() {
-                            "--inventory" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("expected path after --inventory".into());
-                                };
-                                inventory = Some(normalize_path(Path::new(&path))?);
-                            }
-                            flag => {
-                                return Err(
-                                    format!("unknown flag for soracloud-inrou-smoke mixed-host: {flag}")
-                                        .into(),
-                                );
-                            }
-                        }
-                    }
-                    let inventory = inventory.ok_or_else(|| {
-                        "soracloud-inrou-smoke mixed-host requires --inventory <path>"
-                            .to_string()
-                    })?;
-                    Ok(CommandKind::SoracloudInrouSmoke {
-                        mode: soracloud_inrou::CommandMode::MixedHost { inventory },
-                    })
-                }
                 other => Err(format!(
-                    "unknown soracloud-inrou-smoke mode `{other}` (expected portable|firecracker|mixed-host)"
+                    "unknown soracloud-inrou-smoke mode `{other}` (expected `portable`)"
                 )
                 .into()),
             }
@@ -14470,7 +14437,7 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     let path = path.ok_or("missing `path=` in --artifact spec")?;
     Ok((kind, path))
 }
-const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors in one absent absolute create-only root outside the workspace.";
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors in one absent absolute create-only output root outside the workspace.";
 const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 include!("usage.rs");
 #[cfg(test)]

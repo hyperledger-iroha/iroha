@@ -630,11 +630,13 @@ Implementation notes (current)
 - Stateful path provides `VerifyProof` ISI that records verification outcome into WSV (`proofs` storage). The real Halo2 backend is always linked; proofs are verified using `plonk::verify_proof` with the appropriate `Params<C>` and verifying key derived from the backend tag’s `<circuit-id>`.
   - Transparent Halo2 (IPA over Pasta): proofs are verified using `plonk::verify_proof` with IPA PCS and `Params::<EqAffine>` derived transparently.
     - VK/Params encoding (ZK1):
-      - `ZK1` envelope with TLVs: `IPAK(k)` and `H2VK` (Halo2 verifying key bytes).
+      - Production `ZK1` envelopes contain exactly `IPAK(k)`, `CID1`, and
+        `H2VK` (Halo2 verifying key bytes), in that order.
     - Proof encoding (ZK1):
-      - `ZK1` with `PROF` (raw transcript) and optional instance columns `I10P` (Pasta Fp).
-    - `VerifyingKeyBox.bytes`: `ZK1` with `IPAK(k)`.
-    - `ProofBox.bytes`: `ZK1` with `PROF` (+ optional `I10P`).
+      - `ZK1` contains `PROF` (raw transcript) followed by optional instance
+        columns `I10P` (Pasta Fp).
+    - `VerifyingKeyBox.bytes`: canonical production key envelope above.
+    - `ProofBox.bytes`: canonical proof envelope above.
     - Built‑in circuit ids:
       - `tiny-add-v1`: enforces 2 + 2 = 4
       - `tiny-mul-v1`: enforces 3 × 2 = 6

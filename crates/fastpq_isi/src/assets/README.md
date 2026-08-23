@@ -1,15 +1,17 @@
-# FastPQ Poseidon2 fixed assets
+# FASTPQ Poseidon fixed assets
 
-`poseidon2_goldilocks_width3_v1.bin` contains the canonical width-three
-Goldilocks Poseidon2 constants: 65 rows of three round constants followed by
-the three-by-three MDS matrix. Every field element is stored as `u64` little
-endian. Fixed-size `const fn` decoding reconstructs the original public array
-types, so permutation round indexing and runtime arithmetic are unchanged and
-there is no runtime parser, allocation, synchronization, or extra branch.
+`poseidon2_goldilocks_width3_v1.bin` (legacy filename) contains the canonical
+width-three Goldilocks Poseidon constants: 65 rows of three round constants
+followed by the three-by-three MDS matrix. The construction is the original
+dense-MDS Poseidon permutation, not Poseidon2, and uses the bijective `x^7`
+Goldilocks S-box pinned in `../poseidon.rs`. Every field element is stored as
+`u64` little endian. Fixed-size `const fn` decoding reconstructs the public
+array types without runtime parsing or allocation.
 
 The values are cross-pinned to `../../../../artifacts/poseidon/constants.ron`
-and the provenance comments in `../poseidon.rs` (`poseidon-primitives` 0.2.0,
-parameters pinned to `ark-poseidon2` commit `3f2b7fe`). The existing
-`poseidon_hash_known_vector` test and the Metal/CUDA manifest parity checks
-remain independent consumers. `manifest.json` pins both the asset and source
-preimages.
+and the permutation tests in `../poseidon.rs`. The
+`poseidon_hash_known_vector` and former-`x^5` collision regressions pin the CPU
+semantics, while the Metal/CUDA manifest and source checks pin accelerator
+parity. `manifest.json` records the fixed asset and its generation provenance;
+the executable profile digest additionally binds the construction identifier,
+S-box exponent, and constants-manifest digest.

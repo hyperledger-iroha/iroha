@@ -17,6 +17,17 @@
 //! and the final codec digest.  It also retains the already-authenticated 200
 //! qPCS product/opening-quotient pairs as canonical residues.
 //!
+//! A separate move-only pre-qPCS preflight may validate that same inner proof
+//! body before the final transcript exists and lend only its 6,400 q-mask
+//! digit commitments to the early root.  That state is provisional and
+//! non-authorizing: the header supplies its own prior-context digest, the
+//! proof-slice lease can be issued only by the sealed canonical Envelope, and no raw bytes, digest,
+//! root, continuation, or point array can escape.  Later authentication must
+//! consume the preflight against the exact same typed proof allocation and
+//! the linked final context; that final transition performs no second header,
+//! full-point-validation, inventory-root, continuation, or codec pass.  The
+//! required early root still decodes its 6,400 selected points individually.
+//!
 //! This is deliberately not the cross-field/global-lookup verifier.  The
 //! retired implementation covers only 38 limbs and assumes uninhabited source,
 //! range, q-mask, and qPCS seals.  Its global lookup additionally lacks the
@@ -30,19 +41,32 @@
 
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweSafeCoreProjectionV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
         ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1,
     },
+    rns_native_rlwe_source_statement::RnsNativeRlweSourceStatementStageV1,
     rns_native_section_codec::{
-        CROSS_LOOKUP_FIXED_BYTES_V1, ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
+        CROSS_LOOKUP_FIXED_BYTES_V1, RnsNativeBoundCrossFieldGlobalLookupV1,
+        RnsNativeSealedCrossProofInventoryPermitV1,
+        ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1,
+        authenticate_bound_cross_field_global_lookup_for_inventory_v1,
     },
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
-    rns_native_source_terminal_cross_field::RnsNativeSourceTerminalCrossFieldPrerequisiteV1,
+    rns_native_source_terminal_cross_field::{
+        RnsNativeSourceTerminalCrossFieldPrerequisiteV1,
+        link_rns_native_source_terminal_cross_field_v1,
+    },
+    rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
     rns_native_wire::ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
+    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 use crate::vega::{VegaT256PointV1 as Point, sponge::Keccak256};
+
+#[cfg(test)]
+use std::cell::Cell;
 
 const INVENTORY_VERSION_V1: u8 = 1;
 const INVENTORY_FLAGS_V1: u8 = 0;
@@ -70,6 +94,27 @@ const Q_MASK_BLOCKS_V1: usize =
 const Q_MASK_POINTS_V1: usize = Q_MASK_BLOCKS_V1 * Q_MASK_POINTS_PER_BLOCK_V1;
 const INVENTORY_POINTS_V1: usize = COMPARATOR_POINTS_V1 + SMALL_SOURCE_POINTS_V1 + Q_MASK_POINTS_V1;
 const INVENTORY_BYTES_V1: usize = INVENTORY_POINTS_V1 * POINT_BYTES_V1;
+const PRE_DIRECT_CANDIDATE_SAFE_ROLES_V1: usize = 9;
+const PRE_DIRECT_CANDIDATE_POINTS_V1: usize = COMPARATOR_TOP_POINTS_V1
+    + COMPARATOR_GROUPS_V1 * (17 + 1 + 18)
+    + SMALL_SOURCE_BLOCKS_V1 * 2
+    + Q_MASK_BLOCKS_V1 * (2 * Q_MASK_DIGITS_V1);
+const PRE_DIRECT_CANDIDATE_EXCLUDED_INVERSE_POINTS_V1: usize =
+    COMPARATOR_GROUPS_V1 * 17 + SMALL_SOURCE_BLOCKS_V1 * 2 + Q_MASK_BLOCKS_V1 * 8;
+const PRE_DIRECT_CANDIDATE_POINT_BYTES_V1: usize = PRE_DIRECT_CANDIDATE_POINTS_V1 * POINT_BYTES_V1;
+const PRE_DIRECT_CANDIDATE_FRAME_BYTES_V1: usize = 4 + 1 + 4 + 2 + POINT_BYTES_V1;
+const PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1: usize =
+    PRE_DIRECT_CANDIDATE_POINTS_V1 * PRE_DIRECT_CANDIDATE_FRAME_BYTES_V1;
+const PRE_QPCS_Q_MASK_S_POINTS_V1: usize = Q_MASK_BLOCKS_V1 * Q_MASK_DIGITS_V1;
+const PRE_QPCS_Q_MASK_S_CANONICAL_BYTES_V1: usize = PRE_QPCS_Q_MASK_S_POINTS_V1 * POINT_BYTES_V1;
+const Q_MASK_INVENTORY_FIRST_ORDINAL_V1: usize = COMPARATOR_POINTS_V1 + SMALL_SOURCE_POINTS_V1;
+const PRE_QPCS_Q_MASK_FIRST_PROOF_OFFSET_V1: usize =
+    HEADER_BYTES_V1 + Q_MASK_INVENTORY_FIRST_ORDINAL_V1 * POINT_BYTES_V1;
+const PRE_QPCS_Q_MASK_LAST_INVENTORY_ORDINAL_V1: usize = Q_MASK_INVENTORY_FIRST_ORDINAL_V1
+    + (Q_MASK_BLOCKS_V1 - 1) * Q_MASK_POINTS_PER_BLOCK_V1
+    + (Q_MASK_DIGITS_V1 - 1);
+const PRE_QPCS_Q_MASK_LAST_PROOF_OFFSET_V1: usize =
+    HEADER_BYTES_V1 + PRE_QPCS_Q_MASK_LAST_INVENTORY_ORDINAL_V1 * POINT_BYTES_V1;
 const QPCS_ROWS_PER_REPETITION_V1: usize = 2;
 const QPCS_EVALUATION_BYTES_V1: usize =
     ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITIONS_V1 * QPCS_ROWS_PER_REPETITION_V1 * 8;
@@ -94,6 +139,14 @@ const CONTINUATION_DOMAIN_V1: &[u8] =
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.codec";
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.prerequisite";
+const PRE_DIRECT_CANDIDATE_MANIFEST_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.pre-direct-candidate.manifest";
+const PRE_DIRECT_CANDIDATE_CONTEXT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.pre-direct-candidate.context";
+const PRE_DIRECT_CANDIDATE_POINT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.pre-direct-candidate.point";
+const PRE_DIRECT_CANDIDATE_FINAL_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-cross-field-inventory.pre-direct-candidate.final";
 
 // These are acceptance capabilities, not progress counters.  They must remain
 // false until the named proof obligations have actual first-party verifiers.
@@ -102,6 +155,21 @@ const RANGE_AND_CARRY_RELATIONS_VERIFIED_V1: bool = false;
 const CANONICAL_Q_MASK_RELATIONS_VERIFIED_V1: bool = false;
 const GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1: bool = false;
 const CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1: bool = false;
+const PRE_QPCS_Q_MASK_SEALED_ENVELOPE_LEASE_IMPLEMENTED_V1: bool = true;
+const PRE_QPCS_Q_MASK_PREFLIGHT_LIVE_V1: bool = false;
+const PRE_QPCS_Q_MASK_SOURCE_INTEGRATED_V1: bool = false;
+const PRE_QPCS_Q_MASK_DIRECT_INTEGRATED_V1: bool = false;
+const PRE_QPCS_Q_MASK_COMPOSITE_INTEGRATED_V1: bool = false;
+const PRE_QPCS_Q_MASK_RESOURCE_EVIDENCE_QUALIFIED_V1: bool = false;
+const PRE_QPCS_Q_MASK_READINESS_V1: bool = false;
+const PRE_QPCS_Q_MASK_RELEASE_READY_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_CONTRACT_IMPLEMENTED_V1: bool = true;
+const PRE_DIRECT_CANDIDATE_PROJECTION_LIVE_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_SOURCE_INTEGRATED_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_DIRECT_INTEGRATED_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_RESOURCE_EVIDENCE_QUALIFIED_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_READINESS_V1: bool = false;
+const PRE_DIRECT_CANDIDATE_PROJECTION_RELEASE_READY_V1: bool = false;
 
 const _: () = {
     assert!(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 == 131_072);
@@ -116,18 +184,51 @@ const _: () = {
     assert!(SMALL_SOURCE_POINTS_V1 == 4_128);
     assert!(Q_MASK_BLOCKS_V1 == 1_600);
     assert!(Q_MASK_POINTS_V1 == 25_600);
+    assert!(PRE_QPCS_Q_MASK_S_POINTS_V1 == 6_400);
+    assert!(PRE_QPCS_Q_MASK_S_CANONICAL_BYTES_V1 == 211_200);
+    assert!(Q_MASK_INVENTORY_FIRST_ORDINAL_V1 == 23_048);
+    assert!(PRE_QPCS_Q_MASK_FIRST_PROOF_OFFSET_V1 == 760_720);
+    assert!(PRE_QPCS_Q_MASK_LAST_INVENTORY_ORDINAL_V1 == 48_635);
+    assert!(PRE_QPCS_Q_MASK_LAST_PROOF_OFFSET_V1 == 1_605_091);
+    assert!(PRE_QPCS_Q_MASK_LAST_PROOF_OFFSET_V1 + POINT_BYTES_V1 == 1_605_124);
     assert!(INVENTORY_POINTS_V1 == 48_648);
     assert!(INVENTORY_BYTES_V1 == 1_605_384);
+    assert!(PRE_DIRECT_CANDIDATE_SAFE_ROLES_V1 == 9);
+    assert!(PRE_DIRECT_CANDIDATE_POINTS_V1 == 27_936);
+    assert!(PRE_DIRECT_CANDIDATE_EXCLUDED_INVERSE_POINTS_V1 == 20_712);
+    assert!(
+        PRE_DIRECT_CANDIDATE_POINTS_V1 + PRE_DIRECT_CANDIDATE_EXCLUDED_INVERSE_POINTS_V1
+            == INVENTORY_POINTS_V1
+    );
+    assert!(PRE_DIRECT_CANDIDATE_POINT_BYTES_V1 == 921_888);
+    assert!(PRE_DIRECT_CANDIDATE_FRAME_BYTES_V1 == 44);
+    assert!(PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1 == 1_229_184);
     assert!(QPCS_EVALUATION_BYTES_V1 == 3_200);
     assert!(HEADER_BYTES_V1 == 136);
     assert!(MIN_PROOF_BYTES_V1 == 1_605_553);
+    assert!(PROOF_MAX_BYTES_V1 == 8_385_797);
+    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_780_245);
     assert!(MIN_PROOF_BYTES_V1 < PROOF_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 > 567_460);
     assert!(COMPARATOR_BOOLEAN_DISJOINT_PRODUCT_ARGUMENT_AVAILABLE_V1);
     assert!(!RANGE_AND_CARRY_RELATIONS_VERIFIED_V1);
     assert!(!CANONICAL_Q_MASK_RELATIONS_VERIFIED_V1);
     assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
     assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
+    assert!(PRE_QPCS_Q_MASK_SEALED_ENVELOPE_LEASE_IMPLEMENTED_V1);
+    assert!(!PRE_QPCS_Q_MASK_PREFLIGHT_LIVE_V1);
+    assert!(!PRE_QPCS_Q_MASK_SOURCE_INTEGRATED_V1);
+    assert!(!PRE_QPCS_Q_MASK_DIRECT_INTEGRATED_V1);
+    assert!(!PRE_QPCS_Q_MASK_COMPOSITE_INTEGRATED_V1);
+    assert!(!PRE_QPCS_Q_MASK_RESOURCE_EVIDENCE_QUALIFIED_V1);
+    assert!(!PRE_QPCS_Q_MASK_READINESS_V1);
+    assert!(!PRE_QPCS_Q_MASK_RELEASE_READY_V1);
+    assert!(PRE_DIRECT_CANDIDATE_PROJECTION_CONTRACT_IMPLEMENTED_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_LIVE_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_SOURCE_INTEGRATED_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_DIRECT_INTEGRATED_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_RESOURCE_EVIDENCE_QUALIFIED_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_READINESS_V1);
+    assert!(!PRE_DIRECT_CANDIDATE_PROJECTION_RELEASE_READY_V1);
 };
 
 /// Failure while authenticating the exact 40-limb commitment inventory.
@@ -168,6 +269,23 @@ enum InventoryPointRoleV1 {
     QMaskDigitInverse = 12,
     QMaskComplementDigit = 13,
     QMaskComplementInverse = 14,
+}
+
+impl InventoryPointRoleV1 {
+    const fn is_pre_direct_candidate_v1(self) -> bool {
+        matches!(
+            self,
+            Self::ComparatorDifferenceTop
+                | Self::ComparatorSumTop
+                | Self::ComparatorDifferenceDigit
+                | Self::ComparatorMixedTop
+                | Self::ComparatorBorrow
+                | Self::SmallSigned
+                | Self::SmallNegativeMagnitude
+                | Self::QMaskDigit
+                | Self::QMaskComplementDigit
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,6 +431,26 @@ fn q_mask_linear_commitments_v1(
         digits,
         complement_digits,
     })
+}
+
+/// Decode exactly one pre-qPCS q-mask `S` digit from its canonical inventory
+/// owner.  This deliberately cannot project complements, inverses, or an
+/// array of points.
+fn pre_qpcs_q_mask_s_digit_v1(inventory: &[u8], owner: usize, digit: usize) -> Option<Point> {
+    if inventory.len() != INVENTORY_BYTES_V1
+        || owner >= Q_MASK_BLOCKS_V1
+        || digit >= Q_MASK_DIGITS_V1
+    {
+        return None;
+    }
+    let ordinal = COMPARATOR_POINTS_V1
+        .checked_add(SMALL_SOURCE_POINTS_V1)?
+        .checked_add(owner.checked_mul(Q_MASK_POINTS_PER_BLOCK_V1)?)?
+        .checked_add(digit)?;
+    let offset = ordinal.checked_mul(POINT_BYTES_V1)?;
+    #[cfg(test)]
+    update_preflight_audit_counters_v1(|counters| counters.q_mask_digit_projections += 1);
+    Point::from_non_identity_wire_bytes_exact(inventory.get(offset..offset + POINT_BYTES_V1)?).ok()
 }
 
 fn comparator_difference_inverse_v1(
@@ -472,12 +610,11 @@ impl<'a> CanonicalQpcsEvaluationGridV1<'a> {
             return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation);
         }
         let grid = Self { bytes };
-        for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+        for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().copied().enumerate() {
             for repetition in 0..REPETITIONS_V1 {
                 let value = grid
                     .get_v1(limb, repetition)
                     .ok_or(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation)?;
-                let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
                 if value.product >= modulus || value.opening_quotient >= modulus {
                     return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidQpcsEvaluation);
                 }
@@ -547,10 +684,52 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PreflightAuditCountersV1 {
+    header_passes: usize,
+    inventory_root_passes: usize,
+    point_validation_decodes: usize,
+    pre_direct_candidate_points: usize,
+    pre_direct_candidate_framed_bytes: usize,
+    continuation_hash_passes: usize,
+    codec_hash_passes: usize,
+    q_mask_digit_projections: usize,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PREFLIGHT_AUDIT_COUNTERS_V1: Cell<PreflightAuditCountersV1> =
+        const { Cell::new(PreflightAuditCountersV1 {
+            header_passes: 0,
+            inventory_root_passes: 0,
+            point_validation_decodes: 0,
+            pre_direct_candidate_points: 0,
+            pre_direct_candidate_framed_bytes: 0,
+            continuation_hash_passes: 0,
+            codec_hash_passes: 0,
+            q_mask_digit_projections: 0,
+        }) };
+}
+
+#[cfg(test)]
+fn update_preflight_audit_counters_v1(update: impl FnOnce(&mut PreflightAuditCountersV1)) {
+    PREFLIGHT_AUDIT_COUNTERS_V1.with(|cell| {
+        let mut counters = cell.get();
+        update(&mut counters);
+        cell.set(counters);
+    });
+}
+
+#[cfg(test)]
+fn preflight_audit_counters_v1() -> PreflightAuditCountersV1 {
+    PREFLIGHT_AUDIT_COUNTERS_V1.with(Cell::get)
+}
+
 struct CrossFieldInventoryProofViewV1<'a> {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
+    pre_direct_candidate_point_root: [u8; DIGEST_BYTES_V1],
     continuation_digest: [u8; DIGEST_BYTES_V1],
     inventory: &'a [u8],
     continuation: &'a [u8],
@@ -558,9 +737,10 @@ struct CrossFieldInventoryProofViewV1<'a> {
 }
 
 impl<'a> CrossFieldInventoryProofViewV1<'a> {
-    fn from_canonical_bytes_exact_v1(
+    /// Parse and authenticate the internally declared inventory body without
+    /// granting authority to its header-supplied prior context.
+    fn from_self_consistent_canonical_bytes_exact_v1(
         bytes: &'a [u8],
-        expected_prior_context: [u8; DIGEST_BYTES_V1],
     ) -> Result<Self, RnsNativeCrossFieldInventoryErrorV1> {
         if bytes.len() > PROOF_MAX_BYTES_V1 {
             return Err(RnsNativeCrossFieldInventoryErrorV1::ProofCapExceeded);
@@ -568,6 +748,8 @@ impl<'a> CrossFieldInventoryProofViewV1<'a> {
         if bytes.len() < MIN_PROOF_BYTES_V1 {
             return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidHeader);
         }
+        #[cfg(test)]
+        update_preflight_audit_counters_v1(|counters| counters.header_passes += 1);
         let mut decoder = DecoderV1::new(bytes);
         if decoder.array::<4>()? != INVENTORY_MAGIC_V1
             || decoder.u8()? != INVENTORY_VERSION_V1
@@ -612,7 +794,6 @@ impl<'a> CrossFieldInventoryProofViewV1<'a> {
         if decoder.cursor != HEADER_BYTES_V1
             || continuation_len == 0
             || expected_total != bytes.len()
-            || prior_context_digest != expected_prior_context
             || [prior_context_digest, inventory_root, continuation_digest].contains(&[0; 32])
             || prior_context_digest == inventory_root
             || prior_context_digest == continuation_digest
@@ -624,8 +805,9 @@ impl<'a> CrossFieldInventoryProofViewV1<'a> {
         let continuation = decoder.take(continuation_len)?;
         let codec_offset = decoder.cursor;
         let codec_digest = decoder.array()?;
+        let canonical_roots = canonical_inventory_root_v1(prior_context_digest, inventory)?;
         if decoder.cursor != bytes.len()
-            || canonical_inventory_root_v1(prior_context_digest, inventory)? != inventory_root
+            || canonical_roots.inventory_root != inventory_root
             || canonical_continuation_digest_v1(prior_context_digest, inventory_root, continuation)?
                 != continuation_digest
             || codec_digest == [0; DIGEST_BYTES_V1]
@@ -639,21 +821,235 @@ impl<'a> CrossFieldInventoryProofViewV1<'a> {
         Ok(Self {
             prior_context_digest,
             inventory_root,
+            pre_direct_candidate_point_root: canonical_roots.pre_direct_candidate_point_root,
             continuation_digest,
             inventory,
             continuation,
             codec_digest,
         })
     }
+
+    fn validate_expected_prior_context_v1(
+        &self,
+        expected_prior_context: [u8; DIGEST_BYTES_V1],
+    ) -> Result<(), RnsNativeCrossFieldInventoryErrorV1> {
+        if self.prior_context_digest != expected_prior_context {
+            return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidHeader);
+        }
+        Ok(())
+    }
+
+    fn from_canonical_bytes_exact_v1(
+        bytes: &'a [u8],
+        expected_prior_context: [u8; DIGEST_BYTES_V1],
+    ) -> Result<Self, RnsNativeCrossFieldInventoryErrorV1> {
+        let view = Self::from_self_consistent_canonical_bytes_exact_v1(bytes)?;
+        view.validate_expected_prior_context_v1(expected_prior_context)?;
+        Ok(view)
+    }
+}
+
+/// Purpose-sealed production issuer for the exact envelope-owned proof lease.
+///
+/// Only the section-codec module can construct the opaque permit. A detached
+/// byte slice cannot mint this issuer.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the exact sealed-envelope permit must be consumed once"
+)]
+pub(super) struct RnsNativePreQpcsCrossProofLeaseIssuerV1<'proof> {
+    permit: RnsNativeSealedCrossProofInventoryPermitV1<'proof>,
+    proof: &'proof [u8],
+}
+
+impl<'proof> RnsNativePreQpcsCrossProofLeaseIssuerV1<'proof> {
+    pub(super) fn from_sealed_envelope_v1(
+        permit: RnsNativeSealedCrossProofInventoryPermitV1<'proof>,
+        proof: &'proof [u8],
+    ) -> Self {
+        Self { permit, proof }
+    }
+}
+
+#[allow(
+    missing_copy_implementations,
+    reason = "lease provenance must move with the exact proof borrow"
+)]
+enum RnsNativePreQpcsCrossProofLeaseOriginV1<'proof> {
+    SealedEnvelope(RnsNativeSealedCrossProofInventoryPermitV1<'proof>),
+    #[cfg(test)]
+    RawFixture,
+}
+
+/// Move-only lease over the exact inner cross-proof allocation.
+///
+/// It has no raw-byte accessor and is useful only by consumption into the
+/// provisional preflight below. Production construction requires the opaque
+/// sealed-envelope permit; the detached raw fixture is compiled only for tests.
+#[allow(
+    missing_copy_implementations,
+    reason = "an exact proof allocation must have one consuming preflight owner"
+)]
+#[must_use = "the exact proof-slice lease must be consumed by its provisional preflight"]
+pub(super) struct RnsNativePreQpcsCrossProofLeaseV1<'proof> {
+    proof: &'proof [u8],
+    origin: RnsNativePreQpcsCrossProofLeaseOriginV1<'proof>,
+}
+
+impl<'proof> RnsNativePreQpcsCrossProofLeaseV1<'proof> {
+    pub(super) fn from_production_issuer_v1(
+        issuer: RnsNativePreQpcsCrossProofLeaseIssuerV1<'proof>,
+    ) -> Self {
+        Self {
+            proof: issuer.proof,
+            origin: RnsNativePreQpcsCrossProofLeaseOriginV1::SealedEnvelope(issuer.permit),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn from_raw_fixture_v1(proof: &'proof [u8]) -> Self {
+        Self {
+            proof,
+            origin: RnsNativePreQpcsCrossProofLeaseOriginV1::RawFixture,
+        }
+    }
+}
+
+/// Provisional, move-only, non-authorizing q-mask inventory preflight.
+///
+/// This owner proves only that one leased inner proof body is internally
+/// canonical and self-consistent.  In particular, its header-selected prior
+/// context is not trusted.  It exposes one q-mask `S` digit at a time and no
+/// raw bytes, digest, root, continuation, inverse, complement, or point array.
+/// Final authority can arise only when this exact owner is consumed against
+/// the identical typed cross-section allocation and linked final context.
+#[allow(
+    missing_copy_implementations,
+    reason = "the provisional proof lease and parsed view must be consumed exactly once"
+)]
+#[must_use = "the provisional q-mask owner must be consumed by final inventory authentication"]
+pub(super) struct RnsNativePreQpcsQMaskInventoryPreflightV1<'proof> {
+    lease: RnsNativePreQpcsCrossProofLeaseV1<'proof>,
+    view: CrossFieldInventoryProofViewV1<'proof>,
+}
+
+impl<'proof> RnsNativePreQpcsQMaskInventoryPreflightV1<'proof> {
+    pub(super) fn preflight_v1(
+        lease: RnsNativePreQpcsCrossProofLeaseV1<'proof>,
+    ) -> Result<Self, RnsNativeCrossFieldInventoryErrorV1> {
+        let view = CrossFieldInventoryProofViewV1::from_self_consistent_canonical_bytes_exact_v1(
+            lease.proof,
+        )?;
+        Ok(Self { lease, view })
+    }
+
+    /// Lend one exact q-mask `S` digit.  The direct module supplies the
+    /// limb/repetition/block-to-owner mapping and converts failures into its
+    /// own closed error vocabulary.
+    pub(super) fn project_q_mask_s_digit_v1(&self, owner: usize, digit: usize) -> Option<Point> {
+        pre_qpcs_q_mask_s_digit_v1(self.view.inventory, owner, digit)
+    }
+
+    #[cfg(test)]
+    fn into_exact_fixture_proof_view_v1(
+        self,
+        exact_proof: &'proof [u8],
+    ) -> Result<CrossFieldInventoryProofViewV1<'proof>, RnsNativeCrossFieldInventoryErrorV1> {
+        let Self { lease, view } = self;
+        if !matches!(
+            lease.origin,
+            RnsNativePreQpcsCrossProofLeaseOriginV1::RawFixture
+        ) {
+            return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
+        }
+        let same_pointer = core::ptr::eq(lease.proof.as_ptr(), exact_proof.as_ptr());
+        let same_length = lease.proof.len() == exact_proof.len();
+        let same_bytes = lease.proof == exact_proof;
+        if !(same_pointer && same_length && same_bytes) {
+            return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
+        }
+        Ok(view)
+    }
+
+    fn into_exact_bound_view_v1(
+        self,
+        bound: RnsNativeBoundCrossFieldGlobalLookupV1<'proof>,
+    ) -> Result<
+        (
+            ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'proof>,
+            CrossFieldInventoryProofViewV1<'proof>,
+        ),
+        RnsNativeCrossFieldInventoryErrorV1,
+    > {
+        let Self { lease, view } = self;
+        #[cfg(not(test))]
+        let RnsNativePreQpcsCrossProofLeaseOriginV1::SealedEnvelope(permit) = lease.origin;
+        #[cfg(test)]
+        let permit = match lease.origin {
+            RnsNativePreQpcsCrossProofLeaseOriginV1::SealedEnvelope(permit) => permit,
+            RnsNativePreQpcsCrossProofLeaseOriginV1::RawFixture => {
+                return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
+            }
+        };
+        let typed = authenticate_bound_cross_field_global_lookup_for_inventory_v1(bound, permit)
+            .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
+        if !core::ptr::eq(lease.proof.as_ptr(), typed.proof().as_ptr())
+            || lease.proof.len() != typed.proof().len()
+            || lease.proof != typed.proof()
+        {
+            return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
+        }
+        Ok((typed, view))
+    }
+}
+
+struct CanonicalInventoryRootsV1 {
+    inventory_root: [u8; DIGEST_BYTES_V1],
+    pre_direct_candidate_point_root: [u8; DIGEST_BYTES_V1],
+}
+
+fn pre_direct_candidate_manifest_digest_v1() -> [u8; DIGEST_BYTES_V1] {
+    let mut hash = Keccak256::new();
+    hash.update(PRE_DIRECT_CANDIDATE_MANIFEST_DOMAIN_V1);
+    hash.update(&[INVENTORY_VERSION_V1]);
+    hash.update(&(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes());
+    hash.update(&(REPETITIONS_V1 as u16).to_be_bytes());
+    hash.update(&(RECORDS_V1 as u16).to_be_bytes());
+    hash.update(&(BLOCKS_PER_RECORD_V1 as u16).to_be_bytes());
+    hash.update(&(RADIX_DIGITS_V1 as u16).to_be_bytes());
+    hash.update(&(Q_MASK_DIGITS_V1 as u16).to_be_bytes());
+    hash.update(&(POINT_BYTES_V1 as u16).to_be_bytes());
+    hash.update(&(PRE_DIRECT_CANDIDATE_POINTS_V1 as u32).to_be_bytes());
+    hash.update(&(PRE_DIRECT_CANDIDATE_POINT_BYTES_V1 as u32).to_be_bytes());
+    hash.update(&(PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1 as u32).to_be_bytes());
+    hash.update(&[PRE_DIRECT_CANDIDATE_SAFE_ROLES_V1 as u8]);
+    for (role, points) in [
+        (InventoryPointRoleV1::ComparatorDifferenceTop, 344_u32),
+        (InventoryPointRoleV1::ComparatorSumTop, 344),
+        (InventoryPointRoleV1::ComparatorDifferenceDigit, 5_848),
+        (InventoryPointRoleV1::ComparatorMixedTop, 344),
+        (InventoryPointRoleV1::ComparatorBorrow, 6_192),
+        (InventoryPointRoleV1::SmallSigned, 1_032),
+        (InventoryPointRoleV1::SmallNegativeMagnitude, 1_032),
+        (InventoryPointRoleV1::QMaskDigit, 6_400),
+        (InventoryPointRoleV1::QMaskComplementDigit, 6_400),
+    ] {
+        hash.update(&[role as u8]);
+        hash.update(&points.to_be_bytes());
+    }
+    hash.finalize()
 }
 
 fn canonical_inventory_root_v1(
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldInventoryErrorV1> {
+) -> Result<CanonicalInventoryRootsV1, RnsNativeCrossFieldInventoryErrorV1> {
     if prior_context_digest == [0; DIGEST_BYTES_V1] || inventory.len() != INVENTORY_BYTES_V1 {
         return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidGeometry);
     }
+    #[cfg(test)]
+    update_preflight_audit_counters_v1(|counters| counters.inventory_root_passes += 1);
     let mut hash = Keccak256::new();
     hash.update(INVENTORY_ROOT_DOMAIN_V1);
     hash.update(&[INVENTORY_VERSION_V1]);
@@ -661,7 +1057,19 @@ fn canonical_inventory_root_v1(
     hash.update(&(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes());
     hash.update(&(REPETITIONS_V1 as u16).to_be_bytes());
     hash.update(&(INVENTORY_POINTS_V1 as u32).to_be_bytes());
+    let candidate_manifest_digest = pre_direct_candidate_manifest_digest_v1();
+    let mut candidate_hash = Keccak256::new();
+    candidate_hash.update(PRE_DIRECT_CANDIDATE_POINT_DOMAIN_V1);
+    candidate_hash.update(&[INVENTORY_VERSION_V1]);
+    candidate_hash.update(&candidate_manifest_digest);
+    candidate_hash.update(&(PRE_DIRECT_CANDIDATE_POINTS_V1 as u32).to_be_bytes());
+    candidate_hash.update(&(PRE_DIRECT_CANDIDATE_POINT_BYTES_V1 as u32).to_be_bytes());
+    candidate_hash.update(&(PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1 as u32).to_be_bytes());
     for (ordinal, encoded) in inventory.chunks_exact(POINT_BYTES_V1).enumerate() {
+        #[cfg(test)]
+        update_preflight_audit_counters_v1(|counters| {
+            counters.point_validation_decodes += 1;
+        });
         Point::from_non_identity_wire_bytes_exact(encoded)
             .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidPoint)?;
         let coordinate = inventory_coordinate_v1(ordinal)?;
@@ -670,12 +1078,31 @@ fn canonical_inventory_root_v1(
         hash.update(&(coordinate.owner as u32).to_be_bytes());
         hash.update(&(coordinate.column as u16).to_be_bytes());
         hash.update(encoded);
+        if coordinate.role.is_pre_direct_candidate_v1() {
+            candidate_hash.update(&(ordinal as u32).to_be_bytes());
+            candidate_hash.update(&[coordinate.role as u8]);
+            candidate_hash.update(&(coordinate.owner as u32).to_be_bytes());
+            candidate_hash.update(&(coordinate.column as u16).to_be_bytes());
+            candidate_hash.update(encoded);
+            #[cfg(test)]
+            update_preflight_audit_counters_v1(|counters| {
+                counters.pre_direct_candidate_points += 1;
+                counters.pre_direct_candidate_framed_bytes += PRE_DIRECT_CANDIDATE_FRAME_BYTES_V1;
+            });
+        }
     }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
+    let inventory_root = hash.finalize();
+    let pre_direct_candidate_point_root = candidate_hash.finalize();
+    if inventory_root == [0; DIGEST_BYTES_V1]
+        || pre_direct_candidate_point_root == [0; DIGEST_BYTES_V1]
+        || inventory_root == pre_direct_candidate_point_root
+    {
         return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidIntegrity);
     }
-    Ok(digest)
+    Ok(CanonicalInventoryRootsV1 {
+        inventory_root,
+        pre_direct_candidate_point_root,
+    })
 }
 
 fn canonical_continuation_digest_v1(
@@ -689,6 +1116,8 @@ fn canonical_continuation_digest_v1(
     {
         return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidIntegrity);
     }
+    #[cfg(test)]
+    update_preflight_audit_counters_v1(|counters| counters.continuation_hash_passes += 1);
     let mut hash = Keccak256::new();
     hash.update(CONTINUATION_DOMAIN_V1);
     hash.update(&[INVENTORY_VERSION_V1]);
@@ -708,6 +1137,8 @@ fn canonical_continuation_digest_v1(
 }
 
 fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
+    #[cfg(test)]
+    update_preflight_audit_counters_v1(|counters| counters.codec_hash_passes += 1);
     let mut hash = Keccak256::new();
     hash.update(CODEC_DOMAIN_V1);
     hash.update(&[INVENTORY_VERSION_V1]);
@@ -717,6 +1148,126 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
 
 fn absorb_digest_v1(hash: &mut Keccak256, digest: [u8; DIGEST_BYTES_V1]) {
     hash.update(&digest);
+}
+
+/// Opaque one-shot projection of only the successor-independent inventory
+/// commitments authenticated through the exact sealed cross-proof allocation.
+/// It cannot be minted by detached typed-section authentication and exposes no
+/// raw constructor or parts transition.
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the exact sealed-allocation projection must move into one direct candidate axis"
+)]
+#[must_use = "the sealed pre-direct candidate projection must be consumed exactly once"]
+pub(super) struct RnsNativePreDirectInventoryCandidateProjectionV1 {
+    context_digest: [u8; DIGEST_BYTES_V1],
+    inventory_root: [u8; DIGEST_BYTES_V1],
+    _sealed_allocation_origin: RnsNativePreDirectCandidateSealedAllocationOriginV1,
+}
+
+#[allow(
+    dead_code,
+    missing_copy_implementations,
+    reason = "the sealed-allocation origin marker must remain move-only"
+)]
+struct RnsNativePreDirectCandidateSealedAllocationOriginV1(());
+
+impl RnsNativePreDirectInventoryCandidateProjectionV1 {
+    pub(super) fn is_valid_for_direct_fixed_axes_v1(
+        &self,
+        other_axes: &[[u8; DIGEST_BYTES_V1]],
+    ) -> bool {
+        self.context_digest != [0; DIGEST_BYTES_V1]
+            && self.inventory_root != [0; DIGEST_BYTES_V1]
+            && self.context_digest != self.inventory_root
+            && !other_axes.contains(&self.context_digest)
+            && !other_axes.contains(&self.inventory_root)
+    }
+
+    pub(super) fn absorb_direct_fixed_axes_v1(&self, hash: &mut Keccak256) {
+        hash.update(&self.context_digest);
+        hash.update(&self.inventory_root);
+    }
+
+    /// Construct the purpose-bound inventory portion of the direct safe-core
+    /// projection. The opaque radix axis must complete it before it can leave
+    /// the direct verifier; neither inventory digest can escape detached.
+    pub(super) fn bind_pending_existing_radix_safe_core_v1(
+        &self,
+        terminal_predecessor_context_binding_digest: [u8; DIGEST_BYTES_V1],
+        direct_core_safe_digest: [u8; DIGEST_BYTES_V1],
+    ) -> RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+        RnsNativeCrossFieldRlweSafeCoreProjectionV1 {
+            terminal_predecessor_context_binding_digest,
+            candidate_pre_direct_inventory_context_digest: self.context_digest,
+            candidate_pre_direct_inventory_root: self.inventory_root,
+            existing_radix_candidate_root: [0; DIGEST_BYTES_V1],
+            direct_core_safe_digest,
+        }
+    }
+}
+
+fn mint_pre_direct_inventory_candidate_projection_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    linked: &RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'_, S>,
+    point_root: [u8; DIGEST_BYTES_V1],
+) -> Result<RnsNativePreDirectInventoryCandidateProjectionV1, RnsNativeCrossFieldInventoryErrorV1> {
+    let source = linked.source();
+    let candidate_manifest_digest = pre_direct_candidate_manifest_digest_v1();
+    let safe_context = [
+        transcript.profile_manifest_digest(),
+        source.snapshot().layout().source_binding_digest(),
+        source.formula_digest(),
+        source.mapping_digest(),
+    ];
+    if point_root == [0; DIGEST_BYTES_V1]
+        || candidate_manifest_digest == [0; DIGEST_BYTES_V1]
+        || safe_context.contains(&[0; DIGEST_BYTES_V1])
+        || safe_context
+            .iter()
+            .enumerate()
+            .any(|(index, digest)| safe_context[index + 1..].contains(digest))
+    {
+        return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
+    }
+    let mut context_hash = Keccak256::new();
+    context_hash.update(PRE_DIRECT_CANDIDATE_CONTEXT_DOMAIN_V1);
+    context_hash.update(&[INVENTORY_VERSION_V1]);
+    context_hash.update(&candidate_manifest_digest);
+    for digest in safe_context {
+        context_hash.update(&digest);
+    }
+    let context_digest = context_hash.finalize();
+    if context_digest == [0; DIGEST_BYTES_V1]
+        || context_digest == point_root
+        || context_digest == candidate_manifest_digest
+        || safe_context.contains(&context_digest)
+    {
+        return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidIntegrity);
+    }
+    let mut final_hash = Keccak256::new();
+    final_hash.update(PRE_DIRECT_CANDIDATE_FINAL_DOMAIN_V1);
+    final_hash.update(&[INVENTORY_VERSION_V1]);
+    final_hash.update(&candidate_manifest_digest);
+    final_hash.update(&context_digest);
+    final_hash.update(&point_root);
+    final_hash.update(&(PRE_DIRECT_CANDIDATE_POINTS_V1 as u32).to_be_bytes());
+    final_hash.update(&(PRE_DIRECT_CANDIDATE_FRAMED_BYTES_V1 as u32).to_be_bytes());
+    let inventory_root = final_hash.finalize();
+    if inventory_root == [0; DIGEST_BYTES_V1]
+        || inventory_root == candidate_manifest_digest
+        || inventory_root == context_digest
+        || inventory_root == point_root
+        || safe_context.contains(&inventory_root)
+    {
+        return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidIntegrity);
+    }
+    Ok(RnsNativePreDirectInventoryCandidateProjectionV1 {
+        context_digest,
+        inventory_root,
+        _sealed_allocation_origin: RnsNativePreDirectCandidateSealedAllocationOriginV1(()),
+    })
 }
 
 fn prior_context_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
@@ -842,7 +1393,7 @@ fn prior_context_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     linked: &RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'_, S>,
     cross: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'_>,
-    view: CrossFieldInventoryProofViewV1<'_>,
+    view: &CrossFieldInventoryProofViewV1<'_>,
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeCrossFieldInventoryErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(PREREQUISITE_DOMAIN_V1);
@@ -875,6 +1426,35 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     Ok(digest)
 }
 
+fn finish_rns_native_cross_field_inventory_authentication_v1<'source, 'proof, S>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    linked: RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'source, S>,
+    cross: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'proof>,
+    qpcs_evaluations: CanonicalQpcsEvaluationGridV1<'source>,
+    view: CrossFieldInventoryProofViewV1<'proof>,
+    pre_direct_candidate_projection: Option<RnsNativePreDirectInventoryCandidateProjectionV1>,
+) -> Result<
+    RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    RnsNativeCrossFieldInventoryErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let binding_digest = prerequisite_binding_digest_v1(&linked, cross, &view)?;
+    Ok(RnsNativeCrossFieldInventoryPrerequisiteV1 {
+        linked,
+        qpcs_evaluations,
+        inventory: view.inventory,
+        continuation: view.continuation,
+        terminal_transcript_digest: transcript.transcript_digest(),
+        prior_context_digest: view.prior_context_digest,
+        inventory_root: view.inventory_root,
+        continuation_digest: view.continuation_digest,
+        binding_digest,
+        pre_direct_candidate_projection,
+    })
+}
+
 /// Move-only, private, non-authorizing 40-limb commitment inventory.
 ///
 /// The continuation is intentionally opaque.  It must later be consumed by a
@@ -898,6 +1478,7 @@ pub(super) struct RnsNativeCrossFieldInventoryPrerequisiteV1<
     inventory_root: [u8; DIGEST_BYTES_V1],
     continuation_digest: [u8; DIGEST_BYTES_V1],
     binding_digest: [u8; DIGEST_BYTES_V1],
+    pre_direct_candidate_projection: Option<RnsNativePreDirectInventoryCandidateProjectionV1>,
 }
 
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
@@ -934,6 +1515,25 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
+    }
+
+    /// Take the sealed-allocation candidate projection exactly once. Detached
+    /// typed authentication leaves this slot empty and a repeated take fails
+    /// closed.
+    pub(super) fn take_pre_direct_candidate_projection_v1(
+        &mut self,
+    ) -> Result<RnsNativePreDirectInventoryCandidateProjectionV1, RnsNativeCrossFieldInventoryErrorV1>
+    {
+        self.pre_direct_candidate_projection
+            .take()
+            .ok_or(RnsNativeCrossFieldInventoryErrorV1::InvalidContext)
+    }
+
+    /// Narrow post-equation alias for the enclosing packing identity retained
+    /// by the exact linked source/terminal owner. It must never be projected
+    /// into a pre-challenge safe core.
+    pub(super) const fn enclosing_packing_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.linked.anchor_digest()
     }
 
     pub(super) fn comparator_top_commitments(&self, group: usize) -> Option<(Point, Point)> {
@@ -1048,18 +1648,120 @@ where
         cross.proof(),
         prior_context_digest,
     )?;
-    let binding_digest = prerequisite_binding_digest_v1(&linked, cross, view)?;
-    Ok(RnsNativeCrossFieldInventoryPrerequisiteV1 {
+    finish_rns_native_cross_field_inventory_authentication_v1(
+        transcript,
         linked,
+        cross,
         qpcs_evaluations,
-        inventory: view.inventory,
-        continuation: view.continuation,
-        terminal_transcript_digest: transcript.transcript_digest(),
-        prior_context_digest: view.prior_context_digest,
-        inventory_root: view.inventory_root,
-        continuation_digest: view.continuation_digest,
-        binding_digest,
-    })
+        view,
+        None,
+    )
+}
+
+/// Consume the provisional pre-qPCS owner into the ordinary authenticated
+/// inventory prerequisite without a second header, full point-validation,
+/// inventory-root, continuation, or codec pass.  The ordinary prerequisite
+/// binding hash is still computed exactly once after final context binding.
+///
+/// The exact typed `cross.proof()` allocation must be pointer-, length-, and
+/// byte-identical to the leased allocation.  Equal bytes copied into a second
+/// allocation are rejected. This detached typed-section compatibility path is
+/// test-only; production must consume the sealed Envelope transition below.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "the raw typed-section compatibility path exists only for bounded fixtures"
+)]
+pub(super) fn authenticate_rns_native_cross_field_inventory_from_pre_qpcs_preflight_v1<
+    'source,
+    'proof,
+    S,
+>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    linked: RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'source, S>,
+    cross: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'proof>,
+    preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'proof>,
+) -> Result<
+    RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    RnsNativeCrossFieldInventoryErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let view = preflight.into_exact_fixture_proof_view_v1(cross.proof())?;
+    let qpcs_evaluations = CanonicalQpcsEvaluationGridV1::from_authenticated_bytes_v1(
+        linked.source().qpcs().evaluations(),
+    )?;
+    let prior_context_digest =
+        prior_context_digest_v1(transcript, &linked, cross, qpcs_evaluations)?;
+    view.validate_expected_prior_context_v1(prior_context_digest)?;
+    finish_rns_native_cross_field_inventory_authentication_v1(
+        transcript,
+        linked,
+        cross,
+        qpcs_evaluations,
+        view,
+        None,
+    )
+}
+
+/// Consume the exact bound envelope section and its sealed provisional
+/// preflight into the ordinary authenticated inventory prerequisite.
+///
+/// Whole-envelope, whole-section, proof-offset, pointer, length, and byte
+/// identity are checked before the first linked-source access. The already
+/// parsed inner inventory view is then reused without another header, point,
+/// root, continuation, or codec pass.
+#[allow(
+    dead_code,
+    reason = "the claimed-qPCS carrier has not yet taken ownership of the outer envelope lease"
+)]
+pub(super) fn authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1<
+    'source,
+    'proof,
+    S,
+>(
+    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    source: RnsNativeRlweSourceStatementStageV1<'source, S>,
+    terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
+    zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
+    bound: RnsNativeBoundCrossFieldGlobalLookupV1<'proof>,
+    preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'proof>,
+) -> Result<
+    RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    RnsNativeCrossFieldInventoryErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let (cross, view) = preflight.into_exact_bound_view_v1(bound)?;
+    let linked = link_rns_native_source_terminal_cross_field_v1(
+        transcript,
+        source,
+        terminal,
+        zero_padding,
+        cross,
+    )
+    .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
+    let qpcs_evaluations = CanonicalQpcsEvaluationGridV1::from_authenticated_bytes_v1(
+        linked.source().qpcs().evaluations(),
+    )?;
+    let prior_context_digest =
+        prior_context_digest_v1(transcript, &linked, cross, qpcs_evaluations)?;
+    view.validate_expected_prior_context_v1(prior_context_digest)?;
+    let pre_direct_candidate_projection = mint_pre_direct_inventory_candidate_projection_v1(
+        transcript,
+        &linked,
+        view.pre_direct_candidate_point_root,
+    )?;
+    finish_rns_native_cross_field_inventory_authentication_v1(
+        transcript,
+        linked,
+        cross,
+        qpcs_evaluations,
+        view,
+        Some(pre_direct_candidate_projection),
+    )
 }
 
 #[cfg(test)]

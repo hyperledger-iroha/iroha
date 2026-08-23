@@ -2,7 +2,7 @@
 //! SoraDNS resolver prototype library.
 //!
 //! The resolver ingests proof bundles and resolver adverts, tracks resolver
-//! state, emits change events, and exposes DNS transports (DoH, DoT, DoQ) that
+//! state, emits change events, and exposes DNS transports (DoH and DoT) that
 //! currently resolve against a static record set supplied via configuration.
 pub mod bundle;
 pub mod canonical;
@@ -20,7 +20,7 @@ use crate::{
     events::EventEmitter,
     limits::{
         MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
-        MAX_TLS_KEY_BYTES, read_bounded_file, replace_retained_bytes,
+        MAX_TLS_KEY_BYTES, read_bounded_file, read_bounded_private_file, replace_retained_bytes,
     },
     rad::{ResolverAttestation, rad_retained_bytes, validate_rad},
     state::{ResolverState, ResolverStateMetrics},
@@ -28,8 +28,9 @@ use crate::{
 use axum::{
     Router,
     body::{Body, Bytes},
-    extract::{Query, State as AxumState},
-    http::{Response, StatusCode},
+    extract::{DefaultBodyLimit, RawQuery, Request, State as AxumState},
+    http::{HeaderMap, Response, StatusCode, header},
+    middleware::{self, Next},
     response::sse::{Event as SseEvent, KeepAlive, Sse},
     routing::{get, post},
 };
@@ -48,6 +49,7 @@ use rustls::{
 use std::{
     collections::HashMap,
     convert::Infallible,
+    fmt,
     net::SocketAddr,
     path::Path,
     sync::{
@@ -59,16 +61,25 @@ use std::{
 use time::OffsetDateTime;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, UdpSocket},
+    net::TcpListener,
     signal,
-    sync::RwLock,
-    task::JoinHandle,
-    time::{Instant, MissedTickBehavior, interval_at},
+    sync::{OwnedSemaphorePermit, RwLock, Semaphore},
+    task::{JoinHandle, JoinSet},
+    time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
 const DNS_CONTENT_TYPE: &str = "application/dns-message";
+const MAX_DNS_MESSAGE_BYTES_V1: usize = u16::MAX as usize;
+const MAX_DOH_GET_ENCODED_BYTES_V1: usize = MAX_DNS_MESSAGE_BYTES_V1.div_ceil(3) * 4;
+const MAX_DOT_CONCURRENT_SESSIONS_V1: usize = 256;
+const OPERATIONS_AUTH_TOKEN_FILE_MAX_BYTES_V1: usize = 258;
+const DOT_TLS_HANDSHAKE_TIMEOUT_V1: Duration = Duration::from_secs(5);
+const DOT_IO_TIMEOUT_V1: Duration = Duration::from_secs(15);
+const HTTP_CONNECT_TIMEOUT_V1: Duration = Duration::from_secs(5);
+const HTTP_REQUEST_TIMEOUT_V1: Duration = Duration::from_secs(15);
+const HTTP_REDIRECT_LIMIT_V1: usize = 5;
 /// Shared resolver application state guarded by an async `RwLock`.
 pub type SharedState = Arc<RwLock<ResolverState>>;
 #[derive(Clone, Default)]
@@ -124,6 +135,7 @@ pub struct ResolverDaemon {
     tls: Option<ResolverTls>,
     event_addr: Option<SocketAddr>,
     metrics: MetricsRegistry,
+    operations_authorization: Option<Arc<OperationsAuthorization>>,
 }
 #[derive(Clone)]
 struct ResolverTls {
@@ -186,18 +198,90 @@ impl AppContext {
         self.sync_interval
     }
 }
+struct OperationsAuthorization {
+    token_hash: [u8; 32],
+}
+impl OperationsAuthorization {
+    fn load(path: &Path) -> Result<Self> {
+        let mut bytes = read_bounded_private_file(
+            path,
+            OPERATIONS_AUTH_TOKEN_FILE_MAX_BYTES_V1,
+            "SoraDNS operational bearer token",
+        )?;
+        let token_hash = (|| {
+            let token_bytes = if bytes.ends_with(b"\r\n") {
+                &bytes[..bytes.len() - 2]
+            } else if bytes.ends_with(b"\n") {
+                &bytes[..bytes.len() - 1]
+            } else {
+                bytes.as_slice()
+            };
+            if !(32..=256).contains(&token_bytes.len())
+                || !token_bytes.iter().all(u8::is_ascii_graphic)
+            {
+                eyre::bail!(
+                    "SoraDNS operational bearer token must contain 32 to 256 printable non-whitespace ASCII bytes"
+                );
+            }
+            Ok(*blake3::hash(token_bytes).as_bytes())
+        })();
+        bytes.fill(0);
+        std::hint::black_box(bytes.as_mut_slice());
+        Ok(Self {
+            token_hash: token_hash?,
+        })
+    }
+    fn matches(&self, candidate: &str) -> bool {
+        constant_time_eq_32(
+            &self.token_hash,
+            blake3::hash(candidate.as_bytes()).as_bytes(),
+        )
+    }
+    fn clear(&mut self) {
+        self.token_hash.fill(0);
+        std::hint::black_box(&mut self.token_hash);
+    }
+}
+fn constant_time_eq_32(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    let mut difference = 0_u8;
+    for index in 0..32 {
+        difference |= left[index] ^ right[index];
+    }
+    difference == 0
+}
+impl fmt::Debug for OperationsAuthorization {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OperationsAuthorization")
+            .field("token_hash", &"<redacted>")
+            .finish()
+    }
+}
+impl Drop for OperationsAuthorization {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 impl ResolverDaemon {
     /// Create a new resolver daemon. Validates configuration and initialises state.
     pub fn new(config: ResolverConfig) -> Result<Self> {
         config.validate()?;
         let http_client = reqwest::Client::builder()
             .user_agent("soradns-resolver/0.1.0")
+            .connect_timeout(HTTP_CONNECT_TIMEOUT_V1)
+            .timeout(HTTP_REQUEST_TIMEOUT_V1)
+            .redirect(reqwest::redirect::Policy::limited(HTTP_REDIRECT_LIMIT_V1))
             .build()?;
         let tls = match config.dot_tls() {
             Some(tls) => Some(load_tls_configs(tls)?),
             None => None,
         };
         let event_addr = config.event_listen();
+        let operations_authorization = config
+            .operations_auth_token_path()
+            .map(OperationsAuthorization::load)
+            .transpose()?
+            .map(Arc::new);
         let mut state = ResolverState::new(config.resolver_id.clone(), config.region.clone());
         state.update_static_zones(config.static_zones())?;
         let events =
@@ -210,6 +294,7 @@ impl ResolverDaemon {
             tls,
             event_addr,
             metrics: MetricsRegistry::new(),
+            operations_authorization,
         })
     }
     /// Returns a clone of the shared state handle for background tasks.
@@ -219,9 +304,15 @@ impl ResolverDaemon {
     }
     /// Performs a single synchronization pass and returns the number of tracked zones.
     pub async fn sync_once(&self) -> Result<usize> {
+        let loaded = self.fetch_proof_bundles().await?;
+        let adverts = self.fetch_rad_entries().await?;
         let mut state = self.state.write().await;
-        let bundle_count = self.load_proof_bundles(&mut state).await?;
-        let rad_count = self.refresh_rad_entries(&mut state).await?;
+        let bundle_diff = state.update_bundles(loaded)?;
+        self.events.emit_bundle_diff(&bundle_diff);
+        let resolver_diff = state.update_resolver_adverts(adverts)?;
+        self.events.emit_resolver_diff(&resolver_diff);
+        let bundle_count = state.bundle_count();
+        let rad_count = state.resolver_advert_count();
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let expirations = state.prune_stale_entries(now)?;
         self.events.emit_expirations(&expirations);
@@ -235,7 +326,7 @@ impl ResolverDaemon {
         self.metrics.update_last_sync(now);
         Ok(state.zone_count())
     }
-    async fn load_proof_bundles(&self, state: &mut ResolverState) -> Result<usize> {
+    async fn fetch_proof_bundles(&self) -> Result<HashMap<String, ProofBundleV1>> {
         let mut loaded: HashMap<String, ProofBundleV1> = HashMap::new();
         let mut retained_bytes = 0usize;
         for source in self.config.bundle_sources() {
@@ -298,11 +389,9 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_bundles(loaded)?;
-        self.events.emit_bundle_diff(&diff);
-        Ok(state.bundle_count())
+        Ok(loaded)
     }
-    async fn refresh_rad_entries(&self, state: &mut ResolverState) -> Result<usize> {
+    async fn fetch_rad_entries(&self) -> Result<HashMap<String, ResolverAttestation>> {
         let mut adverts: HashMap<String, ResolverAttestation> = HashMap::new();
         let mut retained_bytes = 0usize;
         for source in self.config.rad_sources() {
@@ -369,9 +458,7 @@ impl ResolverDaemon {
                 ),
             }
         }
-        let diff = state.update_resolver_adverts(adverts)?;
-        self.events.emit_resolver_diff(&diff);
-        Ok(state.resolver_advert_count())
+        Ok(adverts)
     }
     /// Run the daemon, spawning DNS transports and the event stream endpoint.
     pub async fn run(&self) -> Result<()> {
@@ -411,19 +498,29 @@ impl ResolverDaemon {
                 warn!(%addr, "DoT listener requested without TLS configuration; skipping");
             }
         }
-        for &addr in self.config.doq_listen() {
-            tasks.push(tokio::spawn(start_doq_server(addr, self.state.clone())));
-        }
         if let Some(addr) = self.event_addr {
-            tasks.push(tokio::spawn(start_event_server(addr, self.events.clone())));
+            let authorization = Arc::clone(
+                self.operations_authorization
+                    .as_ref()
+                    .expect("validated operational listener has bearer authentication"),
+            );
+            tasks.push(tokio::spawn(start_event_server(
+                addr,
+                self.events.clone(),
+                AppContext::new(self.state.clone(), self.metrics.clone(), sync_interval),
+                authorization,
+            )));
         }
         info!("resolver listeners started; waiting for shutdown signal");
         if let Err(error) = signal::ctrl_c().await {
             warn!(?error, "failed to install ctrl-c handler");
         }
         info!("shutdown signal received; terminating listeners");
-        for handle in tasks {
+        for handle in &tasks {
             handle.abort();
+        }
+        for handle in tasks {
+            let _ = handle.await;
         }
         Ok(())
     }
@@ -441,8 +538,7 @@ async fn start_doh_server(
             let router = Router::new()
                 .route("/dns-query", get(doh_get))
                 .route("/dns-query", post(doh_post))
-                .route("/metrics", get(metrics_handler))
-                .route("/healthz", get(health_handler))
+                .layer(DefaultBodyLimit::max(MAX_DNS_MESSAGE_BYTES_V1))
                 .with_state(ctx);
             if let Err(error) = axum::serve(listener, router.into_make_service()).await {
                 warn!(%addr, ?error, "DoH server exited with error");
@@ -456,20 +552,36 @@ async fn start_dot_server(addr: SocketAddr, tls_config: Arc<ServerConfig>, state
         Ok(listener) => {
             info!(%addr, "DoT listener bound");
             let acceptor = TlsAcceptor::from(tls_config);
+            let session_permits = Arc::new(Semaphore::new(MAX_DOT_CONCURRENT_SESSIONS_V1));
+            let mut sessions = JoinSet::new();
             loop {
-                match listener.accept().await {
-                    Ok((stream, peer)) => {
-                        let acceptor = acceptor.clone();
-                        let state = state.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) = handle_dot_stream(stream, acceptor, state).await {
-                                warn!(%peer, ?error, "DoT session failed");
-                            }
-                        });
+                tokio::select! {
+                    Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                        if let Err(error) = result {
+                            warn!(?error, "DoT session task failed");
+                        }
                     }
-                    Err(error) => {
-                        warn!(%addr, ?error, "DoT accept failed");
-                        break;
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _peer)) => {
+                                let Some(permit) = try_dot_session_permit(&session_permits) else {
+                                    warn!("DoT session capacity reached; rejecting connection");
+                                    continue;
+                                };
+                                let acceptor = acceptor.clone();
+                                let state = state.clone();
+                                sessions.spawn(async move {
+                                    let _permit = permit;
+                                    if let Err(error) = handle_dot_stream(stream, acceptor, state).await {
+                                        warn!(?error, "DoT session failed");
+                                    }
+                                });
+                            }
+                            Err(error) => {
+                                warn!(%addr, ?error, "DoT accept failed");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -477,46 +589,78 @@ async fn start_dot_server(addr: SocketAddr, tls_config: Arc<ServerConfig>, state
         Err(error) => error!(%addr, ?error, "failed to bind DoT listener"),
     }
 }
-/// Temporary UDP DoQ listener used until QUIC support returns.
-async fn start_doq_server(addr: SocketAddr, state: SharedState) {
-    match UdpSocket::bind(addr).await {
-        Ok(socket) => {
-            info!(%addr, "DoQ listener bound (UDP stub)");
-            let mut buf = vec![0_u8; 4096];
-            loop {
-                match socket.recv_from(&mut buf).await {
-                    Ok((len, peer)) => {
-                        let payload = &buf[..len];
-                        match dns::decode_message(payload) {
-                            Ok(request) => {
-                                if let Some(response) = resolve_bytes(&state, &request).await
-                                    && let Err(error) = socket.send_to(&response, peer).await
-                                {
-                                    warn!(%peer, ?error, "failed to send DoQ response");
-                                }
-                            }
-                            Err(error) => {
-                                warn!(?error, %peer, "failed to decode DoQ datagram");
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        warn!(%addr, ?error, "DoQ listener receive error");
-                        break;
-                    }
-                }
-            }
-        }
-        Err(error) => error!(%addr, ?error, "failed to bind DoQ listener"),
+fn request_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
     }
+    let value = value.to_str().ok()?;
+    if !(39..=263).contains(&value.len()) {
+        return None;
+    }
+    let mut parts = value.split_ascii_whitespace();
+    let scheme = parts.next()?;
+    let token = parts.next()?;
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || !(32..=256).contains(&token.len())
+        || !token.bytes().all(|byte| byte.is_ascii_graphic())
+        || parts.next().is_some()
+    {
+        return None;
+    }
+    Some(token)
 }
-async fn start_event_server(addr: SocketAddr, emitter: EventEmitter) {
+async fn authorize_operational_request(
+    AxumState(authorization): AxumState<Arc<OperationsAuthorization>>,
+    request: Request,
+    next: Next,
+) -> Response<Body> {
+    if request_bearer_token(request.headers())
+        .is_some_and(|candidate| authorization.matches(candidate))
+    {
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        response.headers_mut().insert(
+            header::PRAGMA,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+        return response;
+    }
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(header::WWW_AUTHENTICATE, "Bearer")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::PRAGMA, "no-cache")
+        .body(Body::from("authentication required"))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+async fn start_event_server(
+    addr: SocketAddr,
+    emitter: EventEmitter,
+    app_context: AppContext,
+    authorization: Arc<OperationsAuthorization>,
+) {
     match TcpListener::bind(addr).await {
         Ok(listener) => {
             info!(%addr, "event stream listener bound");
-            let router = Router::new()
+            let event_router = Router::new()
                 .route("/events", get(sse_handler))
                 .with_state(emitter);
+            let telemetry_router = Router::new()
+                .route("/metrics", get(metrics_handler))
+                .route("/healthz", get(health_handler))
+                .with_state(app_context);
+            let router =
+                event_router
+                    .merge(telemetry_router)
+                    .layer(middleware::from_fn_with_state(
+                        authorization,
+                        authorize_operational_request,
+                    ));
             if let Err(error) = axum::serve(listener, router.into_make_service()).await {
                 warn!(%addr, ?error, "event stream server exited with error");
             }
@@ -529,39 +673,98 @@ async fn handle_dot_stream(
     acceptor: TlsAcceptor,
     state: SharedState,
 ) -> eyre::Result<()> {
-    let mut tls_stream = acceptor.accept(stream).await?;
+    let mut tls_stream = timeout(DOT_TLS_HANDSHAKE_TIMEOUT_V1, acceptor.accept(stream))
+        .await
+        .map_err(|_| eyre::eyre!("DoT TLS handshake timed out"))??;
     let mut len_bytes = [0_u8; 2];
-    tls_stream.read_exact(&mut len_bytes).await?;
+    timeout(DOT_IO_TIMEOUT_V1, tls_stream.read_exact(&mut len_bytes))
+        .await
+        .map_err(|_| eyre::eyre!("DoT frame length read timed out"))??;
     let frame_len = u16::from_be_bytes(len_bytes) as usize;
     let mut payload = vec![0_u8; frame_len];
-    tls_stream.read_exact(&mut payload).await?;
+    timeout(DOT_IO_TIMEOUT_V1, tls_stream.read_exact(&mut payload))
+        .await
+        .map_err(|_| eyre::eyre!("DoT frame body read timed out"))??;
     if let Ok(request) = dns::decode_message(&payload) {
         if let Some(bytes) = resolve_bytes(&state, &request).await {
-            tls_stream
-                .write_all(&(bytes.len() as u16).to_be_bytes())
-                .await?;
-            tls_stream.write_all(&bytes).await?;
+            let response_len = dot_response_length_prefix(bytes.len())?;
+            timeout(DOT_IO_TIMEOUT_V1, async {
+                tls_stream.write_all(&response_len).await?;
+                tls_stream.write_all(&bytes).await
+            })
+            .await
+            .map_err(|_| eyre::eyre!("DoT response write timed out"))??;
         }
     } else {
         warn!("failed to decode DoT request");
     }
-    tls_stream.flush().await?;
+    timeout(DOT_IO_TIMEOUT_V1, tls_stream.flush())
+        .await
+        .map_err(|_| eyre::eyre!("DoT response flush timed out"))??;
     Ok(())
+}
+fn dot_response_length_prefix(response_len: usize) -> eyre::Result<[u8; 2]> {
+    let response_len = u16::try_from(response_len)
+        .map_err(|_| eyre::eyre!("DoT response exceeds the 65,535-byte framing limit"))?;
+    Ok(response_len.to_be_bytes())
+}
+fn try_dot_session_permit(semaphore: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+    Arc::clone(semaphore).try_acquire_owned().ok()
 }
 async fn doh_get(
     AxumState(ctx): AxumState<AppContext>,
-    Query(params): Query<HashMap<String, String>>,
+    RawQuery(raw_query): RawQuery,
 ) -> Response<Body> {
-    let Some(encoded) = params.get("dns") else {
-        return build_error_response(StatusCode::BAD_REQUEST, "missing dns parameter");
+    let encoded = match parse_doh_get_query(raw_query.as_deref()) {
+        Ok(encoded) => encoded,
+        Err(message) => return build_error_response(StatusCode::BAD_REQUEST, message),
     };
     match URL_SAFE_NO_PAD.decode(encoded.as_bytes()) {
-        Ok(bytes) => ctx.resolve_dns(&bytes).await,
+        Ok(bytes) if bytes.len() <= MAX_DNS_MESSAGE_BYTES_V1 => ctx.resolve_dns(&bytes).await,
+        Ok(_) => build_error_response(StatusCode::BAD_REQUEST, "dns parameter is too large"),
         Err(_) => build_error_response(StatusCode::BAD_REQUEST, "invalid base64 dns parameter"),
     }
 }
-async fn doh_post(AxumState(ctx): AxumState<AppContext>, body: Bytes) -> Response<Body> {
+fn parse_doh_get_query(raw_query: Option<&str>) -> std::result::Result<&str, &'static str> {
+    let raw_query = raw_query.ok_or("missing dns parameter")?;
+    if raw_query.len() > 4 + MAX_DOH_GET_ENCODED_BYTES_V1 {
+        return Err("dns parameter is too large");
+    }
+    let encoded = raw_query
+        .strip_prefix("dns=")
+        .filter(|value| !value.is_empty() && !value.contains('&'))
+        .ok_or("query must contain exactly one dns parameter")?;
+    if encoded.len() > MAX_DOH_GET_ENCODED_BYTES_V1 {
+        return Err("dns parameter is too large");
+    }
+    Ok(encoded)
+}
+async fn doh_post(
+    AxumState(ctx): AxumState<AppContext>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response<Body> {
+    if !valid_doh_content_type(&headers) {
+        return build_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "content-type must be application/dns-message",
+        );
+    }
     ctx.resolve_dns(body.as_ref()).await
+}
+fn valid_doh_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(header::CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case(DNS_CONTENT_TYPE))
 }
 async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body> {
     let snapshot = ctx.metrics_snapshot().await;
@@ -788,7 +991,7 @@ fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     Ok(vec![cert])
 }
 fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
-    let bytes = read_bounded_file(path, MAX_TLS_KEY_BYTES, "DoT private key")?;
+    let bytes = read_bounded_private_file(path, MAX_TLS_KEY_BYTES, "DoT private key")?;
     Ok(PrivateKeyDer::from(PrivatePkcs8KeyDer::from(bytes)))
 }
 fn build_error_response(status: StatusCode, message: &str) -> Response<Body> {
@@ -825,60 +1028,124 @@ mod tests {
         header::{ACCEPT, CONTENT_TYPE},
     };
     use std::{io::ErrorKind, net::Ipv4Addr, sync::Arc};
-    use tokio::{
-        net::UdpSocket,
-        time::{Duration, sleep},
-    };
-    #[tokio::test(flavor = "multi_thread")]
-    async fn doq_roundtrip_resolves_static_record() -> Result<()> {
-        let addr = match std::net::UdpSocket::bind("127.0.0.1:0") {
-            Ok(socket) => socket.local_addr()?,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => return Ok(()),
-            Err(err) => return Err(err.into()),
+    use tokio::time::{Duration, sleep};
+    const TEST_OPERATIONS_TOKEN: &str = "soradns-operations-token-00000001";
+    fn test_operations_authorization() -> Arc<OperationsAuthorization> {
+        Arc::new(OperationsAuthorization {
+            token_hash: *blake3::hash(TEST_OPERATIONS_TOKEN.as_bytes()).as_bytes(),
+        })
+    }
+    #[test]
+    fn operations_auth_comparison_checks_every_digest_byte_and_redacts_debug() {
+        let mut authorization = OperationsAuthorization {
+            token_hash: [0xA5; 32],
         };
-        let state = Arc::new(RwLock::new(ResolverState::new(
-            "resolver".into(),
-            "global".into(),
-        )));
-        {
-            let mut guard = state.write().await;
-            let name = Name::from_ascii("example.test.").unwrap();
-            let record = Record::from_rdata(name, 60, RData::A(A::new(192, 0, 2, 1)));
-            guard.update_static_zones(&[StaticZone {
-                domain: "example.test".into(),
-                records: vec![record],
-                freeze: None,
-                retained_bytes: 1024,
-            }])?;
+        assert!(constant_time_eq_32(&[0xA5; 32], &[0xA5; 32]));
+        for index in 0..32 {
+            let mut changed = [0xA5; 32];
+            changed[index] ^= 1;
+            assert!(!constant_time_eq_32(&authorization.token_hash, &changed));
         }
-        let server_state = state.clone();
-        let doq_task = tokio::spawn(start_doq_server(addr, server_state));
-        sleep(Duration::from_millis(50)).await;
-        let client = match UdpSocket::bind("127.0.0.1:0").await {
-            Ok(socket) => socket,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => return Ok(()),
-            Err(err) => return Err(err.into()),
-        };
-        client.connect(addr).await?;
-        let mut query = Message::new(0xCAFE, MessageType::Query, OpCode::Query);
-        let name = Name::from_ascii("example.test.").unwrap();
-        query.add_query(Query::query(name.clone(), RecordType::A));
-        query.metadata.recursion_desired = true;
-        let body = dns::encode_message(&query)?;
-        client.send(&body).await?;
-        let mut buf = vec![0_u8; 4096];
-        let len = client.recv(&mut buf).await?;
-        let response = dns::decode_message(&buf[..len])?;
-        assert_eq!(response.metadata.id, 0xCAFE);
-        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
-        assert_eq!(response.answers.len(), 1);
-        if let RData::A(answer) = &response.answers[0].data {
-            assert_eq!(answer.0, Ipv4Addr::new(192, 0, 2, 1));
-        } else {
-            panic!("expected A record in response");
-        }
-        doq_task.abort();
-        Ok(())
+        let rendered = format!("{authorization:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains("165, 165"));
+        authorization.clear();
+        assert_eq!(authorization.token_hash, [0; 32]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn operations_auth_loader_requires_private_canonical_token_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("operations auth directory");
+        let path = directory.path().join("operations.token");
+        std::fs::write(&path, format!("{TEST_OPERATIONS_TOKEN}\n"))
+            .expect("write operations bearer token");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect operations bearer token");
+        let authorization = OperationsAuthorization::load(&path).expect("load private token");
+        assert!(authorization.matches(TEST_OPERATIONS_TOKEN));
+        assert!(!authorization.matches("soradns-operations-token-00000002"));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("make token permissions unsafe");
+        assert!(OperationsAuthorization::load(&path).is_err());
+    }
+    #[test]
+    fn transport_source_omits_raw_doq_and_client_address_logging() {
+        let source = include_str!("lib.rs");
+        let raw_peer_field = ["%", "peer"].concat();
+        let raw_doq_server = ["start_", "doq_server"].concat();
+        assert!(!source.contains(&raw_peer_field));
+        assert!(!source.contains(&raw_doq_server));
+    }
+    #[test]
+    fn doh_get_query_enforces_exact_encoded_ceiling_and_single_parameter() {
+        let exact = "A".repeat(MAX_DOH_GET_ENCODED_BYTES_V1);
+        let exact_query = format!("dns={exact}");
+        assert_eq!(
+            parse_doh_get_query(Some(&exact_query)).expect("exact encoded ceiling"),
+            exact
+        );
+        let oversized = format!("dns={exact}A");
+        assert_eq!(
+            parse_doh_get_query(Some(&oversized)),
+            Err("dns parameter is too large")
+        );
+        assert!(parse_doh_get_query(Some("dns=AA&dns=BB")).is_err());
+        assert!(parse_doh_get_query(Some("other=AA")).is_err());
+    }
+    #[test]
+    fn doh_post_rejects_duplicate_or_ambiguous_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            DNS_CONTENT_TYPE.parse().expect("content type"),
+        );
+        assert!(valid_doh_content_type(&headers));
+        headers.append(
+            header::CONTENT_TYPE,
+            "application/octet-stream"
+                .parse()
+                .expect("second content type"),
+        );
+        assert!(!valid_doh_content_type(&headers));
+    }
+    #[test]
+    fn dot_session_permits_fail_closed_at_capacity() {
+        let permits = Arc::new(Semaphore::new(1));
+        let held = try_dot_session_permit(&permits).expect("first DoT permit");
+        assert!(try_dot_session_permit(&permits).is_none());
+        drop(held);
+        assert!(try_dot_session_permit(&permits).is_some());
+    }
+    #[test]
+    fn dot_response_length_prefix_rejects_u16_overflow() {
+        assert_eq!(
+            dot_response_length_prefix(u16::MAX as usize).expect("maximum DoT frame"),
+            u16::MAX.to_be_bytes()
+        );
+        assert!(dot_response_length_prefix(u16::MAX as usize + 1).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn dot_private_key_loader_rejects_unsafe_path() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("private-key directory");
+        let target = directory.path().join("dot.key");
+        let link = directory.path().join("dot.link");
+        std::fs::write(&target, b"private key fixture").expect("write private-key fixture");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("set unsafe private-key permissions");
+        let error = load_key(&target).expect_err("world-readable private key must fail closed");
+        assert!(error.to_string().contains("group or other"));
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("protect private-key fixture");
+        symlink(&target, &link).expect("create private-key symlink");
+        let error = load_key(&link).expect_err("private-key symlink must fail closed");
+        assert!(error.to_string().contains("direct regular file"));
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn doh_get_and_post_resolve_static_record() -> Result<()> {
@@ -960,11 +1227,26 @@ mod tests {
         );
         let post_bytes = post_response.bytes().await?;
         assert_example_a_response(&post_bytes)?;
+        let wrong_content_type = client
+            .post(&base)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(body)
+            .send()
+            .await?;
+        assert_eq!(
+            wrong_content_type.status(),
+            HttpStatus::UNSUPPORTED_MEDIA_TYPE
+        );
+        let metrics_response = client
+            .get(format!("http://{}:{}/metrics", addr.ip(), addr.port()))
+            .send()
+            .await?;
+        assert_eq!(metrics_response.status(), HttpStatus::NOT_FOUND);
         doh_task.abort();
         Ok(())
     }
     #[tokio::test(flavor = "multi_thread")]
-    async fn doh_metrics_endpoint_reports_counts() -> Result<()> {
+    async fn operational_metrics_endpoint_requires_auth_and_reports_counts() -> Result<()> {
         let addr = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => {
                 let addr = listener.local_addr()?;
@@ -980,12 +1262,11 @@ mod tests {
         )));
         let metrics = MetricsRegistry::new();
         metrics.update_last_sync(1234);
-        let server_state = state.clone();
-        let doh_task = tokio::spawn(start_doh_server(
+        let operational_task = tokio::spawn(start_event_server(
             addr,
-            server_state,
-            metrics.clone(),
-            Duration::from_secs(30),
+            EventEmitter::new("resolver".to_owned(), None)?,
+            AppContext::new(state, metrics.clone(), Duration::from_secs(30)),
+            test_operations_authorization(),
         ));
         sleep(Duration::from_millis(50)).await;
         let client = HttpClient::builder()
@@ -993,8 +1274,28 @@ mod tests {
             .build()
             .expect("reqwest client");
         let metrics_url = format!("http://{}:{}/metrics", addr.ip(), addr.port());
-        let response = client.get(metrics_url).send().await?;
+        let unauthorized = client.get(&metrics_url).send().await?;
+        assert_eq!(unauthorized.status(), HttpStatus::UNAUTHORIZED);
+        assert_eq!(
+            unauthorized
+                .headers()
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer")
+        );
+        let response = client
+            .get(metrics_url)
+            .bearer_auth(TEST_OPERATIONS_TOKEN)
+            .send()
+            .await?;
         assert_eq!(response.status(), HttpStatus::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
         let body = response.text().await?;
         assert!(
             body.contains("soradns_resolver_bundle_count"),
@@ -1020,7 +1321,7 @@ mod tests {
             body.contains("soradns_resolver_validation_failures_total"),
             "metrics output missing validation failure counter: {body}"
         );
-        doh_task.abort();
+        operational_task.abort();
         Ok(())
     }
     #[tokio::test]
@@ -1058,7 +1359,7 @@ mod tests {
         Ok(())
     }
     #[tokio::test(flavor = "multi_thread")]
-    async fn doh_health_endpoint_reports_status() -> Result<()> {
+    async fn operational_health_endpoint_requires_auth_and_reports_status() -> Result<()> {
         let addr = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => {
                 let addr = listener.local_addr()?;
@@ -1074,12 +1375,11 @@ mod tests {
         )));
         let metrics = MetricsRegistry::new();
         metrics.update_last_sync(5678);
-        let server_state = state.clone();
-        let doh_task = tokio::spawn(start_doh_server(
+        let operational_task = tokio::spawn(start_event_server(
             addr,
-            server_state,
-            metrics,
-            Duration::from_secs(30),
+            EventEmitter::new("resolver".to_owned(), None)?,
+            AppContext::new(state, metrics, Duration::from_secs(30)),
+            test_operations_authorization(),
         ));
         sleep(Duration::from_millis(50)).await;
         let client = HttpClient::builder()
@@ -1087,7 +1387,13 @@ mod tests {
             .build()
             .expect("reqwest client");
         let health_url = format!("http://{}:{}/healthz", addr.ip(), addr.port());
-        let response = client.get(health_url).send().await?;
+        let unauthorized = client.get(&health_url).send().await?;
+        assert_eq!(unauthorized.status(), HttpStatus::UNAUTHORIZED);
+        let response = client
+            .get(health_url)
+            .bearer_auth(TEST_OPERATIONS_TOKEN)
+            .send()
+            .await?;
         assert_eq!(response.status(), HttpStatus::OK);
         let body = response.text().await?;
         let value: Value = json::from_str(&body)?;
@@ -1100,7 +1406,7 @@ mod tests {
             value.get("sync_interval_secs").and_then(|v| v.as_u64()),
             Some(30)
         );
-        doh_task.abort();
+        operational_task.abort();
         Ok(())
     }
     fn assert_example_a_response(bytes: &[u8]) -> Result<()> {

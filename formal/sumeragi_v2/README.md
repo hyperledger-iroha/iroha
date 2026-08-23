@@ -1341,22 +1341,20 @@ There is no separate timeout-certificate formation action or compatibility
 tombstone. Certificate formation is atomic with the local receipt-admitting
 turn.
 
-The final-source run on 2026-08-21 passed with SANY 0, raw TLC 12, normalizer
-0, wrapper 0, exactly 101 tool states and 100 normalized actions, empty
-separate stderr, and byte equality with the tracked TSV. Its receipt SHA-256 is
-`c57126bcd5578358c93fc70cad2d1f2c411a10b7c6d85d936d72628cfd430239`;
-the raw TLC SHA-256 is
-`2f7f2ad7e7f779b84b7f27335ed63ce9ac25a47c57e03ad589179dc473e01df6`;
-and the normalized SHA-256 is
-`32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748`.
-The independent receipt checker exited 0.
+The 2026-08-21 replay is invalidated as release evidence because the formal
+input closure changed during the V1 hard cut. `SumeragiV2TraceWitness` now
+imports `SumeragiV2Inductive` directly, and the retired `SumeragiV2`
+compatibility entry point has been removed. A current result must be executed
+again from this exact closure.
 
-The existing project verifier does not sign the canonical receipt and its
-execution artifacts. The receipt is therefore `unsigned-diagnostic`,
-release-required checking exits 2, and no formal registry or proof status is
-promoted from it. The complete proof-ledger checker has zero reset-scoped
-errors but still exits 1 on nine unchanged `fc09b635` inventory/hash debts
-outside this reset.
+The collector emits one canonical release-signing request. The receipt checker
+has one success path and always requires a detached OpenSSH SSHSIG over the
+exact canonical `receipt.json` bytes. The finalizer verifies that signature
+against the pinned verifier, namespace, one-entry Ed25519 allowed-signers
+policy, and revocation input before it can publish a read-only release bundle.
+No inspection mode, optional release mode, unsigned acceptance, or custom
+cryptography is retained. Until the external signing ceremony completes, no
+formal registry or proof status may be promoted from the request.
 
 The operator-facing conditional guarantee, liveness snapshot, watchdog
 classifications, and executable PR/release commands are documented in
@@ -1691,7 +1689,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
+`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

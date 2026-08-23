@@ -607,6 +607,41 @@ pub mod fixed_bytes_hex {
         Ok(out)
     }
 }
+/// Serialize and deserialize a SoraNet privacy collector ID as one canonical lowercase hex value.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod soranet_privacy_collector_id {
+    use super::*;
+    const COLLECTOR_ID_BYTES: usize = 32;
+    /// Serialize a collector ID as exactly 64 lowercase hexadecimal characters.
+    pub fn serialize(bytes: &[u8; COLLECTOR_ID_BYTES], out: &mut String) {
+        fixed_bytes_hex::serialize(bytes, out);
+    }
+    /// Stream a collector ID as exactly 64 lowercase hexadecimal characters.
+    pub fn serialize_bounded(
+        bytes: &[u8; COLLECTOR_ID_BYTES],
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        fixed_bytes_hex::serialize_bounded(bytes, out)
+    }
+    /// Decode only the canonical 64-character lowercase hexadecimal spelling.
+    pub fn deserialize(parser: &mut Parser<'_>) -> Result<[u8; COLLECTOR_ID_BYTES], json::Error> {
+        let raw = parser.parse_string()?;
+        if raw.len() != COLLECTOR_ID_BYTES * 2
+            || !raw
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(json::Error::Message(
+                "expected exactly 64 lowercase hexadecimal characters".to_owned(),
+            ));
+        }
+        let mut out = [0_u8; COLLECTOR_ID_BYTES];
+        hex::decode_to_slice(raw, &mut out)
+            .map_err(|error| json::Error::Message(error.to_string()))?;
+        Ok(out)
+    }
+}
 /// Serialize and deserialize [`SoranetPrivacyModeV1`] values as their label strings.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -931,6 +966,18 @@ mod tests {
         secret: String,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    #[norito(deny_unknown_fields)]
+    struct SoranetCollectorIdWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(
+                with = "crate::json_helpers::soranet_privacy_collector_id",
+                bounded_with = "crate::json_helpers::soranet_privacy_collector_id::serialize_bounded"
+            )
+        )]
+        collector_id: [u8; 32],
+    }
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedU64LimbsWrapper {
         #[cfg_attr(
             feature = "json",
@@ -982,6 +1029,27 @@ mod tests {
             error.to_string().contains("expected exactly 4 u64 limbs"),
             "unexpected fixed-limb error: {error}"
         );
+    }
+    #[test]
+    fn soranet_collector_id_requires_one_canonical_json_spelling() {
+        let wrapper = SoranetCollectorIdWrapper {
+            collector_id: [0xab; 32],
+        };
+        let canonical = "ab".repeat(32);
+        let encoded = json::to_json(&wrapper).expect("serialize collector ID");
+        assert_eq!(encoded, format!(r#"{{"collector_id":"{canonical}"}}"#));
+        assert_eq!(
+            json::from_str::<SoranetCollectorIdWrapper>(&encoded).expect("decode collector ID"),
+            wrapper
+        );
+        for noncanonical in [canonical.to_uppercase(), format!("0x{canonical}")] {
+            let payload = format!(r#"{{"collector_id":"{noncanonical}"}}"#);
+            json::from_str::<SoranetCollectorIdWrapper>(&payload)
+                .expect_err("noncanonical collector ID must fail closed");
+        }
+        let unknown = format!(r#"{{"collector_id":"{canonical}","extra":true}}"#);
+        json::from_str::<SoranetCollectorIdWrapper>(&unknown)
+            .expect_err("unknown collector ID fields must fail closed");
     }
     #[test]
     fn fixed_u32_limbs_stream_exact_length_and_type() {

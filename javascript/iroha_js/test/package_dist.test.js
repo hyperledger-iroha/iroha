@@ -378,6 +378,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./browser",
     "./canonical-request",
     "./connect-browser",
+    "./contract-payload",
     "./crypto",
     "./instruction-builders",
     "./ivm-artifact",

@@ -420,6 +420,28 @@ fn iterable_routed_query_skips_not_found_and_route_unavailable_errors() {
     assert!(!should_skip_iterable_routed_query_route_error(
         &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
     ));
+    let mut duplicate = torii_proxy_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "route_unavailable",
+        "offline",
+    );
+    duplicate.headers_mut().append(
+        "x-iroha-reject-code",
+        axum::http::HeaderValue::from_static("route_unavailable"),
+    );
+    assert!(
+        !should_skip_iterable_routed_query_route_error(&duplicate),
+        "ambiguous duplicate reject codes must not suppress a route error"
+    );
+    let success_with_reject = Response::builder()
+        .status(StatusCode::OK)
+        .header("x-iroha-reject-code", "route_unavailable")
+        .body(Body::empty())
+        .expect("response");
+    assert!(
+        !should_skip_iterable_routed_query_route_error(&success_with_reject),
+        "success responses cannot advertise a trusted reject code"
+    );
 }
 #[test]
 fn singleton_routed_query_skips_not_found_and_route_unavailable_errors() {

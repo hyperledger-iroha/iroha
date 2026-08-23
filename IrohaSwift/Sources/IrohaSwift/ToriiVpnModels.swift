@@ -855,7 +855,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         helperTicketHex = try decodeCanonicalVpnHex(
             from: container,
             forKey: .helperTicketHex,
-            byteCount: 664,
+            byteCount: 696,
             field: "vpn session helper_ticket_hex"
         )
         bytesIn = try decodeVpnUInt64(

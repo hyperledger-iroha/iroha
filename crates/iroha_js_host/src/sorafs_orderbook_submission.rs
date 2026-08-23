@@ -8,10 +8,6 @@ fn invalid(message: impl Into<String>) -> napi::Error {
 }
 /// Exact identities derived from one authenticated orderbook transaction.
 #[napi(object)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the published JavaScript identity object uses explicit hash field names"
-)]
 pub struct JsSorafsOrderbookSubmissionIdentityV1 {
     /// Canonical entrypoint identity.
     pub entrypoint_hash: String,

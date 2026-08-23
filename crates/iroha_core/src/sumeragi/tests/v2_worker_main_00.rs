@@ -334,12 +334,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
-    fn step_recovery_effects(
-        &mut self,
-        now: Instant,
-    ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_effects(now)
-    }
     fn take_effect_ownership(
         &mut self,
         effects: &[AdapterEffect],
@@ -769,6 +763,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         kura_replica_advert_refresh,
         exact_output_handoff_owner,
         exact_output_admission_hook: None,
+        consensus_broadcasts: Vec::new(),
         active_tag,
         last_status: None,
         fatal_reason: None,

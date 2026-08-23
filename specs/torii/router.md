@@ -78,6 +78,16 @@ request payload as invalid:
   `x-iroha-route-loop-prevention-drops` distinguish catalog drift, offline
   authoritative peers, and proxy-hop loop prevention.
 
+Configured public-dataspace HTTP upstreams may forward only one
+`x-iroha-reject-code` on a `4xx`/`5xx` response, and it must satisfy Torii's
+bounded grammar: 1–128 ASCII letters, digits, `_`, `.`, `:`, or `-`. This
+preserves `route_unavailable` skip semantics without reflecting contradictory,
+arbitrary, or ambiguous upstream headers. Peer proxy snapshots, including local
+`502` fallbacks for header/body overflow, cap diagnostic bodies at the
+request-specific response limit so receiver-side bounds validation cannot
+discard the fallback. Body-read errors use fixed local diagnostic text and
+never reflect or format an upstream body's error value.
+
 Read/query fanout starts candidate dataspace routes concurrently and returns a
 merged response from the routes that answer successfully. Responses include
 aggregate fanout headers:

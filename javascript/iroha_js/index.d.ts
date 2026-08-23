@@ -3957,7 +3957,6 @@ export interface SoranetPuzzleMintOptions {
 
 export interface SoranetTokenMintOptions extends SoranetPuzzleMintOptions {
   flags?: number;
-  issuedAtUnix?: number | bigint | null;
 }
 
 export interface SoranetPuzzleClientOptions {
@@ -11537,7 +11536,7 @@ export function verifySm2(
 
 export function buildKaigiRosterJoinProof(
   options: KaigiRosterJoinProofOptions,
-): KaigiRosterJoinProof;
+): never;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

@@ -352,6 +352,55 @@ impl ToriiRoutedReadMemoryBudget {
             .map(Vec::from)
             .map_err(|_| torii_routed_read_json_encode_response())
     }
+    /// Decode and inspect one typed JSON candidate without retaining a second representation.
+    ///
+    /// The borrowed `Value` remains the canonical row representation. Its temporary JSON bytes and
+    /// typed value occupy the candidate-encoding and transient decode phases respectively, and both
+    /// are dropped before this method returns.
+    fn inspect_typed_json_candidate<T, D, F>(
+        &self,
+        value: &Value,
+        invalid_message: &'static str,
+        decode: D,
+        inspect: F,
+    ) -> Result<(), Response>
+    where
+        D: FnOnce(&Value) -> Result<T, norito::json::Error>,
+        F: FnOnce(&T) -> Result<(), Response>,
+    {
+        let canonical_limit = self.canonical_remaining()?;
+        let _canonical = norito::json::to_json_bounded_boxed(value, canonical_limit)
+            .map_err(|_| torii_routed_read_json_encode_response())?;
+        let allocation_limit = self.envelope.decode_allocated_bytes;
+        if allocation_limit == 0 {
+            return Err(torii_routed_read_capacity_response(
+                "typed candidate decode allocations",
+                1,
+                0,
+            ));
+        }
+        let limits = norito::DecodeLimits::new(
+            allocation_limit,
+            allocation_limit,
+            allocation_limit,
+            allocation_limit,
+            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        );
+        let (typed, usage) = norito::core::with_decode_limits_measured(limits, || decode(value));
+        let typed = typed.map_err(|error| {
+            if error.is_decode_resource_limit() {
+                torii_routed_read_json_decode_response(error)
+            } else {
+                torii_internal_json_error(invalid_message)
+            }
+        })?;
+        torii_routed_read_ensure(
+            "typed candidate decode allocations",
+            usage.total_allocated_bytes(),
+            allocation_limit,
+        )?;
+        inspect(&typed)
+    }
     fn json_response<T: norito::json::JsonSerialize + ?Sized>(
         &self,
         value: &T,

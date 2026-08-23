@@ -24,6 +24,10 @@ pub(super) enum LifecycleOutputRegistryJoinV1 {
     /// row. Its volatile runtime root may have been reminted after the first
     /// service call, so it stutters without re-entering direct admission.
     TerminalDirectOutputDuplicate,
+    /// A process-local carrier was reinstalled at the same exact address as an
+    /// already-durable terminal direct output. Only the volatile carrier must
+    /// be retired; the `Terminal(Advanced)` ledger row remains unchanged.
+    TerminalInstalledDuplicate(PreparedLifecycleOutputRegistryRetirementV1),
     /// The exact row exists but an older Ready row or an active claim owns the turn.
     Deferred,
     /// The exact row is the next lifecycle-owned output allowed to execute.
@@ -35,6 +39,21 @@ pub(super) enum LifecycleOutputRegistryJoinV1 {
 pub(super) enum ReadyLifecycleBroadcastCarrierV1 {
     /// An ordinary runtime output remains owned by generic output settlement.
     RetainedDirectOutput(ReadyRetainedDirectBroadcastAttestationV1),
+    /// A typed recovered Sign successor owns one dedicated refanout transaction.
+    RecoveredRefanout,
+}
+
+/// Classification of one exact Broadcast row admitted to the current
+/// scheduler census.
+///
+/// Unlike [`ReadyLifecycleBroadcastCarrierV1`], this seal may describe a
+/// direct output that the caller's exact reducer-fence observation will wake
+/// during the same planning transaction. Recovered refanout remains
+/// Ready-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SchedulableLifecycleBroadcastCarrierV1 {
+    /// An ordinary runtime output remains owned by generic output settlement.
+    RetainedDirectOutput(SchedulableRetainedDirectBroadcastAttestationV1),
     /// A typed recovered Sign successor owns one dedicated refanout transaction.
     RecoveredRefanout,
 }
@@ -51,6 +70,26 @@ impl ReadyRetainedDirectBroadcastAttestationV1 {
     /// scheduler input.
     pub(super) fn matches_ready_record(self, record: &super::LifecycleRecord) -> bool {
         record.state == super::LifecycleState::Ready
+            && record.work_class == LifecycleWorkClass::Broadcast
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+                == Some((self.address.slot, self.digest))
+    }
+}
+
+/// Registry seal for one exact direct Broadcast in the current scheduler
+/// census, including its pre-planning Ready or reducer-fence Waiting state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SchedulableRetainedDirectBroadcastAttestationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    state: super::LifecycleState,
+}
+impl SchedulableRetainedDirectBroadcastAttestationV1 {
+    /// Rejoin the seal to the unchanged row before minting a scheduler input.
+    pub(super) fn matches_schedulable_record(self, record: &super::LifecycleRecord) -> bool {
+        record.state == self.state
             && record.work_class == LifecycleWorkClass::Broadcast
             && record.owner == self.address.owner
             && record.ordinal == self.address.ordinal
@@ -281,6 +320,112 @@ impl ConcreteLifecycleWorkRegistry {
             | ConcreteLifecycleWorkKind::DurableStoreBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_)
+            | ConcreteLifecycleWorkKind::DurableCertifiedServe(_)
+            | ConcreteLifecycleWorkKind::DurableProducerTurn(_) => Err(RegistryError::CorruptWork),
+        }
+    }
+
+    /// Classify one exact Broadcast admitted to the current scheduler census.
+    ///
+    /// Ready rows retain the existing closed carrier classification. The sole
+    /// additional state is a direct output Waiting on the exact context-scoped
+    /// reducer fence supplied by the caller; that wait must be absent from the
+    /// Ready index and strictly older than the observed generation. A recovered
+    /// Broadcast can never borrow this direct-output wake path.
+    pub(super) fn attest_schedulable_lifecycle_broadcast_carrier(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+        fence: Option<crate::sumeragi::v2::LifecycleReducerFenceObservationV1>,
+    ) -> Result<SchedulableLifecycleBroadcastCarrierV1, RegistryError> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(RegistryError::CorruptWork);
+        }
+        let record = coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(RegistryError::Missing)?;
+        if record.work_class != LifecycleWorkClass::Broadcast {
+            return Err(RegistryError::CorruptWork);
+        }
+        match record.state {
+            super::LifecycleState::Ready => {
+                if !coordinator.ready_index.contains(&ordinal) {
+                    return Err(RegistryError::CorruptWork);
+                }
+                return self
+                    .attest_ready_lifecycle_broadcast_carrier(coordinator, ordinal)
+                    .map(|carrier| match carrier {
+                        ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
+                            SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(
+                                SchedulableRetainedDirectBroadcastAttestationV1 {
+                                    address: attestation.address,
+                                    digest: attestation.digest,
+                                    state: record.state,
+                                },
+                            )
+                        }
+                        ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                            SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout
+                        }
+                    });
+            }
+            super::LifecycleState::Waiting(wait)
+                if fence.is_some_and(|fence| {
+                    !coordinator.ready_index.contains(&ordinal)
+                        && fence.source()
+                            == super::projection::reducer_fence_wait_source(
+                                coordinator.active_context,
+                            )
+                        && wait.source() == fence.source()
+                        && wait.observed_generation() < fence.generation()
+                        && coordinator.observed_generation.get(&wait.source())
+                            == Some(&wait.observed_generation())
+                }) => {}
+            super::LifecycleState::Waiting(_)
+            | super::LifecycleState::Claimed(_)
+            | super::LifecycleState::Terminal(_) => {
+                return Err(RegistryError::CorruptWork);
+            }
+        }
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+                .ok_or(RegistryError::InvalidAdmissionShape)?;
+        let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
+            .ok_or(RegistryError::InvalidAddress)?;
+        let work = self.entries.get(&address).ok_or(RegistryError::Missing)?;
+        if work.digest != digest {
+            return Err(RegistryError::DigestMismatch);
+        }
+        match &work.kind {
+            ConcreteLifecycleWorkKind::PendingAdapter {
+                effect,
+                pending,
+                replay_authority: _,
+            } if lifecycle_output_row_matches(coordinator, address, work, effect, pending) => Ok(
+                SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(
+                    SchedulableRetainedDirectBroadcastAttestationV1 {
+                        address,
+                        digest,
+                        state: record.state,
+                    },
+                ),
+            ),
+            ConcreteLifecycleWorkKind::PendingAdapter { .. }
+            | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
+            | ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableStoreBody(_)
+            | ConcreteLifecycleWorkKind::DurableValidateBody(_)
+            | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
             | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
@@ -304,19 +449,17 @@ impl ConcreteLifecycleWorkRegistry {
         execution: &PreparedLifecycleOutputExecutionV1,
     ) -> Result<LifecycleOutputRegistryJoinV1, RegistryError> {
         let pending = execution.exact_pending_binding();
-        let installed = {
+        let (installed, installed_count) = {
             let mut matches = self.entries.iter().filter(|(address, work)| {
                 pending_output_matches_work(&execution.effect, &pending, work)
                     && address.owner.causal_root()
                         == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
             });
             let installed = matches.next();
-            if matches.next().is_some() {
-                return Err(RegistryError::CorruptWork);
-            }
-            installed
+            let count = usize::from(installed.is_some()).saturating_add(matches.count());
+            (installed, count)
         };
-        let recovered_broadcast = {
+        let (recovered_broadcast, recovered_broadcast_count) = {
             let mut matches = self.entries.iter().filter(|(address, work)| {
                 recovered_broadcast_output_matches_work(
                     coordinator,
@@ -327,12 +470,10 @@ impl ConcreteLifecycleWorkRegistry {
                 )
             });
             let recovered_broadcast = matches.next();
-            if matches.next().is_some() {
-                return Err(RegistryError::CorruptWork);
-            }
-            recovered_broadcast
+            let count = usize::from(recovered_broadcast.is_some()).saturating_add(matches.count());
+            (recovered_broadcast, count)
         };
-        let terminal_direct_output = {
+        let (terminal_direct_output, terminal_direct_output_count) = {
             let mut matches = coordinator.records.keys().copied().filter(|ordinal| {
                 terminal_direct_output_matches_record(
                     coordinator,
@@ -342,17 +483,28 @@ impl ConcreteLifecycleWorkRegistry {
                 )
             });
             let terminal = matches.next();
-            if matches.next().is_some() {
-                return Err(RegistryError::CorruptWork);
-            }
-            terminal
+            let count = usize::from(terminal.is_some()).saturating_add(matches.count());
+            (terminal, count)
         };
-        if u8::from(installed.is_some())
-            .saturating_add(u8::from(recovered_broadcast.is_some()))
-            .saturating_add(u8::from(terminal_direct_output.is_some()))
-            > 1
+        let same_address_terminal_installed = installed_count == 1
+            && recovered_broadcast_count == 0
+            && terminal_direct_output_count == 1
+            && installed
+                .is_some_and(|(address, _)| terminal_direct_output == Some(address.ordinal));
+        if installed_count > 1
+            || recovered_broadcast_count > 1
+            || terminal_direct_output_count > 1
+            || (!same_address_terminal_installed
+                && usize::from(installed.is_some())
+                    .saturating_add(usize::from(recovered_broadcast.is_some()))
+                    .saturating_add(usize::from(terminal_direct_output.is_some()))
+                    > 1)
         {
-            return Err(RegistryError::CorruptWork);
+            return Err(RegistryError::AmbiguousLifecycleOutputOwnership {
+                installed: installed_count,
+                recovered_broadcast: recovered_broadcast_count,
+                terminal_direct_output: terminal_direct_output_count,
+            });
         }
         let Some((&address, work)) = installed else {
             return Ok(if recovered_broadcast.is_some() {
@@ -370,19 +522,23 @@ impl ConcreteLifecycleWorkRegistry {
             .records
             .get(&address.ordinal)
             .ok_or(RegistryError::Missing)?;
+        let retirement = PreparedLifecycleOutputRegistryRetirementV1 {
+            address,
+            digest: work.digest,
+            key: record.key,
+        };
+        if same_address_terminal_installed {
+            return Ok(LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(
+                retirement,
+            ));
+        }
         if coordinator.active_lease.is_some()
             || record.state != super::LifecycleState::Ready
             || coordinator.ready_index.first().copied() != Some(address.ordinal)
         {
             return Ok(LifecycleOutputRegistryJoinV1::Deferred);
         }
-        Ok(LifecycleOutputRegistryJoinV1::Ready(
-            PreparedLifecycleOutputRegistryRetirementV1 {
-                address,
-                digest: work.digest,
-                key: record.key,
-            },
-        ))
+        Ok(LifecycleOutputRegistryJoinV1::Ready(retirement))
     }
 
     /// Seal the exact generic retransmit used to exercise recovered-Broadcast
@@ -452,8 +608,76 @@ impl ConcreteLifecycleWorkRegistry {
             })
     }
 
+    /// Recheck a process-local carrier attached to the same exact address as
+    /// its already-fsynced `Terminal(Advanced)` direct-output row.
+    pub(super) fn lifecycle_output_terminal_installed_is_exact(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        prepared: PreparedLifecycleOutputRegistryRetirementV1,
+        execution: &PreparedLifecycleOutputExecutionV1,
+    ) -> bool {
+        let Some(work) = self.entries.get(&prepared.address) else {
+            return false;
+        };
+        let pending = execution.exact_pending_binding();
+        let installed_count = self
+            .entries
+            .iter()
+            .filter(|(address, work)| {
+                pending_output_matches_work(&execution.effect, &pending, work)
+                    && address.owner.causal_root()
+                        == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
+            })
+            .count();
+        let recovered_count = self
+            .entries
+            .iter()
+            .filter(|(address, work)| {
+                recovered_broadcast_output_matches_work(
+                    coordinator,
+                    **address,
+                    work,
+                    &execution.effect,
+                    &pending,
+                )
+            })
+            .count();
+        let terminal_count = coordinator
+            .records
+            .keys()
+            .copied()
+            .filter(|ordinal| {
+                terminal_direct_output_matches_record(
+                    coordinator,
+                    *ordinal,
+                    &execution.effect,
+                    &pending,
+                )
+            })
+            .count();
+        lifecycle_output_row_matches(
+            coordinator,
+            prepared.address,
+            work,
+            &execution.effect,
+            &pending,
+        ) && terminal_direct_output_matches_record(
+            coordinator,
+            prepared.address.ordinal,
+            &execution.effect,
+            &pending,
+        ) && work.digest == prepared.digest
+            && coordinator
+                .records
+                .get(&prepared.address.ordinal)
+                .is_some_and(|record| record.key == prepared.key)
+            && installed_count == 1
+            && recovered_count == 0
+            && terminal_count == 1
+    }
+
     /// Remove the already-fsynced exact output carrier. All fallible checks
-    /// happen in [`Self::lifecycle_output_terminal_is_exact`].
+    /// happen in the applicable terminal preflight immediately before fsync.
     pub(super) fn publish_lifecycle_output_terminal_after_fsync(
         &mut self,
         prepared: PreparedLifecycleOutputRegistryRetirementV1,

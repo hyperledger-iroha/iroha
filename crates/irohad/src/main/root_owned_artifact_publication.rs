@@ -68,7 +68,7 @@ const MACOS_XATTR_SHOWCOMPRESSION: std::os::raw::c_int = 0x20;
 #[cfg(target_os = "linux")]
 #[allow(
     unsafe_code,
-    reason = "Linux exposes descriptor-bound xattr inspection through libc"
+    reason = "flistxattr is the descriptor-bound platform API and has no safe standard-library wrapper"
 )]
 unsafe extern "C" {
     fn flistxattr(fd: std::os::raw::c_int, list: *mut std::os::raw::c_char, size: usize) -> isize;
@@ -76,7 +76,7 @@ unsafe extern "C" {
 #[cfg(target_os = "macos")]
 #[allow(
     unsafe_code,
-    reason = "macOS exposes descriptor-bound xattr inspection with hidden compression metadata through libc"
+    reason = "macOS exposes descriptor-bound xattr inspection with hidden compression metadata and has no safe standard-library wrapper"
 )]
 unsafe extern "C" {
     fn flistxattr(
@@ -192,6 +192,24 @@ fn stat_matches_metadata(stat: &rustix::fs::Stat, metadata: &fs::Metadata) -> bo
         && u64::try_from(stat.st_size).ok() == Some(metadata.len())
 }
 
+#[cfg(unix)]
+fn validate_root_owned_read_stat(
+    stat: &rustix::fs::Stat,
+    expected_uid: u32,
+    label: &str,
+) -> Result<(), String> {
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+        || u64::from(stat.st_nlink) != 1
+        || stat.st_uid != expected_uid
+        || u32::from(stat.st_mode) & 0o7777 != 0o444
+    {
+        return Err(format!(
+            "{label} must be a direct single-link regular file owned by uid {expected_uid} with mode 0444"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
     let opened_before = opened
@@ -235,8 +253,16 @@ fn require_no_xattrs(opened: &fs::File, path: &Path, label: &str) -> Result<(), 
     // SAFETY: a null buffer and zero length request the descriptor-bound size;
     // the retained descriptor remains valid for the call.
     #[cfg(target_os = "linux")]
+    #[allow(
+        unsafe_code,
+        reason = "flistxattr is the descriptor-bound platform API and has no safe standard-library wrapper"
+    )]
     let count = unsafe { flistxattr(opened.as_raw_fd(), std::ptr::null_mut(), 0) };
     #[cfg(target_os = "macos")]
+    #[allow(
+        unsafe_code,
+        reason = "flistxattr is the descriptor-bound platform API and has no safe standard-library wrapper"
+    )]
     let count = unsafe {
         flistxattr(
             opened.as_raw_fd(),
@@ -357,17 +383,7 @@ impl RootOwnedNoReplaceArtifactPublicationTarget {
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         )
         .map_err(|error| format!("failed to inspect {} before read: {error}", self.label))?;
-        if rustix::fs::FileType::from_raw_mode(named_before.st_mode)
-            != rustix::fs::FileType::RegularFile
-            || u64::from(named_before.st_nlink) != 1
-            || named_before.st_uid != self.expected_uid
-            || u32::from(named_before.st_mode) & 0o7777 != 0o444
-        {
-            return Err(format!(
-                "{} must be a direct single-link regular file owned by uid {} with mode 0444",
-                self.label, self.expected_uid
-            ));
-        }
+        validate_root_owned_read_stat(&named_before, self.expected_uid, self.label)?;
         let mut opened = fs::File::from(
             rustix::fs::openat(
                 &self.parent,

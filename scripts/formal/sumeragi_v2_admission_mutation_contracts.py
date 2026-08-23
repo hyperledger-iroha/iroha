@@ -828,6 +828,7 @@ if let Err(error) = coordinator
     return Err(LiveValidateReportPublicationError {
         _coordinator: coordinator,
         _staged: staged,
+        _ordinal_reservation: ordinal_reservation,
         _failure: LiveValidateReportPublicationFailure::Ledger {
             _error: error,
             _publication: publication,

@@ -139,12 +139,12 @@ fn validate_optional_nonempty(
 fn invalid_field(
     manifest: &'static str,
     field: &'static str,
-    reason: &'static str,
+    reason: impl Into<String>,
 ) -> SoracloudManifestError {
     SoracloudManifestError::InvalidField {
         manifest,
         field,
-        reason: reason.to_owned(),
+        reason: reason.into(),
     }
 }
 /// Runtime expected by the container manifest.
@@ -217,8 +217,15 @@ impl SoraInrouGuestIsaV1 {
 pub enum SoraInrouRuntimeBackendV1 {
     /// Portable full-system VM running entirely in unprivileged userspace.
     PortableVm,
-    /// Linux/KVM-accelerated Firecracker fast path.
-    FirecrackerKvm,
+}
+impl SoraInrouRuntimeBackendV1 {
+    /// Canonical configuration and status label for the backend.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PortableVm => "portable_vm",
+        }
+    }
 }
 /// CDN-like distribution target for Soracloud-published artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
@@ -264,13 +271,10 @@ impl SoraArtifactDistributionTargetV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraArtifactDistributionPolicyV1 {
     /// Operator target: global or a set of geography tags.
-    #[norito(default)]
     pub target: SoraArtifactDistributionTargetV1,
     /// Prefer lower observed latency among otherwise eligible hosts.
-    #[norito(default = "default_true")]
     pub prefer_low_latency: bool,
     /// Fall back to latency when host geography is missing or unverifiable.
-    #[norito(default = "default_true")]
     pub fallback_to_low_latency_when_geography_unknown: bool,
 }
 impl Default for SoraArtifactDistributionPolicyV1 {
@@ -300,10 +304,8 @@ pub struct SoraPublishedInrouGuestImageArtifactV1 {
     /// CID rendered for the uploaded guest-image artifact bundle.
     pub content_cid: String,
     /// Optional storage manifest identifier returned by the storage pin endpoint.
-    #[norito(default)]
     pub manifest_id_hex: Option<String>,
     /// Exact copy of the parent guest image's authoritative distribution policy.
-    #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
 }
 impl SoraPublishedInrouGuestImageArtifactV1 {
@@ -348,13 +350,10 @@ pub struct SoraInrouGuestImageV1 {
     /// Root filesystem image member path inside the signed Soracloud VM artifact bundle.
     pub rootfs_image_path: String,
     /// Optional initrd image member path inside the signed Soracloud VM artifact bundle.
-    #[norito(default)]
     pub initrd_image_path: Option<String>,
     /// Authoritative distribution policy for the published guest-image artifact.
-    #[norito(default)]
     pub distribution: SoraArtifactDistributionPolicyV1,
     /// Immutable `SoraFS` artifact that carries the guest image members after release.
-    #[norito(default)]
     pub published_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
 }
 #[cfg(feature = "json")]
@@ -375,15 +374,6 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
                 })?;
             json::from_value(value)
         }
-        fn take_optional<T: JsonDeserialize>(
-            object: &mut BTreeMap<String, Value>,
-            field: &str,
-        ) -> Result<Option<T>, json::Error> {
-            match object.remove(field) {
-                Some(Value::Null) | None => Ok(None),
-                Some(value) => json::from_value(value).map(Some),
-            }
-        }
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -395,15 +385,9 @@ impl JsonDeserialize for SoraInrouGuestImageV1 {
         };
         let kernel_image_path = take_required(&mut object, "kernel_image_path")?;
         let rootfs_image_path = take_required(&mut object, "rootfs_image_path")?;
-        let initrd_image_path =
-            take_optional::<Option<String>>(&mut object, "initrd_image_path")?.flatten();
-        let distribution =
-            take_optional::<SoraArtifactDistributionPolicyV1>(&mut object, "distribution")?
-                .unwrap_or_default();
-        let published_artifact = take_optional::<SoraPublishedInrouGuestImageArtifactV1>(
-            &mut object,
-            "published_artifact",
-        )?;
+        let initrd_image_path = take_required(&mut object, "initrd_image_path")?;
+        let distribution = take_required(&mut object, "distribution")?;
+        let published_artifact = take_required(&mut object, "published_artifact")?;
         if let Some(extra) = object.keys().next().cloned() {
             return Err(json::Error::UnknownField { field: extra });
         }
@@ -465,17 +449,15 @@ pub struct SoraInrouManifestV1 {
     pub schema_version: u16,
     /// Guest userspace contract expected by the runtime.
     pub guest_os: SoraInrouGuestOsV1,
-    /// Admitted guest image assets keyed by guest ISA. Both `x86_64` and `aarch64` are required.
+    /// Admitted guest image assets keyed by guest ISA; at least one native profile is required.
     #[cfg_attr(
         feature = "json",
         norito(json = "crate::json_helpers::sora_inrou_guest_images_map")
     )]
     pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     /// Optional user-data overlay path copied into the bootstrap seed drive.
-    #[norito(default)]
     pub bootstrap_user_data_path: Option<String>,
     /// SSH public keys injected for tenant administration.
-    #[norito(default)]
     pub ssh_authorized_keys: Vec<String>,
 }
 #[cfg(feature = "json")]
@@ -570,15 +552,6 @@ impl JsonDeserialize for SoraInrouManifestV1 {
                 })?;
             json::from_value(value)
         }
-        fn take_optional<T: JsonDeserialize>(
-            object: &mut BTreeMap<String, Value>,
-            field: &str,
-        ) -> Result<Option<T>, json::Error> {
-            match object.remove(field) {
-                Some(Value::Null) | None => Ok(None),
-                Some(value) => json::from_value(value).map(Some),
-            }
-        }
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -589,65 +562,9 @@ impl JsonDeserialize for SoraInrouManifestV1 {
             }
         };
         let schema_version = take_required(&mut object, "schema_version")?;
-        let guest_os = match object
-            .remove("guest_os")
-            .ok_or_else(|| json::Error::MissingField {
-                field: "guest_os".to_owned(),
-            })? {
-            Value::String(label) => match label.as_str() {
-                "DebianSlim" => SoraInrouGuestOsV1::DebianSlim,
-                other => {
-                    return Err(json::Error::UnknownField {
-                        field: other.to_owned(),
-                    });
-                }
-            },
-            Value::Object(mut tagged) => {
-                let label =
-                    match tagged
-                        .remove("guest_os")
-                        .ok_or_else(|| json::Error::MissingField {
-                            field: "guest_os".to_owned(),
-                        })? {
-                        Value::String(label) => label,
-                        other => {
-                            return Err(json::Error::InvalidField {
-                                field: "guest_os".to_owned(),
-                                message: format!("expected string, got {other:?}"),
-                            });
-                        }
-                    };
-                if let Some(extra_value) = tagged.remove("value")
-                    && !matches!(extra_value, Value::Null)
-                {
-                    return Err(json::Error::InvalidField {
-                        field: "guest_os.value".to_owned(),
-                        message: format!("expected null, got {extra_value:?}"),
-                    });
-                }
-                if let Some(extra) = tagged.keys().next().cloned() {
-                    return Err(json::Error::UnknownField { field: extra });
-                }
-                match label.as_str() {
-                    "DebianSlim" => SoraInrouGuestOsV1::DebianSlim,
-                    other => {
-                        return Err(json::Error::UnknownField {
-                            field: other.to_owned(),
-                        });
-                    }
-                }
-            }
-            other => {
-                return Err(json::Error::InvalidField {
-                    field: "guest_os".to_owned(),
-                    message: format!("expected string or tagged object, got {other:?}"),
-                });
-            }
-        };
-        let bootstrap_user_data_path =
-            take_optional::<Option<String>>(&mut object, "bootstrap_user_data_path")?.flatten();
-        let ssh_authorized_keys =
-            take_optional::<Vec<String>>(&mut object, "ssh_authorized_keys")?.unwrap_or_default();
+        let guest_os = take_required(&mut object, "guest_os")?;
+        let bootstrap_user_data_path = take_required(&mut object, "bootstrap_user_data_path")?;
+        let ssh_authorized_keys = take_required(&mut object, "ssh_authorized_keys")?;
         let guest_images_value =
             object
                 .remove("guest_images")
@@ -689,7 +606,7 @@ impl JsonDeserialize for SoraInrouManifestV1 {
 mod inrou_manifest_checked_json_tests {
     use super::*;
     #[test]
-    fn manifest_map_writer_matches_legacy_bytes_and_exact_bound() {
+    fn manifest_map_writer_matches_canonical_bytes_and_exact_bound() {
         let manifest = SoraInrouManifestV1 {
             schema_version: SORA_INROU_MANIFEST_VERSION_V1,
             guest_os: SoraInrouGuestOsV1::DebianSlim,
@@ -706,13 +623,13 @@ mod inrou_manifest_checked_json_tests {
             bootstrap_user_data_path: Some("/bootstrap/user-data".to_owned()),
             ssh_authorized_keys: vec!["ssh-ed25519 fixture".to_owned()],
         };
-        let legacy = json::to_json(&manifest).expect("serialize manifest");
+        let canonical = json::to_json(&manifest).expect("serialize manifest");
         assert_eq!(
-            json::to_json_bounded(&manifest, legacy.len()).expect("serialize at exact bound"),
-            legacy
+            json::to_json_bounded(&manifest, canonical.len()).expect("serialize at exact bound"),
+            canonical
         );
         assert_eq!(
-            json::to_json_bounded(&manifest, legacy.len() - 1),
+            json::to_json_bounded(&manifest, canonical.len() - 1),
             Err(json::BoundedJsonError::BodyTooLarge)
         );
     }
@@ -729,20 +646,12 @@ impl SoraInrouManifestV1 {
             self.schema_version,
             SORA_INROU_MANIFEST_VERSION_V1,
         )?;
-        for required_isa in [SoraInrouGuestIsaV1::X8664, SoraInrouGuestIsaV1::Aarch64] {
-            if !self.guest_images.contains_key(&required_isa) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora inrou manifest",
-                    field: "guest_images",
-                    reason: format!(
-                        "must include a `{}` guest image profile",
-                        match required_isa {
-                            SoraInrouGuestIsaV1::X8664 => "x86_64",
-                            SoraInrouGuestIsaV1::Aarch64 => "aarch64",
-                        }
-                    ),
-                });
-            }
+        if self.guest_images.is_empty() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora inrou manifest",
+                field: "guest_images",
+                reason: "must include at least one native guest image profile".to_owned(),
+            });
         }
         for guest_image in self.guest_images.values() {
             guest_image.validate()?;
@@ -843,6 +752,69 @@ impl SoraNetworkPolicyV1 {
                 .any(|entry| entry.matches_host(host) && entry.allows_port(port)),
         }
     }
+
+    fn validate_for_inrou(&self) -> Result<(), SoracloudManifestError> {
+        let Self::Allowlist(entries) = self else {
+            return if matches!(self, Self::Isolated) {
+                Ok(())
+            } else {
+                Err(invalid_field(
+                    "sora container manifest",
+                    "capabilities.network",
+                    "Inrou V1 forbids unrestricted network egress",
+                ))
+            };
+        };
+        if entries.is_empty() {
+            return Err(invalid_field(
+                "sora container manifest",
+                "capabilities.network",
+                "Inrou allowlist egress requires at least one host",
+            ));
+        }
+        let mut seen_hosts = BTreeSet::new();
+        for entry in entries {
+            let host = entry.host.as_str();
+            if host.is_empty()
+                || host.trim() != host
+                || host.chars().any(char::is_control)
+                || host.chars().any(char::is_whitespace)
+            {
+                return Err(invalid_field(
+                    "sora container manifest",
+                    "capabilities.network",
+                    "Inrou allowlist hosts must be nonempty canonical hostnames or IP literals",
+                ));
+            }
+            if !seen_hosts.insert(host.to_ascii_lowercase()) {
+                return Err(invalid_field(
+                    "sora container manifest",
+                    "capabilities.network",
+                    format!("duplicate Inrou allowlist host `{host}`"),
+                ));
+            }
+            if entry.ports.is_empty() {
+                return Err(invalid_field(
+                    "sora container manifest",
+                    "capabilities.network",
+                    format!("Inrou allowlist host `{host}` must include at least one TCP port"),
+                ));
+            }
+            let mut seen_ports = BTreeSet::new();
+            for port in &entry.ports {
+                if *port == 0 || !seen_ports.insert(*port) {
+                    return Err(invalid_field(
+                        "sora container manifest",
+                        "capabilities.network",
+                        format!(
+                            "Inrou allowlist host `{host}` contains an invalid or duplicate TCP port `{port}`"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 /// Capability policy enforced by the Sora Container Runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -856,7 +828,6 @@ pub struct SoraCapabilityPolicyV1 {
     /// Whether deterministic key-value writes are allowed through bindings.
     pub allow_state_writes: bool,
     /// Whether read-only model inference adapters are exposed to the service.
-    #[cfg_attr(feature = "json", norito(default))]
     pub allow_model_inference: bool,
     /// Whether model-training ops are allowed for this workload.
     pub allow_model_training: bool,
@@ -885,7 +856,6 @@ pub struct SoraLifecycleHooksV1 {
     /// Grace period allowed for service shutdown.
     pub stop_grace_secs: NonZeroU32,
     /// Optional HTTP health endpoint path.
-    #[norito(default)]
     pub healthcheck_path: Option<String>,
 }
 /// Explicit config export injected into the runtime environment or mounted tree.
@@ -964,24 +934,18 @@ pub struct SoraContainerManifestV1 {
     /// Entrypoint symbol or executable path.
     pub entrypoint: String,
     /// Static arguments passed at process startup.
-    #[norito(default)]
     pub args: Vec<String>,
     /// Environment variables supplied at launch.
     ///
     /// Keys must use canonical POSIX environment-variable name syntax: `[A-Za-z_][A-Za-z0-9_]*`.
-    #[norito(default)]
     pub env: std::collections::BTreeMap<String, String>,
     /// Optional Inrou microVM metadata required for hosted HTTP VM workloads.
-    #[norito(default)]
     pub inrou: Option<SoraInrouManifestV1>,
     /// Service-scoped config entries that must exist before this revision may start.
-    #[norito(default)]
     pub required_config_names: Vec<String>,
     /// Service-scoped secret entries that must exist before this revision may start.
-    #[norito(default)]
     pub required_secret_names: Vec<String>,
     /// Explicit config exports projected into the runtime environment or mounted tree.
-    #[norito(default)]
     pub config_exports: Vec<SoraConfigExportV1>,
     /// Capability policy enforced by SCR.
     pub capabilities: SoraCapabilityPolicyV1,
@@ -1008,15 +972,6 @@ impl JsonDeserialize for SoraContainerManifestV1 {
                 })?;
             json::from_value(value)
         }
-        fn take_optional<T: JsonDeserialize>(
-            object: &mut BTreeMap<String, Value>,
-            field: &str,
-        ) -> Result<Option<T>, json::Error> {
-            match object.remove(field) {
-                Some(Value::Null) | None => Ok(None),
-                Some(value) => json::from_value(value).map(Some),
-            }
-        }
         let mut object = match value.clone() {
             Value::Object(map) => map,
             other => {
@@ -1031,17 +986,12 @@ impl JsonDeserialize for SoraContainerManifestV1 {
         let bundle_hash = take_required(&mut object, "bundle_hash")?;
         let bundle_path = take_required(&mut object, "bundle_path")?;
         let entrypoint = take_required(&mut object, "entrypoint")?;
-        let args = take_optional::<Vec<String>>(&mut object, "args")?.unwrap_or_default();
-        let env =
-            take_optional::<BTreeMap<String, String>>(&mut object, "env")?.unwrap_or_default();
-        let inrou = take_optional(&mut object, "inrou")?;
-        let required_config_names =
-            take_optional::<Vec<String>>(&mut object, "required_config_names")?.unwrap_or_default();
-        let required_secret_names =
-            take_optional::<Vec<String>>(&mut object, "required_secret_names")?.unwrap_or_default();
-        let config_exports =
-            take_optional::<Vec<SoraConfigExportV1>>(&mut object, "config_exports")?
-                .unwrap_or_default();
+        let args = take_required(&mut object, "args")?;
+        let env = take_required(&mut object, "env")?;
+        let inrou = take_required(&mut object, "inrou")?;
+        let required_config_names = take_required(&mut object, "required_config_names")?;
+        let required_secret_names = take_required(&mut object, "required_secret_names")?;
+        let config_exports = take_required(&mut object, "config_exports")?;
         let capabilities = take_required(&mut object, "capabilities")?;
         let resources = take_required(&mut object, "resources")?;
         let lifecycle = take_required(&mut object, "lifecycle")?;
@@ -1099,6 +1049,7 @@ impl SoraContainerManifestV1 {
                 ));
             };
             inrou.validate()?;
+            self.capabilities.network.validate_for_inrou()?;
         } else if self.inrou.is_some() {
             return Err(invalid_field(
                 "sora container manifest",
@@ -1872,7 +1823,6 @@ pub struct SoraArtifactRefV1 {
     /// Canonical bundle-relative or service-relative path for the artifact.
     pub artifact_path: String,
     /// Optional handler that consumes or serves the artifact.
-    #[norito(default)]
     pub handler_name: Option<Name>,
 }
 impl SoraArtifactRefV1 {
@@ -1933,12 +1883,10 @@ pub struct SoraServiceHandlerV1 {
     /// Entrypoint symbol/function for this handler.
     pub entrypoint: String,
     /// Optional path suffix relative to the service route prefix.
-    #[norito(default)]
     pub route_path: Option<String>,
     /// Certification mode for responses emitted by this handler.
     pub certified_response: SoraCertifiedResponsePolicyV1,
     /// Ordered mailbox contract for replicated handlers.
-    #[norito(default)]
     pub mailbox: Option<SoraMailboxContractV1>,
 }
 impl SoraServiceHandlerV1 {
@@ -2014,31 +1962,24 @@ pub struct SoraServiceManifestV1 {
     /// Human-readable service version label.
     pub service_version: String,
     /// Execution plane selected by this service revision.
-    #[norito(default)]
     pub execution_plane: SoraServiceExecutionPlaneV1,
     /// Reference to the executable container manifest.
     pub container: SoraContainerManifestRefV1,
     /// Desired replica count.
     pub replicas: NonZeroU16,
     /// Optional route exposure metadata.
-    #[norito(default)]
     pub route: Option<SoraRouteTargetV1>,
     /// Rollout and rollback policy.
     pub rollout: SoraRolloutPolicyV1,
     /// Hosted-service economics used for prepaid open deployment.
-    #[norito(default)]
     pub economics: SoraHttpServiceEconomicsV1,
     /// State bindings exposed to the service.
-    #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
     /// Lease-backed mutable storage volumes exposed to hosted HTTP services.
-    #[norito(default)]
     pub lease_volumes: Vec<SoraLeaseVolumeBindingV1>,
     /// Runtime handler contracts exposed by the revision.
-    #[norito(default)]
     pub handlers: Vec<SoraServiceHandlerV1>,
     /// Content-addressed artifacts referenced by the revision.
-    #[norito(default)]
     pub artifacts: Vec<SoraArtifactRefV1>,
 }
 impl SoraServiceManifestV1 {

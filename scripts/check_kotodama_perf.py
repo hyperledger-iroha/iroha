@@ -32,6 +32,10 @@ BASELINE_SHA = "fc09b635df385d0488067f09baaa92a8d16fa124"
 BASELINE_CARGO_LOCK_SHA256 = (
     "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 )
+CANDIDATE_CARGO_LOCK_SHA256 = (
+    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+)
+EVIDENCE_SCHEMA = "iroha.kotodama.performance.v1"
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
 DECIMAL_BENCHMARKS = (
@@ -359,6 +363,168 @@ def validate_baseline_provenance(
         base_sources=_benchmark_sources_at(root),
         candidate_sources=candidate_sources,
     )
+
+
+def validate_candidate_provenance(
+    candidate_root: Path, expected_revision: str
+) -> tuple[str, str]:
+    """Return the exact clean candidate revision and lockfile digest."""
+
+    if re.fullmatch(r"[0-9a-f]{40}", expected_revision) is None:
+        raise GateError(
+            "expected candidate revision must be one lowercase 40-hex commit"
+        )
+    if candidate_root.is_symlink():
+        raise GateError("candidate checkout must not be a symlink")
+    try:
+        root = candidate_root.resolve(strict=True)
+    except OSError as error:
+        raise GateError(
+            f"failed to resolve candidate checkout {candidate_root}: {error}"
+        ) from error
+    if not root.is_dir():
+        raise GateError(f"candidate checkout is not a directory: {root}")
+
+    revision = _git_head(root)
+    if revision != expected_revision:
+        raise GateError(
+            "candidate checkout revision mismatch: "
+            f"expected {expected_revision}, got {revision}"
+        )
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        raise GateError(
+            f"failed to verify candidate source provenance: {error}"
+        ) from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        detail = detail or f"git exited {result.returncode}"
+        raise GateError(
+            f"failed to verify candidate source provenance: {detail}"
+        )
+    if result.stdout:
+        raise GateError(
+            "candidate checkout contains tracked or untracked source drift"
+        )
+    lock_digest = _sha256_regular_file(
+        root / "Cargo.lock", "candidate Cargo.lock"
+    )
+    if lock_digest != CANDIDATE_CARGO_LOCK_SHA256:
+        raise GateError(
+            "candidate Cargo.lock digest mismatch: expected "
+            f"{CANDIDATE_CARGO_LOCK_SHA256}, got {lock_digest}"
+        )
+    return revision, lock_digest
+
+
+def criterion_estimates_sha256(criterion_dir: Path) -> str:
+    """Hash every required base/new estimate with its relative path."""
+
+    if criterion_dir.is_symlink() or not criterion_dir.is_dir():
+        raise GateError(
+            "Criterion directory must be a regular, non-symlink directory: "
+            f"{criterion_dir}"
+        )
+    digest = hashlib.sha256()
+    for name in sorted(REGRESSION_BENCHMARKS):
+        for sample in ("base", "new"):
+            relative_path = Path(name, sample, "estimates.json")
+            current = criterion_dir
+            for component in relative_path.parts[:-1]:
+                current /= component
+                if current.is_symlink() or not current.is_dir():
+                    raise GateError(
+                        "Criterion estimate parent must be a regular, "
+                        f"non-symlink directory: {current}"
+                    )
+            path = criterion_dir / relative_path
+            if path.is_symlink() or not path.is_file():
+                raise GateError(
+                    "Criterion estimate must be a regular, non-symlink file: "
+                    f"{path}"
+                )
+            relative = relative_path.as_posix().encode("utf-8")
+            try:
+                payload = path.read_bytes()
+            except OSError as error:
+                raise GateError(
+                    f"failed to read Criterion estimate {path}: {error}"
+                ) from error
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(len(payload).to_bytes(8, "big"))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
+def write_evidence_report(
+    output: Path,
+    *,
+    criterion_dir: Path,
+    comparisons: Sequence[Comparison],
+    threshold: float,
+    candidate_revision: str,
+    candidate_lock_sha256: str,
+) -> None:
+    """Create one source- and sample-bound machine-readable gate receipt."""
+
+    parent = output.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise GateError(
+            f"evidence output parent must be a regular directory: {parent}"
+        )
+    report = {
+        "schema": EVIDENCE_SCHEMA,
+        "threshold": threshold,
+        "benchmark_count": len(comparisons),
+        "criterion_estimates_sha256": criterion_estimates_sha256(criterion_dir),
+        "baseline": {
+            "revision": BASELINE_SHA,
+            "cargo_lock_sha256": BASELINE_CARGO_LOCK_SHA256,
+        },
+        "candidate": {
+            "revision": candidate_revision,
+            "cargo_lock_sha256": candidate_lock_sha256,
+        },
+        "list_sugar": {
+            "benchmark": LIST_SUGAR_BENCHMARK,
+            "manual_benchmark": LIST_MANUAL_BENCHMARK,
+            "maximum_slowdown": LIST_SUGAR_MAX_SLOWDOWN,
+        },
+        "comparisons": [
+            {
+                "name": row.name,
+                "baseline_ns": row.baseline_ns,
+                "measured_ns": row.measured_ns,
+                "change": row.change,
+            }
+            for row in comparisons
+        ],
+    }
+    try:
+        with output.open("x", encoding="utf-8", newline="\n") as destination:
+            json.dump(report, destination, indent=2, sort_keys=True)
+            destination.write("\n")
+    except FileExistsError as error:
+        raise GateError(f"evidence output already exists: {output}") from error
+    except OSError as error:
+        raise GateError(
+            f"failed to write evidence output {output}: {error}"
+        ) from error
 
 
 _OPEN_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
@@ -1072,12 +1238,47 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--threshold", type=float, default=MAX_REGRESSION)
+    parser.add_argument(
+        "--candidate-root",
+        type=Path,
+        help=(
+            "clean candidate checkout to bind into an evidence receipt; "
+            "required with --json-output"
+        ),
+    )
+    parser.add_argument(
+        "--expected-candidate-commit",
+        help=(
+            "exact lowercase 40-hex candidate commit; required with "
+            "--json-output"
+        ),
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help=(
+            "create one machine-readable source/lock/sample-bound receipt; "
+            "the path must not already exist"
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        evidence_values = (
+            args.candidate_root,
+            args.expected_candidate_commit,
+            args.json_output,
+        )
+        if any(value is not None for value in evidence_values) and not all(
+            value is not None for value in evidence_values
+        ):
+            raise GateError(
+                "--candidate-root, --expected-candidate-commit, and "
+                "--json-output must be supplied together"
+            )
         validate_benchmark_policy()
         validate_baseline_provenance(args.baseline_root)
         current = read_current_samples(
@@ -1091,6 +1292,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(render(comparisons))
         enforce(comparisons, args.threshold)
+        if args.json_output is not None:
+            candidate_revision, candidate_lock_sha256 = (
+                validate_candidate_provenance(
+                    args.candidate_root, args.expected_candidate_commit
+                )
+            )
+            write_evidence_report(
+                args.json_output,
+                criterion_dir=args.criterion_dir,
+                comparisons=comparisons,
+                threshold=args.threshold,
+                candidate_revision=candidate_revision,
+                candidate_lock_sha256=candidate_lock_sha256,
+            )
     except GateError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

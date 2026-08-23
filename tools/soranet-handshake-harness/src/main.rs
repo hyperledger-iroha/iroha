@@ -1,3 +1,5 @@
+//! Command-line harness for SoraNet handshake fixtures and diagnostics.
+
 use clap::{Parser, Subcommand};
 use soranet_handshake_harness::{
     CapabilitySummary, CapabilityTlv, HandshakeSuite, HarnessError, HexInput,
@@ -11,7 +13,315 @@ use soranet_pq::{
     MlKemSuite, SuiteParseError, validate_mlkem_ciphertext, validate_mlkem_public_key,
     validate_mlkem_secret_key,
 };
-use std::{env, fs, path::PathBuf};
+#[cfg(unix)]
+use std::fs::{File, Metadata as FsMetadata, OpenOptions};
+use std::{
+    env, fmt, fs,
+    io::{self, Read as _},
+    path::{Path, PathBuf},
+};
+
+const SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1: usize = 256;
+const STATIC_SECRET_KEY_BYTES: usize = 32;
+
+struct SecretBytes(Vec<u8>);
+
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted secret bytes>")
+    }
+}
+
+impl SecretBytes {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        // Best-effort wipe without adding dependency metadata to this
+        // developer-only harness. Cryptographic backends may own additional
+        // internal copies while an operation is in progress.
+        self.0.fill(0);
+        std::hint::black_box(&self.0);
+    }
+}
+
+struct StaticSecretKey([u8; STATIC_SECRET_KEY_BYTES]);
+
+impl StaticSecretKey {
+    fn as_array(&self) -> &[u8; STATIC_SECRET_KEY_BYTES] {
+        &self.0
+    }
+}
+
+impl Drop for StaticSecretKey {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&self.0);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const SECRET_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SECRET_FILE_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const SECRET_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraNet handshake-harness secret loading requires a defined no-follow flag");
+
+#[cfg(unix)]
+type SecretFileIdentity = (u64, u64);
+
+#[cfg(unix)]
+fn secret_file_identity(metadata: &FsMetadata) -> SecretFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(unix)]
+fn secret_file_metadata_unchanged(left: &FsMetadata, right: &FsMetadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    secret_file_identity(left) == secret_file_identity(right)
+        && left.len() == right.len()
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(unix)]
+fn current_process_owner_uid() -> io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(tempfile::tempfile()?.metadata()?.uid())
+}
+
+#[cfg(unix)]
+fn validate_private_secret_file(metadata: &FsMetadata, label: &str, owner: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.uid() != owner
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{label} must be a direct regular file owned by the current user, owner-private, and have exactly one link"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_private_secret_file(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(SECRET_FILE_O_NOFOLLOW_FLAG);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn read_private_secret_file(
+    path: &Path,
+    maximum_raw_bytes: usize,
+    label: &str,
+) -> Result<SecretBytes, HarnessError> {
+    let owner = current_process_owner_uid()?;
+    let before = fs::symlink_metadata(path)?;
+    validate_private_secret_file(&before, label, owner)?;
+    if before.len() > u64::try_from(maximum_raw_bytes).unwrap_or(u64::MAX) {
+        return Err(HarnessError::Validation(format!(
+            "{label} exceeds its {maximum_raw_bytes}-byte first-release input limit"
+        )));
+    }
+    let mut file = open_private_secret_file(path)?;
+    let opened = file.metadata()?;
+    validate_private_secret_file(&opened, label, owner)?;
+    if !secret_file_metadata_unchanged(&before, &opened) {
+        return Err(HarnessError::Validation(format!(
+            "{label} changed between inspection and open"
+        )));
+    }
+    let expected_len = usize::try_from(opened.len()).map_err(|_| {
+        HarnessError::Validation(format!("{label} length is not representable on this host"))
+    })?;
+    let mut bytes = SecretBytes::new(Vec::new());
+    bytes
+        .0
+        .try_reserve_exact(expected_len)
+        .map_err(|_| HarnessError::Validation(format!("failed to reserve bounded {label}")))?;
+    bytes.0.resize(expected_len, 0);
+    file.read_exact(&mut bytes.0).map_err(|error| {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            HarnessError::Validation(format!("{label} changed length while being read"))
+        } else {
+            HarnessError::Io(error)
+        }
+    })?;
+    let mut growth_probe = [0_u8; 1];
+    let grew = file.read(&mut growth_probe)? != 0;
+    growth_probe.fill(0);
+    std::hint::black_box(&growth_probe);
+    if grew {
+        return Err(HarnessError::Validation(format!(
+            "{label} grew while being read or exceeds its {maximum_raw_bytes}-byte limit"
+        )));
+    }
+    let after_file = file.metadata()?;
+    let after_path = fs::symlink_metadata(path)?;
+    validate_private_secret_file(&after_file, label, owner)?;
+    validate_private_secret_file(&after_path, label, owner)?;
+    if !secret_file_metadata_unchanged(&opened, &after_file)
+        || !secret_file_metadata_unchanged(&opened, &after_path)
+    {
+        return Err(HarnessError::Validation(format!(
+            "{label} changed while being read"
+        )));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_private_secret_file(
+    _path: &Path,
+    _maximum_raw_bytes: usize,
+    label: &str,
+) -> Result<SecretBytes, HarnessError> {
+    Err(HarnessError::Validation(format!(
+        "private {label} file custody checks are unavailable on this platform; use standard input"
+    )))
+}
+
+fn read_bounded_secret_input(
+    mut reader: impl io::Read,
+    maximum_raw_bytes: usize,
+    label: &str,
+) -> Result<SecretBytes, HarnessError> {
+    let read_limit = maximum_raw_bytes
+        .checked_add(1)
+        .ok_or_else(|| HarnessError::Validation(format!("{label} input limit overflowed")))?;
+    let mut bytes = SecretBytes::new(Vec::new());
+    bytes
+        .0
+        .try_reserve_exact(read_limit)
+        .map_err(|_| HarnessError::Validation(format!("failed to reserve bounded {label}")))?;
+    let mut bounded = reader.by_ref().take(u64::try_from(read_limit).map_err(|_| {
+        HarnessError::Validation(format!("{label} input limit is not representable"))
+    })?);
+    bounded.read_to_end(&mut bytes.0)?;
+    if bytes.0.len() > maximum_raw_bytes {
+        return Err(HarnessError::Validation(format!(
+            "{label} exceeds its {maximum_raw_bytes}-byte first-release input limit"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn decode_secret_hex_source(
+    path: &Path,
+    maximum_decoded_bytes: usize,
+    label: &str,
+) -> Result<SecretBytes, HarnessError> {
+    let maximum_raw_bytes = maximum_decoded_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1))
+        .ok_or_else(|| HarnessError::Validation(format!("{label} input limit overflowed")))?;
+    let raw = if path == Path::new("-") {
+        let stdin = io::stdin();
+        read_bounded_secret_input(stdin.lock(), maximum_raw_bytes, label)?
+    } else {
+        read_private_secret_file(path, maximum_raw_bytes, label)?
+    };
+    decode_secret_hex_bytes(raw.as_slice(), maximum_decoded_bytes, label)
+}
+
+fn decode_secret_hex_bytes(
+    raw: &[u8],
+    maximum_decoded_bytes: usize,
+    label: &str,
+) -> Result<SecretBytes, HarnessError> {
+    let text = std::str::from_utf8(raw)
+        .map_err(|_| HarnessError::Validation(format!("{label} must be UTF-8 hexadecimal text")))?;
+    let trimmed = text.trim();
+    let surrounding_whitespace_bytes = text.len().saturating_sub(trimmed.len());
+    if surrounding_whitespace_bytes > SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1 {
+        return Err(HarnessError::Validation(format!(
+            "{label} exceeds the {}-byte surrounding-whitespace limit",
+            SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1
+        )));
+    }
+    let decoded =
+        SecretBytes::new(decode_hex(trimmed).map_err(|error| {
+            HarnessError::Validation(format!("failed to decode {label}: {error}"))
+        })?);
+    if decoded.0.len() > maximum_decoded_bytes {
+        return Err(HarnessError::Validation(format!(
+            "{label} decodes to {} bytes; first-release limit is {maximum_decoded_bytes}",
+            decoded.0.len()
+        )));
+    }
+    Ok(decoded)
+}
+
+fn load_static_secret(path: &Path, label: &str) -> Result<StaticSecretKey, HarnessError> {
+    let decoded = decode_secret_hex_source(path, STATIC_SECRET_KEY_BYTES, label)?;
+    if decoded.0.len() != STATIC_SECRET_KEY_BYTES {
+        return Err(HarnessError::Validation(format!(
+            "{label} must decode to {STATIC_SECRET_KEY_BYTES} bytes, got {}",
+            decoded.0.len()
+        )));
+    }
+    if decoded
+        .0
+        .first()
+        .is_some_and(|first| decoded.0.iter().all(|byte| byte == first))
+    {
+        return Err(HarnessError::Validation(format!(
+            "{label} must not be an all-zero or repeated-byte degenerate key"
+        )));
+    }
+    let mut key = [0_u8; STATIC_SECRET_KEY_BYTES];
+    key.copy_from_slice(decoded.as_slice());
+    Ok(StaticSecretKey(key))
+}
+
+fn validate_simulation_secret_sources(client: &Path, relay: &Path) -> Result<(), HarnessError> {
+    if client == Path::new("-") && relay == Path::new("-") {
+        return Err(HarnessError::Validation(
+            "client and relay static secrets cannot both read from standard input".into(),
+        ));
+    }
+    Ok(())
+}
 /// Command-line interface for the (still evolving) SoraNet handshake harness.
 #[derive(Parser, Debug)]
 #[command(author, version, about = "SoraNet handshake harness", long_about = None)]
@@ -99,8 +409,9 @@ enum Commands {
         signature: Option<String>,
         #[arg(long)]
         witness_signature: Option<String>,
+        /// Owner-private relay static-secret hex file. Use `-` for standard input.
         #[arg(long)]
-        relay_static_sk_hex: Option<String>,
+        relay_static_sk_file: Option<PathBuf>,
     },
     /// Generate or verify the reference handshake fixtures.
     Fixtures {
@@ -122,9 +433,9 @@ enum Commands {
         /// Public key bytes to validate (hex).
         #[arg(long)]
         public_hex: Option<String>,
-        /// Secret key bytes to validate (hex).
+        /// Owner-private secret-key hex file. Use `-` for standard input.
         #[arg(long)]
-        secret_hex: Option<String>,
+        secret_file: Option<PathBuf>,
         /// Ciphertext bytes to validate (hex).
         #[arg(long)]
         ciphertext_hex: Option<String>,
@@ -137,12 +448,12 @@ enum Commands {
         /// Relay capability vector (hex)
         #[arg(long)]
         relay_hex: String,
-        /// Client static secret key (hex)
+        /// Owner-private client static-secret hex file. Use `-` for standard input.
         #[arg(long)]
-        client_static_sk_hex: String,
-        /// Relay static secret key (hex)
+        client_static_sk_file: PathBuf,
+        /// Owner-private relay static-secret hex file. Use `-` for standard input.
         #[arg(long)]
-        relay_static_sk_hex: String,
+        relay_static_sk_file: PathBuf,
         /// Optional resume hash (hex)
         #[arg(long)]
         resume_hash_hex: Option<HexInput>,
@@ -292,22 +603,12 @@ fn main() -> Result<(), HarnessError> {
             incident_reference,
             signature,
             witness_signature,
-            relay_static_sk_hex,
+            relay_static_sk_file,
         } => {
-            let signing_key = if let Some(sk_hex) = relay_static_sk_hex.as_deref() {
-                let bytes = decode_hex(sk_hex)?;
-                if bytes.len() != 32 {
-                    return Err(HarnessError::Validation(format!(
-                        "relay-static-sk-hex must decode to 32 bytes, got {}",
-                        bytes.len()
-                    )));
-                }
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes);
-                Some(key)
-            } else {
-                None
-            };
+            let signing_key = relay_static_sk_file
+                .as_deref()
+                .map(|path| load_static_secret(path, "relay static secret"))
+                .transpose()?;
             let signature_ref = if signing_key.is_some() {
                 None
             } else {
@@ -330,7 +631,7 @@ fn main() -> Result<(), HarnessError> {
                     signature: signature_ref,
                     witness_signature: witness_signature_ref,
                 },
-                signing_key.as_ref(),
+                signing_key.as_ref().map(StaticSecretKey::as_array),
             )?;
             println!("{json}");
         }
@@ -347,17 +648,22 @@ fn main() -> Result<(), HarnessError> {
             kem_id,
             kem_suite,
             public_hex,
-            secret_hex,
+            secret_file,
             ciphertext_hex,
         } => {
             let (resolved_id, suite) = resolve_kem_suite(kem_id, kem_suite.as_deref())?;
             let public = decode_optional_hex("public key", public_hex)?;
-            let secret = decode_optional_hex("secret key", secret_hex)?;
+            let secret = secret_file
+                .as_deref()
+                .map(|path| {
+                    decode_secret_hex_source(path, suite.secret_key_len(), "ML-KEM secret key")
+                })
+                .transpose()?;
             let ciphertext = decode_optional_hex("ciphertext", ciphertext_hex)?;
             let results = run_kem_validation(
                 suite,
                 public.as_deref(),
-                secret.as_deref(),
+                secret.as_ref().map(SecretBytes::as_slice),
                 ciphertext.as_deref(),
             )?;
             println!("ML-KEM suite {suite} (id {resolved_id}) validation succeeded.");
@@ -368,8 +674,8 @@ fn main() -> Result<(), HarnessError> {
         Commands::Simulate {
             client_hex,
             relay_hex,
-            client_static_sk_hex,
-            relay_static_sk_hex,
+            client_static_sk_file,
+            relay_static_sk_file,
             resume_hash_hex,
             descriptor_commit_hex,
             client_nonce_hex,
@@ -385,8 +691,9 @@ fn main() -> Result<(), HarnessError> {
         } => {
             let client_caps = decode_hex(&client_hex)?;
             let relay_caps = decode_hex(&relay_hex)?;
-            let client_sk = decode_hex(&client_static_sk_hex)?;
-            let relay_sk = decode_hex(&relay_static_sk_hex)?;
+            validate_simulation_secret_sources(&client_static_sk_file, &relay_static_sk_file)?;
+            let client_sk = load_static_secret(&client_static_sk_file, "client static secret")?;
+            let relay_sk = load_static_secret(&relay_static_sk_file, "relay static secret")?;
             let resume_hash = resume_hash_hex.map(|h| h.0);
             let descriptor_commit = decode_hex(&descriptor_commit_hex)?;
             let client_nonce = decode_hex(&client_nonce_hex)?;
@@ -399,8 +706,8 @@ fn main() -> Result<(), HarnessError> {
             let result = simulate_handshake(&SimulationParams {
                 client_capabilities: &client_caps,
                 relay_capabilities: &relay_caps,
-                client_static_sk: &client_sk,
-                relay_static_sk: &relay_sk,
+                client_static_sk: client_sk.as_array(),
+                relay_static_sk: relay_sk.as_array(),
                 resume_hash: resume_hash.as_deref(),
                 descriptor_commit: &descriptor_commit,
                 client_nonce: &client_nonce,
@@ -699,7 +1006,7 @@ fn run_kem_validation(
 ) -> Result<Vec<String>, HarnessError> {
     if public.is_none() && secret.is_none() && ciphertext.is_none() {
         return Err(HarnessError::Validation(
-            "provide at least one of --public-hex, --secret-hex, or --ciphertext-hex".into(),
+            "provide at least one of --public-hex, --secret-file, or --ciphertext-hex".into(),
         ));
     }
     let mut status = Vec::new();
@@ -724,6 +1031,140 @@ fn run_kem_validation(
 mod tests {
     use super::*;
     use soranet_pq::{encapsulate_mlkem_from_os, generate_mlkem_keypair_from_os};
+
+    #[test]
+    fn cli_removes_secret_bearing_argv_options() {
+        for argv in [
+            vec![
+                "soranet-handshake-harness",
+                "telemetry",
+                "--relay-static-sk-hex",
+                "00",
+            ],
+            vec![
+                "soranet-handshake-harness",
+                "kem-validate",
+                "--secret-hex",
+                "00",
+            ],
+            vec![
+                "soranet-handshake-harness",
+                "simulate",
+                "--client-static-sk-hex",
+                "00",
+            ],
+            vec![
+                "soranet-handshake-harness",
+                "simulate",
+                "--relay-static-sk-hex",
+                "00",
+            ],
+        ] {
+            let error = Cli::try_parse_from(argv)
+                .expect_err("secret bytes must not be accepted as process arguments");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+
+    #[test]
+    fn cli_accepts_secret_file_or_standard_input_path() {
+        let cli = Cli::try_parse_from([
+            "soranet-handshake-harness",
+            "kem-validate",
+            "--kem-id",
+            "1",
+            "--secret-file",
+            "-",
+        ])
+        .expect("secret-file standard-input marker must parse");
+        assert!(matches!(
+            cli.command,
+            Commands::KemValidate {
+                secret_file: Some(path),
+                ..
+            } if path == Path::new("-")
+        ));
+    }
+
+    #[test]
+    fn simulation_accepts_at_most_one_secret_from_standard_input() {
+        validate_simulation_secret_sources(Path::new("-"), Path::new("relay.hex"))
+            .expect("one standard-input secret is unambiguous");
+        let error = validate_simulation_secret_sources(Path::new("-"), Path::new("-"))
+            .expect_err("one stream cannot frame two independent secret values");
+        assert!(error.to_string().contains("cannot both read"));
+    }
+
+    #[test]
+    fn bounded_secret_input_accepts_exact_and_rejects_plus_one() {
+        let maximum = 2 + SECRET_FILE_MAX_SURROUNDING_WHITESPACE_BYTES_V1;
+        let raw = read_bounded_secret_input(io::Cursor::new(b"ab\n"), maximum, "test secret")
+            .expect("bounded input");
+        let secret = decode_secret_hex_bytes(raw.as_slice(), 1, "test secret")
+            .expect("hex secret must decode");
+        assert_eq!(secret.as_slice(), [0xab]);
+
+        let error = read_bounded_secret_input(
+            io::Cursor::new(vec![b' '; maximum + 1]),
+            maximum,
+            "test secret",
+        )
+        .expect_err("input above the corridor must fail");
+        assert!(error.to_string().contains("first-release input limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_secret_loader_rejects_degenerate_keys() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("temporary directory");
+        for (name, byte) in [("zero.hex", "00"), ("repeated.hex", "a5")] {
+            let path = dir.path().join(name);
+            fs::write(&path, byte.repeat(STATIC_SECRET_KEY_BYTES)).expect("write static secret");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("make secret private");
+            let error = match load_static_secret(&path, "test static secret") {
+                Ok(_) => panic!("degenerate static secrets must fail closed"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("degenerate key"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_requires_private_mode_direct_path_and_single_link() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("secret.hex");
+        fs::write(&path, b"ab").expect("write secret fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("make secret fixture non-private");
+        let error = decode_secret_hex_source(&path, 1, "test secret")
+            .expect_err("group/world-readable secret must fail");
+        assert!(error.to_string().contains("owner-private"));
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("make secret fixture private");
+        let secret = decode_secret_hex_source(&path, 1, "test secret")
+            .expect("private direct file must load");
+        assert_eq!(secret.as_slice(), [0xab]);
+
+        let second_link = dir.path().join("secret-copy.hex");
+        fs::hard_link(&path, &second_link).expect("create hard link");
+        let error = decode_secret_hex_source(&path, 1, "test secret")
+            .expect_err("multiply linked secret must fail");
+        assert!(error.to_string().contains("exactly one link"));
+        fs::remove_file(&second_link).expect("remove hard link");
+
+        let link = dir.path().join("secret-link.hex");
+        symlink(&path, &link).expect("create symbolic link");
+        let error = decode_secret_hex_source(&link, 1, "test secret")
+            .expect_err("symbolic-link secret must fail");
+        assert!(error.to_string().contains("direct regular file"));
+    }
+
     #[test]
     fn run_kem_validation_accepts_valid_materials() {
         let suite = MlKemSuite::MlKem768;

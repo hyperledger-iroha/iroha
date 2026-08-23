@@ -1021,10 +1021,10 @@ __device__ __forceinline__ Bn254Value bn254_to_canonical(const Bn254Value& value
     return out;
 }
 
-__device__ __forceinline__ uint64_t poseidon_pow5(uint64_t x) {
+__device__ __forceinline__ uint64_t poseidon_pow7(uint64_t x) {
     uint64_t x2 = f_mul(x, x);
     uint64_t x4 = f_mul(x2, x2);
-    return f_mul(x4, x);
+    return f_mul(f_mul(x4, x2), x);
 }
 
 __device__ void poseidon_apply_mds(uint64_t state[POSEIDON_STATE_WIDTH]) {
@@ -1046,7 +1046,7 @@ __device__ void poseidon_full_round(
     const uint64_t rc[POSEIDON_STATE_WIDTH]
 ) {
     for (unsigned int idx = 0; idx < POSEIDON_STATE_WIDTH; ++idx) {
-        state[idx] = poseidon_pow5(f_add(state[idx], rc[idx]));
+        state[idx] = poseidon_pow7(f_add(state[idx], rc[idx]));
     }
     poseidon_apply_mds(state);
 }
@@ -1058,7 +1058,7 @@ __device__ void poseidon_partial_round(
     for (unsigned int idx = 0; idx < POSEIDON_STATE_WIDTH; ++idx) {
         state[idx] = f_add(state[idx], rc[idx]);
     }
-    state[0] = poseidon_pow5(state[0]);
+    state[0] = poseidon_pow7(state[0]);
     poseidon_apply_mds(state);
 }
 
@@ -1214,6 +1214,18 @@ __global__ void fastpq_bn254_fft_kernel(
     }
     __syncthreads();
 
+    for (uint64_t idx = threadIdx.x; idx < column_len; idx += blockDim.x) {
+        const uint64_t reversed = bit_reverse_index(idx, log_len);
+        if (idx < reversed) {
+            const Bn254Value value = bn254_load(column + idx * BN254_LIMBS);
+            const Bn254Value reversed_value =
+                bn254_load(column + reversed * BN254_LIMBS);
+            bn254_store(column + idx * BN254_LIMBS, reversed_value);
+            bn254_store(column + reversed * BN254_LIMBS, value);
+        }
+    }
+    __syncthreads();
+
     uint64_t stage_span = column_len >> 1;
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         uint64_t len = 1ull << (stage + 1u);
@@ -1282,6 +1294,18 @@ __global__ void fastpq_bn254_lde_kernel(
             out_column + idx * BN254_LIMBS,
             bn254_montgomery_mul(value, coset_power)
         );
+    }
+    __syncthreads();
+
+    for (uint64_t idx = threadIdx.x; idx < eval_len; idx += blockDim.x) {
+        const uint64_t reversed = bit_reverse_index(idx, log_len);
+        if (idx < reversed) {
+            const Bn254Value value = bn254_load(out_column + idx * BN254_LIMBS);
+            const Bn254Value reversed_value =
+                bn254_load(out_column + reversed * BN254_LIMBS);
+            bn254_store(out_column + idx * BN254_LIMBS, reversed_value);
+            bn254_store(out_column + reversed * BN254_LIMBS, value);
+        }
     }
     __syncthreads();
 

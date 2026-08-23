@@ -208,9 +208,12 @@ Every typed `POST /v1/soracloud/*` operation has its own sealed route-local
 canonical-account boundary. Torii bounds the exact body and authenticates its
 method, path, exact runtime `NetworkId`, freshness nonce, and account signer
 before a typed extractor or SoraCloud handler runs; the same verified principal
-then feeds the account/origin rate and in-flight gates. The route catalog marks
-the ciphertext query as a bounded read, private uploaded-model execution as
-expensive compute, and all retained or ledger-changing commands as mutations.
+then feeds the account-and-route rate gate before the global in-flight gate.
+`Origin` remains CORS metadata, not an authenticated rate-limit identity:
+changing or spoofing it cannot manufacture another mutation bucket. The route
+catalog marks the ciphertext query as a bounded read, private uploaded-model
+execution as expensive compute, and all retained or ledger-changing commands as
+mutations.
 This rule does not apply to the separately cataloged public-runtime gateway
 exceptions below.
 

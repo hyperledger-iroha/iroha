@@ -1,6 +1,6 @@
 #[cfg(all(test, feature = "app_api"))]
 mod accounts_query_tests {
-    use std::sync::Arc;
+    use super::*;
     use axum::http::StatusCode;
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -10,7 +10,7 @@ mod accounts_query_tests {
     };
     use iroha_crypto::Algorithm;
     use iroha_data_model::prelude as dm;
-    use super::*;
+    use std::sync::Arc;
     fn checked_accounts_query_authority(seed: u8, context: &'static str) -> dm::AccountId {
         dm::AccountId::new(
             checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
@@ -339,6 +339,47 @@ mod accounts_query_tests {
             ids.iter().all(|id| !id.contains('@')),
             "GET /v1/accounts must still emit canonical account ids, got {ids:?}"
         );
+    }
+    #[tokio::test]
+    async fn accounts_list_rejects_malformed_filter_instead_of_widening_results() {
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        for malformed_filter in ["", "not-json", r#"{"eq": ["id"]}"#] {
+            let params = ListFilterParams {
+                filter: Some(malformed_filter.to_owned()),
+                limit: Some(8),
+                ..Default::default()
+            };
+            let error = match handle_v1_accounts(
+                Arc::clone(&state),
+                crate::NoritoQuery(params),
+                crate::routing::MaybeTelemetry::for_tests(),
+            )
+            .await
+            {
+                Ok(_) => panic!(
+                    "malformed filter `{malformed_filter}` must not be treated as an absent filter"
+                ),
+                Err(error) => error,
+            };
+            let Error::AppQueryValidation { code, message } = &error else {
+                panic!("malformed filter `{malformed_filter}` returned the wrong error: {error:?}");
+            };
+            assert_eq!(*code, "invalid_filter");
+            assert!(message.contains(ENDPOINT_ACCOUNTS_LIST));
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("invalid_filter")
+            );
+        }
     }
     #[tokio::test]
     async fn accounts_query_aggregate_groups_by_primary_alias_domain() {

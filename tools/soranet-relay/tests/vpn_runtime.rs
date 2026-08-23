@@ -5,8 +5,8 @@ use soranet_relay::{
     config::{VpnConfig, VpnCoverTrafficConfig},
     metrics::Metrics,
     vpn::{
-        CoverFrameMeta, VpnFrameIoError, VpnOverlay, read_frame, schedule_frames,
-        send_scheduled_frames, write_frame,
+        CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, read_frame,
+        schedule_frames, send_scheduled_frames, write_frame,
     },
 };
 use std::{
@@ -78,7 +78,7 @@ async fn scheduler_applies_pacing_without_cover() {
     cfg.cover.enabled = false;
     cfg.pacing_millis = 25;
     let pacing = cfg.pacing_millis;
-    let overlay = VpnOverlay::from_config(cfg);
+    let overlay = Arc::new(VpnOverlay::from_config(cfg));
     let cover_meta = CoverFrameMeta {
         circuit_id: [0x01; 16],
         flow_label: VpnFlowLabelV1::from_u32(1).expect("flow"),
@@ -120,7 +120,7 @@ async fn scheduler_applies_pacing_without_cover() {
             .await
             .expect("schedule sent");
     });
-    let read_overlay = overlay.clone();
+    let read_overlay = Arc::clone(&overlay);
     let read_handle = tokio::spawn(async move {
         let mut arrivals = Vec::new();
         for _ in 0..2 {
@@ -140,6 +140,37 @@ async fn scheduler_applies_pacing_without_cover() {
         "pacing gap should respect configured minimum (delta: {delta:?})"
     );
 }
+
+#[test]
+fn scheduler_rejects_sequence_wrap() {
+    let overlay = VpnOverlay::from_config(VpnConfig::default());
+    let flow_label = VpnFlowLabelV1::from_u32(1).expect("flow");
+    let cover_meta = CoverFrameMeta {
+        circuit_id: [0x01; 16],
+        flow_label,
+        ack: 0,
+        flags: VpnCellFlagsV1::new(true, false, false, false),
+        start_sequence: u64::MAX,
+    };
+    let data_cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Data,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id: [0x01; 16],
+            flow_label,
+            sequence: 0,
+            ack: 0,
+            padding_budget_ms: overlay.config().padding_budget_ms,
+            payload_len: 0,
+        },
+        payload: vec![0xAA],
+    };
+    assert!(matches!(
+        schedule_frames(&overlay, vec![data_cell], cover_meta, [0x11; 32]),
+        Err(VpnFrameBuildError::SequenceExhausted)
+    ));
+}
 #[tokio::test]
 async fn cover_frames_are_injected_when_enabled() {
     let cfg = VpnConfig {
@@ -153,7 +184,7 @@ async fn cover_frames_are_injected_when_enabled() {
         pacing_millis: 10,
         ..VpnConfig::default()
     };
-    let overlay = VpnOverlay::from_config(cfg);
+    let overlay = Arc::new(VpnOverlay::from_config(cfg));
     let cover_meta = CoverFrameMeta {
         circuit_id: [0x09; 16],
         flow_label: VpnFlowLabelV1::from_u32(2).expect("flow"),
@@ -200,7 +231,7 @@ async fn cover_and_data_metrics_accounted_separately() {
         pacing_millis: 5,
         ..VpnConfig::default()
     };
-    let overlay = VpnOverlay::from_config(cfg);
+    let overlay = Arc::new(VpnOverlay::from_config(cfg));
     let cover_meta = CoverFrameMeta {
         circuit_id: [0x44; 16],
         flow_label: VpnFlowLabelV1::from_u32(7).expect("flow"),
@@ -238,7 +269,7 @@ async fn cover_and_data_metrics_accounted_separately() {
             .await
             .expect("schedule sent");
     });
-    let read_overlay = overlay.clone();
+    let read_overlay = Arc::clone(&overlay);
     let read = tokio::spawn(async move {
         let mut frames = Vec::new();
         for _ in 0..schedule.len() {

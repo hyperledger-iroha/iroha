@@ -1,15 +1,75 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use core::ops::Range;
     use rand::{SeedableRng, rngs::StdRng};
     use rand_core::{CryptoRng, RngCore, TryCryptoRng, TryRngCore};
-    use super::*;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked SoraNet handshake fixture keypair")
     }
     fn checked_seeded_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked SoraNet handshake fixture keypair")
+    }
+    #[test]
+    fn bounded_fixture_reader_enforces_the_requested_limit() {
+        let root = TempDir::new().expect("temporary fixture directory");
+        let path = root.path().join("fixture.json");
+        fs::write(&path, [1_u8, 2, 3, 4]).expect("write fixture at limit");
+        assert_eq!(
+            read_bounded_direct_fixture(&path, 4, "test fixture").expect("read at limit"),
+            [1, 2, 3, 4]
+        );
+
+        fs::write(&path, [1_u8, 2, 3, 4, 5]).expect("write oversized fixture");
+        let error = read_bounded_direct_fixture(&path, 4, "test fixture")
+            .expect_err("oversized fixture must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("4-byte first-release limit"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_fixture_reader_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("temporary fixture directory");
+        let target = root.path().join("target.json");
+        let link = root.path().join("fixture.json");
+        fs::write(&target, b"{}").expect("write symlink target");
+        symlink(&target, &link).expect("create fixture symlink");
+        let error = read_bounded_direct_fixture(&link, 16, "test fixture")
+            .expect_err("fixture symlink must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn verify_salt_vector_rejects_an_oversized_file_before_json_parsing() {
+        let root = TempDir::new().expect("temporary fixture directory");
+        let path = root.path().join("salt.json");
+        fs::write(
+            &path,
+            vec![b' '; SALT_ANNOUNCEMENT_FIXTURE_MAX_BYTES_V1 + 1],
+        )
+        .expect("write oversized salt fixture");
+        let error = verify_salt_vector(&path).expect_err("oversized salt fixture must fail");
+        assert!(matches!(
+            error,
+            HarnessError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
+        ));
+    }
+    #[test]
+    fn compare_fixture_rejects_an_oversized_expected_file() {
+        let root = TempDir::new().expect("temporary fixture directory");
+        let expected = root.path().join("expected.json");
+        let actual = root.path().join("actual.json");
+        fs::write(&expected, vec![0_u8; HANDSHAKE_FIXTURE_MAX_BYTES_V1 + 1])
+            .expect("write oversized expected fixture");
+        fs::write(&actual, b"{}").expect("write generated fixture");
+        let error = compare_fixture(&expected, &actual)
+            .expect_err("oversized expected fixture must fail closed");
+        assert!(matches!(
+            error,
+            HarnessError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
+        ));
     }
     fn assert_relay_authentication_roundtrip(algorithm: Algorithm, seed: u8) {
         let relay_keys = KeyPair::try_from_seed(vec![seed; 32], algorithm)
@@ -184,6 +244,61 @@ mod tests {
             }
             other => panic!("expected RNG failure, got {other:?}"),
         }
+    }
+    #[test]
+    fn build_client_hello_rejects_repeated_nonzero_rng_blocks() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = FixedTryRng { byte: 0x5A };
+        let error = build_client_hello(&params, &mut rng)
+            .err()
+            .expect("a stuck nonzero RNG must not expose reused secret material");
+        match error {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert!(message.contains("all-identical-byte material"));
+            }
+            other => panic!("expected repeated RNG failure, got {other:?}"),
+        }
+    }
+    #[test]
+    fn process_client_hello_rejects_repeated_nonzero_relay_rng_blocks() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut client_rng = StdRng::seed_from_u64(0x5A17);
+        let (client_hello, _) = build_client_hello(&params, &mut client_rng).expect("client hello");
+        let mut relay_rng = FixedTryRng { byte: 0xA5 };
+        let error = process_client_hello(
+            &client_hello,
+            &params,
+            &checked_random_keypair(),
+            &mut relay_rng,
+        )
+        .err()
+        .expect("a stuck relay RNG must not reuse public nonce material as a secret");
+        match error {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building relay nonce");
+                assert!(message.contains("all-identical-byte material"));
+            }
+            other => panic!("expected repeated relay RNG failure, got {other:?}"),
+        }
+    }
+    #[test]
+    fn confirmation_comparison_checks_all_bytes_and_lengths() {
+        assert!(constant_time_bytes_eq(&[0xA5; 32], &[0xA5; 32]));
+        assert!(!constant_time_bytes_eq(&[0x5A; 32], &[0x5A; 31]));
+        let mut different = [0xA5; 32];
+        different[31] ^= 1;
+        assert!(!constant_time_bytes_eq(&[0xA5; 32], &different));
+    }
+    #[test]
+    fn exact_handshake_fields_reject_noncanonical_lengths() {
+        validate_exact_field_len("confirmation", &[0xA5; 32], 32).expect("canonical field length");
+        let error = validate_exact_field_len("confirmation", &[0xA5; 31], 32)
+            .expect_err("short fixed-width field must fail");
+        assert!(
+            error.to_string().contains("must be 32 bytes, got 31"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn encode_signature_returns_prefixed_base64() {
@@ -410,28 +525,225 @@ mod tests {
         assert!(matches!(err, HarnessError::DuplicateCapability(_)));
     }
     #[test]
-    fn parse_capabilities_allows_duplicate_pqsig() {
+    fn parse_capabilities_rejects_repeated_algorithm_ids_even_when_flags_differ() {
+        for (ty, id) in [(CAPABILITY_PQKEM, 0x01), (CAPABILITY_PQSIG, 0x01)] {
+            let entries = vec![
+                CapabilityTlv {
+                    ty,
+                    value: vec![id, 0x00],
+                    required: false,
+                },
+                CapabilityTlv {
+                    ty,
+                    value: vec![id, CAPABILITY_REQUIRED_FLAG],
+                    required: false,
+                },
+            ];
+            let error = parse_capabilities(&encode_tlvs(&entries))
+                .expect_err("repeated algorithm identifier must fail closed");
+            assert!(
+                matches!(error, HarnessError::DuplicateCapability(ref label) if label.contains(&format!("algorithm id 0x{id:02x}"))),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn parse_capabilities_allows_distinct_kem_ids_and_repeated_grease_types() {
         let entries = vec![
             CapabilityTlv {
-                ty: CAPABILITY_PQSIG,
-                value: vec![0x01, 0x00],
+                ty: CAPABILITY_PQKEM,
+                value: vec![0x00, 0x00],
                 required: false,
             },
             CapabilityTlv {
-                ty: CAPABILITY_PQSIG,
-                value: vec![0x02, 0x00],
+                ty: CAPABILITY_PQKEM,
+                value: vec![0x01, CAPABILITY_REQUIRED_FLAG],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: 0x7F10,
+                value: vec![0xAA],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: 0x7F10,
+                value: vec![0xBB],
                 required: false,
             },
         ];
-        let buf = encode_tlvs(&entries);
-        let parsed = parse_capabilities(&buf).expect("pqsig duplicates allowed");
-        let pqsigs: Vec<_> = parsed
-            .iter()
-            .filter(|cap| cap.ty == CAPABILITY_PQSIG)
-            .collect();
-        assert_eq!(pqsigs.len(), 2);
-        assert_eq!(pqsigs[0].value, vec![0x01, 0x00]);
-        assert_eq!(pqsigs[1].value, vec![0x02, 0x00]);
+        let parsed = parse_capabilities(&encode_tlvs(&entries))
+            .expect("distinct algorithms and repeated GREASE types stay legal");
+        assert_eq!(parsed.len(), entries.len());
+    }
+    #[test]
+    fn parse_capabilities_rejects_unsupported_algorithm_ids() {
+        for (ty, id, expected) in [
+            (CAPABILITY_PQKEM, 0xff, "unsupported ML-KEM identifier"),
+            (
+                CAPABILITY_PQSIG,
+                0x00,
+                "unsupported first-release signature identifier",
+            ),
+            (
+                CAPABILITY_PQSIG,
+                0x02,
+                "unsupported first-release signature identifier",
+            ),
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty,
+                value: vec![id, 0],
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("unsupported algorithm identifier must fail closed");
+            assert!(
+                matches!(error, HarnessError::Validation(ref message) if message.contains(expected)),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn parse_capabilities_rejects_reserved_flag_bits() {
+        for (ty, value, label) in [
+            (CAPABILITY_PQKEM, vec![0x01, 0x02], "snnet.pqkem"),
+            (CAPABILITY_PQSIG, vec![0x01, 0x80], "snnet.pqsig"),
+            (
+                CAPABILITY_CONSTANT_RATE,
+                vec![0x01, 0x40, 0x00, 0x04],
+                "snnet.constant_rate",
+            ),
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty,
+                value,
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("reserved first-release flag bits must fail closed");
+            match error {
+                HarnessError::Validation(message) => {
+                    assert!(message.contains(label), "unexpected error: {message}");
+                    assert!(
+                        message.contains("undefined flag bits"),
+                        "unexpected error: {message}"
+                    );
+                }
+                other => panic!("expected validation error, got {other:?}"),
+            }
+        }
+    }
+    #[test]
+    fn parse_capabilities_rejects_invalid_role_and_constant_rate_payloads() {
+        for role in [0x00, 0x08, 0x80, 0xFF] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty: CAPABILITY_ROLE,
+                value: vec![role],
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("zero or reserved role bits must fail closed");
+            assert!(
+                matches!(error, HarnessError::Validation(ref message) if message.contains("invalid first-release role bits")),
+                "unexpected error: {error:?}"
+            );
+        }
+
+        for value in [
+            vec![0x01, 0x00, 0x00],
+            vec![0x01, 0x00, 0x00, 0x04, 0x00],
+            vec![0x02, 0x00, 0x00, 0x04],
+            vec![0x01, 0x00, 0xFF, 0x03],
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty: CAPABILITY_CONSTANT_RATE,
+                value,
+                required: false,
+            }]);
+            parse_capabilities(&encoded)
+                .expect_err("noncanonical constant-rate descriptor must fail closed");
+        }
+        let canonical = encode_tlvs(&[CapabilityTlv {
+            ty: CAPABILITY_CONSTANT_RATE,
+            value: vec![0x01, 0x00, 0x00, 0x04],
+            required: true,
+        }]);
+        let parsed = parse_capabilities(&canonical)
+            .expect("canonical first-release constant-rate descriptor");
+        assert_eq!(parsed[0].value, vec![0x01, 0x01, 0x00, 0x04]);
+        assert!(parsed[0].required);
+    }
+    #[test]
+    fn parse_capabilities_rejects_vectors_above_first_release_limit() {
+        let oversized = vec![0_u8; MAX_CAPABILITY_VECTOR_LEN + 1];
+        let error = parse_capabilities(&oversized)
+            .expect_err("oversized capability vector must fail before parsing or allocation");
+        assert!(matches!(
+            error,
+            HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            } if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
+    }
+    #[test]
+    fn update_suite_list_enforces_aggregate_vector_limit() {
+        let suites = [
+            HandshakeSuite::Nk2Hybrid,
+            HandshakeSuite::Nk3PqForwardSecure,
+        ];
+        // The inserted suite-list occupies six encoded bytes. Leave exactly
+        // that much room after a single GREASE TLV.
+        let exact_base = encode_tlvs(&[CapabilityTlv {
+            ty: 0x7F10,
+            value: vec![0xAA; MAX_CAPABILITY_VECTOR_LEN - 10],
+            required: false,
+        }]);
+        let exact = update_suite_list(&exact_base, &suites, true)
+            .expect("suite insertion at the exact aggregate limit must succeed");
+        assert_eq!(exact.len(), MAX_CAPABILITY_VECTOR_LEN);
+
+        let oversized_base = encode_tlvs(&[CapabilityTlv {
+            ty: 0x7F10,
+            value: vec![0xAA; MAX_CAPABILITY_VECTOR_LEN - 9],
+            required: false,
+        }]);
+        assert!(matches!(
+            update_suite_list(&oversized_base, &suites, true),
+            Err(HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            }) if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
+    }
+    #[test]
+    fn handshake_negotiation_rejects_noncanonical_client_capability_order() {
+        let mut client = parse_capabilities(&DEFAULT_CLIENT_CAPABILITIES)
+            .expect("default client capabilities parse");
+        client.swap(0, 1);
+        let encoded_client = encode_tlvs(&client);
+        let error = validate_client_capability_vector(&encoded_client)
+            .expect_err("client vector validation must reject decreasing capability types");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("nondecreasing order")),
+            "unexpected error: {error:?}"
+        );
+        let relay = parse_capabilities(&DEFAULT_RELAY_CAPABILITIES)
+            .expect("default relay capabilities parse");
+        let error = negotiate_handshake_suite(&client, &relay)
+            .expect_err("decreasing client capability types must fail closed");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("nondecreasing order")),
+            "unexpected error: {error:?}"
+        );
+        let mut reordered_relay = relay;
+        reordered_relay.reverse();
+        negotiate_handshake_suite(
+            &parse_capabilities(&DEFAULT_CLIENT_CAPABILITIES)
+                .expect("canonical client capabilities parse"),
+            &reordered_relay,
+        )
+        .expect("relay capability order is transcript-bound but not client-canonicalized");
     }
     #[test]
     fn build_interop_value_exposes_session_key() {
@@ -522,7 +834,7 @@ mod tests {
     #[test]
     fn decode_handshake_inputs_handles_resume_hash() {
         let base = &super::INTEROP_SPECS[0];
-        let resume_hex = "aabbccddeeff00112233445566778899";
+        let resume_hex = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
         let spec = super::InteropSpec {
             id: "resume-test",
             description: "spec exercising resume hash decoding",
@@ -545,11 +857,21 @@ mod tests {
             super::decode_hex(base.client_static_sk_hex)
                 .expect("decode baseline client static key")
         );
-        let resume = inputs.resume_hash.expect("resume hash decoded");
-        assert_eq!(
-            resume,
-            super::decode_hex(resume_hex).expect("decode resume hex")
-        );
+        let resume = inputs.resume_hash.as_ref().expect("resume hash decoded");
+        let expected_resume = super::decode_hex(resume_hex).expect("decode resume hex");
+        assert_eq!(resume.as_slice(), expected_resume.as_slice());
+
+        let invalid = super::InteropSpec {
+            resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
+            ..spec
+        };
+        let error = super::decode_handshake_inputs(&invalid)
+            .err()
+            .expect("noncanonical resume hash width must fail");
+        assert!(matches!(
+            error,
+            HarnessError::Validation(message) if message.contains("resume_hash_hex must decode to 32 bytes")
+        ));
     }
     #[test]
     fn build_session_artifacts_emits_forward_shared_for_nk3() {
@@ -649,6 +971,154 @@ mod tests {
             decode_hex("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
                 .expect("relay static hex");
         (client_static, relay_static)
+    }
+    #[test]
+    fn simulation_rejects_degenerate_or_reused_static_keys() {
+        for key in [[0_u8; NOISE_SECRET_LEN], [0xA5; NOISE_SECRET_LEN]] {
+            let error = validate_static_key("client", &key)
+                .expect_err("repeated-byte static keys must fail closed");
+            assert!(matches!(
+                error,
+                HarnessError::Validation(message) if message.contains("degenerate key")
+            ));
+        }
+        let client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
+        let relay_caps = DEFAULT_RELAY_CAPABILITIES.to_vec();
+        let shared = decode_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+            .expect("static key");
+        let error = simulate_handshake(&SimulationParams {
+            client_capabilities: &client_caps,
+            relay_capabilities: &relay_caps,
+            client_static_sk: &shared,
+            relay_static_sk: &shared,
+            resume_hash: None,
+            descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
+            client_nonce: &[0x11; NOISE_SECRET_LEN],
+            relay_nonce: &[0x22; NOISE_SECRET_LEN],
+            kem_id: 1,
+            sig_id: 1,
+        })
+        .expect_err("static key reuse across roles must fail closed");
+        assert!(matches!(
+            error,
+            HarnessError::Validation(message) if message.contains("must be distinct")
+        ));
+    }
+    #[test]
+    fn simulation_params_debug_redacts_static_secrets() {
+        let client_secret = [0xDE, 0xAD, 0xBE, 0xEF];
+        let relay_secret = [0xCA, 0xFE, 0xBA, 0xBE];
+        let params = SimulationParams {
+            client_capabilities: &[],
+            relay_capabilities: &[],
+            client_static_sk: &client_secret,
+            relay_static_sk: &relay_secret,
+            resume_hash: None,
+            descriptor_commit: &[],
+            client_nonce: &[],
+            relay_nonce: &[],
+            kem_id: 1,
+            sig_id: 1,
+        };
+        let debug = format!("{params:?}");
+        assert!(debug.contains("client_static_sk: \"[REDACTED]\""));
+        assert!(debug.contains("relay_static_sk: \"[REDACTED]\""));
+        assert!(!debug.contains("222, 173, 190, 239"));
+        assert!(!debug.contains("202, 254, 186, 190"));
+    }
+    #[test]
+    fn deterministic_simulation_intermediates_are_explicitly_zeroizable() {
+        let simulated_kem = || SimulatedKemArtifacts {
+            client_public: vec![1; 2],
+            relay_public: vec![2; 2],
+            ciphertext: vec![3; 2],
+            confirmation: vec![4; 2],
+            shared_secret: vec![5; 2],
+        };
+        let mut kem = simulated_kem();
+        kem.zeroize_sensitive_fields();
+        assert!(
+            [
+                &kem.client_public,
+                &kem.relay_public,
+                &kem.ciphertext,
+                &kem.confirmation,
+                &kem.shared_secret,
+            ]
+            .into_iter()
+            .all(|field| field.iter().all(|byte| *byte == 0))
+        );
+
+        let mut material = DeterministicHandshakeMaterial {
+            client_static_public: [1; NOISE_SECRET_LEN],
+            client_ephemeral_public: [2; NOISE_SECRET_LEN],
+            relay_static_bytes: [3; NOISE_SECRET_LEN],
+            relay_static_public: [4; NOISE_SECRET_LEN],
+            relay_ephemeral_public: [5; NOISE_SECRET_LEN],
+            noise_xx_dh: NoiseXxDhSecrets {
+                ee: Zeroizing::new([6; NOISE_SECRET_LEN]),
+                es: Zeroizing::new([7; NOISE_SECRET_LEN]),
+                se: Zeroizing::new([8; NOISE_SECRET_LEN]),
+            },
+            primary_kem: simulated_kem(),
+            forward_secure_kem: simulated_kem(),
+        };
+        material.zeroize_sensitive_fields();
+        assert_eq!(material.relay_static_bytes, [0; NOISE_SECRET_LEN]);
+        assert!(material.noise_xx_dh.ee.iter().all(|byte| *byte == 0));
+        assert!(material.noise_xx_dh.es.iter().all(|byte| *byte == 0));
+        assert!(material.noise_xx_dh.se.iter().all(|byte| *byte == 0));
+        assert!(
+            material
+                .primary_kem
+                .shared_secret
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(
+            material
+                .forward_secure_kem
+                .shared_secret
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+
+        let mut inputs = HandshakeInputs {
+            client_static: [1; NOISE_SECRET_LEN],
+            relay_static: [2; NOISE_SECRET_LEN],
+            client_nonce: [3; NOISE_SECRET_LEN],
+            relay_nonce: [4; NOISE_SECRET_LEN],
+            resume_hash: Some(vec![5; TRANSCRIPT_BINDING_LEN]),
+        };
+        inputs.zeroize_sensitive_fields();
+        assert_eq!(inputs.client_static, [0; NOISE_SECRET_LEN]);
+        assert!(
+            inputs
+                .resume_hash
+                .as_ref()
+                .is_none_or(|value| { value.iter().all(|byte| *byte == 0) })
+        );
+
+        let mut session = SessionArtifacts {
+            handshake: HandshakeArtifacts {
+                steps: Vec::new(),
+                telemetry_payloads: Vec::new(),
+            },
+            session_key: vec![1; 32],
+            session_confirmation: vec![2; 32],
+            primary_shared: vec![3; 32],
+            forward_shared: Some(vec![4; 32]),
+            dual_mix: Some(vec![5; 32]),
+        };
+        session.zeroize_sensitive_fields();
+        assert!(session.session_key.iter().all(|byte| *byte == 0));
+        assert!(session.primary_shared.iter().all(|byte| *byte == 0));
+        assert!(
+            session
+                .forward_shared
+                .as_ref()
+                .is_none_or(|value| value.iter().all(|byte| *byte == 0))
+        );
     }
     fn suite_list_tlv(required: bool, suites: &[HandshakeSuite]) -> Vec<u8> {
         assert!(
@@ -767,6 +1237,14 @@ mod tests {
     fn client_hello_forward_kem_range(frame: &[u8]) -> Range<usize> {
         let mut offset = client_hello_primary_kem_range(frame).end;
         len_prefixed_payload_range(frame, &mut offset)
+    }
+    fn client_hello_resume_flag_index(frame: &[u8]) -> usize {
+        let mut offset = client_hello_primary_kem_range(frame).end;
+        if frame[0] == PQFS_CLIENT_COMMIT_TYPE {
+            skip_len_prefixed_payload(frame, &mut offset);
+        }
+        skip_len_prefixed_payload(frame, &mut offset);
+        offset
     }
     fn relay_response_ephemeral_range(frame: &[u8]) -> Range<usize> {
         let mut offset = 1;
@@ -1092,6 +1570,90 @@ mod tests {
             err.to_string().contains("multiple of"),
             "unexpected error: {err}"
         );
+    }
+    #[test]
+    fn handshake_parsers_reject_oversized_padding_before_scanning_fields() {
+        let oversized = vec![0_u8; MAX_HANDSHAKE_FRAME_LEN + NOISE_PADDING_BLOCK];
+        for error in [
+            parse_client_hello(&oversized, None)
+                .err()
+                .expect("oversized client hello must fail"),
+            parse_hybrid_relay_response(
+                &oversized,
+                &DEFAULT_DESCRIPTOR_COMMIT,
+                MlKemSuite::MlKem768,
+            )
+            .err()
+            .expect("oversized NK2 relay response must fail"),
+            parse_pqfs_relay_response(&oversized, &DEFAULT_DESCRIPTOR_COMMIT, MlKemSuite::MlKem768)
+                .err()
+                .expect("oversized NK3 relay response must fail"),
+        ] {
+            assert!(
+                error.to_string().contains("first-release maximum"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+    #[test]
+    fn client_hello_rejects_noncanonical_resume_presence_flags() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let nk2_client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let nk2_relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let nk3_client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk3PqForwardSecure],
+            false,
+        );
+        let nk3_relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk3PqForwardSecure],
+            false,
+        );
+        for (suite, client_capabilities, relay_capabilities, seed) in [
+            (
+                HandshakeSuite::Nk2Hybrid,
+                nk2_client_caps.as_slice(),
+                nk2_relay_caps.as_slice(),
+                0xA11C_u64,
+            ),
+            (
+                HandshakeSuite::Nk3PqForwardSecure,
+                nk3_client_caps.as_slice(),
+                nk3_relay_caps.as_slice(),
+                0xA11D_u64,
+            ),
+        ] {
+            let params = RuntimeParams {
+                client_capabilities,
+                relay_capabilities,
+                ..defaults.clone()
+            };
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (mut hello, _) = build_client_hello(&params, &mut rng).expect("client hello");
+            assert_eq!(
+                hello[client_hello_resume_flag_index(&hello)],
+                0,
+                "{suite} fixture should not resume"
+            );
+            let resume_flag = client_hello_resume_flag_index(&hello);
+            hello[resume_flag] = 2;
+            let error = parse_client_hello(&hello, None)
+                .err()
+                .expect("noncanonical resume flag must fail");
+            assert!(
+                error.to_string().contains("must be 0 or 1"),
+                "unexpected {suite} error: {error}"
+            );
+        }
     }
     #[test]
     fn parse_relay_response_rejects_short_ed25519_signature() {
@@ -1627,6 +2189,32 @@ mod tests {
         assert_eq!(hash.len(), 32);
     }
     #[test]
+    fn transcript_hash_rejects_noncanonical_widths_and_suite_ids() {
+        let field = [0x11_u8; TRANSCRIPT_BINDING_LEN];
+        let short = [0x22_u8; TRANSCRIPT_BINDING_LEN - 1];
+        let base = |client_nonce: &[u8], resume_hash: Option<&[u8]>, kem_id, sig_id| {
+            TranscriptInputs {
+                descriptor_commit: &field,
+                client_nonce,
+                relay_nonce: &field,
+                capability_bytes: &[],
+                kem_id,
+                sig_id,
+                handshake_suite: HandshakeSuite::Nk2Hybrid,
+                resume_hash,
+            }
+            .compute_hash()
+        };
+        for error in [
+            base(&short, None, 1, 1).expect_err("short nonce must fail"),
+            base(&field, Some(&short), 1, 1).expect_err("short resume hash must fail"),
+            base(&field, None, 0xFF, 1).expect_err("unsupported KEM must fail"),
+            base(&field, None, 1, 0xFF).expect_err("unsupported signature must fail"),
+        ] {
+            assert!(matches!(error, HarnessError::Validation(_)));
+        }
+    }
+    #[test]
     fn transcript_capability_length_rejects_u32_overflow() {
         let err = transcript_capability_len_bytes(u32::MAX as usize + 1)
             .expect_err("oversized transcript capability vector must fail");
@@ -1811,6 +2399,98 @@ mod tests {
         assert!(json.contains("ed25519"));
     }
     #[test]
+    fn noise_xx_dh_contributions_are_symmetric() {
+        let client_ephemeral_secret = StaticSecret::from([0x11; NOISE_SECRET_LEN]);
+        let client_static_secret = StaticSecret::from([0x22; NOISE_SECRET_LEN]);
+        let relay_ephemeral_secret = StaticSecret::from([0x33; NOISE_SECRET_LEN]);
+        let relay_static_secret = StaticSecret::from([0x44; NOISE_SECRET_LEN]);
+        let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
+        let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
+        let relay_ephemeral_public = X25519PublicKey::from(&relay_ephemeral_secret).to_bytes();
+        let relay_static_public = X25519PublicKey::from(&relay_static_secret).to_bytes();
+
+        let client = derive_client_noise_xx_dh(
+            &client_ephemeral_secret,
+            &client_static_secret,
+            &relay_ephemeral_public,
+            &relay_static_public,
+        )
+        .expect("derive client Noise XX contributions");
+        let relay = derive_relay_noise_xx_dh(
+            &relay_ephemeral_secret,
+            &relay_static_secret,
+            &client_ephemeral_public,
+            &client_static_public,
+        )
+        .expect("derive relay Noise XX contributions");
+
+        assert_eq!(client.ee.as_slice(), relay.ee.as_slice());
+        assert_eq!(client.es.as_slice(), relay.es.as_slice());
+        assert_eq!(client.se.as_slice(), relay.se.as_slice());
+        for contribution in [&client.ee, &client.es, &client.se] {
+            assert!(contribution.iter().any(|byte| *byte != 0));
+        }
+    }
+    #[test]
+    fn x25519_dh_rejects_an_all_zero_output() {
+        let local_secret = StaticSecret::from([0x55; NOISE_SECRET_LEN]);
+        let error = checked_x25519_dh("ee", &local_secret, &[0; NOISE_SECRET_LEN])
+            .err()
+            .expect("low-order peer must produce a rejected all-zero DH output");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("Noise XX ee X25519 DH output must not be all zero")),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[test]
+    fn session_keys_depend_on_every_noise_xx_contribution() {
+        let transcript_hash = [0x61; TRANSCRIPT_BINDING_LEN];
+        let primary_shared = [0x62; 32];
+        let forward_shared = [0x63; 32];
+        let make_dh = |ee, es, se| NoiseXxDhSecrets {
+            ee: Zeroizing::new([ee; NOISE_SECRET_LEN]),
+            es: Zeroizing::new([es; NOISE_SECRET_LEN]),
+            se: Zeroizing::new([se; NOISE_SECRET_LEN]),
+        };
+
+        for suite in [
+            HandshakeSuite::Nk2Hybrid,
+            HandshakeSuite::Nk3PqForwardSecure,
+        ] {
+            let baseline_dh = make_dh(0x71, 0x72, 0x73);
+            let derive = |dh: &NoiseXxDhSecrets| {
+                derive_session_key_and_confirmation(SessionKeyInputs {
+                    suite,
+                    transcript_hash: &transcript_hash,
+                    noise_xx_dh: dh,
+                    primary_shared: &primary_shared,
+                    forward_shared: (suite == HandshakeSuite::Nk3PqForwardSecure)
+                        .then_some(forward_shared.as_slice()),
+                })
+                .expect("derive hybrid session material")
+            };
+            let (baseline_key, baseline_confirmation) = derive(&baseline_dh);
+            for (label, changed_dh) in [
+                ("ee", make_dh(0x81, 0x72, 0x73)),
+                ("es", make_dh(0x71, 0x82, 0x73)),
+                ("se", make_dh(0x71, 0x72, 0x83)),
+            ] {
+                let (changed_key, changed_confirmation) = derive(&changed_dh);
+                assert_ne!(
+                    baseline_key.payload(),
+                    changed_key.payload(),
+                    "{suite:?} session key ignored Noise XX {label}"
+                );
+                if suite == HandshakeSuite::Nk2Hybrid {
+                    assert_ne!(
+                        baseline_confirmation, changed_confirmation,
+                        "NK2 relay confirmation ignored Noise XX {label}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn runtime_handshake_roundtrip_produces_matching_session_keys() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(1);
@@ -1847,6 +2527,38 @@ mod tests {
             client_secrets.transcript_hash,
             relay_secrets.transcript_hash
         );
+    }
+    #[test]
+    fn inspect_client_hello_accepts_current_nk2_and_nk3_frames() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let resume_hash = [0x44; TRANSCRIPT_BINDING_LEN];
+        for (seed, suite) in [
+            (7_u64, HandshakeSuite::Nk2Hybrid),
+            (8_u64, HandshakeSuite::Nk3PqForwardSecure),
+        ] {
+            let capabilities =
+                capabilities_with_suites(defaults.client_capabilities, &[suite], false);
+            let params = RuntimeParams {
+                descriptor_commit: defaults.descriptor_commit,
+                client_capabilities: capabilities.as_slice(),
+                relay_capabilities: capabilities.as_slice(),
+                kem_id: defaults.kem_id,
+                sig_id: defaults.sig_id,
+                transport_alpn: defaults.transport_alpn,
+                tls_server_name: defaults.tls_server_name,
+                resume_hash: Some(&resume_hash),
+            };
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (frame, _state) = build_client_hello(&params, &mut rng)
+                .expect("crypto engine must build its current ClientHello");
+            let metadata = inspect_client_hello(&frame)
+                .expect("canonical preflight parser must accept its own ClientHello");
+            assert_eq!(metadata.handshake_suite(), suite);
+            assert_eq!(metadata.kem_id(), params.kem_id);
+            assert_eq!(metadata.sig_id(), params.sig_id);
+            assert_eq!(metadata.client_capabilities(), capabilities);
+            assert_eq!(metadata.resume_hash(), Some(resume_hash.as_slice()));
+        }
     }
     #[test]
     fn build_client_hello_supports_nk2_preference() {
@@ -2530,13 +3242,7 @@ mod tests {
     fn build_client_hello_rejects_oversized_capabilities_before_rng() {
         let defaults = RuntimeParams::soranet_defaults();
         let mut oversized_client_capabilities = defaults.client_capabilities.to_vec();
-        while u16::try_from(oversized_client_capabilities.len()).is_ok() {
-            oversized_client_capabilities.extend_from_slice(&CAPABILITY_PQSIG.to_be_bytes());
-            oversized_client_capabilities.extend_from_slice(&2_u16.to_be_bytes());
-            oversized_client_capabilities.extend_from_slice(&[0x01, 0x00]);
-        }
-        parse_capabilities(&oversized_client_capabilities)
-            .expect("oversized capability stream remains structurally valid");
+        oversized_client_capabilities.resize(MAX_CAPABILITY_VECTOR_LEN + 1, 0);
         let params = RuntimeParams {
             descriptor_commit: defaults.descriptor_commit,
             client_capabilities: &oversized_client_capabilities,
@@ -2551,14 +3257,52 @@ mod tests {
             Ok(_) => panic!("oversized capabilities must fail before client RNG"),
             Err(err) => err,
         };
-        match err {
-            HarnessError::Validation(message) => assert!(
-                message.contains("client capability vector")
-                    && message.contains("exceeds u16::MAX"),
-                "unexpected message: {message}"
-            ),
-            other => panic!("expected capability validation error, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            } if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
+    }
+    #[test]
+    fn build_client_hello_rejects_transport_unencodable_aggregate_frame() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let nk2_capabilities = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let mut entries = parse_capabilities(&nk2_capabilities).expect("parse capabilities");
+        let base_len = encode_tlvs(&entries).len();
+        let grease_value_len = usize::from(u16::MAX)
+            .checked_sub(base_len + 4)
+            .expect("default capabilities leave space for GREASE");
+        entries.push(CapabilityTlv {
+            ty: GREASE_RANGE_START,
+            value: vec![0xA5; grease_value_len],
+            required: false,
+        });
+        let maximal_capabilities = encode_tlvs(&entries);
+        assert_eq!(maximal_capabilities.len(), usize::from(u16::MAX));
+        let relay_capabilities = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            client_capabilities: &maximal_capabilities,
+            relay_capabilities: &relay_capabilities,
+            ..defaults
+        };
+        let mut rng = StdRng::seed_from_u64(0xC0DE);
+        let error = build_client_hello(&params, &mut rng)
+            .err()
+            .expect("the transport cannot encode an aggregate frame above u16::MAX");
+        assert!(
+            error.to_string().contains("first-release maximum"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn process_client_hello_errors_on_missing_capability() {
@@ -2633,7 +3377,7 @@ mod tests {
             parse_capabilities(client_params.client_capabilities).expect("parse defaults");
         client_entries.push(CapabilityTlv {
             ty: CAPABILITY_CONSTANT_RATE,
-            value: vec![0x01, 0x01],
+            value: vec![0x01, 0x00, 0x00, 0x04],
             required: true,
         });
         client_entries.sort_by_key(|cap| cap.ty);
@@ -2643,7 +3387,7 @@ mod tests {
             parse_capabilities(client_params.relay_capabilities).expect("parse relay defaults");
         expected_relay_entries.push(CapabilityTlv {
             ty: CAPABILITY_CONSTANT_RATE,
-            value: vec![0x01, 0x01],
+            value: vec![0x01, 0x00, 0x00, 0x04],
             required: true,
         });
         expected_relay_entries.sort_by_key(|cap| cap.ty);

@@ -74,37 +74,37 @@ pub enum OfflineCashArtifactRoleV1 {
     StatePkEp,
     /// Ep/Fq state verifying key.
     StateVkEp,
-    /// Eq/Fp GuardUse proving key.
+    /// Eq/Fp `GuardUse` proving key.
     GuardUsePkEq,
-    /// Eq/Fp GuardUse verifying key.
+    /// Eq/Fp `GuardUse` verifying key.
     GuardUseVkEq,
-    /// Ep/Fq GuardUse proving key.
+    /// Ep/Fq `GuardUse` proving key.
     GuardUsePkEp,
-    /// Ep/Fq GuardUse verifying key.
+    /// Ep/Fq `GuardUse` verifying key.
     GuardUseVkEp,
-    /// Eq/Fp PlatformBind proving key.
+    /// Eq/Fp `PlatformBind` proving key.
     PlatformBindPkEq,
-    /// Eq/Fp PlatformBind verifying key.
+    /// Eq/Fp `PlatformBind` verifying key.
     PlatformBindVkEq,
-    /// Ep/Fq PlatformBind proving key.
+    /// Ep/Fq `PlatformBind` proving key.
     PlatformBindPkEp,
-    /// Ep/Fq PlatformBind verifying key.
+    /// Ep/Fq `PlatformBind` verifying key.
     PlatformBindVkEp,
-    /// Eq/Fp AndroidKeyCert proving key.
+    /// Eq/Fp `AndroidKeyCert` proving key.
     AndroidKeyCertPkEq,
-    /// Eq/Fp AndroidKeyCert verifying key.
+    /// Eq/Fp `AndroidKeyCert` verifying key.
     AndroidKeyCertVkEq,
-    /// Ep/Fq AndroidKeyCert proving key.
+    /// Ep/Fq `AndroidKeyCert` proving key.
     AndroidKeyCertPkEp,
-    /// Ep/Fq AndroidKeyCert verifying key.
+    /// Ep/Fq `AndroidKeyCert` verifying key.
     AndroidKeyCertVkEp,
-    /// Eq/Fp GuardBundle proving key.
+    /// Eq/Fp `GuardBundle` proving key.
     GuardBundlePkEq,
-    /// Eq/Fp GuardBundle verifying key.
+    /// Eq/Fp `GuardBundle` verifying key.
     GuardBundleVkEq,
-    /// Ep/Fq GuardBundle proving key.
+    /// Ep/Fq `GuardBundle` proving key.
     GuardBundlePkEp,
-    /// Ep/Fq GuardBundle verifying key.
+    /// Ep/Fq `GuardBundle` verifying key.
     GuardBundleVkEp,
 }
 

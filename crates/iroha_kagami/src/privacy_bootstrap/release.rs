@@ -61,6 +61,7 @@ const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/genesis.json");
 const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.json");
+#[cfg(test)]
 const GOLDEN_NEVO_REVIEW_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/review.json");
 const GOLDEN_NEVO_ONBOARDING_V2: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
@@ -274,6 +275,10 @@ fn activation_material_v1(
     }
     Ok((hashes, encoded, boxes))
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the review validator keeps the complete canonical field and value contract auditable as one ordered check"
+)]
 fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<()> {
     let value: JsonValue =
         norito::json::from_slice(review).wrap_err("Taira NEVO review is not strict JSON")?;
@@ -570,6 +575,10 @@ fn expected_nevo_genesis_v1(
 }
 
 #[allow(dead_code)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the legacy renderer is an unrelated fixed-schema compatibility surface whose exact field order must remain intact"
+)]
 fn expected_nevo_genesis_v1_legacy(
     onboarding: &str,
     api_signer: &str,

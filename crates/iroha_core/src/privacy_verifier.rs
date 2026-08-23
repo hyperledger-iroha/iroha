@@ -210,7 +210,7 @@ impl VerifiedAnonymousPgcLedgerEffectV1 {
         &self.accounts
     }
 }
-/// Exact transparent mutation authorized by the direct native ZK-ACE engine.
+/// Exact transparent mutation produced by the disabled native ZK-ACE candidate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedZkAceAuthorizationV1 {
     pub(crate) policy_id: PrivacyPolicyIdV1,
@@ -2230,8 +2230,6 @@ pub(crate) use tests::{
     FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
     zk_ams_runtime_fixture_for_test, zk_x509_dispatch_fixture_for_test,
 };
-#[cfg(all(test, feature = "zk-stark"))]
-pub(crate) use tests::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3603,104 +3601,6 @@ mod tests {
             block_timestamp_ms: 1_800_000_000_000,
         }
     }
-    #[cfg(feature = "zk-stark")]
-    pub(crate) struct ZkAceRuntimeFixtureForTest {
-        pub(crate) envelope: PrivacyProofEnvelopeV1,
-        pub(crate) activation: PrivacyProtocolActivationRecordV1,
-        pub(crate) network_id: NetworkId,
-        pub(crate) genesis_hash: [u8; 32],
-        pub(crate) current_height: u64,
-        pub(crate) block_timestamp_ms: u64,
-    }
-    #[cfg(feature = "zk-stark")]
-    pub(crate) fn zk_ace_runtime_fixture_for_test() -> ZkAceRuntimeFixtureForTest {
-        static FIXTURE: OnceLock<(
-            PrivacyProofEnvelopeV1,
-            PrivacyProtocolActivationRecordV1,
-            NetworkId,
-        )> = OnceLock::new();
-        let (envelope, activation, network_id) = FIXTURE.get_or_init(|| {
-            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-                .expect("compiled ZK-ACE profile");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
-            let network_id = network_id(0xA7);
-            let account = |seed: u8| {
-                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                    .expect("ZK-ACE runtime account");
-                AccountId::new(key_pair.public_key().clone())
-            };
-            let witness = crate::privacy_engines::zk_ace::ZkAcePrivacyWitnessV1::try_new(
-                [0x91; 32], [0x92; 32], [0x93; 32],
-            )
-            .expect("canonical ZK-ACE witness");
-            let statement = iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1 {
-                context: PrivacyStatementContextV1 {
-                    network_id: network_id.clone(),
-                    action_index: 0,
-                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x94; 32]),
-                    parameter_id: compiled.parameter_id,
-                    parameter_digest: compiled.parameter_digest,
-                    verifier_digest: compiled.verifier_digest,
-                    statement_schema_digest: compiled.statement_schema_digest,
-                    engine_manifest_digest: compiled.engine_manifest_digest,
-                },
-                identity_commitment: witness.identity_commitment_v1(),
-                policy_id: PrivacyPolicyIdV1::new([0x9A; 32]),
-                policy_digest: PrivacyPolicyDigestV1::new([0x9B; 32]),
-                source: account(0x9C),
-                destination: account(0x9D),
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("privacy", "universal").expect("privacy domain"),
-                    Name::from_str("zkace_runtime").expect("asset name"),
-                ),
-                public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
-                amount: 19,
-                authorization_epoch: 1,
-                replay_nullifier: PrivacyNullifierV1::new([0; 32]),
-            };
-            let genesis_hash = [0xA7; 32];
-            let mut public_inputs = ZkAcePrivacyPublicInputsV1::new(statement, genesis_hash);
-            let authorization_digest =
-                iroha_data_model::zk::derive_zk_ace_privacy_authorization_digest(&public_inputs)
-                    .expect("ZK-ACE authorization digest");
-            public_inputs.statement.replay_nullifier =
-                witness.replay_nullifier_v1(&authorization_digest, &network_id);
-            let proof =
-                crate::privacy_engines::zk_ace::prove_zk_ace_privacy_v1(&public_inputs, &witness)
-                    .expect("native ZK-ACE runtime proof");
-            let statement =
-                PrivacyStatementV1::ZkAcePqAuthorizationV0(public_inputs.statement.clone());
-            let statement_digest = statement.digest().expect("ZK-ACE statement digest");
-            let envelope = PrivacyProofEnvelopeV1 {
-                protocol_id: compiled.protocol_id,
-                proof_system_id: compiled.proof_system_id,
-                engine_id: compiled.engine_id,
-                parameter_id: compiled.parameter_id,
-                parameter_digest: compiled.parameter_digest,
-                verifier_digest: compiled.verifier_digest,
-                statement_schema_digest: compiled.statement_schema_digest,
-                engine_manifest_digest: compiled.engine_manifest_digest,
-                statement_digest,
-                statement,
-                proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
-            };
-            (envelope, activation, network_id)
-        });
-        ZkAceRuntimeFixtureForTest {
-            envelope: envelope.clone(),
-            activation: *activation,
-            network_id: network_id.clone(),
-            genesis_hash: [0xA7; 32],
-            current_height: 10,
-            block_timestamp_ms: 1_800_000_000_000,
-        }
-    }
     pub(crate) struct ZkAmsRuntimeFixtureForTest {
         pub(crate) batch_envelope: PrivacyProofEnvelopeV1,
         pub(crate) provision_envelope: PrivacyProofEnvelopeV1,
@@ -4387,73 +4287,16 @@ mod tests {
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn zk_ace_production_dispatch_derives_exact_effects_and_rejects_adversarial_binding() {
-        let fixture = zk_ace_runtime_fixture_for_test();
-        let context = || PrivacyVerificationContextV1 {
-            activation: &fixture.activation,
-            consensus_limits: &TEST_CONSENSUS_LIMITS,
-            network_id: &fixture.network_id,
-            genesis_hash: fixture.genesis_hash,
-            current_height: fixture.current_height,
-            expected_action_index: 0,
-            block_timestamp_ms: fixture.block_timestamp_ms,
-            pgc_state: None,
-            orchard_state: None,
-            proof_managed_state: None,
-            zk_x509_state: None,
-            bootle_lantern_policy: None,
-            vega_issuer_record: None,
-        };
-        let effects = verify_privacy_envelope_v1(&fixture.envelope, context())
-            .expect("native ZK-ACE production dispatch");
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &fixture.envelope.statement
-        else {
-            unreachable!("ZK-ACE runtime fixture")
-        };
+    fn zk_ace_production_dispatch_has_no_activatable_profile() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         assert_eq!(
-            effects.protocol_id(),
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+            compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
         );
-        assert_eq!(
-            effects.statement_digest(),
-            fixture.envelope.statement_digest
-        );
-        assert_eq!(effects.action_index(), 0);
-        let VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(effect) = effects.ledger() else {
-            panic!("ZK-ACE dispatch returned the wrong ledger effect")
-        };
-        assert_eq!(effect.policy_id, statement.policy_id);
-        assert_eq!(effect.policy_digest, statement.policy_digest);
-        assert_eq!(effect.identity_commitment, statement.identity_commitment);
-        assert_eq!(effect.authorization_epoch, statement.authorization_epoch);
-        assert_eq!(effect.source, statement.source);
-        assert_eq!(effect.destination, statement.destination);
-        assert_eq!(effect.asset_definition_id, statement.asset_definition_id);
-        assert_eq!(effect.amount, statement.amount);
-        assert_eq!(effect.replay_nullifier, statement.replay_nullifier);
-        let mut corrupted = fixture.envelope.clone();
-        let PrivacyProofV1::ZkAcePqAuthorizationV0(proof) = &mut corrupted.proof else {
-            unreachable!("ZK-ACE runtime fixture")
-        };
-        let middle = proof.bytes.len() / 2;
-        proof.bytes[middle] ^= 1;
-        assert!(matches!(
-            verify_privacy_envelope_v1(&corrupted, context()),
-            Err(PrivacyVerificationErrorV1::NativeZkAce(_))
-        ));
-        let mut rebound = fixture.envelope.clone();
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &mut rebound.statement else {
-            unreachable!("ZK-ACE runtime fixture")
-        };
-        statement.amount += 1;
-        rebound.statement_digest = rebound
-            .statement
-            .digest()
-            .expect("mutated statement remains canonical");
-        assert!(matches!(
-            verify_privacy_envelope_v1(&rebound, context()),
-            Err(PrivacyVerificationErrorV1::NativeZkAce(_))
-        ));
     }
     #[test]
     #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]

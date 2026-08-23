@@ -484,7 +484,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     assert_eq!(resp.status(), StatusCode::OK);
     let inactive = resp.into_body().collect().await.unwrap().to_bytes();
     let inactive_doc: Value = json::from_slice(&inactive).expect("inactive payload");
-    assert_eq!(inactive_doc["total"], Value::from(2));
+    assert_eq!(inactive_doc["total"], Value::from(1));
     assert_eq!(
         inactive_doc["manifests"].as_array().unwrap().len(),
         1,
@@ -504,28 +504,20 @@ async fn space_directory_manifest_endpoint_returns_records() {
     assert_eq!(resp.status(), StatusCode::OK);
     let active = resp.into_body().collect().await.unwrap().to_bytes();
     let active_doc: Value = json::from_slice(&active).expect("active payload");
-    assert_eq!(active_doc["total"], Value::from(2));
+    assert_eq!(active_doc["total"], Value::from(1));
     assert_eq!(
         active_doc["manifests"].as_array().unwrap().len(),
         1,
         "pagination limits to 1 entry"
     );
-    // limit=0 is treated as "no limit" even when multiple manifests exist.
+    // A zero limit must not bypass the configured pagination ceiling.
     let resp = fixtures::request_get(
         &app,
         &format!("/v1/space-directory/uaids/{uaid}/manifests?limit=0"),
     )
     .await
-    .expect("no-limit response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let no_limit = resp.into_body().collect().await.unwrap().to_bytes();
-    let no_limit_doc: Value = json::from_slice(&no_limit).expect("no-limit payload");
-    assert_eq!(no_limit_doc["total"], Value::from(2));
-    assert_eq!(
-        no_limit_doc["manifests"].as_array().unwrap().len(),
-        2,
-        "limit=0 should return all matching manifests"
-    );
+    .expect("zero-limit response");
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
@@ -651,7 +643,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     );
 }
 #[tokio::test]
-async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_page_is_empty() {
+async fn space_directory_manifest_endpoint_reports_filtered_total_when_public_page_is_empty() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -718,11 +710,11 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let doc: Value = json::from_slice(&body).expect("manifests payload");
     assert_eq!(doc["uaid"], Value::from(uaid.to_string()));
-    assert_eq!(doc["total"], Value::from(2));
+    assert_eq!(doc["total"], Value::from(1));
     assert_eq!(
         doc["manifests"].as_array().expect("manifests array").len(),
         0,
-        "total should reflect the pre-status-filter set size even when pagination clears the page",
+        "total should count status-filtered rows even when pagination clears the page",
     );
 }
 #[tokio::test]

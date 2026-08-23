@@ -5,6 +5,13 @@ summary: Outline for SNNet-1 specification and threat model.
 
 # SoraNet Specification Plan (Draft)
 
+> Historical planning record. The shipped first-release protocol is normative
+> in [`soranet_handshake.md`](soranet_handshake.md) and
+> [`soranet_handshake_rfc.md`](soranet_handshake_rfc.md): it requires the NK2
+> or NK3 two-flight hybrid suite and has no Noise XX, transport, or
+> classical-only fallback. Pre-release alternatives below are retained only as
+> design history and must not be used for deployment.
+
 ## Deliverables
 - RFC-style document (`specs/soranet/spec.md`) covering:
   - Relay roles (entry/middle/exit), circuit length rules.

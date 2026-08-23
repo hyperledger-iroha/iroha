@@ -613,6 +613,28 @@ mod tests {
         }
     }
     #[test]
+    fn kagemusha_release_lifecycle_has_stable_wire_ids() {
+        let registry = default();
+        for (type_name, wire_id) in [
+            (
+                std::any::type_name::<offline::EnableKagemushaRecursiveIssuanceV4>(),
+                offline::EnableKagemushaRecursiveIssuanceV4::WIRE_ID,
+            ),
+            (
+                std::any::type_name::<offline::CancelKagemushaRecursiveReleaseV4>(),
+                offline::CancelKagemushaRecursiveReleaseV4::WIRE_ID,
+            ),
+            (
+                std::any::type_name::<offline::DeactivateKagemushaRecursiveIssuanceV4>(),
+                offline::DeactivateKagemushaRecursiveIssuanceV4::WIRE_ID,
+            ),
+        ] {
+            assert_eq!(registry.wire_id(type_name), Some(wire_id));
+            assert!(registry.contains(wire_id));
+            assert!(is_instruction_wire_id_registered(wire_id));
+        }
+    }
+    #[test]
     fn instruction_registry_excludes_direct_grouped_variants() {
         let registry = default();
         let removed_type_names = [

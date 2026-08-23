@@ -1,4 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
+//! secp256k1 and ECDSA circuit regressions.
+
 use ivm::halo2::{EcdsaVerifyCircuit, Secp256k1AddCircuit, Secp256k1MulCircuit};
 use k256::{
     ProjectivePoint, Scalar,
@@ -44,6 +46,25 @@ fn test_secp256k1_mul() {
         result: r_bytes,
     };
     assert!(circuit.verify().is_ok());
+}
+#[test]
+fn test_secp256k1_mul_rejects_noncanonical_scalar_without_panicking() {
+    let point = ProjectivePoint::GENERATOR
+        .to_affine()
+        .to_encoded_point(false);
+    let mut point_bytes = [0u8; 65];
+    point_bytes.copy_from_slice(point.as_bytes());
+    let circuit = Secp256k1MulCircuit {
+        scalar: [0xff; 32],
+        point: point_bytes,
+        result: point_bytes,
+    };
+
+    let result = std::panic::catch_unwind(|| circuit.verify());
+    assert_eq!(
+        result.expect("noncanonical scalar verification must not panic"),
+        Err("secp256k1 scalar decode failed")
+    );
 }
 #[test]
 fn test_ecdsa_verify_ok() {

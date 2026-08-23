@@ -1092,6 +1092,12 @@ fn bn254_stage_twiddles(log_size: u32) -> Vec<Bn254Scalar> {
 fn bn254_cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
     let n = 1usize << log_size;
     for column in columns {
+        for index in 1..column.len().saturating_sub(1) {
+            let reversed = index.reverse_bits() >> (usize::BITS - log_size);
+            if index < reversed {
+                column.swap(index, reversed);
+            }
+        }
         for stage in 0..log_size {
             let len = 1usize << (stage + 1);
             let half = len / 2;

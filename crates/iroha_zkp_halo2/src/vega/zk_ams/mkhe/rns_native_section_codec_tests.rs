@@ -7,7 +7,7 @@ use crate::vega::zk_ams::mkhe::{
     rns_native_source::{
         ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
         ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-        ZkAmsMkheRnsNativeSourceSnapshotV1,
+        ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
     rns_native_transcript::{
         ZkAmsMkheRnsNativeOpeningCommitmentV1, ZkAmsMkheRnsNativeOpeningCommitmentsV1,
@@ -92,7 +92,13 @@ fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
     family_from_ordinal_v1(ordinal).expect("opening ordinal is canonical")
 }
 
-fn transcript_fixture(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
+fn transcript_source_fixture(
+    context: u16,
+) -> (
+    ZkAmsMkheRnsNativeSourceLayoutV1,
+    ZkAmsMkheRnsNativeSourceReceiptV1,
+    ZkAmsMkheRnsNativeChallengeSeedsV1,
+) {
     let profile = zk_ams_mkhe_rns_native_profile_v1().expect("profile");
     let topology = zk_ams_mkhe_rns_native_topology_v1().expect("topology");
     let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("candidate");
@@ -175,12 +181,19 @@ fn transcript_fixture(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
         digest(b"padding-root", context, 0),
     )
     .expect("terminal roots");
-    transcript
+    let seeds = transcript
         .bind_terminal_roots(roots)
-        .expect("complete transcript")
+        .expect("complete transcript");
+    (layout, receipt, seeds)
+}
+
+fn transcript_fixture(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
+    transcript_source_fixture(context).2
 }
 
 struct CodecFixture {
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
     equations: [[u8; 32]; EQUATION_COUNT_V1],
     qpcs_limbs: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
@@ -196,7 +209,7 @@ struct CodecFixture {
 }
 
 fn codec_fixture(context: u16) -> CodecFixture {
-    let transcript = transcript_fixture(context);
+    let (layout, receipt, transcript) = transcript_source_fixture(context);
     let equations = indexed(b"equation", context);
     let qpcs_limbs = indexed(b"qpcs-limb", context);
     let queries = indexed(b"query", context);
@@ -234,6 +247,8 @@ fn codec_fixture(context: u16) -> CodecFixture {
             .to_canonical_bytes_v1()
             .expect("padding encoding");
     CodecFixture {
+        layout,
+        receipt,
         transcript,
         equations,
         qpcs_limbs,
@@ -247,6 +262,18 @@ fn codec_fixture(context: u16) -> CodecFixture {
         cross_lookup,
         zero_padding,
     }
+}
+
+fn envelope_fixture(fixture: &CodecFixture) -> ZkAmsMkheRnsNativeProofEnvelopeV1 {
+    ZkAmsMkheRnsNativeProofEnvelopeV1::new(
+        fixture.layout,
+        fixture.receipt,
+        fixture.terminal.clone(),
+        fixture.rns_qpcs.clone(),
+        fixture.cross_lookup.clone(),
+        fixture.zero_padding.clone(),
+    )
+    .expect("canonical envelope")
 }
 
 #[test]
@@ -292,6 +319,70 @@ fn all_four_codecs_roundtrip_with_exact_counts() {
     assert_eq!(
         padding.limb_padding_digests(),
         fixture.padding_limbs.as_slice()
+    );
+}
+
+#[test]
+fn envelope_cross_preflight_splits_and_binds_without_a_second_parse_or_hash() {
+    let fixture = codec_fixture(31);
+    let envelope = envelope_fixture(&fixture);
+    let cross_bytes =
+        envelope.section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup);
+    let before = cross_lookup_unbound_audit_counters_v1();
+    let unbound = preflight_rns_native_cross_field_global_lookup_from_envelope_v1(&envelope)
+        .expect("context-free envelope preflight");
+    let after_parse = cross_lookup_unbound_audit_counters_v1();
+    assert_eq!(after_parse.parse_passes - before.parse_passes, 1);
+    assert_eq!(after_parse.proof_hash_passes - before.proof_hash_passes, 1);
+    assert_eq!(after_parse.codec_hash_passes - before.codec_hash_passes, 1);
+    assert_eq!(after_parse.final_context_binds, before.final_context_binds);
+
+    let (pending, sealed) = unbound.split_pre_qpcs_v1();
+    assert!(core::ptr::eq(sealed.section.as_ptr(), cross_bytes.as_ptr()));
+    assert_eq!(sealed.section.len(), cross_bytes.len());
+    assert!(core::ptr::eq(
+        sealed.proof.as_ptr(),
+        cross_bytes[CROSS_LOOKUP_PROOF_OFFSET_V1..].as_ptr()
+    ));
+    let bound = pending
+        .bind_final_context_v1(&fixture.transcript)
+        .expect("final transcript bind");
+    assert!(core::ptr::eq(bound.section.as_ptr(), cross_bytes.as_ptr()));
+    assert!(core::ptr::eq(
+        bound.typed.proof().as_ptr(),
+        sealed.proof.as_ptr()
+    ));
+    let after_bind = cross_lookup_unbound_audit_counters_v1();
+    assert_eq!(after_bind.parse_passes, after_parse.parse_passes);
+    assert_eq!(after_bind.proof_hash_passes, after_parse.proof_hash_passes);
+    assert_eq!(after_bind.codec_hash_passes, after_parse.codec_hash_passes);
+    assert_eq!(
+        after_bind.final_context_binds - after_parse.final_context_binds,
+        1
+    );
+}
+
+#[test]
+fn envelope_preflight_accepts_provisional_foreign_context_but_final_bind_rejects_it() {
+    let fixture = codec_fixture(32);
+    let foreign = codec_fixture(33);
+    let envelope = ZkAmsMkheRnsNativeProofEnvelopeV1::new(
+        fixture.layout,
+        fixture.receipt,
+        fixture.terminal,
+        fixture.rns_qpcs,
+        foreign.cross_lookup,
+        fixture.zero_padding,
+    )
+    .expect("transport-valid mixed envelope");
+    let unbound = preflight_rns_native_cross_field_global_lookup_from_envelope_v1(&envelope)
+        .expect("foreign final context remains provisional");
+    let (pending, _sealed) = unbound.split_pre_qpcs_v1();
+    assert_eq!(
+        pending
+            .bind_final_context_v1(&fixture.transcript)
+            .map(|_| ()),
+        Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)
     );
 }
 
@@ -531,4 +622,91 @@ fn forged_length_count_and_digest_aliases_are_rejected() {
         ),
         Err(CompositeSectionSetErrorV1::CrossSectionAlias)
     );
+}
+
+#[test]
+fn sealed_envelope_surface_is_move_only_private_and_fail_closed() {
+    let source = include_str!("rns_native_section_codec.rs");
+    for declaration in [
+        "pub(super) struct RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1",
+        "pub(super) struct RnsNativePendingCrossFieldGlobalLookupContextV1",
+        "pub(super) struct RnsNativeSealedCrossProofLeaseV1",
+        "pub(super) struct RnsNativeSealedCrossProofInventoryPermitV1",
+        "pub(super) struct RnsNativeBoundCrossFieldGlobalLookupV1",
+    ] {
+        let offset = source.find(declaration).expect("sealed type declaration");
+        let attributes = source[..offset]
+            .rsplit_once("\n\n")
+            .map_or(&source[..offset], |(_, block)| block);
+        assert!(!attributes.contains("derive(Clone"));
+        assert!(!attributes.contains("derive(Copy"));
+    }
+    let sealed_impl = source
+        .split_once("impl<'env> RnsNativeSealedCrossProofLeaseV1")
+        .expect("sealed proof implementation")
+        .1
+        .split_once("/// Parse and hash the exact envelope-owned cross section once")
+        .expect("sealed proof implementation boundary")
+        .0;
+    assert_eq!(sealed_impl.matches("pub(super) fn ").count(), 1);
+    assert!(sealed_impl.contains("preflight_q_mask_inventory_v1"));
+    for forbidden in [
+        "fn proof(",
+        "fn bytes(",
+        "fn section(",
+        "fn digest(",
+        "fn root(",
+        "fn into_parts",
+        "AsRef",
+        "Deref",
+    ] {
+        assert!(
+            !sealed_impl.contains(forbidden),
+            "sealed proof escape present: {forbidden}"
+        );
+    }
+    assert!(source.contains("CROSS_LOOKUP_FIXED_BYTES_V1 == 2_811"));
+    assert!(source.contains("CROSS_LOOKUP_PROOF_OFFSET_V1 == 2_779"));
+    assert!(source.contains("CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_385_797"));
+    assert!(source.contains("CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_774_480"));
+    assert!(source.contains("CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 16_384"));
+    assert!(source.contains("PRE_QPCS_CROSS_ENVELOPE_SOURCE_IMPLEMENTED_V1: bool = true"));
+    for false_gate in [
+        "PRE_QPCS_CROSS_ENVELOPE_LIVE_INTEGRATED_V1: bool = false",
+        "PRE_QPCS_CROSS_ENVELOPE_RESOURCE_QUALIFIED_V1: bool = false",
+        "PRE_QPCS_CROSS_ENVELOPE_RELEASE_READY_V1: bool = false",
+    ] {
+        assert!(source.contains(false_gate));
+    }
+    let identity = source
+        .split_once("pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1")
+        .expect("sealed identity consumer")
+        .1
+        .split_once("/// Borrowed, typed forty-limb zero-padding proof section")
+        .expect("sealed identity consumer boundary")
+        .0;
+    for required in [
+        "core::ptr::eq(bound.envelope, seal.envelope)",
+        "core::ptr::eq(bound.section.as_ptr(), seal.section.as_ptr())",
+        "bound.section.len() == seal.section.len()",
+        "bound.section == seal.section",
+        "core::ptr::eq(exact_proof.as_ptr(), seal.proof.as_ptr())",
+        "bound.codec_digest == exact_codec_digest",
+    ] {
+        assert!(
+            identity.contains(required),
+            "missing identity guard: {required}"
+        );
+    }
+    for forbidden_repeat in [
+        "decode_unbound_cross_field_global_lookup_v1",
+        "proof_body_digest_v1",
+        "codec_digest_v1",
+        "DecoderV1",
+    ] {
+        assert!(
+            !identity.contains(forbidden_repeat),
+            "identity consumer repeats parsing or hashing: {forbidden_repeat}"
+        );
+    }
 }

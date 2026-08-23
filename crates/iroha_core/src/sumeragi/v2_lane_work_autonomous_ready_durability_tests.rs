@@ -186,11 +186,7 @@ fn autonomous_test_candidate_limits(
     max_transactions: usize,
     max_queue_scan: usize,
 ) -> CandidateLimits {
-    autonomous_test_candidate_limits_with_payload(
-        max_transactions,
-        4 * 1024 * 1024,
-        max_queue_scan,
-    )
+    autonomous_test_candidate_limits_with_payload(max_transactions, 4 * 1024 * 1024, max_queue_scan)
 }
 
 fn autonomous_test_candidate_limits_with_payload(
@@ -221,8 +217,7 @@ fn autonomous_route_quota_for_test(
         .iter()
         .position(|route| *route == (lane_id, dataspace_id))
         .expect("independent route is active");
-    let rotation = usize::try_from(adapter.context.height.saturating_sub(1))
-        .unwrap_or(usize::MAX)
+    let rotation = usize::try_from(adapter.context.height.saturating_sub(1)).unwrap_or(usize::MAX)
         % routes.len();
     V2LaneWorkAdapter::autonomous_route_quota(total, routes.len(), route_index, rotation)
 }

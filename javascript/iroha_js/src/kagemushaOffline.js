@@ -381,11 +381,22 @@ export function normalizeKagemushaOperationStatus(payload, expectedOperationId) 
     "error",
   ]);
   const error = record(value.error, `${context}.value.error`);
+  const errorFields = Object.keys(error);
+  const hasDetails = Object.prototype.hasOwnProperty.call(error, "details");
+  const expectedErrorFields = hasDetails
+    ? ["code", "message", "details"]
+    : ["code", "message"];
+  if (
+    errorFields.length !== expectedErrorFields.length ||
+    errorFields.some((field) => !expectedErrorFields.includes(field))
+  ) {
+    throw new TypeError(`${context}.value.error contains missing or unknown fields`);
+  }
   const normalizedError = {
     code: exactString(error.code, `${context}.value.error.code`, { maximum: 128 }),
     message: exactString(error.message, `${context}.value.error.message`),
   };
-  if (error.details !== undefined && error.details !== null) {
+  if (hasDetails) {
     normalizedError.details = jsonSnapshot(record(error.details, `${context}.value.error.details`));
   }
   return Object.freeze({

@@ -31,22 +31,25 @@ fn minimal_puzzle_config(
         max_future_skew,
         min_ticket_ttl,
     );
-    Arc::new(SoranetHandshakeConfig::new(
-        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-        true,
-        1,
-        1,
-        None,
-        true,
-        pow_params,
-        Some(puzzle_params),
-        ticket_ttl,
-        None,
-        None,
-        None,
-    ))
+    Arc::new(
+        SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+            true,
+            1,
+            1,
+            None,
+            true,
+            pow_params,
+            Some(puzzle_params),
+            ticket_ttl,
+            None,
+            None,
+            None,
+        )
+        .expect("test SoraNet handshake config must be valid"),
+    )
 }
 fn mint_test_admission_ticket(
     config: &SoranetHandshakeConfig,
@@ -57,10 +60,14 @@ fn mint_test_admission_ticket(
         .mint_challenge_ticket(transcript_hash, &mut StdRng::from_seed(seed))
         .expect("test admission should mint")
         .expect("admission should be enabled")
-        .ticket
-        .expect("admission should produce a ticket")
+        .frames
+        .into_iter()
+        .next()
+        .expect("admission should produce a frame")
 }
 struct FailingTryRng;
+struct ZeroTryRng;
+struct RepeatedTryRng;
 #[derive(Debug)]
 struct FailingTryRngError;
 impl fmt::Display for FailingTryRngError {
@@ -81,6 +88,34 @@ impl TryRngCore for FailingTryRng {
     }
 }
 impl TryCryptoRng for FailingTryRng {}
+impl TryRngCore for ZeroTryRng {
+    type Error = std::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(0)
+    }
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(0)
+    }
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        dst.fill(0);
+        Ok(())
+    }
+}
+impl TryCryptoRng for ZeroTryRng {}
+impl TryRngCore for RepeatedTryRng {
+    type Error = std::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::from_le_bytes([0xA5; 4]))
+    }
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::from_le_bytes([0xA5; 8]))
+    }
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        dst.fill(0xA5);
+        Ok(())
+    }
+}
+impl TryCryptoRng for RepeatedTryRng {}
 #[test]
 fn soranet_handshake_rng_reads_os_entropy() {
     let mut rng = soranet_handshake_rng().expect("OS RNG should seed SoraNet handshake RNG");
@@ -98,14 +133,54 @@ fn soranet_transport_delegation_challenge_rng_failure_is_fail_closed() {
     ));
 }
 #[test]
-fn sanitises_invalid_kem_and_signature_ids() {
+fn soranet_transport_delegation_challenge_rejects_all_zero_entropy() {
+    let error = generate_soranet_transport_delegation_challenge(&mut ZeroTryRng)
+        .expect_err("an all-zero challenge must stop the handshake");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message == "SoraNet delegation challenge RNG returned an all-zero value"
+    ));
+
+    let error = generate_soranet_transport_delegation_challenge(&mut RepeatedTryRng)
+        .expect_err("an all-identical-byte challenge must stop the handshake");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message == "SoraNet delegation challenge RNG returned all-identical-byte material"
+    ));
+}
+#[test]
+fn rejects_invalid_kem_and_signature_ids() {
     let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
-    let config = SoranetHandshakeConfig::new(
+    let kem_error = SoranetHandshakeConfig::new(
         iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
         iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
         true,
         42,
+        1,
+        None,
+        false,
+        params,
+        None,
+        Duration::from_secs(60),
+        None,
+        None,
+        None,
+    )
+    .expect_err("unsupported KEM identifiers must fail closed");
+    assert!(matches!(
+        kem_error,
+        Error::HandshakeSoranet(message)
+            if message == "unsupported SoraNet ML-KEM identifier 42"
+    ));
+    let signature_error = SoranetHandshakeConfig::new(
+        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+        true,
+        1,
         99,
         None,
         false,
@@ -115,10 +190,112 @@ fn sanitises_invalid_kem_and_signature_ids() {
         None,
         None,
         None,
-    );
-    let runtime = config.runtime_params();
-    assert_eq!(runtime.kem_id, 1);
-    assert_eq!(runtime.sig_id, 1);
+    )
+    .expect_err("unsupported signature identifiers must fail closed");
+    assert!(matches!(
+        signature_error,
+        Error::HandshakeSoranet(message)
+            if message == "unsupported SoraNet signature identifier 99"
+    ));
+
+    SoranetHandshakeConfig::new(
+        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+        true,
+        MlKemSuite::MlKem512.kem_id(),
+        1,
+        None,
+        false,
+        params,
+        None,
+        Duration::from_secs(60),
+        None,
+        None,
+        None,
+    )
+    .expect("every ML-KEM suite in the first-release registry must be accepted");
+}
+#[test]
+fn rejects_noncanonical_transcript_fields_and_capability_vectors_at_construction() {
+    let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
+    let build =
+        |descriptor_commit: Vec<u8>, client_capabilities: Vec<u8>, resume_hash: Option<Vec<u8>>| {
+            SoranetHandshakeConfig::new(
+                descriptor_commit,
+                client_capabilities,
+                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+                true,
+                1,
+                1,
+                resume_hash,
+                false,
+                params,
+                None,
+                Duration::from_secs(60),
+                None,
+                None,
+                None,
+            )
+        };
+    for (error, expected) in [
+        (
+            build(
+                vec![0; iroha_crypto::Hash::LENGTH - 1],
+                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+                None,
+            )
+            .expect_err("short descriptor commitment must fail"),
+            "descriptor commitment must be 32 bytes",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+                Some(vec![0; iroha_crypto::Hash::LENGTH - 1]),
+            )
+            .expect_err("short resume hash must fail"),
+            "resume hash must be 32 bytes",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![0x01],
+                None,
+            )
+            .expect_err("malformed capabilities must fail"),
+            "invalid SoraNet client capability vector",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![
+                    0x01, 0x02, 0x00, 0x02, 0x01, 0x01, // signature
+                    0x01, 0x01, 0x00, 0x02, 0x01, 0x01, // KEM
+                ],
+                None,
+            )
+            .expect_err("decreasing client capability types must fail at construction"),
+            "nondecreasing order",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![
+                    0;
+                    iroha_crypto::soranet::handshake::MAX_CAPABILITY_VECTOR_LEN + 1
+                ],
+                None,
+            )
+            .expect_err("oversized client capability vector must fail at the shared bound"),
+            "first-release maximum is 4096 bytes",
+        ),
+    ] {
+        assert!(
+            matches!(error, Error::HandshakeSoranet(message) if message.contains(expected)),
+            "unexpected error for {expected}"
+        );
+    }
 }
 #[test]
 fn admission_transcript_binds_resumption_presence_and_value() {
@@ -182,7 +359,8 @@ fn puzzle_ticket_mints_and_verifies() {
         None,
         None,
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     assert_eq!(config.pow_parameters().difficulty(), 5);
     assert_eq!(config.pow_ticket_ttl(), Duration::from_secs(240));
     let configured_puzzle = config
@@ -209,20 +387,17 @@ fn puzzle_ticket_mints_and_verifies() {
         puzzle_params.difficulty()
     );
     let verification = config
-        .verify_challenge_ticket(
-            minted
-                .ticket
-                .as_ref()
-                .expect("ticket bytes present")
-                .as_slice(),
-            &transcript,
-        )
+        .verify_challenge_ticket(&minted.frames[0], &transcript)
         .expect("verify ticket");
     assert_eq!(
         verification.expect("verification summary").pow.difficulty(),
         puzzle_params.difficulty()
     );
-    let mut corrupted = minted.ticket.expect("ticket bytes present");
+    let mut corrupted = minted
+        .frames
+        .into_iter()
+        .next()
+        .expect("ticket frame present");
     // Corrupt the version byte to guarantee a parse/verify failure.
     // Flipping solution bytes is probabilistic for low difficulties (it may still satisfy
     // the leading-zero predicate), so do not rely on it in tests.
@@ -251,20 +426,63 @@ fn token_frame_emitted_when_configured() {
         None,
         None,
         None,
-    );
-    let mut encoded = b"SNTK\x01".to_vec();
-    encoded.extend_from_slice(&[0xAA; 64]);
-    config.set_admission_token(encoded.clone());
+    )
+    .expect("test SoraNet handshake config must be valid");
+    let suite = MlDsaSuite::MlDsa44;
+    let keypair = generate_mldsa_keypair(suite).expect("keygen");
+    let issuer_fingerprint =
+        iroha_crypto::soranet::token::compute_issuer_fingerprint(keypair.public_key());
+    let issued_at = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let mut token_rng = StdRng::from_seed([0x47; 32]);
+    let token = AdmissionToken::mint(
+        suite,
+        keypair.secret_key(),
+        issuer_fingerprint,
+        [0x11; 32],
+        test_admission_transcript(),
+        issued_at,
+        issued_at + Duration::from_secs(60),
+        0,
+        &mut token_rng,
+    )
+    .expect("mint admission token");
+    let encoded = token.encode();
+    config
+        .set_admission_token(encoded.clone())
+        .expect("canonical admission token");
+    let config_debug = format!("{config:?}");
+    assert!(config_debug.contains("[REDACTED]"));
+    assert!(!config_debug.contains(&format!("{encoded:?}")));
     let mut rng = StdRng::from_seed([0x99; 32]);
     let transcript = test_admission_transcript();
     let minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect("mint token challenge")
         .expect("token frame present");
-    assert!(minted.ticket.is_none());
     assert!(minted.admission.is_none());
     assert_eq!(minted.frames.len(), 1);
     assert_eq!(minted.frames[0], encoded);
+    let minted_debug = format!("{minted:?}");
+    assert!(minted_debug.contains("[REDACTED]"));
+    assert!(!minted_debug.contains(&format!("{encoded:?}")));
+}
+#[test]
+fn admission_token_configuration_rejects_malformed_frames() {
+    let mut config = SoranetHandshakeConfig::defaults();
+    let error = config
+        .set_admission_token(b"SNTK\x01".to_vec())
+        .expect_err("truncated admission token must fail closed");
+    assert!(matches!(error, AdmissionTokenDecodeError::Truncated { .. }));
+    assert!(config.admission_token.is_none());
+}
+#[test]
+fn minted_challenge_explicitly_clears_sensitive_bytes() {
+    let mut minted = MintedChallenge {
+        frames: vec![vec![0xA5; 32]],
+        admission: None,
+    };
+    minted.clear_sensitive_bytes();
+    assert!(minted.frames.is_empty());
 }
 #[test]
 fn mint_challenge_ticket_reports_rng_failure() {
@@ -284,7 +502,8 @@ fn mint_challenge_ticket_reports_rng_failure() {
         None,
         None,
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = FailingTryRng;
     let transcript = test_admission_transcript();
     let err = config
@@ -292,7 +511,7 @@ fn mint_challenge_ticket_reports_rng_failure() {
         .expect_err("failing RNG must abort challenge minting");
     match err {
         ChallengeMintError::Pow(pow::MintError::RandomBytes { operation, message }) => {
-            assert_eq!(operation, "minting PoW client nonce");
+            assert_eq!(operation, "minting PoW solution nonce");
             assert!(
                 message.contains("failing p2p ticket RNG"),
                 "unexpected message: {message}"
@@ -323,14 +542,15 @@ fn pow_ticket_replay_rejected_and_persisted() {
         None,
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0x21; 32]);
     let transcript = test_admission_transcript();
     let minted = config
         .mint_challenge_ticket(&transcript, &mut rng)
         .expect("mint")
         .expect("ticket present");
-    let ticket = minted.ticket.expect("ticket bytes");
+    let ticket = minted.frames.into_iter().next().expect("ticket frame");
     config
         .verify_challenge_ticket(&ticket, &transcript)
         .expect("first verify");
@@ -356,7 +576,8 @@ fn pow_ticket_replay_rejected_and_persisted() {
         None,
         Some(Arc::new(Mutex::new(reloaded))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let err = config_reloaded
         .verify_challenge_ticket(&ticket, &transcript)
         .expect_err("replay after reload must fail");
@@ -385,7 +606,8 @@ fn signed_ticket_replay_persists_across_reload() {
         Some(keypair.public_key().to_vec()),
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0x27; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -424,7 +646,8 @@ fn signed_ticket_replay_persists_across_reload() {
         Some(keypair.public_key().to_vec()),
         Some(Arc::new(Mutex::new(reloaded))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let err = config_reloaded
         .verify_challenge_ticket(&signed_bytes, &transcript)
         .expect_err("signed ticket replay after reload must fail");
@@ -452,7 +675,8 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         None,
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0x31; 32]);
     let transcript = test_admission_transcript();
     let first = config
@@ -464,11 +688,11 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         .expect("mint second")
         .expect("ticket");
     config
-        .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
+        .verify_challenge_ticket(&first.frames[0], &transcript)
         .expect("first verify");
     assert_eq!(config.active_revocations(), 1);
     let capacity_err = config
-        .verify_challenge_ticket(second.ticket.as_ref().expect("ticket bytes"), &transcript)
+        .verify_challenge_ticket(&second.frames[0], &transcript)
         .expect_err("full store must fail closed");
     assert!(matches!(
         capacity_err,
@@ -480,7 +704,7 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         "capacity-one store must retain the first consumption record"
     );
     let replay_err = config
-        .verify_challenge_ticket(first.ticket.as_ref().expect("ticket bytes"), &transcript)
+        .verify_challenge_ticket(&first.frames[0], &transcript)
         .expect_err("first ticket must remain consumed");
     assert!(matches!(replay_err, ChallengeVerifyError::Replay));
     config.purge_expired_revocations().expect("purge succeeds");
@@ -512,7 +736,8 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         None,
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0x41; 32]);
     let transcript = test_admission_transcript();
     let minted = config
@@ -520,7 +745,7 @@ fn revocation_store_ttl_overflow_surfaces_store_error() {
         .expect("mint")
         .expect("ticket");
     let err = config
-        .verify_challenge_ticket(minted.ticket.as_ref().expect("ticket bytes"), &transcript)
+        .verify_challenge_ticket(&minted.frames[0], &transcript)
         .expect_err("revocation store ttl cap should reject ticket");
     assert!(matches!(err, ChallengeVerifyError::RevocationStore(_)));
 }
@@ -545,7 +770,8 @@ fn signed_ticket_invalid_signature_rejected() {
         None,
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
     let expires_at = std::time::SystemTime::now()
         .checked_add(Duration::from_secs(120))
@@ -603,7 +829,8 @@ fn signed_ticket_with_config_key_accepts_once() {
         Some(keypair.public_key().to_vec()),
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0x55; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -653,7 +880,8 @@ fn raw_ticket_rejected_with_signed_key_present() {
         Some(keypair.public_key().to_vec()),
         Some(Arc::new(Mutex::new(store))),
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let mut rng = StdRng::from_seed([0xA5; 32]);
     let transcript = test_admission_transcript();
     let ticket = pow::mint_ticket(
@@ -690,7 +918,8 @@ fn signed_challenge_ticket_rejects_client_hello_substitution_before_signature_wo
         Some(vec![0x77]),
         None,
         None,
-    );
+    )
+    .expect("test SoraNet handshake config must be valid");
     let transcript = test_admission_transcript();
     let substituted = substituted_admission_transcript();
     let expires_at = SystemTime::now()
@@ -879,22 +1108,25 @@ async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn ordinary_pow_verification_does_not_depend_on_the_puzzle_gate() {
-    let config = Arc::new(SoranetHandshakeConfig::new(
-        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-        true,
-        1,
-        1,
-        None,
-        true,
-        PowParameters::new(1, Duration::from_secs(30), Duration::from_secs(1)),
-        None,
-        Duration::from_secs(5),
-        None,
-        None,
-        None,
-    ));
+    let config = Arc::new(
+        SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+            true,
+            1,
+            1,
+            None,
+            true,
+            PowParameters::new(1, Duration::from_secs(30), Duration::from_secs(1)),
+            None,
+            Duration::from_secs(5),
+            None,
+            None,
+            None,
+        )
+        .expect("test SoraNet handshake config must be valid"),
+    );
     let transcript_hash = test_admission_transcript();
     let ticket = mint_test_admission_ticket(&config, &transcript_hash, [0x30; 32]);
     let closed_gate = Arc::new(Semaphore::new(1));
@@ -912,29 +1144,32 @@ async fn signed_ticket_verification_does_not_depend_on_the_puzzle_gate() {
     let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
     let max_future_skew = Duration::from_secs(30);
     let min_ticket_ttl = Duration::from_secs(1);
-    let config = Arc::new(SoranetHandshakeConfig::new(
-        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
-        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
-        true,
-        1,
-        1,
-        None,
-        true,
-        PowParameters::new(1, max_future_skew, min_ticket_ttl),
-        Some(PuzzleParameters::new(
-            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("minimum puzzle memory is non-zero"),
-            NonZeroU32::new(1).expect("one Argon2 iteration is non-zero"),
-            NonZeroU32::new(1).expect("one Argon2 lane is non-zero"),
+    let config = Arc::new(
+        SoranetHandshakeConfig::new(
+            iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+            iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+            true,
             1,
-            max_future_skew,
-            min_ticket_ttl,
-        )),
-        Duration::from_secs(5),
-        Some(keypair.public_key().to_vec()),
-        None,
-        None,
-    ));
+            1,
+            None,
+            true,
+            PowParameters::new(1, max_future_skew, min_ticket_ttl),
+            Some(PuzzleParameters::new(
+                NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("minimum puzzle memory is non-zero"),
+                NonZeroU32::new(1).expect("one Argon2 iteration is non-zero"),
+                NonZeroU32::new(1).expect("one Argon2 lane is non-zero"),
+                1,
+                max_future_skew,
+                min_ticket_ttl,
+            )),
+            Duration::from_secs(5),
+            Some(keypair.public_key().to_vec()),
+            None,
+            None,
+        )
+        .expect("test SoraNet handshake config must be valid"),
+    );
     let transcript_hash = test_admission_transcript();
     let ticket = pow::mint_ticket(
         config.pow_params.as_ref(),

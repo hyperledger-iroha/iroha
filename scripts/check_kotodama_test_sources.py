@@ -45,6 +45,7 @@ EXPECTED_TEST_INCLUDES = {
     ),
     "crates/kotodama_lang/src/semantic.rs": (
         "semantic/tests/numeric_rounding_modes.rs",
+        "semantic/tests/trigger_semantics_tests.rs",
         "semantic_sum_tests.rs",
     ),
     "crates/kotodama_lang/src/ir.rs": (
@@ -200,6 +201,28 @@ def _relative_path(value: Any, label: str) -> str:
     if path.is_absolute() or ".." in path.parts or path.as_posix() != raw:
         _fail(f"{label} must be a canonical repository-relative path")
     return raw
+
+
+def _resolved_include_path(source_path: str, value: Any, label: str) -> str:
+    """Resolve one canonical Rust include path without escaping the repository."""
+
+    raw = _string(value, label)
+    if "\\" in raw:
+        _fail(f"{label} must use POSIX separators")
+    include = PurePosixPath(raw)
+    if include.is_absolute() or include.as_posix() != raw:
+        _fail(f"{label} must be a canonical source-relative path")
+    components = list(PurePosixPath(source_path).parent.parts)
+    for component in include.parts:
+        if component == "..":
+            if not components:
+                _fail(f"{label} escapes the repository")
+            components.pop()
+        else:
+            components.append(component)
+    if not components:
+        _fail(f"{label} does not name a repository file")
+    return PurePosixPath(*components).as_posix()
 
 
 def _digest_json(value: Any) -> str:
@@ -425,9 +448,13 @@ def _expanded_test_names(root: Path, source_path: str, source: str) -> list[str]
                 f"failed to read Rust test include {child_source_path}: {error}"
             ) from error
         child_masked = _mask_rust(child_source)
-        child_names = [
-            child_match.group("name")
+        child_events: list[tuple[int, list[str]]] = [
+            (child_match.start(), [child_match.group("name")])
             for child_match in TEST_FUNCTION_RE.finditer(child_masked)
+        ]
+        child_events.extend(_macro_test_events(source_path, child_masked))
+        child_names = [
+            name for _, event_names in sorted(child_events) for name in event_names
         ]
         if not child_names:
             _fail(f"Rust test include has no tests: {child_source_path}")
@@ -520,12 +547,30 @@ def _validate_legacy_manifest(root: Path, manifest_path: Path) -> int:
         except FileNotFoundError:
             _fail(f"legacy fixture owner source is missing: {source_path}")
         source_parent = PurePosixPath(source_path).parent
-        for match in INCLUDE_STR_RE.finditer(source):
-            include_path = match.group("path")
-            if "/test_sources/" not in include_path:
+        include_sources = [(source_path, source)]
+        for child_relative in EXPECTED_TEST_INCLUDES.get(source_path, ()):
+            child_path = (source_parent / PurePosixPath(child_relative)).as_posix()
+            if child_path in source_files:
                 continue
-            include_path = _relative_path(include_path, "legacy include path")
-            observed_includes.append((source_parent / include_path).as_posix())
+            try:
+                include_sources.append((
+                    child_path,
+                    _regular_bytes(root / child_path, child_path).decode("utf-8"),
+                ))
+            except FileNotFoundError:
+                _fail(f"Rust test include is missing: {child_path}")
+        for include_source_path, include_source in include_sources:
+            for match in INCLUDE_STR_RE.finditer(include_source):
+                include_path = match.group("path")
+                if "/test_sources/" not in include_path:
+                    continue
+                observed_includes.append(
+                    _resolved_include_path(
+                        include_source_path,
+                        include_path,
+                        "legacy include path",
+                    )
+                )
     if len(observed_includes) != len(set(observed_includes)):
         _fail("legacy fixture include inventory contains duplicates")
     if set(observed_includes) != set(expected_paths):

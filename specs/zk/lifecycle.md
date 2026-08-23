@@ -32,7 +32,7 @@ state, Torii app endpoints, and the CLI helpers for operators and SDK authors.
   `RegisterVerifyingKey` transaction.
 - `POST /v1/zk/vk/update` – validate and prepare an unsigned
   `UpdateVerifyingKey` transaction with a higher version and the existing `circuit_id`.
-- `GET  /v1/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`).
+- `GET  /v1/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`) and bounded `limit`/`offset` pagination. Unknown status/order values, zero or over-limit pages, and pagination windows beyond the configured fetch budget fail with `400 Bad Request`.
 - `GET  /v1/zk/vk/{backend}/{name}` – fetch a single VK record.
 
 ### CLI helpers
@@ -83,7 +83,14 @@ payload, payload hash, chain, authority, single instruction, key id, and record 
 
 `/v1/zk/proofs` and `/v1/zk/proofs/count` expose the ledger-facing records:
 
-- Filters: `backend`, `status`, `has_tag`, `offset`, `limit`, `order=asc|desc`, `ids_only`.
+- Shared filters: `backend`, `status`, `has_tag`, and the verification and
+  bridge height ranges. The list route additionally accepts `offset`, `limit`,
+  `order=asc|desc`, and `ids_only`; the count route rejects those list-only
+  parameters.
+- Status values are exact (`Submitted`, `Verified`, or `Rejected`), tags are
+  exactly four ASCII graphic/non-space printable characters, and inverted
+  verification-height ranges are invalid. Malformed filters fail with
+  `400 Bad Request` rather than being ignored.
 - Tag filtering is efficient: tags are indexed at verification time and served from a dedicated `(tag → proof ids)` index.
 - `ids_only=true` returns `{ backend, hash }` objects for lightweight pagination.
 - `/v1/zk/proof/{backend}/{hash}` remains available for direct lookups.

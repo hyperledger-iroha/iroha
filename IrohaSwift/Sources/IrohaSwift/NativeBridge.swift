@@ -89,9 +89,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64_x86_64": "c34007ea95a057f55b4526596d4e5c6574681dd509262404939ce90bdc1f7577",
-        "ios-arm64": "b0b7a7e476c21807fa8bed9e17f67118d78d4e43dcc590d5028e463893760bb6",
-        "ios-arm64_x86_64-simulator": "defe4d4f5b6e8093825448a0536361cd2a9f830fbf693963bb5b68002c64cc46"
+        "macos-arm64_x86_64": "1caf8cee8c16b078ac196e48e69a956555458cb129c55d1118780ddca2ff9f4b",
+        "ios-arm64": "4ae4f24d8bdf0dab48fbfdff246384999c9e7660210772d2cc66a75140c06dd9",
+        "ios-arm64_x86_64-simulator": "c5157968a9070ad609ff755776dc1fa7a6d76e0abed5ba4e14501cfcfc1a9ff3"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -1408,22 +1408,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private typealias MldsaGenerateKeypairFn = @convention(c) (
         UInt32,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+        UnsafeMutablePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias MldsaSignFn = @convention(c) (
         UInt32,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias MldsaVerifyFn = @convention(c) (
         UInt32,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias ConnectGenerateKeypairFn = @convention(c) (
@@ -6562,9 +6562,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 return mldsaGenerateKeypairFn(
                     UInt32(suiteId),
                     pubBase,
-                    CUnsignedLong(publicKeyLength),
+                    UInt(publicKeyLength),
                     secBase,
-                    CUnsignedLong(secretKeyLength)
+                    UInt(secretKeyLength)
                 )
             }
         }
@@ -6588,11 +6588,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     return mldsaSignFn(
                         UInt32(suiteId),
                         skBase,
-                        CUnsignedLong(secretKey.count),
+                        UInt(secretKey.count),
                         msgBase,
-                        CUnsignedLong(message.count),
+                        UInt(message.count),
                         sigBase,
-                        CUnsignedLong(signatureLength)
+                        UInt(signatureLength)
                     )
                 }
             }
@@ -6624,11 +6624,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     return mldsaVerifyFn(
                         UInt32(suiteId),
                         pkBase,
-                        CUnsignedLong(publicKey.count),
+                        UInt(publicKey.count),
                         msgBase,
-                        CUnsignedLong(message.count),
+                        UInt(message.count),
                         sigBase,
-                        CUnsignedLong(signature.count)
+                        UInt(signature.count)
                     )
                 }
             }

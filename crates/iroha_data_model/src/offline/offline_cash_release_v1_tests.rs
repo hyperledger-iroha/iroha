@@ -408,7 +408,9 @@ fn exact_release_decoders_enforce_semantic_collection_caps() {
         Err(OfflineCashReleaseErrorV1::InvalidArtifactSet)
     );
 
-    let mut keys = (1_u8..=(OFFLINE_CASH_RELEASE_AUTHORITY_MAX_SIGNERS_V1 + 1) as u8)
+    let oversized_signer_count = u8::try_from(OFFLINE_CASH_RELEASE_AUTHORITY_MAX_SIGNERS_V1 + 1)
+        .expect("the bounded signer test fixture fits in u8");
+    let mut keys = (1_u8..=oversized_signer_count)
         .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));

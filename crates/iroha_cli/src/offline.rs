@@ -1,17 +1,15 @@
 //! Offline command surfaces.
+mod kagemusha_lifecycle;
 mod kagemusha_rollout;
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
-use iroha::data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
-use iroha::data_model::offline::{KagemushaV4PromotionBindingV1, OfflineDeviceAttestationPolicy};
 use iroha::data_model::petal_stream::{
     PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS, PETAL_CAPTURE_RATIO_BPS_SCALE,
     PETAL_STREAM_GRID_SIZES, PetalStreamCaptureProfile, PetalStreamDecoder, PetalStreamEncoder,
     PetalStreamGrid, PetalStreamOptions, PetalStreamSampleGrid,
     render_petal_capture_samples_with_seed, score_petal_capture_profile_with_seed,
 };
-use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
 use norito::derive::JsonSerialize;
 use std::{
     fs,
@@ -65,8 +63,9 @@ impl Run for Command {
 }
 #[derive(Subcommand, Debug)]
 pub(crate) enum KagemushaCommand {
-    /// Activate an authenticated ABI-21 release and its exact Eq/Ep verifier pair.
-    ActivateReleaseV4(ActivateReleaseV4Args),
+    /// Prepare, independently sign, assemble, and submit one exact lifecycle transaction.
+    #[command(name = "lifecycle-v4")]
+    LifecycleV4(kagemusha_lifecycle::Args),
     /// Execute the phase-separated, exact-byte Kagemusha V4 rollout corridor.
     #[command(name = "rollout-v4")]
     RolloutV4(kagemusha_rollout::Args),
@@ -75,6 +74,9 @@ impl KagemushaCommand {
     fn allows_fallback_config(&self) -> bool {
         matches!(
             self,
+            Self::LifecycleV4(args) if args.allows_fallback_config()
+        ) || matches!(
+            self,
             Self::RolloutV4(args) if args.allows_fallback_config()
         )
     }
@@ -82,89 +84,9 @@ impl KagemushaCommand {
 impl Run for KagemushaCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Self::ActivateReleaseV4(args) => args.run(context),
+            Self::LifecycleV4(args) => args.run(context),
             Self::RolloutV4(args) => args.run(context),
         }
-    }
-}
-#[derive(Args, Debug, Clone)]
-pub(crate) struct ActivateReleaseV4Args {
-    /// Unique nonzero promotion-run identity reserved before validator qualification.
-    #[arg(
-        long = "promotion-id",
-        value_name = "LOWERCASE_HEX",
-        value_parser = parse_promotion_id
-    )]
-    promotion_id: [u8; 32],
-    /// Exact canonical controller-signed promotion binding committed by activation.
-    #[arg(long = "promotion-binding", value_name = "PATH")]
-    promotion_binding: PathBuf,
-    /// Canonical Norito release-policy file configured on the target peers.
-    #[arg(long = "release-policy", value_name = "PATH")]
-    release_policy: PathBuf,
-    /// Authenticated catalog root configured on the target peers.
-    #[arg(long = "artifact-dir", value_name = "DIR")]
-    artifact_dir: PathBuf,
-    /// Canonical lowercase SHA-256 digest naming the release catalog directory.
-    #[arg(
-        long = "manifest-sha256",
-        value_name = "LOWERCASE_HEX",
-        value_parser = parse_canonical_sha256
-    )]
-    manifest_sha256: [u8; 32],
-    /// Next atomic Eq/Ep verifier version in consensus state.
-    #[arg(long = "verifier-version")]
-    verifier_version: u32,
-    /// Exact governed device-attestation policy to publish atomically with the release.
-    #[arg(long = "device-attestation-policy", value_name = "PATH")]
-    device_attestation_policy: PathBuf,
-}
-impl Run for ActivateReleaseV4Args {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let catalog = KagemushaReleaseCatalogV4::load(&self.release_policy, &self.artifact_dir)
-            .map_err(|error| eyre!(error))
-            .wrap_err("failed to authenticate the configured Kagemusha V4 release catalog")?;
-        let activation = catalog
-            .build_activation(self.manifest_sha256, self.verifier_version)
-            .map_err(|error| eyre!(error))
-            .wrap_err("failed to construct the governed Kagemusha V4 activation")?;
-        let policy_bytes = fs::read(&self.device_attestation_policy)
-            .wrap_err("failed to read the governed device-attestation policy")?;
-        if policy_bytes.len() > 1024 * 1024 {
-            return Err(eyre!(
-                "governed device-attestation policy exceeds the 1 MiB CLI limit"
-            ));
-        }
-        let device_attestation_policy: OfflineDeviceAttestationPolicy =
-            norito::json::from_slice(&policy_bytes)
-                .wrap_err("failed to decode the governed device-attestation policy")?;
-        let promotion_binding_bytes = fs::read(&self.promotion_binding)
-            .wrap_err("failed to read the canonical Kagemusha V4 promotion binding")?;
-        if promotion_binding_bytes.is_empty() || promotion_binding_bytes.len() > 64 * 1024 {
-            return Err(eyre!(
-                "canonical Kagemusha V4 promotion binding must be 1..=65536 bytes"
-            ));
-        }
-        let promotion_binding: KagemushaV4PromotionBindingV1 =
-            norito::decode_canonical_with_limits(
-                &promotion_binding_bytes,
-                norito::canonical_decode_limits(promotion_binding_bytes.len()),
-            )
-            .wrap_err("failed to decode the canonical Kagemusha V4 promotion binding")?;
-        promotion_binding.validate().map_err(|error| eyre!(error))?;
-        if norito::encode_canonical(&promotion_binding)? != promotion_binding_bytes
-            || promotion_binding.promotion_id != self.promotion_id
-        {
-            return Err(eyre!(
-                "promotion binding is non-canonical or differs from --promotion-id"
-            ));
-        }
-        let instruction = ActivateKagemushaRecursiveReleaseV4::new(
-            promotion_binding,
-            activation,
-            device_attestation_policy,
-        );
-        context.finish([InstructionBox::from(instruction)])
     }
 }
 fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
@@ -181,9 +103,13 @@ fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     Ok(digest)
 }
 fn parse_promotion_id(value: &str) -> Result<[u8; 32], String> {
+    let digest = parse_nonzero_canonical_sha256(value)?;
+    Ok(digest)
+}
+fn parse_nonzero_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     let digest = parse_canonical_sha256(value)?;
     if digest == [0; 32] {
-        return Err("promotion id must be nonzero".to_owned());
+        return Err("digest must be nonzero".to_owned());
     }
     Ok(digest)
 }
@@ -2627,20 +2553,11 @@ mod tests {
         assert_eq!(parse_promotion_id(&"ab".repeat(32)), Ok([0xab; 32]));
         assert!(parse_promotion_id(&"00".repeat(32)).is_err());
         assert!(parse_promotion_id(&"AB".repeat(32)).is_err());
-    }
-    #[test]
-    fn kagemusha_activation_never_allows_fallback_credentials() {
-        let command =
-            Command::Kagemusha(KagemushaCommand::ActivateReleaseV4(ActivateReleaseV4Args {
-                promotion_id: [0x10; 32],
-                promotion_binding: PathBuf::from("promotion-binding.norito"),
-                release_policy: PathBuf::from("policy.norito"),
-                artifact_dir: PathBuf::from("catalog"),
-                manifest_sha256: [0x11; 32],
-                verifier_version: 1,
-                device_attestation_policy: PathBuf::from("device-attestation-policy.json"),
-            }));
-        assert!(!command.allows_fallback_config());
+        assert_eq!(
+            parse_nonzero_canonical_sha256(&"cd".repeat(32)),
+            Ok([0xcd; 32]),
+        );
+        assert!(parse_nonzero_canonical_sha256(&"00".repeat(32)).is_err());
     }
     struct TestContext {
         output_format: crate::CliOutputFormat,

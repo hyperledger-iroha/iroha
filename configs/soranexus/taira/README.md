@@ -6,14 +6,14 @@ Taira's disposable testnet path is one command:
 python3 scripts/taira_devnet.py up
 ```
 
-It builds the current `kagami`, `iroha3d`, and `iroha` binaries, replaces the
-previous script-owned bundle under `dist/taira-devnet/`, generates exactly four
-fresh-key NPoS validators for the canonical Taira chain, validates every peer
-configuration, starts the peers, and waits for all four nodes to become ready.
-It then submits one signed `iroha tx ping`, waits for its typed `Applied` status,
-requires all four committed heights to advance and converge, and checks that the
-generated MCP endpoint can initialize and list tools. The build uses the
-repository's stable local metadata and shared target cache, so unrelated
+It builds the current `kagami`, `iroha3d_taira`, and `iroha` binaries, replaces
+the previous script-owned bundle under `dist/taira-devnet/`, generates exactly
+four fresh-key NPoS validators for the canonical Taira chain, validates every
+peer configuration, starts the peers, and waits for all four nodes to become
+ready. It then submits one signed `iroha tx ping`, waits for its typed `Applied`
+status, requires all four committed heights to advance and converge, and checks
+that every generated MCP endpoint can initialize and list tools. The build uses
+the repository's stable local metadata and shared target cache, so unrelated
 worktree metadata does not force a cold rebuild.
 
 There is no release authority, source-closure ceremony, evidence archive,
@@ -44,12 +44,22 @@ Teardown returns success only after every managed PID file and matching peer
 process is gone. If that cannot be proved, the bundle is retained for diagnosis
 and the command fails instead of deleting its ownership evidence.
 
-Run the broader public-product route diagnostic only when that is the purpose
-of the deployment:
+Optionally run the broader read-only public-product route diagnostic after the
+standard signed smoke and four-peer MCP checks:
 
 ```bash
 python3 scripts/taira_devnet.py up --full-doctor
 ```
+
+`--full-doctor` runs the same-revision `iroha taira doctor` against the
+generated local endpoint. It uses the same three standard binaries as the
+default devnet and requires no Inrou workspace or SoraFS preseed. The
+first-release devnet interface has no `--inrou-canary-dir` option.
+
+The dedicated daemon's config validation, help, and version commands are
+offline introspection surfaces: they never open or consume the inherited
+runtime-signer descriptor. Every node-starting invocation still requires the
+exact descriptor and compiled Taira profile.
 
 Use already-built binaries when iterating on orchestration:
 
@@ -58,6 +68,9 @@ python3 scripts/taira_devnet.py up \
   --no-build \
   --bin-dir "$PWD/target/local-release"
 ```
+
+The directory needs the three default binaries above for both the standard and
+`--full-doctor` paths.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command stops
