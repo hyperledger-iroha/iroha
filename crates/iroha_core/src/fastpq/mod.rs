@@ -19,6 +19,7 @@ use iroha_data_model::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
+        transfer_asset_scales,
     },
     role::{Role, RoleId},
 };
@@ -780,6 +781,7 @@ where
     I: IntoIterator<Item = &'a TransferTranscript>,
 {
     let mut transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
+    let asset_scales = transfer_asset_scales(&transcripts);
     let transfer_roots = if transcripts.is_empty() {
         None
     } else {
@@ -795,7 +797,7 @@ where
         batch.public_inputs.new_root = new_root;
     }
     for transcript in &transcripts {
-        append_transcript(&mut batch, transcript)?;
+        append_transcript(&mut batch, transcript, &asset_scales)?;
     }
     attach_transcript_metadata(&mut batch, transcripts)?;
     batch.sort();
@@ -826,9 +828,14 @@ pub fn batch_from_transcript_bundle(
 fn append_transcript(
     batch: &mut TransitionBatch,
     transcript: &TransferTranscript,
+    asset_scales: &BTreeMap<AssetDefinitionId, u32>,
 ) -> Result<(), TranscriptBatchError> {
     for delta in &transcript.deltas {
-        push_transfer_delta(batch, delta)?;
+        let target_scale = asset_scales
+            .get(&delta.asset_definition)
+            .copied()
+            .unwrap_or_else(|| delta.normalized_scale());
+        push_transfer_delta(batch, delta, target_scale)?;
     }
     Ok(())
 }
@@ -851,10 +858,10 @@ fn attach_transcript_metadata(
 fn push_transfer_delta(
     batch: &mut TransitionBatch,
     delta: &TransferDeltaTranscript,
+    target_scale: u32,
 ) -> Result<(), TranscriptBatchError> {
     let from_key = balance_key(&delta.asset_definition, &delta.from_account);
     let to_key = balance_key(&delta.asset_definition, &delta.to_account);
-    let target_scale = delta.normalized_scale();
     let from_pre = encode_numeric_le(&delta.from_balance_before, target_scale)?;
     let from_post = encode_numeric_le(&delta.from_balance_after, target_scale)?;
     let to_pre = encode_numeric_le(&delta.to_balance_before, target_scale)?;
@@ -1609,6 +1616,71 @@ mod tests {
             &batch.public_inputs.new_root,
         )
         .expect("transfer SMT witnesses verify");
+    }
+
+    #[test]
+    fn batch_from_transcripts_keeps_one_scale_across_repeated_fractional_balances() {
+        let first = sample_transcript();
+        let mut second = sample_transcript();
+        second.batch_hash = Hash::prehashed([0x5A; 32]);
+        let delta = &mut second.deltas[0];
+        delta.amount = "0.5".parse().expect("non-negative FASTPQ quantity");
+        delta.from_balance_before = Quantity::from(158_u64);
+        delta.from_balance_after = "157.5".parse().expect("non-negative FASTPQ quantity");
+        delta.to_balance_before = Quantity::from(43_u64);
+        delta.to_balance_after = "43.5".parse().expect("non-negative FASTPQ quantity");
+        delta.from_smt_witness = Default::default();
+        delta.to_smt_witness = Default::default();
+        second.poseidon_preimage_digest = None;
+
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&first, &second],
+        )
+        .expect("mixed-scale repeated balances build");
+        let encoded = batch
+            .metadata
+            .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
+            .expect("transfer metadata");
+        let decoded: Vec<TransferTranscript> =
+            decode_from_bytes(encoded).expect("decode transcripts");
+        let second_delta = &decoded[1].deltas[0];
+        assert_eq!(second_delta.from_balance_before, Quantity::from(158_u64));
+        assert_eq!(
+            second_delta.from_balance_after,
+            "157.5"
+                .parse::<Quantity>()
+                .expect("non-negative FASTPQ quantity")
+        );
+        assert_eq!(second_delta.to_balance_before, Quantity::from(43_u64));
+        assert_eq!(
+            second_delta.to_balance_after,
+            "43.5"
+                .parse::<Quantity>()
+                .expect("non-negative FASTPQ quantity")
+        );
+
+        let sender_key = balance_key(&second_delta.asset_definition, &second_delta.from_account);
+        let sender_rows = batch
+            .transitions
+            .iter()
+            .filter(|row| row.key == sender_key)
+            .collect::<Vec<_>>();
+        assert_eq!(sender_rows.len(), 2);
+        assert_eq!(decode_le(&sender_rows[0].pre_value), 2_000);
+        assert_eq!(decode_le(&sender_rows[0].post_value), 1_580);
+        assert_eq!(decode_le(&sender_rows[1].pre_value), 1_580);
+        assert_eq!(decode_le(&sender_rows[1].post_value), 1_575);
+
+        fastpq_prover::gadgets::transfer::verify_transcripts(&batch.transitions, &decoded)
+            .expect("mixed-scale transition rows verify");
+        fastpq_prover::gadgets::transfer::transcripts_to_witnesses(
+            &decoded,
+            &batch.public_inputs.old_root,
+            &batch.public_inputs.new_root,
+        )
+        .expect("mixed-scale SMT witnesses verify");
     }
     #[test]
     fn batch_from_transcripts_normalizes_mixed_scale_values() {

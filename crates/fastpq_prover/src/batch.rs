@@ -39,8 +39,6 @@ pub struct PublicInputs {
 #[derive(
     Debug,
     Clone,
-    PartialEq,
-    Eq,
     NoritoSerialize,
     NoritoDeserialize,
     norito::derive::JsonSerialize,
@@ -61,6 +59,17 @@ pub struct StateTransition {
     #[norito(skip)]
     pub(crate) ordinal: usize,
 }
+// `ordinal` is local sort state and is deliberately absent from canonical equality, matching its
+// omission from Norito and JSON encodings.
+impl PartialEq for StateTransition {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.pre_value == other.pre_value
+            && self.post_value == other.post_value
+            && self.operation == other.operation
+    }
+}
+impl Eq for StateTransition {}
 impl StateTransition {
     /// Construct a new transition.
     pub fn new(
@@ -265,5 +274,52 @@ mod tests {
             .map(StateTransition::operation_rank)
             .collect();
         assert_eq!(ranks, vec![0, 1, 2]);
+    }
+    #[test]
+    fn sorted_batch_norito_roundtrip_ignores_local_ordinals() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"b".to_vec(),
+            vec![0],
+            vec![1],
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            b"a".to_vec(),
+            vec![1],
+            vec![2],
+            OperationKind::Transfer,
+        ));
+        batch.push(StateTransition::new(
+            b"a".to_vec(),
+            vec![2],
+            vec![3],
+            OperationKind::Transfer,
+        ));
+        batch.sort();
+
+        assert_eq!(
+            batch
+                .transitions
+                .iter()
+                .map(|transition| transition.pre_value.as_slice())
+                .collect::<Vec<_>>(),
+            vec![&[1_u8][..], &[2_u8][..], &[0_u8][..]],
+            "equal key/operation rows must retain insertion order"
+        );
+        assert_eq!(
+            batch
+                .transitions
+                .iter()
+                .map(|transition| transition.ordinal)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 0],
+            "regression requires non-serialized local ordinals"
+        );
+
+        let encoded = norito::to_bytes(&batch).expect("encode transition batch");
+        let decoded = norito::decode_from_bytes::<TransitionBatch>(&encoded)
+            .expect("decode transition batch");
+        assert_eq!(decoded, batch);
     }
 }

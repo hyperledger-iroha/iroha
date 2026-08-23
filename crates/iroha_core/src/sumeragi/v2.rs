@@ -11974,14 +11974,26 @@ impl SumeragiV2Adapter {
             validated_receipt.execution_commitment(),
         )?;
         self.registry = staged_registry;
+        let previous_active_subject = self.active_subject;
         self.active_subject = Some((round, subject));
-        self.step_with_completion_evidence(
+        let result = self.step_with_completion_evidence(
             reducer::Event::LocalProposalReady {
                 tag,
                 manifest: core_manifest,
             },
             Some(completion_evidence),
-        )
+        );
+        if let Ok(outcome) = &result {
+            let retain = outcome.disposition() == reducer::StepDisposition::Applied
+                || (outcome.disposition()
+                    == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                    && outcome.deferred_admission_ordinal().is_some());
+            if !retain {
+                self.active_subject = previous_active_subject;
+                self.publish_status()?;
+            }
+        }
+        result
     }
     /// Bind an exact body-store validation marker into the wire registry.
     ///

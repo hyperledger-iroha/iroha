@@ -6,7 +6,7 @@ use iroha_data_model::{
     asset::id::AssetDefinitionId,
     fastpq::{
         TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
-        TransferTranscript, normalized_numeric_to_u64,
+        TransferTranscript, normalized_numeric_to_u64, transfer_asset_scales,
     },
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -115,31 +115,33 @@ impl TransferRowKey {
     }
 }
 /// Build an index of transfer proofs keyed by transition rows.
+///
+/// A row shape may legitimately recur after intervening updates to other leaves. Preserve every
+/// proof in transcript order so callers do not silently replace an earlier Merkle path with the
+/// later one.
 #[must_use]
 pub fn index_row_proofs(
     inputs: &[TransferGadgetInput],
-) -> HashMap<TransferRowKey, TransferMerkleProof> {
+) -> HashMap<TransferRowKey, VecDeque<TransferMerkleProof>> {
     let mut map = HashMap::new();
     for witness in inputs {
         for delta in &witness.deltas {
             let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
             let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
-            map.insert(
-                TransferRowKey::new(
-                    sender_key.clone(),
-                    delta.from_balance_before.to_le_bytes().to_vec(),
-                    delta.from_balance_after.to_le_bytes().to_vec(),
-                ),
-                delta.smt_proof.from.clone(),
-            );
-            map.insert(
-                TransferRowKey::new(
-                    receiver_key.clone(),
-                    delta.to_balance_before.to_le_bytes().to_vec(),
-                    delta.to_balance_after.to_le_bytes().to_vec(),
-                ),
-                delta.smt_proof.to.clone(),
-            );
+            map.entry(TransferRowKey::new(
+                sender_key.clone(),
+                delta.from_balance_before.to_le_bytes().to_vec(),
+                delta.from_balance_after.to_le_bytes().to_vec(),
+            ))
+            .or_insert_with(VecDeque::new)
+            .push_back(delta.smt_proof.from.clone());
+            map.entry(TransferRowKey::new(
+                receiver_key.clone(),
+                delta.to_balance_before.to_le_bytes().to_vec(),
+                delta.to_balance_after.to_le_bytes().to_vec(),
+            ))
+            .or_insert_with(VecDeque::new)
+            .push_back(delta.smt_proof.to.clone());
         }
     }
     map
@@ -358,13 +360,14 @@ pub fn build_transfer_smt_witness_pair(
 pub fn attach_transfer_smt_witnesses(
     transcripts: &mut [TransferTranscript],
 ) -> Result<([u8; 32], [u8; 32]), Error> {
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut state = TransferSmtState::default();
     let mut seeded_keys = BTreeSet::new();
     let mut delta_count = 0usize;
     for transcript in transcripts.iter() {
         for delta in &transcript.deltas {
             delta_count = delta_count.saturating_add(1);
-            let scale = delta.normalized_scale();
+            let scale = asset_scale(&asset_scales, delta);
             let from_key = balance_key(&delta.asset_definition, &delta.from_account);
             if seeded_keys.insert(from_key.clone()) {
                 state.insert(
@@ -389,8 +392,8 @@ pub fn attach_transfer_smt_witnesses(
     let old_root = state.root().into();
     for transcript in transcripts {
         for delta in &mut transcript.deltas {
-            let scale = delta.normalized_scale();
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
+            let scale = asset_scale(&asset_scales, delta);
+            let snapshot = BalanceSnapshot::from_delta_at_scale(delta, scale)?;
             let from_key = balance_key(&delta.asset_definition, &delta.from_account);
             let from_balance_before = state.current_value(&from_key)?;
             let from_balance_after =
@@ -604,6 +607,7 @@ pub fn transcripts_to_witnesses(
     expected_old_root: &[u8; 32],
     expected_new_root: &[u8; 32],
 ) -> Result<Vec<TransferGadgetInput>, Error> {
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut current_root = *expected_old_root;
     let mut inputs = Vec::with_capacity(transcripts.len());
     for transcript in transcripts {
@@ -615,7 +619,8 @@ pub fn transcripts_to_witnesses(
         let authority_digest = transcript.authority_digest;
         let mut deltas = Vec::with_capacity(transcript.deltas.len());
         for delta in &transcript.deltas {
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
+            let snapshot =
+                BalanceSnapshot::from_delta_at_scale(delta, asset_scale(&asset_scales, delta))?;
             let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
             enforce_poseidon_policy(transcript, &poseidon_digest)?;
             let smt_proof = TransferSmtProof::from_transcript(delta, &snapshot)?;
@@ -664,10 +669,12 @@ pub fn verify_transcripts(
     if transcripts.is_empty() {
         return Ok(());
     }
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut transfer_rows = index_transfers(transitions);
     for transcript in transcripts {
         for delta in &transcript.deltas {
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
+            let snapshot =
+                BalanceSnapshot::from_delta_at_scale(delta, asset_scale(&asset_scales, delta))?;
             let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
             enforce_poseidon_policy(transcript, &poseidon_digest)?;
             ensure_transfer_rows(&mut transfer_rows, transitions, delta, &snapshot)?;
@@ -811,8 +818,14 @@ struct BalanceSnapshot {
     to_after: u64,
 }
 impl BalanceSnapshot {
+    #[cfg(test)]
     fn from_delta(delta: &TransferDeltaTranscript) -> Result<Self, Error> {
-        let target_scale = delta.normalized_scale();
+        Self::from_delta_at_scale(delta, delta.normalized_scale())
+    }
+    fn from_delta_at_scale(
+        delta: &TransferDeltaTranscript,
+        target_scale: u32,
+    ) -> Result<Self, Error> {
         let amount = numeric_to_u64("amount", &delta.amount, target_scale)?;
         let from_before = numeric_to_u64(
             "from_balance_before",
@@ -875,6 +888,12 @@ impl BalanceSnapshot {
     fn transfer_amount(&self) -> u64 {
         self.amount
     }
+}
+fn asset_scale(scales: &BTreeMap<AssetDefinitionId, u32>, delta: &TransferDeltaTranscript) -> u32 {
+    scales
+        .get(&delta.asset_definition)
+        .copied()
+        .unwrap_or_else(|| delta.normalized_scale())
 }
 fn numeric_to_u64(field: &'static str, value: &Quantity, target_scale: u32) -> Result<u64, Error> {
     normalized_numeric_to_u64(value.as_numeric(), target_scale)
@@ -1428,13 +1447,42 @@ mod tests {
             (200u64).to_le_bytes().to_vec(),
             (158u64).to_le_bytes().to_vec(),
         );
-        assert!(index.contains_key(&sender_key));
+        assert_eq!(index.get(&sender_key).map(VecDeque::len), Some(1));
         let receiver_key = TransferRowKey::new(
             balance_key(&delta.asset_definition, &delta.to_account),
             (1u64).to_le_bytes().to_vec(),
             (43u64).to_le_bytes().to_vec(),
         );
-        assert!(index.contains_key(&receiver_key));
+        assert_eq!(index.get(&receiver_key).map(VecDeque::len), Some(1));
+    }
+
+    #[test]
+    fn row_proof_index_preserves_repeated_row_paths_in_order() {
+        let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let witnesses =
+            transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
+                .expect("witnesses");
+        let first = witnesses[0].deltas[0].clone();
+        let mut later = first.clone();
+        later.smt_proof.from.root_before[0] ^= 0x5A;
+        later.smt_proof.from.siblings[0][0] ^= 0xA5;
+        let inputs = [TransferGadgetInput {
+            batch_hash: witnesses[0].batch_hash,
+            authority_digest: witnesses[0].authority_digest,
+            deltas: vec![first.clone(), later.clone()],
+        }];
+
+        let index = index_row_proofs(&inputs);
+        let sender_key = TransferRowKey::new(
+            balance_key(&first.asset_definition, &first.from_account),
+            first.from_balance_before.to_le_bytes().to_vec(),
+            first.from_balance_after.to_le_bytes().to_vec(),
+        );
+        let queue = index.get(&sender_key).expect("repeated sender row");
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0], first.smt_proof.from);
+        assert_eq!(queue[1], later.smt_proof.from);
     }
     #[test]
     fn transfer_row_key_from_transition_matches_explicit_key() {

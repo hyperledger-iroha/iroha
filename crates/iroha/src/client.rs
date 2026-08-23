@@ -14306,7 +14306,9 @@ impl Client {
         witness: &CanonicalRequestWitnessV1,
     ) -> Result<FeeQuoteResponse> {
         if payload.network_id() != Some(&self.network_id) {
-            return Err(eyre!("fee-quote payload network differs from the client network"));
+            return Err(eyre!(
+                "fee-quote payload network differs from the client network"
+            ));
         }
         if witness.subject_account != payload.authority {
             return Err(eyre!(
@@ -14323,9 +14325,11 @@ impl Client {
                 "fee-quote witness must contain at least two and no more than the policy member count"
             ));
         }
-        if witness.signatures.windows(2).any(|pair| {
-            pair[0].signer >= pair[1].signer
-        }) {
+        if witness
+            .signatures
+            .windows(2)
+            .any(|pair| pair[0].signer >= pair[1].signer)
+        {
             return Err(eyre!(
                 "fee-quote witness signers must be distinct and in canonical public-key order"
             ));
@@ -14338,11 +14342,7 @@ impl Client {
                 .iter()
                 .find(|member| member.public_key() == &entry.signer)
                 .ok_or_else(|| eyre!("fee-quote witness includes a nonmember signer"))?;
-            iroha_crypto::verify_signature_for_admission(
-                &entry.signature,
-                &entry.signer,
-                &message,
-            )
+            iroha_crypto::verify_signature_for_admission(&entry.signature, &entry.signer, &message)
                 .wrap_err("fee-quote witness signature failed verification")?;
             total_weight = total_weight
                 .checked_add(u32::from(member.weight()))

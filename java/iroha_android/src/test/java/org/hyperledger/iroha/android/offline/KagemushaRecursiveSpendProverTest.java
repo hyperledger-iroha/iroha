@@ -322,6 +322,7 @@ public final class KagemushaRecursiveSpendProverTest {
           byte[].class,
           byte[].class,
           byte[].class,
+          byte[].class,
           long[].class
         });
     final Method authorizationPrepareNative = Arrays.stream(methods)
@@ -904,31 +905,52 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void releaseAuthenticationIsMandatoryAndBounded() {
     final byte[] one = new byte[] {1};
-    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one);
+    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one, one);
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            new byte[0], one, one, one, one));
+            new byte[0], one, one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, new byte[0], one, one, one));
+            one, new byte[0], one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, new byte[0], one, one));
+            one, one, new byte[0], one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, new byte[0], one));
+            one, one, one, new byte[0], one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, one, new byte[0]));
+            one, one, one, one, new byte[0], one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one, one, one, one, one, new byte[0]));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
             new byte[KagemushaRecursiveSpendProver.MAX_TRUSTED_RELEASE_POLICY_BYTES + 1],
             one,
             one,
             one,
+            one,
             one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_INTERNAL_VALIDATION_RECEIPT_BYTES + 1],
+            one,
+            one,
+            one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_CRYPTOGRAPHIC_REVIEW_BYTES + 1],
+            one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
             one,
             one,
             one,

@@ -16,10 +16,10 @@ export const CONTRACT_PAYLOAD_MAX_NODES: 1000000;
  * canonical contract-schema strings. `null` and `undefined` represent an absent optional payload.
  */
 export function canonicalContractPayloadJson(
-  payload?: CanonicalContractPayloadValue | null,
+  payload?: unknown,
 ): string | null;
 
 /** Return BLAKE3(canonical payload JSON), or BLAKE3(empty bytes) for an absent payload. */
 export function contractPayloadDigestHex(
-  payload?: CanonicalContractPayloadValue | null,
+  payload?: unknown,
 ): string;

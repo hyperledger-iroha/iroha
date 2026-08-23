@@ -38,9 +38,8 @@ impl FastpqLaneHandle {
             debug!(
                 height = job.height,
                 view = job.view,
-                "fastpq lane: deferring background prover job while backend is initialising"
+                "fastpq lane: queueing background prover job while backend is initialising"
             );
-            return false;
         }
         if self
             .backpressure
@@ -414,12 +413,17 @@ fn entry_hash_for_batch(
     witness: &ExecWitness,
     batch: &fastpq_prover::TransitionBatch,
 ) -> Option<Hash> {
-    if let Some(bundle) = witness.fastpq_transcripts.get(idx) {
-        return Some(bundle.entry_hash);
-    }
+    let bundle_entry_hash = witness
+        .fastpq_transcripts
+        .get(idx)
+        .map(|bundle| bundle.entry_hash);
     let bytes = batch.metadata.get(ENTRY_HASH_METADATA_KEY)?;
     let digest: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    Some(Hash::prehashed(digest))
+    let metadata_entry_hash = Hash::prehashed(digest);
+    if bundle_entry_hash.is_some_and(|entry_hash| entry_hash != metadata_entry_hash) {
+        return None;
+    }
+    Some(metadata_entry_hash)
 }
 /// Install a deterministic FASTPQ engine for tests, bypassing the real prover backend.
 ///
@@ -552,6 +556,27 @@ mod tests {
         task.await.expect("worker task joins");
     }
     #[test]
+    fn handle_buffers_jobs_while_backend_is_initialising() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let handle = FastpqLaneHandle {
+            tx,
+            backpressure: None,
+            ready: Arc::new(AtomicBool::new(false)),
+        };
+        let job = FastpqWitnessJob {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32])),
+            height: 42,
+            view: 7,
+            witness: ExecWitness::default(),
+            context: FastpqWitnessContext::default(),
+        };
+
+        assert!(handle.submit(job));
+        let queued = rx.try_recv().expect("pre-ready job is buffered");
+        assert_eq!(queued.height, 42);
+        assert_eq!(queued.view, 7);
+    }
+    #[test]
     fn job_context_builds_batches_for_transcript_only_witness() {
         let bundle = sample_bundle();
         let template = FastpqPublicInputsTemplate {
@@ -587,6 +612,61 @@ mod tests {
         assert_eq!(batches[0].public_inputs.dsid, dsid);
         assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
         assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
+    }
+    #[test]
+    fn entry_hash_for_batch_accepts_matching_bundle_and_metadata() {
+        let bundle = sample_bundle();
+        let batches = sample_batches(&bundle);
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle.clone()],
+            ..ExecWitness::default()
+        };
+
+        assert_eq!(
+            entry_hash_for_batch(0, &witness, &batches[0]),
+            Some(bundle.entry_hash)
+        );
+    }
+    #[test]
+    fn entry_hash_for_batch_rejects_conflicting_bundle_and_metadata() {
+        let bundle = sample_bundle();
+        let mut batches = sample_batches(&bundle);
+        batches[0].metadata.insert(
+            ENTRY_HASH_METADATA_KEY.into(),
+            Hash::prehashed([0x99; 32]).as_ref().to_vec(),
+        );
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle],
+            ..ExecWitness::default()
+        };
+
+        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
+    }
+    #[test]
+    fn entry_hash_for_batch_rejects_missing_metadata_even_with_bundle() {
+        let bundle = sample_bundle();
+        let mut batches = sample_batches(&bundle);
+        batches[0].metadata.remove(ENTRY_HASH_METADATA_KEY);
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle],
+            ..ExecWitness::default()
+        };
+
+        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
+    }
+    #[test]
+    fn entry_hash_for_batch_rejects_malformed_metadata_even_with_bundle() {
+        let bundle = sample_bundle();
+        let mut batches = sample_batches(&bundle);
+        batches[0]
+            .metadata
+            .insert(ENTRY_HASH_METADATA_KEY.into(), vec![0x11; 31]);
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle],
+            ..ExecWitness::default()
+        };
+
+        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
     }
     #[test]
     #[cfg(feature = "fastpq-gpu")]
@@ -677,6 +757,21 @@ mod tests {
                 poseidon_preimage_digest: None,
             }],
         }
+    }
+    fn sample_batches(bundle: &TransferTranscriptBundle) -> Vec<TransitionBatch> {
+        batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            FastpqPublicInputsTemplate {
+                dsid: [0; 16],
+                slot: 0,
+                old_root: [0; 32],
+                new_root: [0; 32],
+                perm_root: [0; 32],
+            },
+            [0; 32],
+            [bundle],
+        )
+        .expect("sample FASTPQ batch")
     }
     #[test]
     fn maps_config_to_metal_overrides() {

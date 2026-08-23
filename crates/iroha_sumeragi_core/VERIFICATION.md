@@ -108,8 +108,9 @@ result.
 ## Accelerated 100,000-height chaos gate
 
 `tests/network_simulation.rs` includes an explicit ignored release gate that
-finalizes two independent 50,000-height chains: one permissioned and one with
-unequal NPoS voting power. Every height runs four production reducers, rotates
+finalizes two independent 50,000-height chains: one permissioned and one using
+NPoS roster-selection mode. Both use the first-release exact `3f + 1`
+equal-weight voting committee. Every height runs four production reducers, rotates
 through certified views, varies delivery order, accepts delayed old-view
 `CommitQC`s, rejects stale completions, periodically injects an under-quorum
 decision, applies the exact certified body, consumes a matching durable Kura
@@ -141,19 +142,19 @@ formation. Local adapter effects are queued one per deterministic scheduler
 rank. Every 64th height rotates through restart after Decision-WAL append,
 FetchBody, StoreBody, validation, and application; the recovered reducer must
 reject the captured old-generation completion. The gate also pins duplicate
-and reordered certificate delivery plus insufficient count-only and power-only
-NPoS certificates. Its schema-v2 marker binds the exact schedule and counters.
+and reordered certificate delivery plus insufficient equal-vote certificates.
+The legacy count-only and power-only counters remain pinned to zero because
+first-release NPoS cannot assign consensus vote weights. Its schema-v2 marker
+binds the exact schedule and counters.
 These are bounded reducer/recovery faults with terminating fixture work, not a
 substitute for the real-network seed matrix. An exact
 schema-v2 harness run on 2026-07-17 completed all 100,000 heights in 57.52
 seconds and matched every pinned counter. The source-attested wrapper correctly
 refuses a dirty worktree, so the final checkout-manifest-bound rerun remains
 required after these changes are in a signed clean commit.
-A 2026-07-21 run against the current proposal-origin source completed the
-50,000-height permissioned prefix and 50,000-height unequal-power NPoS prefix,
-400,000 validator finalizations, and zero failures in 91.29 seconds. This is a
-mutable-working-tree harness result, not a source-sealed release receipt or a
-Verus proof.
+A 2026-07-21 run used the retired unequal-power NPoS fixture and is not evidence
+for the current equal-vote protocol. The corrected gate requires a fresh
+source-sealed run before promotion.
 
 ## Current refinement model
 

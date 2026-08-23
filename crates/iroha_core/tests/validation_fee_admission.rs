@@ -28,7 +28,7 @@ use iroha_data_model::{
         ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::{
-        SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
+        Mint, SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
         governance::{AtWindow, EnactReferendum, FinalizeReferendum},
     },
     nexus::DataSpaceId,
@@ -1373,6 +1373,138 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
         .assets()
         .get(asset_id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
+}
+#[test]
+fn validation_fee_referendum_retains_locks_and_finalizes_after_missed_boundary() {
+    let (state, operator, _operator_key_pair, _recipient, treasury, fee_asset) = test_state();
+    let policy = validation_fee_policy(&state, fee_asset, treasury);
+    let proposal_kind = payout_lifecycle_proposal(&policy);
+    let rules = match &proposal_kind {
+        ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+            payload.plain_electorate_rules.clone()
+        }
+        _ => unreachable!("fixture constructs a payout-lifecycle proposal"),
+    };
+    let window = AtWindow {
+        lower: TEST_LIFECYCLE_WINDOW_START_HEIGHT,
+        upper: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+    };
+    let escrow_asset_id = AssetId::new(
+        rules.voting_asset_id.clone(),
+        rules.bond_escrow_account.clone(),
+    );
+    let operator_asset_id = AssetId::new(rules.voting_asset_id.clone(), operator.clone());
+    let proposal_id;
+    {
+        let mut block = state.block(block_header(window.lower, 1_700_000_001_000));
+        let mut state_transaction = block.transaction();
+        proposal_id = seed_open_proposal(proposal_kind, &operator, window, &mut state_transaction);
+        Mint::asset_quantity(rules.ballot_amount.clone(), escrow_asset_id.clone())
+            .execute(&operator, &mut state_transaction)
+            .expect("fund the exact retained ballot escrow");
+        state_transaction.apply();
+        block
+            .commit()
+            .expect("commit open validation-fee referendum");
+    }
+    let referendum_id = hex::encode(proposal_id);
+
+    // The inclusive end remains too early: the first admissible finalization
+    // height is still h_end + 1.
+    {
+        let mut block = state.block(block_header(window.upper, 1_700_000_002_000));
+        let mut state_transaction = block.transaction();
+        let error = FinalizeReferendum {
+            referendum_id: referendum_id.clone(),
+            proposal_id,
+        }
+        .execute(&operator, &mut state_transaction)
+        .expect_err("inclusive referendum end must remain too early");
+        assert!(
+            error
+                .to_string()
+                .contains("before its inclusive voting window ends"),
+            "unexpected early-finalization error: {error}"
+        );
+    }
+
+    // Deliberately miss h_end + 1 and commit a later block. The expiry sweep
+    // must retain the exact tally inputs while this referendum remains open.
+    let missed_boundary_height = window.upper + 2;
+    state
+        .block(block_header(missed_boundary_height, 1_700_000_003_000))
+        .commit()
+        .expect("commit a block after the missed finalization boundary");
+    {
+        let view = state.view();
+        assert_eq!(
+            view.world()
+                .governance_referenda()
+                .get(&referendum_id)
+                .expect("retained validation-fee referendum")
+                .status,
+            iroha_core::state::GovernanceReferendumStatus::Open
+        );
+        assert!(
+            view.world()
+                .governance_locks()
+                .get(&referendum_id)
+                .is_some_and(|locks| locks.locks.contains_key(&operator)),
+            "expired validation-fee lock must remain until deterministic finalization"
+        );
+        assert_eq!(
+            asset_balance(view.world(), &escrow_asset_id),
+            rules.ballot_amount
+        );
+    }
+
+    let late_finalization_height = window.upper + 3;
+    {
+        let mut block = state.block(block_header(late_finalization_height, 1_700_000_004_000));
+        let mut state_transaction = block.transaction();
+        FinalizeReferendum {
+            referendum_id: referendum_id.clone(),
+            proposal_id,
+        }
+        .execute(&operator, &mut state_transaction)
+        .expect("finalize from retained end-height tally after the missed boundary");
+        let evidence = state_transaction
+            .world
+            .governance_proposals()
+            .get(&proposal_id)
+            .and_then(|proposal| proposal.finalization_evidence.as_ref())
+            .expect("late finalization evidence");
+        assert_eq!(evidence.finalized_at_height, window.upper);
+        assert!(evidence.approved);
+        state_transaction.apply();
+        block
+            .commit()
+            .expect("commit late validation-fee finalization");
+    }
+    let view = state.view();
+    assert_eq!(
+        view.world()
+            .governance_referenda()
+            .get(&referendum_id)
+            .expect("closed validation-fee referendum")
+            .status,
+        iroha_core::state::GovernanceReferendumStatus::Closed
+    );
+    assert!(
+        view.world()
+            .governance_locks()
+            .get(&referendum_id)
+            .is_none_or(|locks| locks.locks.is_empty()),
+        "closing the referendum must release its already-due retained locks"
+    );
+    assert_eq!(
+        asset_balance(view.world(), &escrow_asset_id),
+        Quantity::zero()
+    );
+    assert_eq!(
+        asset_balance(view.world(), &operator_asset_id),
+        Quantity::from(250_u64)
+    );
 }
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {

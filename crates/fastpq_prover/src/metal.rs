@@ -3262,7 +3262,9 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         .map_err(|_| GpuError::InvalidInput("poseidon block count exceeds u32::MAX"))?;
     let padded_len_u32 = u32::try_from(padded_len)
         .map_err(|_| GpuError::InvalidInput("poseidon padded length exceeds u32::MAX"))?;
-    let limits = pipeline_limits(&context.poseidon_trace_fused);
+    // Keep tuning and submission tied to the same function-specific pipeline limits.
+    let pipeline = &context.poseidon_hash;
+    let limits = pipeline_limits(pipeline);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     // Cross-column command batching is parity-covered, but packed multiple
     // sponge states per Metal lane diverges for non-leading lanes on current
@@ -3316,7 +3318,7 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         let mut ticket = submit_compute_with_geometry(
             queue,
             queue_index,
-            &context.poseidon_hash,
+            pipeline,
             Some((threadgroups, threadgroup, logical_threads)),
             logical_threads,
             Some(profile),
@@ -5373,11 +5375,24 @@ mod tests {
         let stats = super::take_kernel_stats().expect("kernel stats enabled");
         super::enable_kernel_stats(false);
         assert_eq!(actual, expected);
-        assert!(
-            stats
-                .iter()
-                .any(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1),
-            "expected a vectorized Poseidon dispatch, got {stats:?}"
+        let sample = stats
+            .iter()
+            .find(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1)
+            .unwrap_or_else(|| panic!("expected a vectorized Poseidon dispatch, got {stats:?}"));
+        let actual_limits = super::PipelineLimits {
+            exec_width: sample.execution_width,
+            max_threads: sample.max_threads_per_group,
+        };
+        let mut expected_tuning = crate::metal_config::poseidon_tuning(
+            actual_limits.exec_width,
+            actual_limits.max_threads,
+        );
+        expected_tuning.states_per_lane = 1;
+        let (_, expected_threadgroup, _, _) =
+            super::poseidon_dispatch_geometry(sample.column_count, expected_tuning, &actual_limits);
+        assert_eq!(
+            sample.threadgroup_width, expected_threadgroup.width,
+            "Poseidon column geometry must use the limits of the pipeline that was dispatched"
         );
     }
     #[test]

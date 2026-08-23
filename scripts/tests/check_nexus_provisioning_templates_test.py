@@ -32,6 +32,12 @@ soranet_transport_private_key_file = "/run/secrets/iroha/transport-key"
 public_key = "genesis-public"
 expected_hash = "{HASH_IDENTITY}"
 
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+
 [streaming]
 identity_public_key = "streaming-public"
 identity_private_key_file = "/run/secrets/iroha/streaming-key"
@@ -135,3 +141,33 @@ def test_paired_public_identity_file_passes(tmp_path: pathlib.Path) -> None:
         encoding="utf-8",
     )
     guard.validate_repository(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("configured", "drifted"),
+    [
+        ("enabled = true", "enabled = 1"),
+        ('profile = "writer"', 'profile = "read_only"'),
+        ("expose_operator_routes = false", "expose_operator_routes = true"),
+        ('allow_tool_prefixes = ["iroha."]', 'allow_tool_prefixes = ["torii."]'),
+    ],
+)
+@pytest.mark.parametrize(
+    "relative",
+    guard.PUBLIC_MCP_SERVER_TEMPLATES,
+    ids=("minamoto", "taira"),
+)
+def test_public_mcp_profile_drift_fails(
+    tmp_path: pathlib.Path,
+    configured: str,
+    drifted: str,
+    relative: pathlib.Path,
+) -> None:
+    _write_repository(tmp_path)
+    target = tmp_path / relative
+    target.write_text(
+        _server().replace(configured, drifted),
+        encoding="utf-8",
+    )
+    with pytest.raises(guard.ProvisioningTemplateError, match="public writer profile"):
+        guard.validate_repository(tmp_path)

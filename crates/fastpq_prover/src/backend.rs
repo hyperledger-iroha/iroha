@@ -622,7 +622,7 @@ mod detection_tests {
     }
     #[test]
     fn backend_config_defaults_to_cpu_execution_mode() {
-        let params = CANONICAL_PARAMETER_SETS[0];
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let config = BackendConfig::new(params);
         assert_eq!(config.execution_mode(), ExecutionMode::Cpu);
         assert_eq!(config.poseidon_mode(), PoseidonExecutionMode::Cpu);
@@ -633,19 +633,25 @@ mod observer_tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+    static OBSERVER_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct ExecutionModeObserverGuard;
     impl Drop for ExecutionModeObserverGuard {
         fn drop(&mut self) {
             clear_execution_mode_observer();
+            crate::trace::clear_poseidon_pipeline_observer();
         }
     }
     #[test]
     fn execution_mode_observer_receives_resolution() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         clear_execution_mode_observer();
         let _observer_guard = ExecutionModeObserverGuard;
         let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
         set_execution_mode_observer(move |requested, resolved, backend| {
-            let _ = tx.send((requested, resolved, backend));
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send((requested, resolved, backend));
+            }
         });
         let resolved = ExecutionMode::Auto.resolve();
         let (requested, resolved_event, backend) = rx
@@ -665,6 +671,50 @@ mod observer_tests {
             ExecutionMode::Auto => unreachable!("resolution never returns Auto"),
         }
         clear_execution_mode_observer();
+    }
+    #[test]
+    fn backend_prove_uses_configured_execution_and_poseidon_modes() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        crate::trace::clear_poseidon_pipeline_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+
+        let (execution_tx, execution_rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |requested, resolved, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = execution_tx.send((requested, resolved, backend));
+            }
+        });
+        let (poseidon_tx, poseidon_rx) = mpsc::channel();
+        crate::trace::set_poseidon_pipeline_observer(move |policy, path, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = poseidon_tx.send((policy, path, backend));
+            }
+        });
+
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let backend = StarkBackend::new(
+            BackendConfig::new(params)
+                .with_execution_mode(ExecutionMode::Cpu)
+                .with_poseidon_mode(PoseidonExecutionMode::Auto),
+        );
+        let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
+        backend
+            .prove(&batch, &PublicIO::default(), 1, 1)
+            .expect("configured backend proof");
+
+        let (requested, resolved, _) = execution_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("execution-mode event");
+        assert_eq!(requested, ExecutionMode::Cpu);
+        assert_eq!(resolved, ExecutionMode::Cpu);
+        let (policy, path, _) = poseidon_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Poseidon-policy event");
+        assert_eq!(policy.requested(), PoseidonExecutionMode::Auto);
+        assert_eq!(policy.resolved(), ExecutionMode::Cpu);
+        assert_eq!(path, "cpu_fallback");
     }
 }
 #[cfg(target_os = "macos")]
@@ -2161,6 +2211,8 @@ fn prepare_batch(
     protocol_version: u16,
     params_version: u16,
     transcript_trace_root: Option<u64>,
+    execution_mode: ExecutionMode,
+    poseidon_policy: PoseidonPipelinePolicy,
 ) -> Result<PreparedBatch> {
     if params.name != batch.parameter {
         return Err(Error::ParameterMismatch {
@@ -2176,9 +2228,8 @@ fn prepare_batch(
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
     let planner = Planner::new(params);
-    let canonical_mode = ExecutionMode::Cpu;
-    let poseidon_policy = PoseidonPipelinePolicy::for_mode(canonical_mode);
-    let polynomial_data = derive_polynomial_data(&trace, &planner, canonical_mode);
+    let poseidon_mode = poseidon_policy.resolved();
+    let polynomial_data = derive_polynomial_data(&trace, &planner, execution_mode);
     let transfer_plan = polynomial_data.transfer_plan().clone();
     if transfer_plan.total_deltas() > 0 {
         tracing::debug!(
@@ -2193,23 +2244,23 @@ fn prepare_batch(
         &trace,
         &polynomial_data.coefficients,
         &planner,
-        canonical_mode,
+        execution_mode,
         poseidon_policy,
     );
     let derived_trace_root =
         merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
     let trace_root = transcript_trace_root.unwrap_or(derived_trace_root);
     let lde_columns = polynomial_data.into_lde_columns();
-    let lde_rows = hash_trace_rows_with_mode(&lde_columns, canonical_mode);
-    let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
+    let lde_rows = hash_trace_rows_with_mode(&lde_columns, poseidon_mode);
+    let lde_values = extend_row_hashes(&planner, execution_mode, lde_rows, trace.padded_len);
     let lde_domain_size =
         u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
             rows: lde_values.len(),
         })?;
-    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, canonical_mode)?;
-    let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
-    let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, canonical_mode)?;
-    let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
+    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, poseidon_mode)?;
+    let lde_root = merkle_root_with_mode(&lde_hashes, poseidon_mode);
+    let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, poseidon_mode)?;
+    let air_trace_root = merkle_root_with_mode(&air_trace_leaves, poseidon_mode);
     let mut transcript = Transcript::initialise(
         public_io,
         params.name,
@@ -2242,8 +2293,8 @@ fn prepare_batch(
     let air_composition_values =
         air_composition_values(&column_names, &lde_columns, &alphas, next_step)?;
     let air_composition_leaves =
-        hash_air_composition_leaves_with_mode(&air_composition_values, canonical_mode)?;
-    let air_composition_root = merkle_root_with_mode(&air_composition_leaves, canonical_mode);
+        hash_air_composition_leaves_with_mode(&air_composition_values, poseidon_mode)?;
+    let air_composition_root = merkle_root_with_mode(&air_composition_leaves, poseidon_mode);
     transcript.append_message(
         TRANSCRIPT_TAG_AIR_ROOTS,
         &[
@@ -2290,6 +2341,8 @@ pub fn derive_batch_commitments(
         protocol_version,
         params_version,
         None,
+        ExecutionMode::Cpu,
+        PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
     )?;
     Ok(BatchDerivedCommitments {
         trace_root: prepared.trace_root,
@@ -2311,6 +2364,10 @@ impl StarkBackend {
         params_version: u16,
         transcript_trace_root: Option<u64>,
     ) -> Result<BackendArtifact> {
+        let execution_mode = self.config.execution_mode().resolve();
+        let poseidon_policy =
+            PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
+        let poseidon_mode = poseidon_policy.resolved();
         let PreparedBatch {
             trace_rows,
             trace_root,
@@ -2335,8 +2392,9 @@ impl StarkBackend {
             protocol_version,
             params_version,
             transcript_trace_root,
+            execution_mode,
+            poseidon_policy,
         )?;
-        let canonical_mode = ExecutionMode::Cpu;
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
@@ -2348,7 +2406,7 @@ impl StarkBackend {
             &air_composition_values,
             &self.config.params,
             &mut transcript,
-            canonical_mode,
+            poseidon_mode,
         )?;
         let query_indices = sample_queries(
             lde_values.len(),
@@ -2363,7 +2421,7 @@ impl StarkBackend {
             &query_indices,
             self.config.params.fri.arity,
             lde_values.len(),
-            canonical_mode,
+            poseidon_mode,
         )?;
         let air_openings = open_air_constraint_openings_with_mode(
             &lde_columns,
@@ -2372,13 +2430,13 @@ impl StarkBackend {
             &air_composition_leaves,
             &query_indices,
             next_step,
-            canonical_mode,
+            poseidon_mode,
         )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,
             &query_indices,
             self.config.params.fri.arity,
-            canonical_mode,
+            poseidon_mode,
         )?;
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),

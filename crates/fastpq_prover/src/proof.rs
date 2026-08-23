@@ -2173,6 +2173,20 @@ mod tests {
         super::verify(&batch, &proof).expect("strict empty no-op verification");
     }
     #[test]
+    fn full_width_slot_uses_a_canonical_trace_residue() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = TransitionBatch::new(
+            "fastpq-lane-balanced",
+            PublicInputs {
+                slot: u64::MAX,
+                ..PublicInputs::default()
+            },
+        );
+        let proof = prover.prove(&batch).expect("full-width slot proof");
+        assert_eq!(proof.public_io.slot, u64::MAX);
+        super::verify(&batch, &proof).expect("full-width slot verification");
+    }
+    #[test]
     fn strict_state_profile_rejects_cryptographically_valid_mint_statement() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();

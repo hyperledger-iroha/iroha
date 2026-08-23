@@ -19,7 +19,7 @@ use iroha_data_model::{
     prelude::*,
     runtime::RuntimeUpgradeManifest,
 };
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::collections::BTreeMap;
@@ -1596,4 +1596,153 @@ fn snapshot_roster_metadata_mismatch_rejects_ballots_even_with_matching_root() {
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
+}
+
+#[test]
+fn proposal_snapshot_remains_authoritative_after_live_module_switch() {
+    let mut state = setup_council_state();
+    enable_parliament_module(&mut state);
+    let pid = [0xC1; 32];
+    let rid = hex::encode(pid);
+    let snapshot_bodies = seed_snapshot_proposal(&mut state, pid, &rid, 5, None);
+    let snapshot_signer = snapshot_bodies
+        .rosters
+        .get(&ParliamentBody::RulesCommittee)
+        .and_then(|roster| roster.members.first())
+        .cloned()
+        .expect("snapshot rules signer");
+
+    // Switch the live catalog to the legacy path and install a different current roster.
+    // The proposal-local snapshot must still decide who may vote.
+    state.nexus.get_mut().governance.default_module = None;
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut tx = block.transaction();
+    tx.world.council_mut().insert(
+        0,
+        iroha_core::governance::state::ParliamentTerm {
+            epoch: 0,
+            members: vec![CARPENTER_ID.clone()],
+            alternates: Vec::new(),
+            candidate_count: 1,
+            derived_by: CouncilDerivationKind::Manual,
+        },
+    );
+    tx.world.parliament_bodies_mut().insert(
+        0,
+        ParliamentBodies {
+            selection_epoch: 0,
+            rosters: all_stage_bodies()
+                .into_iter()
+                .map(|body| {
+                    (
+                        body,
+                        ParliamentRoster {
+                            body,
+                            epoch: 0,
+                            members: vec![CARPENTER_ID.clone()],
+                            alternates: Vec::new(),
+                            candidate_count: 1,
+                            derived_by: CouncilDerivationKind::Manual,
+                        },
+                    )
+                })
+                .collect(),
+        },
+    );
+    tx.apply();
+    block.commit().expect("commit replacement live roster");
+
+    let err = expect_ballot_error_at_height(
+        &state,
+        3,
+        ParliamentBody::RulesCommittee,
+        pid,
+        &CARPENTER_ID,
+        ParliamentDecision::Approve,
+    );
+    assert!(
+        err.contains("only seated parliament members"),
+        "live replacement roster must not override the proposal snapshot: {err}"
+    );
+    approve_at_height(
+        &mut state,
+        3,
+        ParliamentBody::RulesCommittee,
+        pid,
+        &snapshot_signer,
+    );
+    let approvals = state
+        .view()
+        .world()
+        .governance_stage_approvals()
+        .get(&rid)
+        .cloned()
+        .expect("snapshot approval record");
+    assert!(
+        approvals
+            .stages
+            .get(&ParliamentBody::RulesCommittee)
+            .is_some_and(|stage| stage.approvers.contains(&snapshot_signer))
+    );
+}
+
+#[test]
+fn proposal_pipeline_pins_quorum_against_live_config_changes() {
+    let mut state = setup_council_state();
+    enable_parliament_module(&mut state);
+    state.gov.parliament_quorum_bps = 10_000;
+    let pid = [0xC2; 32];
+    let rid = hex::encode(pid);
+    let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 6, None);
+    let rules_members = &bodies
+        .rosters
+        .get(&ParliamentBody::RulesCommittee)
+        .expect("rules roster")
+        .members;
+    assert_eq!(rules_members.len(), 2, "fixture requires two members");
+
+    state.gov.parliament_quorum_bps = 1;
+    approve_at_height(
+        &mut state,
+        2,
+        ParliamentBody::RulesCommittee,
+        pid,
+        &rules_members[0],
+    );
+    let first = state
+        .view()
+        .world()
+        .governance_stage_approvals()
+        .get(&rid)
+        .cloned()
+        .expect("rules approval record");
+    let first_stage = first
+        .stages
+        .get(&ParliamentBody::RulesCommittee)
+        .expect("rules stage");
+    assert_eq!(first_stage.quorum_bps, 10_000);
+    assert_eq!(first_stage.required, 2);
+    assert!(!first_stage.quorum_met());
+
+    approve_at_height(
+        &mut state,
+        3,
+        ParliamentBody::RulesCommittee,
+        pid,
+        &rules_members[1],
+    );
+    let second = state
+        .view()
+        .world()
+        .governance_stage_approvals()
+        .get(&rid)
+        .cloned()
+        .expect("rules approval record");
+    let second_stage = second
+        .stages
+        .get(&ParliamentBody::RulesCommittee)
+        .expect("rules stage");
+    assert_eq!(second_stage.quorum_bps, 10_000);
+    assert_eq!(second_stage.required, 2);
+    assert!(second_stage.quorum_met());
 }

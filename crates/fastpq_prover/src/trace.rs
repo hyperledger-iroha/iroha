@@ -535,10 +535,12 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         &canonical.transitions,
         &canonical.public_inputs,
     )?;
-    let transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
+    let mut transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
     let metadata_hash_limbs = metadata_commitment_limbs(&canonical.metadata)?;
     let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
-    let slot_value = canonical.public_inputs.slot;
+    // The exact `u64` remains bound by `PublicIO`; trace columns must use the
+    // unique canonical Goldilocks representative expected by every backend.
+    let slot_value = canonical.public_inputs.slot % GOLDILOCKS_MODULUS;
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
     // TODO: Constrain these running values in the AIR before enabling Mint/Burn or generic
     // multi-row conservation in a public proof-semantics profile.
@@ -662,8 +664,8 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         };
         if matches!(transition.operation, crate::OperationKind::Transfer) {
             let proof = transfer_proof_index
-                .get(&TransferRowKey::from_transition(transition))
-                .cloned()
+                .get_mut(&TransferRowKey::from_transition(transition))
+                .and_then(std::collections::VecDeque::pop_front)
                 .ok_or_else(|| Error::TransferInvariant {
                     details: "transfer row is missing its canonical SMT proof witness".into(),
                 });
@@ -2159,6 +2161,25 @@ mod tests {
         );
     }
     #[test]
+    fn trace_reduces_full_width_slots_to_canonical_field_elements() {
+        for slot in [GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS, u64::MAX] {
+            let mut batch = sample_batch();
+            batch.public_inputs.slot = slot;
+            let trace = build_trace(&batch).expect("build trace for full-width slot");
+            let slot_column = trace
+                .columns
+                .iter()
+                .find(|column| column.name == "slot")
+                .expect("slot column");
+            assert!(
+                slot_column
+                    .values
+                    .iter()
+                    .all(|value| *value == slot % GOLDILOCKS_MODULUS)
+            );
+        }
+    }
+    #[test]
     fn column_names_for_batch_matches_trace_layout() {
         let batch = sample_batch();
         let trace = build_trace(&batch).expect("build trace");
@@ -3010,7 +3031,10 @@ mod tests {
                 continue;
             }
             let row_key = transfer::TransferRowKey::from_transition(transition);
-            let proof = proof_index.get(&row_key).expect("transfer proof for row");
+            let proof = proof_index
+                .get(&row_key)
+                .and_then(std::collections::VecDeque::front)
+                .expect("transfer proof for row");
             let path_bit = trace
                 .columns
                 .iter()

@@ -3241,7 +3241,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok",
                 "",
                 "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
-                "9 filtered out; finished in 0.01s",
+                "11 filtered out; finished in 0.01s",
             )
         )
         + "\n",

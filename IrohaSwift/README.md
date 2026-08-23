@@ -1199,8 +1199,9 @@ manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
 corrupt, unpromoted, or role-substituted generation never becomes active.
 `KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
-candidate-bound promotion record in addition to policy, attestation, benchmark,
-and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
+candidate-bound promotion record and runner-signed internal-validation receipt in
+addition to policy, attestation, benchmark, and review bytes. Receipt and review
+archives are each limited to 1 MiB. Circuit parameters remain authenticated inline in the Eq/Ep
 profiles. Proof material and verifier bindings are validated by the operation
 that consumes them; they do not change universal offline capability.
 

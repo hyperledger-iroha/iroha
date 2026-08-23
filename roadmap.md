@@ -15,6 +15,20 @@ Completed history lives in [`status.md`](./status.md).
   design; do not restore removed aliases or parallel compatibility surfaces just
   to satisfy stale call sites.
 
+## SORA Parliament hardening
+
+- Replace proposal-time JIT sortition with a two-phase draw bound to an
+  authenticated beacon that is not knowable when the proposal id is committed.
+  The current public-seed plus caller-influenced proposal-id construction lets
+  a proposer grind candidate payloads offline for favorable body rosters.
+- Bind the intended validation-fee proposal operator into the typed proposal
+  preimage and fingerprint. Do not let transaction ordering choose the retained
+  operator for an otherwise identical policy payload.
+- Complete the public contract cleanup: expose the Parliament ballot through
+  the governance MCP surface, remove the retired ZK-ballot path from the served
+  OpenAPI asset, align alias acceptance across Torii/OpenAPI/SDKs, and publish
+  the complete proposal-kind and route inventory in capabilities.
+
 ## ZK algorithm release qualification
 
 - Once the in-progress Halo2 tree compiles, run the focused native-STARK and

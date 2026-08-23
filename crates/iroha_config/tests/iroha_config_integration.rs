@@ -15,6 +15,8 @@ mod governance_alternates_parse;
 mod governance_citizen_service_parse;
 #[path = "kura_retention_hard_cut.rs"]
 mod kura_retention_hard_cut;
+#[path = "minamoto_profile.rs"]
+mod minamoto_profile;
 #[path = "pipeline_cycle_ceiling.rs"]
 mod pipeline_cycle_ceiling;
 #[path = "sccp_route_manifest_aliases.rs"]

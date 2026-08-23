@@ -3217,8 +3217,8 @@ kura.claim_autonomous_lifecycle_process_generation(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 140 tests to be runnable" in harness_source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 187 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -3907,9 +3907,9 @@ def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
 
     assert unit_branch < unit_inventory < ignored_inventory < unit_run
-    assert "if ((${#listed_unit_tests[@]} != 140)); then" in source
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in source
-    assert "reducer unit gate requires all 140 tests to be runnable" in source
+    assert "if ((${#listed_unit_tests[@]} != 187)); then" in source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in source
+    assert "reducer unit gate requires all 187 tests to be runnable" in source
 
 
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:
