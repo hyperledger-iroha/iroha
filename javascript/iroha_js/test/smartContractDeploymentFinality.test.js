@@ -19,14 +19,12 @@ test("deployment polling waits for exact global persisted Applied finality", asy
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
-      summary: "Applied",
       scope: "global",
       resolved_from: "cache",
     },
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
-      summary: "Applied",
       scope: "global",
       resolved_from: "state",
     },
@@ -61,7 +59,6 @@ test("deployment polling rejects malformed Applied envelopes", async () => {
       {
         hash: "ef".repeat(32),
         status: { kind: "Applied", block_height: 1 },
-        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -71,7 +68,6 @@ test("deployment polling rejects malformed Applied envelopes", async () => {
       {
         hash,
         status: { kind: "Applied", block_height: 0 },
-        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -95,7 +91,6 @@ test("deployment polling does not treat nested Committed markers as finality", a
       jsonResponse({
         hash,
         status: { kind: "Queued", content: { Committed: true } },
-        summary: "Queued",
         scope: "global",
         resolved_from: "queue",
       }),
@@ -103,7 +98,7 @@ test("deployment polling does not treat nested Committed markers as finality", a
 
   await assert.rejects(
     client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
-    /did not reach persisted Applied status/u,
+    /retired or unsupported fields: content/u,
   );
 });
 
@@ -113,14 +108,12 @@ test("deployment polling retries cached failures until state resolution", async 
     {
       hash,
       status: { kind: "Rejected" },
-      summary: "Rejected",
       scope: "global",
       resolved_from: "cache",
     },
     {
       hash,
       status: { kind: "Rejected" },
-      summary: "Rejected",
       scope: "global",
       resolved_from: "state",
     },
@@ -147,7 +140,6 @@ test("deployment polling fails closed on unknown status kinds and non-200 status
       jsonResponse({
         hash,
         status: { kind: "Finalized", block_height: 1 },
-        summary: "Finalized",
         scope: "global",
         resolved_from: "state",
       }),

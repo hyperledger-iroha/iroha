@@ -21,7 +21,11 @@ import {
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
 import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
-import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
+import {
+  OperatorSigningContext as DistOperatorSigningContext,
+  ToriiClient as DistToriiClient,
+} from "../dist/toriiClient.js";
+import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 import {
   resolveToriiClientConfig,
   extractToriiFeatureConfig,
@@ -116,11 +120,22 @@ const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
   VK_SIGNING_NETWORK_ID,
 );
 const ISO_OPERATOR_SIGNING_CONTEXT = makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
+const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
+  DistNetworkId.parse(VK_SIGNING_NETWORK_ID.literal),
+  {
+    publicKey: ISO_OPERATOR_SIGNING_CONTEXT.publicKey,
+    sign: async () => Buffer.alloc(64, 0x22),
+  },
+);
 class ToriiClient extends SelectedToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
-      localSigningContext: VK_LOCAL_SIGNING_CONTEXT,
-      operatorSigningContext: ISO_OPERATOR_SIGNING_CONTEXT,
+      localSigningContext:
+        sumeragiDiagnosticsFocus?.localSigningContext
+        ?? VK_LOCAL_SIGNING_CONTEXT,
+      operatorSigningContext:
+        sumeragiDiagnosticsFocus?.operatorSigningContext
+        ?? ISO_OPERATOR_SIGNING_CONTEXT,
       canonicalRequestAuth: APPLICATION_CANONICAL_AUTH,
       ...options,
     });
@@ -8468,7 +8483,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
   assert.equal(attempts, 1);
 });
 
-test("submitTransaction may retry safe capability preflight before one-shot dispatch", async () => {
+test("submitTransaction never retries signed capability preflight or dispatches the payload", async () => {
   let capabilityAttempts = 0;
   let submissionAttempts = 0;
   const fetchImpl = async (url, init) => {
@@ -8494,12 +8509,12 @@ test("submitTransaction may retry safe capability preflight before one-shot disp
     backoffInitialMs: 0,
   });
 
-  assert.deepEqual(
-    await client.submitTransaction(Uint8Array.of(0xad)),
-    { ok: true },
+  await assert.rejects(
+    () => client.submitTransaction(Uint8Array.of(0xad)),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
   );
-  assert.equal(capabilityAttempts, 2);
-  assert.equal(submissionAttempts, 1);
+  assert.equal(capabilityAttempts, 1);
+  assert.equal(submissionAttempts, 0);
 });
 
 for (const redirectStatus of [307, 308]) {
@@ -9786,31 +9801,29 @@ test("getPipelineRecoveryFastpqProofsTyped rejects malformed payloads", async ()
   );
 });
 
-test("extractPipelineStatusKind returns nested status kind", () => {
+test("extractPipelineStatusKind returns the canonical top-level status kind", () => {
   const payload = {
-    kind: "Transaction",
-    content: { status: { kind: "Committed" } },
+    status: { kind: "Committed" },
   };
   assert.equal(extractPipelineStatusKind(payload), "Committed");
 });
 
-test("extractPipelineStatusKind makes canonical transaction content authoritative", () => {
+test("extractPipelineStatusKind ignores retired transaction content", () => {
   assert.equal(
     extractPipelineStatusKind({
-      kind: "Transaction",
       status: { kind: "Applied" },
       content: {
         hash: "ab".repeat(32),
         status: { kind: "Pending", content: null },
       },
     }),
-    "Pending",
+    "Applied",
   );
 });
 
-test("extractPipelineStatusKind accepts direct status string", () => {
+test("extractPipelineStatusKind rejects a direct status string", () => {
   const payload = { status: "Rejected" };
-  assert.equal(extractPipelineStatusKind(payload), "Rejected");
+  assert.equal(extractPipelineStatusKind(payload), null);
 });
 
 test("extractPipelineStatusKind returns null when status missing", () => {
@@ -10517,6 +10530,9 @@ test("typed Sumeragi endpoints reject swapped status and diagnostics payloads", 
 
 function sumeragiClientForPayload(payload, Client = ToriiClient) {
   return new Client(BASE_URL, {
+    ...(Client === DistToriiClient
+      ? { operatorSigningContext: DIST_OPERATOR_SIGNING_CONTEXT }
+      : {}),
     fetchImpl: async () =>
       createResponse({
         status: 200,
@@ -13286,7 +13302,9 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getNodeCapabilities();
+  const result = await client.getNodeCapabilities({
+    canonicalAuth: APPLICATION_CANONICAL_AUTH,
+  });
   assert.deepEqual(result, {
     abiVersion: 1,
     dataModelVersion: 4,
@@ -13345,7 +13363,9 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getNodeCapabilities(),
+    () => client.getNodeCapabilities({
+      canonicalAuth: APPLICATION_CANONICAL_AUTH,
+    }),
     (error) => {
       assert.match(error.message, /abi_version/);
       return true;
@@ -13372,7 +13392,9 @@ test("getRuntimeAbiActive normalizes ABI version", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeAbiActive();
+  const result = await client.getRuntimeAbiActive({
+    canonicalAuth: APPLICATION_CANONICAL_AUTH,
+  });
   assert.deepEqual(result, {
     abiVersion: 1,
   });
@@ -13432,7 +13454,9 @@ test("getRuntimeMetrics normalizes counters", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeMetrics();
+  const result = await client.getRuntimeMetrics({
+    canonicalAuth: APPLICATION_CANONICAL_AUTH,
+  });
   assert.deepEqual(result, {
     abiVersion: 1,
     upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
@@ -13697,6 +13721,7 @@ test("runtime upgrade wrappers reject unsupported option fields", async () => {
 
 registerToriiClientGovernanceTests({
   assert,
+  APPLICATION_CANONICAL_AUTH,
   BASE_URL,
   FIXTURE_ALICE_ID,
   FIXTURE_BOB_ID,
@@ -24951,12 +24976,12 @@ test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels disc
       }
       return createResponse({
         status: 200,
-        jsonData: validNodeCapabilitiesPayload(),
+        jsonData: { policy: "V1", abi_hash_hex: "aabb".repeat(16) },
         headers: { "content-type": "application/json" },
       });
     },
   });
-  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
+  assert.equal((await retryClient.getRuntimeAbiHash()).policy, "V1");
   assert.equal(requests, 2);
   assert.equal(retryBodyCancels, 1);
 });

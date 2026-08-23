@@ -2,12 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
-import { ValidationError, ValidationErrorCode } from "../src/index.js";
+import {
+  LocalSigningContext,
+  NetworkId,
+  ValidationError,
+  ValidationErrorCode,
+} from "../src/index.js";
 
 const BASE_URL = "http://localhost:8080";
 const FIXTURE_ACCOUNT_ID = "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY";
 const FIXTURE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0xa5)),
+);
+const CANONICAL_AUTH = Object.freeze({
+  accountId: FIXTURE_ACCOUNT_ID,
+  privateKey: Buffer.alloc(32, 0x31),
+});
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {
   const body =
@@ -136,9 +148,16 @@ test("queryAccountAssets surfaces permission errors with context", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    allowInsecure: true,
+    fetchImpl,
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
+  });
   await assert.rejects(
-    () => client.queryAccountAssets(FIXTURE_ACCOUNT_ID, { filter: { Eq: ["quantity", 1] } }),
+    () => client.queryAccountAssets(FIXTURE_ACCOUNT_ID, {
+      canonicalAuth: CANONICAL_AUTH,
+      filter: { Eq: ["quantity", 1] },
+    }),
     (error) => {
       assert(error instanceof ToriiHttpError);
       assert.equal(error.status, 403);
