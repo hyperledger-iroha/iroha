@@ -55,10 +55,10 @@ const PACKET_LOSS_ADMISSION_HEIGHT: u64 = 2;
 const PACKET_LOSS_HEIGHT: u64 = 3;
 const PACKET_LOSS_ADMISSION_VIEW: u64 = 0;
 const PACKET_LOSS_CARRIER_VIEWS: [u64; 4] = [0, 1, 2, 3];
-const PACKET_LOSS_CAPTURE_VIEWS: [u64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+const PACKET_LOSS_CAPTURE_VIEWS: [u64; 6] = [0, 1, 2, 3, 4, 5];
 const PACKET_LOSS_CHUNK_INDICES: [u32; 3] = [57, 58, 59];
 const PACKET_LOSS_QUEUE_CAPACITY: usize = 16;
-const PACKET_LOSS_CAPTURE_QUEUE_CAPACITY: usize = 128;
+const PACKET_LOSS_CAPTURE_QUEUE_CAPACITY: usize = 512;
 const PACKET_LOSS_CONTROL_TIMEOUT: Duration = Duration::from_secs(360);
 const PACKET_LOSS_BLOCK_CADENCE: Duration = Duration::from_secs(8);
 const PACKET_LOSS_QUEUE_REPLICATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -376,6 +376,36 @@ fn hold_bounded_view_finality_traffic(
             }
         }
     }
+    rules
+}
+fn hold_exact_manifest_chunks_and_finality_traffic(
+    receiver_index: usize,
+    peer_ids: &[PeerId],
+    manifest_hash: HashOf<PayloadManifest>,
+    proposal_view: u64,
+) -> Vec<ConsensusMessageControlRule> {
+    let mut rules = Vec::new();
+    for (sender_index, sender) in peer_ids.iter().enumerate() {
+        if sender_index == receiver_index {
+            continue;
+        }
+        for index in PACKET_LOSS_CHUNK_INDICES {
+            rules.push(ConsensusMessageControlRule::payload_chunk(
+                sender.clone(),
+                manifest_hash,
+                index,
+                ConsensusMessageControlAction::Hold,
+            ));
+        }
+        rules.push(ConsensusMessageControlRule::exact(
+            sender.clone(),
+            ConsensusMessageControlKind::CertifiedBodyResponse,
+            PACKET_LOSS_HEIGHT,
+            proposal_view,
+            ConsensusMessageControlAction::Hold,
+        ));
+    }
+    rules.extend(hold_bounded_view_finality_traffic(receiver_index, peer_ids));
     rules
 }
 fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64) -> Result<()> {
@@ -696,10 +726,16 @@ fn try_read_exact_held_da_body(
             );
             let body = decode_framed_signed_block(&envelope.canonical_wire)
                 .wrap_err("decode exact held durable body wire")?;
+            let reencoded = body
+                .encode_wire()
+                .wrap_err("re-encode exact held durable body wire")?;
             ensure!(
-                body.header().height().get() == expected_height
+                body.is_resultless_proposal()
+                    && reencoded == envelope.canonical_wire
+                    && body.header().height().get() == expected_height
                     && body.header().view_change_index() <= expected_view
-                    && body.hash() == envelope.subject.block_hash,
+                    && body.hash() == envelope.subject.block_hash
+                    && body.header().prev_block_hash() == envelope.subject.parent_block_hash,
                 "held manifest's durable body changed its exact block subject"
             );
             validate_exact_da_block_transactions(&body, submitted_hash, "held durable DA body")?;
@@ -911,6 +947,23 @@ fn validate_exact_applied_payload_carrier(
     held.manifest
         .validate(&artifact.height_context)
         .wrap_err("validate held manifest against finalized height context")?;
+    let held_chunks =
+        encode_payload_chunks(artifact.height_context.da_layout, &held.canonical_wire)
+            .wrap_err("encode captured held RS16 payload chunks")?;
+    let rederived_held_manifest = PayloadManifest::derive(
+        &artifact.height_context,
+        held.manifest.round,
+        held.subject,
+        u64::try_from(held.canonical_wire.len())
+            .wrap_err("captured held DA payload length does not fit u64")?,
+        &held_chunks,
+    )
+    .wrap_err("rederive captured held payload manifest")?;
+    ensure!(
+        rederived_held_manifest == held.manifest
+            && HashOf::<PayloadManifest>::new(&rederived_held_manifest) == held_manifest_hash,
+        "captured held body bytes do not rederive the exact authenticated RS16 manifest"
+    );
     let same_subject = validate_held_final_manifest_relation(
         held_view,
         committed_view,
@@ -1585,21 +1638,42 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             matched_receivers.iter().filter(|matched| **matched).count() >= 3,
             "healing evidence lost the common authenticated manifest/view witness"
         );
+        for peer in &peers {
+            let status = fetch_v2_status(peer.client())?;
+            status
+                .validate()
+                .map_err(|error| eyre!("invalid pre-fence v2 status: {error}"))?;
+            ensure!(
+                status.height == expected_height
+                    && PACKET_LOSS_CARRIER_VIEWS.contains(&status.view)
+                    && status.last_committed_height < expected_height,
+                "{} escaped the bounded h{expected_height} capture corridor before its finality fence was armed: active=h{}/v{}, committed={}",
+                peer.mnemonic(),
+                status.height,
+                status.view,
+                status.last_committed_height
+            );
+        }
 
-        // Install the finality fence before releasing any retained chunks. A
-        // non-drain command changes the selector atomically while leaving old
-        // retained occurrences queued, so racing traffic is either retained by
-        // the old chunk rules or admitted under these Commit/timeout rules.
-        let capture_rules = peers
+        // Keep the original chunk selectors active while arming the finality
+        // fence on every receiver. A non-drain command changes each selector
+        // atomically while leaving old retained occurrences queued; combining
+        // both rule sets closes the cross-peer cutover window as well.
+        let capture_arm_rules = peers
             .iter()
             .enumerate()
             .map(|(receiver_index, _)| {
-                hold_bounded_view_finality_traffic(receiver_index, &peer_ids)
+                let mut rules = expected_initial_rules[receiver_index].clone();
+                rules.extend(hold_bounded_view_finality_traffic(
+                    receiver_index,
+                    &peer_ids,
+                ));
+                rules
             })
             .collect::<Vec<_>>();
         let capture_armed = try_join_all((0..peers.len()).map(|peer_index| {
             let peer = &peers[peer_index];
-            let rules = &capture_rules[peer_index];
+            let rules = &capture_arm_rules[peer_index];
             async move {
                 peer.consensus_message_control()
                     .ok_or_else(|| eyre!("{} lacks message control", peer.mnemonic()))?
@@ -1617,11 +1691,11 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             .iter()
             .zip(&capture_armed)
             .zip(&matched_sequences)
-            .zip(&capture_rules)
+            .zip(&capture_arm_rules)
         {
             ensure!(
                 ack.revision == 3
-                    && ack.rules.as_slice() == rules.as_slice()
+                    && ack.rules.len() == rules.len()
                     && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
                     && !ack.draining
                     && ack.release_pending.is_empty()
@@ -1641,23 +1715,77 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                 ack.held
             );
         }
+        for peer in &peers {
+            let status = fetch_v2_status(peer.client())?;
+            status
+                .validate()
+                .map_err(|error| eyre!("invalid armed-fence v2 status: {error}"))?;
+            ensure!(
+                status.height == expected_height
+                    && PACKET_LOSS_CARRIER_VIEWS.contains(&status.view)
+                    && status.last_committed_height < expected_height,
+                "{} crossed the bounded h{expected_height} capture fence during the all-peer cutover: active=h{}/v{}, committed={}",
+                peer.mnemonic(),
+                status.height,
+                status.view,
+                status.last_committed_height
+            );
+        }
 
         let chunk_releases = capture_armed
             .iter()
-            .map(|ack| {
+            .zip(&matched_receivers)
+            .map(|(ack, matched_receiver)| {
                 let mut sequences = ack
                     .held
                     .iter()
-                    .filter(|held| held.kind == ConsensusMessageControlKind::PayloadChunk)
+                    .filter(|held| {
+                        *matched_receiver
+                            && held.kind == ConsensusMessageControlKind::PayloadChunk
+                            && held.manifest_hash == Some(held_manifest_hash)
+                            && held
+                                .chunk_index
+                                .is_some_and(|index| PACKET_LOSS_CHUNK_INDICES.contains(&index))
+                    })
                     .map(|held| held.sequence)
                     .collect::<Vec<_>>();
                 sequences.sort_unstable();
                 sequences
             })
             .collect::<Vec<_>>();
+        for ((ack, releases), matched_receiver) in capture_armed
+            .iter()
+            .zip(&chunk_releases)
+            .zip(&matched_receivers)
+        {
+            ensure!(
+                !*matched_receiver
+                    || (!releases.is_empty()
+                        && PACKET_LOSS_CHUNK_INDICES.iter().all(|index| {
+                            ack.held.iter().any(|held| {
+                                releases.contains(&held.sequence)
+                                    && held.manifest_hash == Some(held_manifest_hash)
+                                    && held.chunk_index == Some(*index)
+                            })
+                        })),
+                "matched receiver release set did not cover all exact selected manifest chunks"
+            );
+        }
+        let capture_release_rules = peers
+            .iter()
+            .enumerate()
+            .map(|(receiver_index, _)| {
+                hold_exact_manifest_chunks_and_finality_traffic(
+                    receiver_index,
+                    &peer_ids,
+                    held_manifest_hash,
+                    held_proposal_view,
+                )
+            })
+            .collect::<Vec<_>>();
         let chunks_released = try_join_all((0..peers.len()).map(|peer_index| {
             let peer = &peers[peer_index];
-            let rules = &capture_rules[peer_index];
+            let rules = &capture_release_rules[peer_index];
             let releases = &chunk_releases[peer_index];
             async move {
                 peer.consensus_message_control()
@@ -1672,12 +1800,13 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             }
         }))
         .await?;
-        for ((((peer, ack), matched), rules), releases) in peers
+        for (((((peer, ack), matched), rules), releases), matched_receiver) in peers
             .iter()
             .zip(&chunks_released)
             .zip(&matched_sequences)
-            .zip(&capture_rules)
+            .zip(&capture_release_rules)
             .zip(&chunk_releases)
+            .zip(&matched_receivers)
         {
             ensure!(
                 ack.revision == 4
@@ -1688,18 +1817,20 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     && ack.in_flight.is_none()
                     && !ack.fatal
                     && ack.dropped == 0
-                    && ack.overflowed == 0
-                    && !ack
-                        .held
-                        .iter()
-                        .any(|held| held.kind == ConsensusMessageControlKind::PayloadChunk),
-                "{} did not release all pre-fence payload chunks under the finality capture rules",
+                    && ack.overflowed == 0,
+                "{} did not release the selected payload chunks under the finality capture rules",
                 peer.mnemonic()
             );
             ensure!(
-                matched
-                .iter()
-                    .all(|(sequence, _, _, _)| ack.delivered.contains(sequence))
+                (!*matched_receiver
+                    || matched
+                        .iter()
+                        .filter(|(_, manifest, index, proposal_view)| {
+                            *manifest == held_manifest_hash
+                                && PACKET_LOSS_CHUNK_INDICES.contains(index)
+                                && *proposal_view == held_proposal_view
+                        })
+                        .all(|(sequence, _, _, _)| ack.delivered.contains(sequence)))
                     && releases
                         .iter()
                         .all(|sequence| ack.delivered.contains(sequence)),

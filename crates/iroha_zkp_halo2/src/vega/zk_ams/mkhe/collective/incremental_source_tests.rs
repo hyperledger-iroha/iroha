@@ -766,6 +766,7 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
 #[test]
 fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_reference() {
     let source = include_str!("incremental_source.rs");
+    assert!(!source.contains(concat!("mod incremental_source_", "phase23;")));
     assert!(source.contains("Source-authenticated, limb-streamed collective encryption"));
     assert!(source.contains("38 independently addressed `c0` limbs"));
     assert!(source.contains("38 independently addressed `c1` limbs"));

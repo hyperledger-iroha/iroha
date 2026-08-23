@@ -3977,18 +3977,16 @@ pub(crate) mod valid {
     #[cfg(test)]
     use super::event::map_sig_err_to_reason;
     use super::{event::map_block_err_to_reason, *};
-    use crate::{
-        smartcontracts::ivm::cache::IvmCache,
-        state::{StateBlock, storage_transactions::TransactionsReadOnly},
-        sumeragi::network_topology::Role,
-    };
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    use crate::smartcontracts::ivm::cache::IvmCache;
+    use crate::state::{StateBlock, storage_transactions::TransactionsReadOnly};
+    use crate::sumeragi::network_topology::Role;
+    #[cfg(test)]
     use crate::{
         soracloud_runtime::{
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{StateReadOnly, StateReadOnlyWithTransactions, StateTransaction},
+        state::{StateReadOnly, StateTransaction},
     };
     use commit::CommittedBlock;
     #[cfg(test)]
@@ -6970,7 +6968,7 @@ pub(crate) mod valid {
             .unbox_state_block()
         }
         /// Test-only replay validation entrypoint for exact recovery fixtures.
-        #[cfg(any(test, feature = "iroha-core-tests"))]
+        #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_keep_voting_block_for_replay<'state>(
             block: SignedBlock,
@@ -10730,7 +10728,7 @@ pub(crate) mod valid {
             let prepared_txs = Self::prepare_external_transactions(block);
             let committed_heights = Self::committed_heights_for_prepared_transactions(
                 &prepared_txs,
-                state.transactions(),
+                crate::state::StateReadOnlyWithTransactions::transactions(state),
             );
             let cache_cap = static_data.pipeline_cfg.stateless_cache_cap;
             let cache_enabled = cache_cap > 0 && !block.header().is_genesis();
@@ -17060,7 +17058,7 @@ pub(crate) mod valid {
                 header.set_prev_block_hash(prev_hash);
                 header.creation_time_ms = creation_time_ms;
             });
-            let committed = valid.commit_unchecked().unpack(|_| {});
+            let committed = commit_result_bearing_synthetic_parent(valid, state, leader_private);
             {
                 let mut state_block = state.block(committed.as_ref().header());
                 let _ =
@@ -23585,214 +23583,7 @@ pub(crate) mod valid {
                 Err(InvalidGenesisError::InvalidTransactionSignature)
             );
         }
-        #[cfg(feature = "bls")]
-        #[test]
-        fn block_authenticated_genesis_rejects_invalid_per_transaction_bls_proof() {
-            use iroha_data_model::prelude::*;
-            let chain_id = ChainId::from("block-authenticated-bls-genesis");
-            let genesis_keypair =
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let unrelated_keypair =
-                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
-            let pop = iroha_crypto::bls_normal_pop_prove(genesis_keypair.private_key())
-                .expect("valid BLS proof of possession");
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                "bls_pop".parse().expect("valid BLS PoP metadata key"),
-                iroha_primitives::json::Json::new(hex::encode_upper(pop)),
-            );
-            let mut transaction = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .with_metadata(metadata)
-            .sign(genesis_keypair.private_key());
-            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
-                SignatureOf::try_new(unrelated_keypair.private_key(), transaction.payload())
-                    .expect("unrelated BLS key can sign the fixture payload"),
-            ));
-            transaction
-                .verify_signature()
-                .expect_err("fixture transaction proof must not authorize the genesis account");
-            let block =
-                SignedBlock::genesis(vec![transaction], genesis_keypair.private_key(), None, None);
-            let world = World::with(
-                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
-                [Account::new(genesis_account.clone()).build(&genesis_account)],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let state = State::new_with_chain_for_testing(
-                world,
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            );
-            install_test_lane_manifests_for_keypairs(
-                &state,
-                std::slice::from_ref(&genesis_keypair),
-            );
-            let mut crypto = iroha_config::parameters::actual::Crypto::default();
-            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
-                crypto.allowed_signing.push(Algorithm::BlsNormal);
-            }
-            state.set_crypto(crypto);
-            let block = with_current_state_confidential_features(
-                block,
-                &state,
-                &[(0, genesis_keypair.private_key())],
-            );
-            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
-            let mut voting_block = None;
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
-                block,
-                &topology,
-                &genesis_account,
-                &TimeSource::new_system(),
-                &state,
-                &mut voting_block,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            )
-            .unpack(|_| {});
-            let Err(error) = result else {
-                panic!(
-                    "a valid genesis block signature must not replace each transaction's authorization proof"
-                );
-            };
-            assert!(matches!(
-                *error.1,
-                BlockValidationError::InvalidGenesis(
-                    InvalidGenesisError::InvalidTransactionSignature
-                )
-            ));
-        }
-        #[test]
-        fn check_genesis_block_rejects_multisig_authority_without_unwinding() {
-            use iroha_data_model::{
-                account::{MultisigMember, MultisigPolicy},
-                prelude::*,
-            };
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let transaction = TransactionBuilder::new_genesis(
-                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let block = SignedBlock::genesis(
-                vec![transaction],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                None,
-            );
-            let member =
-                MultisigMember::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(), 1)
-                    .expect("valid member");
-            let multisig_genesis = AccountId::new_multisig(
-                MultisigPolicy::new(1, vec![member]).expect("valid policy"),
-            );
-            assert_eq!(
-                check_genesis_block(&block, &multisig_genesis),
-                Err(InvalidGenesisError::GenesisAuthorityNotSingleKey)
-            );
-        }
-        #[test]
-        fn genesis_block_with_da_commitments_uses_header_tree_commitment() {
-            use iroha_data_model::prelude::*;
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let tx = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let record = DaCommitmentRecord::new(
-                LaneId::new(0),
-                1,
-                1,
-                BlobDigest::new([0xAA; 32]),
-                ManifestDigest::new([0xBB; 32]),
-                DaProofScheme::MerkleSha256,
-                Hash::prehashed([0xCC; 32]),
-                None,
-                RetentionClass::default(),
-                StorageTicketId::new([0xDD; 32]),
-                checked_da_ack_signature(0xEE),
-            );
-            let bundle = DaCommitmentBundle::new(vec![record]);
-            let tree_commitment = bundle
-                .merkle_commitment()
-                .expect("non-empty bundle must have a tree commitment");
-            let block = SignedBlock::genesis(
-                vec![tx],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                Some(bundle),
-            );
-            assert_eq!(block.header().da_commitments_hash(), Some(tree_commitment));
-            assert!(authenticate_genesis_block_intents(&block, &genesis_account).is_ok());
-        }
-        #[test]
-        fn genesis_asset_definition_in_genesis_domain_is_authorized() {
-            use iroha_data_model::prelude::*;
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                DomainId::try_new("genesis", "universal").expect("valid domain id"),
-                "xor".parse().expect("valid asset name"),
-            );
-            let asset_name = "xor".to_owned();
-            let tx = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Register::asset_definition(AssetDefinition::numeric(
-                asset_definition_id,
-                asset_name,
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            ))])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let block = SignedBlock::genesis(
-                vec![tx],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                None,
-            );
-            assert!(authenticate_genesis_block_intents(&block, &genesis_account).is_ok());
-        }
-        #[test]
-        fn signed_genesis_validation_rejects_a_non_genesis_header() {
-            let kura = Kura::blank_kura_for_testing();
-            let state = State::new_for_testing(World::new(), kura, LiveQueryStore::start_test());
-            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
-            let block: SignedBlock = ValidBlock::new_dummy(leader.private_key()).into();
-            let mut voting_block = None;
-
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
-                block,
-                &topology,
-                &ALICE_ID,
-                &TimeSource::new_system(),
-                &state,
-                &mut voting_block,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-            )
-            .unpack(|_| {});
-
-            assert!(matches!(
-                result,
-                Err(error)
-                    if matches!(
-                        *error.1,
-                        BlockValidationError::InvalidGenesis(InvalidGenesisError::InvalidHeader)
-                    )
-            ));
-        }
+        include!("block/genesis_validation_regression_tests.rs");
         #[test]
         fn signed_genesis_validation_is_storage_side_effect_free() {
             use crate::{
@@ -28393,144 +28184,7 @@ mod tests {
             "an autoscale lane must never fall back to an absent live-key record"
         );
     }
-    #[test]
-    fn native_amx_receipt_validation_accepts_signed_participant_qcs() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (tx, tx_hash) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let routing_plan = crate::queue::RoutingPlan::native_amx(
-            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-            vec![
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-            ],
-        );
-        let (world, keypairs) = native_amx_test_world_with_keys();
-        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
-        source_id.copy_from_slice(tx_hash.as_ref());
-        let receipt = signed_native_amx_receipt(
-            source_id,
-            tx.hash_as_entrypoint(),
-            &routing_plan,
-            42,
-            &keypairs,
-        );
-        let coordinator_proposal = native_amx_test_coordinator_proposal(
-            routing_plan.coordinator_route(),
-            tx.hash_as_entrypoint(),
-            42,
-            &keypairs,
-        );
-        let authority = native_amx_test_authority(world, &keypairs);
-        validate_native_amx_receipt_against_plan(
-            &receipt,
-            &coordinator_proposal,
-            tx.hash_as_entrypoint(),
-            &routing_plan,
-            source_id,
-            native_amx_test_network_id(),
-            &dataspace_catalog,
-            &authority,
-            Some(expected_native_amx_test_context(42)),
-        )
-        .expect("signed AMX QCs should validate");
-        assert_eq!(receipt.version, 2);
-        assert_eq!(receipt.source_id.as_slice(), tx_hash.as_ref());
-        assert_eq!(receipt.lane_id, LaneId::new(1));
-        assert_eq!(receipt.dataspace_id, paynet);
-        assert_eq!(receipt.plan_digest, routing_plan.digest());
-        assert_eq!(receipt.authority_context_height, 42);
-        assert_eq!(receipt.lane_block_height, 7);
-        assert_eq!(
-            receipt
-                .legs
-                .iter()
-                .map(|leg| {
-                    (
-                        leg.dataspace_id,
-                        leg.prepare_qc.body.phase,
-                        leg.commit_qc.body.phase,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                (paynet, NativeAmxPhase::Prepare, NativeAmxPhase::Commit),
-                (cbuae, NativeAmxPhase::Prepare, NativeAmxPhase::Commit)
-            ]
-        );
-    }
-    #[test]
-    fn native_amx_receipt_validation_binds_sealed_reveal_source_to_outer_entrypoint() {
-        let paynet = DataSpaceId::new(7);
-        let cbuae = DataSpaceId::new(8);
-        let (signed, _) =
-            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
-        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
-            Hash::new(b"native-amx-sealed-reveal-commitment"),
-            signed.clone(),
-            [0xA5; 32],
-        ));
-        let entrypoint_hash = reveal.hash();
-        let source_id = native_amx_source_id_from_entrypoint_hash(entrypoint_hash);
-        let inner_source_id =
-            native_amx_source_id_from_entrypoint_hash(signed.hash_as_entrypoint());
-        assert_ne!(
-            source_id, inner_source_id,
-            "a sealed reveal must retain its outer entrypoint identity"
-        );
-
-        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        let routing_plan = crate::queue::RoutingPlan::native_amx(
-            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-            vec![
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-                crate::queue::RouteLeg::new(
-                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
-                    crate::queue::RouteLegRole::Participant,
-                ),
-            ],
-        );
-        let (world, keypairs) = native_amx_test_world_with_keys();
-        let receipt =
-            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
-        let coordinator_proposal = native_amx_test_coordinator_proposal(
-            routing_plan.coordinator_route(),
-            entrypoint_hash,
-            42,
-            &keypairs,
-        );
-        let authority = native_amx_test_authority(world, &keypairs);
-        let validate = |expected_source_id| {
-            validate_native_amx_receipt_against_plan(
-                &receipt,
-                &coordinator_proposal,
-                entrypoint_hash,
-                &routing_plan,
-                expected_source_id,
-                native_amx_test_network_id(),
-                &dataspace_catalog,
-                &authority,
-                Some(expected_native_amx_test_context(42)),
-            )
-        };
-        validate(source_id).expect("outer sealed-reveal source identity must validate");
-        assert_eq!(
-            validate(inner_source_id),
-            Err("native AMX receipt source entrypoint mismatch".to_owned()),
-            "the underlying signed-transaction identity must not replace the sealed entrypoint"
-        );
-    }
+    include!("block/native_amx_receipt_regression_tests.rs");
     #[test]
     fn historical_native_amx_validation_checks_later_forged_leg_after_stale_predecessor() {
         let paynet = DataSpaceId::new(7);

@@ -1,0 +1,8 @@
+
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.app"
+                alias = "app::universal"
+                kotodama_project = "kotodama.project.json"
+                artifact = "artifacts/app.to"

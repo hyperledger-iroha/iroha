@@ -1,0 +1,12 @@
+seiyaku StateMapRuntime {
+                state StateMap<Name, int> flags;
+                fn current() -> int {
+                    return match flags.get(Name::parse("paused")) {
+                        Option::some(value) => value,
+                        Option::none => 0,
+                    };
+                }
+                view fn paused() -> int { return current(); }
+                #[test]
+                fn absent_flag_is_zero() { test::assert(current() == 0); }
+            }

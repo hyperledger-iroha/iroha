@@ -666,7 +666,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
         "fn blocks_runtime(",
-        "Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled",
+        "Self::AwaitingApplyCompletion\n                | Self::ApplyTerminalSettled",
         "Self::AwaitingApplyCompletion",
         "typed Apply runtime barrier",
     ),
@@ -690,6 +690,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "matches!(self, Self::ApplyTerminalSettled)",
         "false",
         "durable post-Apply rollover projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+        "fn permits_decided_lane_recovery_ingress(",
+        "matches!(self, Self::ApplyTerminalSettled)",
+        "false",
+        "terminal-only decided-lane recovery ingress authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
@@ -750,16 +757,30 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "fn run_lifecycle_active_height(",
-        "let apply_completion_barrier = producer_claim.blocks_runtime();",
-        "let apply_completion_barrier = false;",
-        "pre-drain typed Apply auxiliary-runtime barrier",
+        "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
+        "let lane_only_completion_barrier = false;",
+        "pre-drain lane-only auxiliary-runtime barrier",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "fn run_lifecycle_active_height(",
-        "let discovery_was_outstanding = if apply_completion_barrier {",
+        "if producer_claim.permits_decided_lane_recovery_ingress() {",
+        "if false {",
+        "pre-drain lane-only auxiliary-runtime barrier",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "drain_decided_lane_recovery_ingress(",
+        "drain_decided_lane_recovery_ingress_removed(",
+        "pre-drain lane-only auxiliary-runtime barrier",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "let discovery_was_outstanding = if lane_only_completion_barrier {",
         "let discovery_was_outstanding = if false {",
-        "pre-drain typed Apply auxiliary-runtime barrier",
+        "pre-drain lane-only auxiliary-runtime barrier",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
@@ -2730,7 +2751,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 361
+) == 364
 
 
 @pytest.mark.parametrize(

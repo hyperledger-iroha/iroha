@@ -1,3 +1,18 @@
+macro_rules! zero_prehash_field_rejection_test {
+    ($name:ident, $zero:ident, $factory:expr; $($field:ident = $value:expr => ($reported:literal, $message:literal);)+) => {
+        #[test]
+        fn $name() {
+            let $zero = zero_prehash_statement_hash();
+            $(
+                let mut subject = $factory;
+                subject.$field = $value;
+                let error = subject.validate().expect_err($message);
+                assert_zero_prehash_digest_error(&error, $reported);
+            )+
+        }
+    };
+}
+
 #[test]
 fn container_validate_rejects_config_export_for_nonrequired_config() {
     let mut container = sample_container();
@@ -8,13 +23,7 @@ fn container_validate_rejects_config_export_for_nonrequired_config() {
     let error = container
         .validate()
         .expect_err("config export must reference a required config");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "config_exports",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "config_exports");
 }
 #[test]
 fn container_validate_rejects_duplicate_config_export_env_targets() {
@@ -36,13 +45,7 @@ fn container_validate_rejects_duplicate_config_export_env_targets() {
     let error = container
         .validate()
         .expect_err("duplicate config export env targets must fail");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "config_exports",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "config_exports");
 }
 #[test]
 fn container_validate_accepts_required_config_exports() {
@@ -133,13 +136,7 @@ fn service_validate_rejects_uncertified_query_handler() {
     let error = manifest
         .validate()
         .expect_err("query handlers must stay certified");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "certified_response",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "certified_response");
 }
 #[test]
 fn service_validate_rejects_private_update_without_mailbox() {
@@ -148,13 +145,7 @@ fn service_validate_rejects_private_update_without_mailbox() {
     let error = manifest
         .validate()
         .expect_err("private_update handlers require a mailbox");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "mailbox",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "mailbox");
 }
 #[test]
 fn service_validate_accepts_http_service_with_lease_volumes() {
@@ -223,13 +214,7 @@ fn service_validate_rejects_http_service_with_underfunded_prepaid_balance() {
     let error = manifest
         .validate()
         .expect_err("hosted http services must reject obviously underfunded prepaid balances");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "economics.prepaid_runtime_balance",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "economics.prepaid_runtime_balance");
 }
 #[test]
 fn service_validate_rejects_http_service_with_deterministic_handlers() {
@@ -245,13 +230,7 @@ fn service_validate_rejects_http_service_with_deterministic_handlers() {
     let error = manifest
         .validate()
         .expect_err("http services must not declare deterministic handlers");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "handlers",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "handlers");
 }
 #[test]
 fn deployment_bundle_validate_rejects_container_hash_mismatch() {
@@ -266,13 +245,7 @@ fn deployment_bundle_validate_rejects_container_hash_mismatch() {
     let error = bundle
         .validate_for_admission()
         .expect_err("mismatched container hash must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "service.container.manifest_hash",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "service.container.manifest_hash");
 }
 #[test]
 fn deployment_bundle_validate_rejects_mutable_binding_without_write_capability() {
@@ -289,13 +262,7 @@ fn deployment_bundle_validate_rejects_mutable_binding_without_write_capability()
     let error = bundle
         .validate_for_admission()
         .expect_err("mutable bindings require state-write capability");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "container.capabilities.allow_state_writes",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "container.capabilities.allow_state_writes");
 }
 #[test]
 fn deployment_bundle_validate_accepts_consistent_bundle() {
@@ -350,13 +317,7 @@ fn deployment_bundle_validate_rejects_http_service_with_ivm_runtime() {
     let error = bundle
         .validate_for_admission()
         .expect_err("http services must not use IVM runtime");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "container.runtime",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "container.runtime");
 }
 #[test]
 fn deployment_bundle_validate_accepts_inrou_http_service() {
@@ -633,13 +594,7 @@ fn artifact_distribution_policy_rejects_empty_geography_target() {
     let error = policy
         .validate()
         .expect_err("empty geography target must fail");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "target",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "target");
 }
 #[test]
 fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
@@ -651,13 +606,7 @@ fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
     let error = manifest
         .validate()
         .expect_err("both required guest ISA profiles must be present");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "guest_images",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "guest_images");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -951,13 +900,7 @@ fn deployment_bundle_validate_rejects_http_service_without_shared_lease_volume()
     let error = bundle
         .validate_for_admission()
         .expect_err("replicated Inrou http services must declare shared storage");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "service.lease_volumes",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "service.lease_volumes");
 }
 #[test]
 fn deployment_bundle_validate_accepts_http_service_with_confidential_shared_lease() {
@@ -1015,13 +958,7 @@ fn agent_apartment_validate_rejects_allowlist_entry_without_ports() {
     let error = manifest
         .validate()
         .expect_err("allowlist entries without ports must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "network_egress",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "network_egress");
 }
 #[test]
 fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
@@ -1048,13 +985,7 @@ fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
     let error = bundle
         .validate_for_admission()
         .expect_err("unknown hosted-service quota classes must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "service.economics.quota_class",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "service.economics.quota_class");
 }
 #[test]
 fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_cap() {
@@ -1081,13 +1012,7 @@ fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_ca
     let error = bundle
         .validate_for_admission()
         .expect_err("hosted HTTP services must stay within the selected quota class");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "container.resources.cpu_millis",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "container.resources.cpu_millis");
 }
 #[test]
 fn deployment_bundle_validate_rejects_missing_required_service_config() {
@@ -1104,13 +1029,7 @@ fn deployment_bundle_validate_rejects_missing_required_service_config() {
     let error = bundle
         .validate_required_service_materials(&BTreeMap::new(), &BTreeMap::new())
         .expect_err("missing required config must fail");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "container.required_config_names",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "container.required_config_names");
 }
 #[test]
 fn deployment_bundle_validate_accepts_present_required_service_materials() {
@@ -1181,29 +1100,16 @@ fn service_runtime_state_validate_rejects_load_out_of_range() {
     let error = runtime_state
         .validate()
         .expect_err("load factor above 10_000 bps must fail");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "load_factor_bps",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "load_factor_bps");
 }
-#[test]
-fn service_runtime_state_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut runtime_state = sample_service_runtime_state();
-    runtime_state.materialized_bundle_hash = zero_digest;
-    let error = runtime_state
-        .validate()
-        .expect_err("materialized bundle placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
-    let mut runtime_state = sample_service_runtime_state();
-    runtime_state.last_receipt_id = Some(zero_digest);
-    let error = runtime_state
-        .validate()
-        .expect_err("last receipt placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "last_receipt_id");
+zero_prehash_field_rejection_test! {
+    service_runtime_state_validate_rejects_zero_prehash_digest_sentinels,
+    zero_digest,
+    sample_service_runtime_state();
+    materialized_bundle_hash = zero_digest =>
+        ("materialized_bundle_hash", "materialized bundle placeholder hash must fail admission");
+    last_receipt_id = Some(zero_digest) =>
+        ("last_receipt_id", "last receipt placeholder hash must fail admission");
 }
 #[test]
 fn inrou_host_capability_record_validate_accepts_hosting_advert() {
@@ -1218,13 +1124,7 @@ fn inrou_host_capability_record_validate_rejects_proxy_only_nonzero_capacity() {
     let error = capability
         .validate()
         .expect_err("proxy-only adverts must not expose hosting capacity");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "proxy_only",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "proxy_only");
 }
 #[test]
 fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
@@ -1233,13 +1133,7 @@ fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
     let error = placement
         .validate()
         .expect_err("duplicate replica slots must fail validation");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "placements",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "placements");
 }
 #[test]
 fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
@@ -1256,21 +1150,14 @@ fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
         }
     ));
 }
-#[test]
-fn inrou_replica_runtime_state_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut runtime_state = sample_inrou_replica_runtime_state();
-    runtime_state.materialized_bundle_hash = zero_digest;
-    let error = runtime_state
-        .validate()
-        .expect_err("materialized bundle placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "materialized_bundle_hash");
-    let mut runtime_state = sample_inrou_replica_runtime_state();
-    runtime_state.last_receipt_id = Some(zero_digest);
-    let error = runtime_state
-        .validate()
-        .expect_err("last receipt placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "last_receipt_id");
+zero_prehash_field_rejection_test! {
+    inrou_replica_runtime_state_validate_rejects_zero_prehash_digest_sentinels,
+    zero_digest,
+    sample_inrou_replica_runtime_state();
+    materialized_bundle_hash = zero_digest =>
+        ("materialized_bundle_hash", "materialized bundle placeholder hash must fail admission");
+    last_receipt_id = Some(zero_digest) =>
+        ("last_receipt_id", "last receipt placeholder hash must fail admission");
 }
 #[test]
 fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
@@ -1291,13 +1178,7 @@ fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
     let error = rollout
         .validate()
         .expect_err("promoted rollouts must serve 100 percent of traffic");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "traffic_percent",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "traffic_percent");
 }
 #[test]
 fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
@@ -1336,29 +1217,16 @@ fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
     let error = deployment
         .validate()
         .expect_err("active rollout must remain in canary state");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "active_rollout.stage",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "active_rollout.stage");
 }
-#[test]
-fn service_deployment_state_validate_rejects_zero_prehash_manifest_hash_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut deployment = sample_service_deployment_state();
-    deployment.current_service_manifest_hash = zero_digest;
-    let error = deployment
-        .validate()
-        .expect_err("current service manifest placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "current_service_manifest_hash");
-    let mut deployment = sample_service_deployment_state();
-    deployment.current_container_manifest_hash = zero_digest;
-    let error = deployment
-        .validate()
-        .expect_err("current container manifest placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "current_container_manifest_hash");
+zero_prehash_field_rejection_test! {
+    service_deployment_state_validate_rejects_zero_prehash_manifest_hash_sentinels,
+    zero_digest,
+    sample_service_deployment_state();
+    current_service_manifest_hash = zero_digest =>
+        ("current_service_manifest_hash", "current service manifest placeholder hash must fail admission");
+    current_container_manifest_hash = zero_digest =>
+        ("current_container_manifest_hash", "current container manifest placeholder hash must fail admission");
 }
 #[test]
 fn service_audit_event_validate_rejects_zero_sequence() {
@@ -1388,47 +1256,22 @@ fn service_audit_event_validate_rejects_zero_sequence() {
     let error = event
         .validate()
         .expect_err("audit sequences must be greater than zero");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "sequence",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "sequence");
 }
-#[test]
-fn service_audit_event_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut event = sample_service_audit_event();
-    event.service_manifest_hash = zero_digest;
-    let error = event
-        .validate()
-        .expect_err("service manifest placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "service_manifest_hash");
-    let mut event = sample_service_audit_event();
-    event.container_manifest_hash = zero_digest;
-    let error = event
-        .validate()
-        .expect_err("container manifest placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "container_manifest_hash");
-    let mut event = sample_service_audit_event();
-    event.governance_tx_hash = Some(zero_digest);
-    let error = event
-        .validate()
-        .expect_err("governance transaction placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "governance_tx_hash");
-    let mut event = sample_service_audit_event();
-    event.policy_snapshot_hash = Some(zero_digest);
-    let error = event
-        .validate()
-        .expect_err("policy snapshot placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "policy_snapshot_hash");
-    let mut event = sample_service_audit_event();
-    event.consent_evidence_hash = Some(zero_digest);
-    let error = event
-        .validate()
-        .expect_err("consent evidence placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "consent_evidence_hash");
+zero_prehash_field_rejection_test! {
+    service_audit_event_validate_rejects_zero_prehash_digest_sentinels,
+    zero_digest,
+    sample_service_audit_event();
+    service_manifest_hash = zero_digest =>
+        ("service_manifest_hash", "service manifest placeholder hash must fail admission");
+    container_manifest_hash = zero_digest =>
+        ("container_manifest_hash", "container manifest placeholder hash must fail admission");
+    governance_tx_hash = Some(zero_digest) =>
+        ("governance_tx_hash", "governance transaction placeholder hash must fail admission");
+    policy_snapshot_hash = Some(zero_digest) =>
+        ("policy_snapshot_hash", "policy snapshot placeholder hash must fail admission");
+    consent_evidence_hash = Some(zero_digest) =>
+        ("consent_evidence_hash", "consent evidence placeholder hash must fail admission");
 }
 #[test]
 fn service_state_entry_validate_allows_plaintext_rows() {
@@ -1446,13 +1289,7 @@ fn service_state_entry_validate_rejects_fhe_residual_bound_on_non_fhe_rows() {
     let error = entry
         .validate()
         .expect_err("BFV residual bounds must only annotate FHE rows");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_residual_multiple_bound",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "fhe_residual_multiple_bound");
 }
 #[test]
 fn service_state_entry_validate_rejects_fhe_public_key_digest_on_non_fhe_rows() {
@@ -1462,13 +1299,7 @@ fn service_state_entry_validate_rejects_fhe_public_key_digest_on_non_fhe_rows() 
     let error = entry
         .validate()
         .expect_err("BFV public-key digests must only annotate FHE rows");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_public_key_digest",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "fhe_public_key_digest");
 }
 #[test]
 fn service_state_entry_validate_rejects_zero_fhe_public_key_digest() {
@@ -1496,25 +1327,13 @@ fn service_state_entry_validate_rejects_fhe_bound_mode_without_fhe_bound() {
     let error = non_fhe_entry
         .validate()
         .expect_err("BFV bound modes must only annotate FHE rows");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_bound_mode",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "fhe_bound_mode");
     let mut missing_bound_entry = sample_state_entry();
     missing_bound_entry.fhe_bound_mode = Some(BfvCiphertextBoundModeV1::ExactResidualMultiple);
     let error = missing_bound_entry
         .validate()
         .expect_err("BFV bound mode must require a bound value");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_bound_mode",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "fhe_bound_mode");
 }
 #[test]
 fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
@@ -1525,13 +1344,7 @@ fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
     let error = missing_mode_entry
         .validate()
         .expect_err("FHE bounds must explicitly advertise their semantics");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_bound_mode",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "fhe_bound_mode");
     let mut exact_entry = sample_state_entry();
     exact_entry.fhe_public_key_digest = Some(sample_hash(151));
     exact_entry.fhe_residual_multiple_bound = Some(u128::MAX);
@@ -1539,17 +1352,11 @@ fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
     let error = exact_entry
         .validate()
         .expect_err("over-capacity exact FHE bound must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_residual_multiple_bound",
-            ..
-        }
-    ));
     assert!(
         error.to_string().contains("exact residual"),
         "unexpected error: {error}"
     );
+    assert_soracloud_invalid_field(error, "fhe_residual_multiple_bound");
     let mut bounded_entry = sample_state_entry();
     bounded_entry.fhe_public_key_digest = Some(sample_hash(152));
     bounded_entry.fhe_residual_multiple_bound = Some(u128::MAX);
@@ -1557,17 +1364,11 @@ fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
     let error = bounded_entry
         .validate()
         .expect_err("bounded-noise FHE bound above capacity must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "fhe_residual_multiple_bound",
-            ..
-        }
-    ));
     assert!(
         error.to_string().contains("bounded-noise"),
         "unexpected error: {error}"
     );
+    assert_soracloud_invalid_field(error, "fhe_residual_multiple_bound");
 }
 #[test]
 fn decryption_request_record_policy_snapshot_hash_is_deterministic() {
@@ -1606,13 +1407,7 @@ fn service_audit_event_validate_requires_break_glass_reason_when_enabled() {
     let error = event
         .validate()
         .expect_err("break_glass events require a reason");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "break_glass_reason",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "break_glass_reason");
 }
 #[test]
 fn service_mailbox_message_validate_rejects_expired_message() {
@@ -1632,13 +1427,7 @@ fn service_mailbox_message_validate_rejects_expired_message() {
     let error = message
         .validate()
         .expect_err("message expiry must be after availability");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "expires_at_sequence",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "expires_at_sequence");
 }
 #[test]
 fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
@@ -1658,29 +1447,16 @@ fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
     let error = message
         .validate()
         .expect_err("message commitment must bind the authoritative payload bytes");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "payload_commitment",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "payload_commitment");
 }
-#[test]
-fn service_mailbox_message_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut message = sample_service_mailbox_message();
-    message.message_id = zero_digest;
-    let error = message
-        .validate()
-        .expect_err("message placeholder id must fail admission");
-    assert_zero_prehash_digest_error(&error, "message_id");
-    let mut message = sample_service_mailbox_message();
-    message.payload_commitment = zero_digest;
-    let error = message
-        .validate()
-        .expect_err("payload placeholder commitment must fail admission");
-    assert_zero_prehash_digest_error(&error, "payload_commitment");
+zero_prehash_field_rejection_test! {
+    service_mailbox_message_validate_rejects_zero_prehash_digest_sentinels,
+    zero_digest,
+    sample_service_mailbox_message();
+    message_id = zero_digest =>
+        ("message_id", "message placeholder id must fail admission");
+    payload_commitment = zero_digest =>
+        ("payload_commitment", "payload placeholder commitment must fail admission");
 }
 #[test]
 fn runtime_receipt_validate_rejects_uncertified_query_receipt() {
@@ -1705,13 +1481,7 @@ fn runtime_receipt_validate_rejects_uncertified_query_receipt() {
     let error = receipt
         .validate()
         .expect_err("query receipts must remain certified");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "certified_by",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "certified_by");
 }
 #[test]
 fn runtime_receipt_validate_rejects_partial_host_attribution() {
@@ -1736,59 +1506,25 @@ fn runtime_receipt_validate_rejects_partial_host_attribution() {
     let error = receipt
         .validate()
         .expect_err("partial host-attribution fields must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "placement_id",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "placement_id");
 }
-#[test]
-fn runtime_receipt_validate_rejects_zero_prehash_digest_sentinels() {
-    let zero_digest = zero_prehash_statement_hash();
-    let mut receipt = sample_runtime_receipt();
-    receipt.receipt_id = zero_digest;
-    let error = receipt
-        .validate()
-        .expect_err("receipt placeholder id must fail admission");
-    assert_zero_prehash_digest_error(&error, "receipt_id");
-    let mut receipt = sample_runtime_receipt();
-    receipt.request_commitment = zero_digest;
-    let error = receipt
-        .validate()
-        .expect_err("request placeholder commitment must fail admission");
-    assert_zero_prehash_digest_error(&error, "request_commitment");
-    let mut receipt = sample_runtime_receipt();
-    receipt.result_commitment = zero_digest;
-    let error = receipt
-        .validate()
-        .expect_err("result placeholder commitment must fail admission");
-    assert_zero_prehash_digest_error(&error, "result_commitment");
-    let mut receipt = sample_runtime_receipt();
-    receipt.placement_id = Some(zero_digest);
-    let error = receipt
-        .validate()
-        .expect_err("placement placeholder id must fail admission");
-    assert_zero_prehash_digest_error(&error, "placement_id");
-    let mut receipt = sample_runtime_receipt();
-    receipt.mailbox_message_id = Some(zero_digest);
-    let error = receipt
-        .validate()
-        .expect_err("mailbox message placeholder id must fail admission");
-    assert_zero_prehash_digest_error(&error, "mailbox_message_id");
-    let mut receipt = sample_runtime_receipt();
-    receipt.journal_artifact_hash = Some(zero_digest);
-    let error = receipt
-        .validate()
-        .expect_err("journal artifact placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "journal_artifact_hash");
-    let mut receipt = sample_runtime_receipt();
-    receipt.checkpoint_artifact_hash = Some(zero_digest);
-    let error = receipt
-        .validate()
-        .expect_err("checkpoint artifact placeholder hash must fail admission");
-    assert_zero_prehash_digest_error(&error, "checkpoint_artifact_hash");
+zero_prehash_field_rejection_test! {
+    runtime_receipt_validate_rejects_zero_prehash_digest_sentinels,
+    zero_digest,
+    sample_runtime_receipt();
+    receipt_id = zero_digest => ("receipt_id", "receipt placeholder id must fail admission");
+    request_commitment = zero_digest =>
+        ("request_commitment", "request placeholder commitment must fail admission");
+    result_commitment = zero_digest =>
+        ("result_commitment", "result placeholder commitment must fail admission");
+    placement_id = Some(zero_digest) =>
+        ("placement_id", "placement placeholder id must fail admission");
+    mailbox_message_id = Some(zero_digest) =>
+        ("mailbox_message_id", "mailbox message placeholder id must fail admission");
+    journal_artifact_hash = Some(zero_digest) =>
+        ("journal_artifact_hash", "journal artifact placeholder hash must fail admission");
+    checkpoint_artifact_hash = Some(zero_digest) =>
+        ("checkpoint_artifact_hash", "checkpoint artifact placeholder hash must fail admission");
 }
 #[test]
 fn agent_apartment_manifest_validate_rejects_duplicate_tool_capabilities() {
@@ -1814,13 +1550,7 @@ fn agent_apartment_manifest_validate_rejects_excessive_per_tx_limit() {
     let error = manifest
         .validate()
         .expect_err("per-tx spend limit above daily limit must fail");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "spend_limits.max_per_tx",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "spend_limits.max_per_tx");
 }
 #[test]
 fn agent_apartment_manifest_validate_rejects_zero_prehash_container_ref_sentinel() {
@@ -1862,13 +1592,7 @@ fn agent_apartment_record_validation_rejects_manifest_hash_mismatch() {
     let error = record
         .validate()
         .expect_err("manifest hash must match embedded manifest");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "manifest_hash",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "manifest_hash");
 }
 #[test]
 fn agent_apartment_record_validation_rejects_mailbox_payload_hash_mismatch() {
@@ -1877,13 +1601,7 @@ fn agent_apartment_record_validation_rejects_mailbox_payload_hash_mismatch() {
     let error = record
         .validate()
         .expect_err("mailbox payload hash must match payload bytes");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "mailbox_queue.payload_hash",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "mailbox_queue.payload_hash");
 }
 #[test]
 fn agent_apartment_record_validation_rejects_zero_prehash_digest_sentinels() {
@@ -1924,13 +1642,7 @@ fn agent_apartment_record_validation_rejects_invalid_workflow_input_json() {
     let error = record
         .validate()
         .expect_err("invalid workflow_input_json must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "autonomy_run_history",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "autonomy_run_history");
 }
 #[test]
 fn agent_apartment_audit_event_validation_rejects_empty_reason() {
@@ -1939,13 +1651,7 @@ fn agent_apartment_audit_event_validation_rejects_empty_reason() {
     let error = event
         .validate()
         .expect_err("empty optional reason must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "reason",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "reason");
 }
 #[test]
 fn agent_apartment_audit_event_validation_rejects_zero_prehash_digest_sentinels() {
@@ -2006,13 +1712,7 @@ fn agent_apartment_audit_event_validation_requires_execution_fields() {
     let error = event
         .validate()
         .expect_err("execution audit events must carry a result commitment");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "result_commitment",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "result_commitment");
 }
 #[test]
 fn fhe_param_set_validate_rejects_unregistered_backend() {
@@ -2021,13 +1721,7 @@ fn fhe_param_set_validate_rejects_unregistered_backend() {
     let error = param_set
         .validate()
         .expect_err("first-release parameter-set admission must reject unregistered backends");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "backend",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "backend");
 }
 #[test]
 fn fhe_param_set_validate_rejects_unsupported_scheme() {
@@ -2036,13 +1730,7 @@ fn fhe_param_set_validate_rejects_unsupported_scheme() {
     let error = param_set
         .validate()
         .expect_err("first-release parameter-set admission must reject non-BFV schemes");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "scheme",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "scheme");
 }
 #[test]
 fn fhe_param_set_validate_rejects_empty_modulus_chain() {
@@ -2067,40 +1755,22 @@ fn fhe_param_set_validate_rejects_zero_prehash_digest_sentinels() {
     let error = parameter_digest
         .validate()
         .expect_err("parameter digest placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "parameter_digest",
-            ..
-        }
-    ));
     assert!(error.to_string().contains("zero prehash sentinel"));
+    assert_soracloud_invalid_field(error, "parameter_digest");
     let mut rns_digest = sample_fhe_param_set();
     rns_digest.rns_modulus_chain_digest = zero_digest;
     let error = rns_digest
         .validate()
         .expect_err("RNS modulus-chain digest placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "rns_modulus_chain_digest",
-            ..
-        }
-    ));
     assert!(error.to_string().contains("zero prehash sentinel"));
+    assert_soracloud_invalid_field(error, "rns_modulus_chain_digest");
     let mut decomposition_digest = sample_fhe_param_set();
     decomposition_digest.key_switch_decomposition_chain_digest = zero_digest;
     let error = decomposition_digest
         .validate()
         .expect_err("key-switch decomposition digest placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "key_switch_decomposition_chain_digest",
-            ..
-        }
-    ));
     assert!(error.to_string().contains("zero prehash sentinel"));
+    assert_soracloud_invalid_field(error, "key_switch_decomposition_chain_digest");
 }
 #[test]
 fn fhe_param_set_validate_rejects_invalid_lifecycle_order() {
@@ -2109,13 +1779,7 @@ fn fhe_param_set_validate_rejects_invalid_lifecycle_order() {
     let error = param_set
         .validate()
         .expect_err("deprecation height before activation must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "deprecation_height",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "deprecation_height");
 }
 #[test]
 fn fhe_param_set_validate_rejects_adversarial_structural_fields() {
@@ -2127,49 +1791,25 @@ fn fhe_param_set_validate_rejects_adversarial_structural_fields() {
     let error = ascending_chain
         .validate()
         .expect_err("ascending modulus chains must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "ciphertext_modulus_bits",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "ciphertext_modulus_bits");
     let mut plaintext_not_smaller = sample_fhe_param_set();
     plaintext_not_smaller.plaintext_modulus_bits = NonZeroU16::new(60).expect("nonzero");
     let error = plaintext_not_smaller
         .validate()
         .expect_err("plaintext modulus must be below ciphertext modulus");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "plaintext_modulus_bits",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "plaintext_modulus_bits");
     let mut slot_overflow = sample_fhe_param_set();
     slot_overflow.slot_count = NonZeroU32::new(8_193).expect("nonzero");
     let error = slot_overflow
         .validate()
         .expect_err("slot count above polynomial degree must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "slot_count",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "slot_count");
     let mut exhausted_depth = sample_fhe_param_set();
     exhausted_depth.max_multiplicative_depth = NonZeroU16::new(3).expect("nonzero");
     let error = exhausted_depth
         .validate()
         .expect_err("depth consuming the whole modulus chain must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "max_multiplicative_depth",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "max_multiplicative_depth");
     let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
     let mut over_evaluator_depth = sample_fhe_param_set();
     over_evaluator_depth.ciphertext_modulus_bits =
@@ -2182,13 +1822,7 @@ fn fhe_param_set_validate_rejects_adversarial_structural_fields() {
     let error = over_evaluator_depth
         .validate()
         .expect_err("depth above exact evaluator budget must be rejected");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "max_multiplicative_depth",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "max_multiplicative_depth");
 }
 #[test]
 fn fhe_param_set_validate_rejects_adversarial_lifecycle_claims() {
@@ -2197,13 +1831,7 @@ fn fhe_param_set_validate_rejects_adversarial_lifecycle_claims() {
     let error = proposed_with_withdraw
         .validate()
         .expect_err("proposed parameter sets cannot carry withdrawal metadata");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "lifecycle",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "lifecycle");
     let mut active_without_activation = sample_fhe_param_set();
     active_without_activation.activation_height = None;
     active_without_activation.deprecation_height = None;
@@ -2211,38 +1839,20 @@ fn fhe_param_set_validate_rejects_adversarial_lifecycle_claims() {
     let error = active_without_activation
         .validate()
         .expect_err("active parameter sets must declare activation height");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "lifecycle",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "lifecycle");
     let mut withdrawn_without_withdraw_height = sample_fhe_param_set();
     withdrawn_without_withdraw_height.lifecycle = FheParamLifecycleV1::Withdrawn;
     withdrawn_without_withdraw_height.withdraw_height = None;
     let error = withdrawn_without_withdraw_height
         .validate()
         .expect_err("withdrawn parameter sets must carry withdraw height");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "lifecycle",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "lifecycle");
     let mut withdraw_before_deprecation = sample_fhe_param_set();
     withdraw_before_deprecation.withdraw_height = Some(20_000);
     let error = withdraw_before_deprecation
         .validate()
         .expect_err("withdraw height must be after deprecation height");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "withdraw_height",
-            ..
-        }
-    ));
+    assert_soracloud_invalid_field(error, "withdraw_height");
 }
 #[test]
 fn validation_helper_schema_version_preserves_error_details() {

@@ -6,10 +6,6 @@
 //! coefficients never cross the public API boundary.
 #[cfg(test)]
 use super::active_exact_binding::mint_test_state_owned_collective_secret_binding_v1;
-#[cfg(test)]
-use super::phase23_rns_link::{
-    ZkAmsPhase23NativeBgvOpeningVerifierPermitV1, ZkAmsPhase23QNativeRelationAdapterSinkV1,
-};
 use super::{
     BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1, MaskedRelaxedRandomSourceV1,
     RnsPolynomial, Scalar, SecretPolynomial, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
@@ -39,7 +35,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{
-    packing::{packed_plaintext_to_rns_v1, rns_polynomial_digest},
+    packing::packed_plaintext_to_rns_v1,
     wire::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheWireBindingV1,
     },
@@ -2586,67 +2582,6 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
 }
 #[cfg(test)]
 impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
-    /// Consume and validate one exact release encryption opening for the
-    /// sealed Phase-23 native-BGV verifier.
-    ///
-    /// The unconstructible sibling permit limits safe production calls to the
-    /// private Phase-23 verifier. No callback or witness reference crosses
-    /// this boundary, and `self` is zeroized on success, error, or unwind.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    pub(super) fn verify_and_consume_phase23_native_bgv_opening_v1(
-        self,
-        permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
-        relation_sink: &mut ZkAmsPhase23QNativeRelationAdapterSinkV1,
-        key: &ZkAmsMkheCollectivePublicKeyV1,
-        layout: ZkAmsT256PackingLayoutV1,
-        plaintext: &ZkAmsT256PackedPlaintextV1,
-        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-        expected_rns_binding_digest: [u8; 32],
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        let profile = release_profile_v1();
-        key.validate(&profile)?;
-        if key.security_certificate_digest != release_security_certificate_digest()?
-            || ciphertext.sample_index
-                >= zk_ams_mkhe_release_manifest_v1()?.max_samples_per_secret_epoch
-            || layout.profile_digest != key.profile_digest
-            || plaintext.profile_digest != key.profile_digest
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-        }
-        let expected_message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
-        let input_topology = CollectiveEncryptionInputTopologyV1::from_packed(layout, plaintext);
-        self.validate_against(
-            &profile,
-            key,
-            &expected_message.0,
-            &plaintext.coefficients,
-            input_topology,
-            ciphertext,
-        )?;
-        let effective_error_zero = derive_natural_lift_effective_error_zero(
-            &profile,
-            &self.canonical_plaintext.0,
-            &self.error_zero,
-        )?;
-        if expected_rns_binding_digest == [0; 32]
-            || self.canonical_plaintext.0.as_slice() != plaintext.coefficients.as_slice()
-            || self.canonical_plaintext.0.len() != profile.ring_degree
-            || self.plaintext_lift.0.coefficients.len()
-                != profile
-                    .ring_degree
-                    .checked_mul(profile.moduli.len())
-                    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-            || rns_polynomial_digest(&profile, &self.plaintext_lift.0)?
-                != expected_rns_binding_digest
-            || self.ephemeral.coefficients.len() != profile.ring_degree
-            || effective_error_zero.coefficients.len() != profile.ring_degree
-            || self.error_one.coefficients.len() != profile.ring_degree
-        {
-            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
-        }
-        relation_sink.absorb_validated_opening_topology_v1(&permit)
-    }
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     #[cfg(test)]
     fn with_validated_native_proof_witness_v1<T>(

@@ -519,17 +519,12 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         1
     );
     assert!(!parent.contains("pub use rns_native_cross_field_inventory"));
-
-    let retired = include_str!("phase23_rns_link_cross_field_v2.rs");
-    assert!(retired.contains("const LIMBS_V2: usize = 38;"));
-    assert!(retired.contains("SOURCE_SET_BOUND_V2: bool = false"));
-    assert!(retired.contains("CANONICAL_Q_MASK_SET_BOUND_V2: bool = false"));
-    let vector_backend = include_str!(
-        "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/vector_arithmetic_proof_codec_v2.rs"
-    );
-    assert!(vector_backend.contains("VECTOR_ARITHMETIC_STREAMING_BACKEND_READY_V2: bool = false"));
+    assert!(!parent.contains("phase23_rns_link"));
 
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));
     assert!(composite.contains("CrossFieldGlobalLookup"));
+    let qpcs = include_str!("rns_native_qpcs_fri_complete.rs");
+    assert!(qpcs.contains("pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1"));
+    assert!(qpcs.contains("Successful verification remains non-authorizing"));
 }

@@ -173,3 +173,13 @@ pub(crate) fn axt_policy_generation_minimum(
         .max()
         .unwrap_or(policy.active_handle_era)
 }
+
+fn axt_lane_map_from_lane_config(lane_config: &LaneConfig) -> BTreeMap<DataSpaceId, LaneId> {
+    let mut lane_for_dataspace = BTreeMap::new();
+    for entry in lane_config.entries() {
+        lane_for_dataspace
+            .entry(entry.dataspace_id)
+            .or_insert(entry.lane_id);
+    }
+    lane_for_dataspace
+}

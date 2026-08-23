@@ -1,6 +1,6 @@
 use super::*;
 use crate::vega::zk_ams::mkhe::{
-    rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
+    rns_native_claimed_successor::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
     rns_native_profile::{
         zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
         zk_ams_mkhe_rns_native_topology_v1,
@@ -984,24 +984,24 @@ fn transcript_contract_remains_non_authorizing_and_stages_are_move_only() {
     assert!(!source.contains("into_verified_cross_field_core_root_v1"));
     assert!(!source.contains("struct ZkAmsMkheRnsNativeVerifiedCrossFieldCoreRootV1"));
 
-    let direct = include_str!("rns_native_cross_field_rlwe_direct.rs");
-    let verified_root_declaration = direct
+    let claimed_facade = include_str!("rns_native_claimed_successor.rs");
+    let verified_root_declaration = claimed_facade
         .find("pub(super) struct RnsNativeCrossFieldRlweVerifiedCoreRootV1(")
-        .expect("direct-verifier-owned root typestate");
+        .expect("sealed verified-root typestate");
     let verified_root_prefix =
-        &direct[verified_root_declaration.saturating_sub(320)..verified_root_declaration];
+        &claimed_facade[verified_root_declaration.saturating_sub(320)..verified_root_declaration];
     assert!(!verified_root_prefix.contains("derive(Clone"));
     assert!(!verified_root_prefix.contains("derive(Copy"));
-    let verified_root_surface = direct[verified_root_declaration..]
-        .split_once("fn cross_field_core_root_v1(")
-        .expect("direct verified-root implementation boundary")
+    let verified_root_surface = claimed_facade[verified_root_declaration..]
+        .split_once("pub(super) struct RnsNativeCrossFieldRlweClaimedInventoryParentV1")
+        .expect("sealed verified-root implementation boundary")
         .0;
     assert!(verified_root_surface.contains("fn matches_claimed_cross_field_root_v1("));
     assert!(!verified_root_surface.contains("pub(super) fn new"));
     assert!(!verified_root_surface.contains("pub(super) const fn root"));
     let fixture = verified_root_surface
         .find("pub(super) fn test_fixture_v1(")
-        .expect("cfg(test)-only direct verified-root fixture");
+        .expect("cfg(test)-only sealed verified-root fixture");
     assert!(verified_root_surface[fixture.saturating_sub(32)..fixture].contains("#[cfg(test)]"));
 }
 
@@ -1100,25 +1100,33 @@ fn qpcs_staging_is_settled_while_direct_activation_remains_fail_closed() {
         assert!(transcript.contains(staged_transition));
     }
 
-    let direct = include_str!("rns_native_cross_field_rlwe_direct.rs");
-    for no_go_flag in [
-        "const PRE_QPCS_Q_MASK_TOKEN_INTEGRATED_V1: bool = false;",
-        "const AUTHORITATIVE_NUMERIC_SOURCE_INTEGRATED_V1: bool = false;",
-        "const POST_CORE_INVENTORY_LINK_INTEGRATED_V1: bool = false;",
-        "const PRODUCTION_PRE_DIRECT_INVENTORY_AXES_INTEGRATED_V1: bool = false;",
-        "const DIRECT_STAGED_TERMINAL_ADAPTER_INTEGRATED_V1: bool = false;",
-        "const GLOBAL_LOOKUP_SUCCESSOR_VERIFIED_V1: bool = false;",
-        "const RELEASE_READY_V1: bool = false;",
-    ] {
-        assert!(
-            direct.contains(no_go_flag),
-            "missing NO-GO flag: {no_go_flag}"
-        );
-    }
-    assert!(direct.contains("const DIRECT_VERIFIED_ROOT_TYPE_BRIDGE_INTEGRATED_V1: bool = true;"));
     let facade = include_str!("../mkhe.rs");
     assert!(facade.contains(
-        "#[path = \"mkhe/rns_native_cross_field_rlwe_direct.rs\"]\nmod rns_native_cross_field_rlwe_direct;"
+        "#[path = \"mkhe/rns_native_claimed_successor.rs\"]\nmod rns_native_claimed_successor;"
     ));
-    assert!(!facade.contains("pub mod rns_native_cross_field_rlwe_direct;"));
+    assert!(!facade.contains("pub mod rns_native_claimed_successor;"));
+    assert!(!facade.contains("rns_native_cross_field_rlwe_direct"));
+    for retired_module in [
+        "rns_native_centering_subtraction_relation",
+        "rns_native_existing_radix_commitment_view",
+        "rns_native_global_lookup_z_commitment_view",
+        "rns_native_public_polynomial_publisher",
+        "rns_native_public_polynomial_reader",
+        "rns_native_q_mask_linear_relations",
+        "rns_native_radix_complement_linear_relation",
+        "rns_native_source_packing_same_opening",
+    ] {
+        assert!(!facade.contains(&format!("mod {retired_module};")));
+    }
+    let composite = include_str!("rns_native_composite_verifier.rs");
+    let cross_field_adapter = composite
+        .split_once("fn verify_cross_field_global_lookup_production_v1(")
+        .expect("cross-field production adapter")
+        .1
+        .split_once("fn verify_zero_padding_production_v1(")
+        .expect("cross-field production adapter boundary")
+        .0;
+    assert!(cross_field_adapter.contains("StageUnavailable"));
+    assert!(cross_field_adapter.contains("CrossFieldGlobalLookup"));
+    assert!(!cross_field_adapter.contains("Ok(())"));
 }

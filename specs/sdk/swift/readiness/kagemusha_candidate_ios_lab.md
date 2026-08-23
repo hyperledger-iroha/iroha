@@ -14,7 +14,8 @@ own hardware-attestation requirement. The production-readiness promotion gate
 therefore rejects this testnet receipt. The distinct
 [`kagemusha_production_ios_evidence.md`](kagemusha_production_ios_evidence.md)
 contract now verifies the safe App Attest assertion substrate, but remains
-fail-closed until its documented Apple-chain and freshness checks are complete.
+fail-closed unless its documented Apple chain, signed online freshness,
+one-time consumption, and promotion-scoped catalog revalidation all pass.
 
 ## Preconditions
 

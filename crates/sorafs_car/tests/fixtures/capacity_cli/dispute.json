@@ -1,0 +1,16 @@
+
+{
+  "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "complainant_id_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "replication_order_id_hex": "abababababababababababababababababababababababababababababababab",
+  "kind": "replication_shortfall",
+  "submitted_epoch": 1700100000,
+  "description": "Provider failed to ingest replication order within SLA.",
+  "requested_remedy": "Slash 10% of committed stake",
+  "evidence": {
+    "digest_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+    "media_type": "application/zip",
+    "uri": "https://evidence.example.com/bundle.zip",
+    "size_bytes": 1024
+  }
+}

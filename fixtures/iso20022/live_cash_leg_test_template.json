@@ -1,0 +1,9 @@
+{
+                "version":"2024-05-01",
+                "source":"CSD cash-leg sample",
+                "entries":[{
+                    "currency":"USD",
+                    "payment_type":"APMT",
+                    "asset_definition_id":"{asset_definition_id}"
+                }]
+            }

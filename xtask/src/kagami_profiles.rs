@@ -113,57 +113,10 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
 fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
     match spec.slug {
         "iroha3-nexus" => {
-            r#"[nexus]
-lane_count = 3
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "core"
-description = "Primary execution lane"
-dataspace = "universal"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "governance"
-description = "Governance & parliament traffic"
-dataspace = "universal"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "zk"
-description = "Zero-knowledge attachments"
-dataspace = "universal"
-metadata = {}
-
-[[nexus.dataspace_catalog]]
-alias = "universal"
-id = 0
-description = "Shared public data space for core, governance, and zero-knowledge lanes"
-fault_tolerance = 1
-
-[nexus.routing_policy]
-default_lane = 0
-default_dataspace = "universal"
-
-[[nexus.routing_policy.rules]]
-lane = 1
-dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "governance"
-
-[[nexus.routing_policy.rules]]
-lane = 2
-dataspace = "universal"
-[nexus.routing_policy.rules.matcher]
-instruction = "smartcontract::deploy"
-"#
+            include_str!("kagami_profiles/nexus_topology.toml")
         }
         _ => {
-            r#"[nexus]
-lane_count = 3
-"#
+            include_str!("kagami_profiles/default_topology.toml")
         }
     }
 }

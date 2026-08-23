@@ -3703,6 +3703,15 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "durable post-Apply rollover projection",
         ("matches!(self, Self::ApplyTerminalSettled)",),
     )
+    decided_lane_recovery_projection = item(
+        "height_driver", "permits_decided_lane_recovery_ingress"
+    )
+    require_tokens(
+        "height_driver",
+        decided_lane_recovery_projection,
+        "terminal-only decided-lane recovery ingress authority",
+        ("matches!(self, Self::ApplyTerminalSettled)",),
+    )
     apply_barrier_transition = item("height_driver", "observe_completion")
     require_tokens(
         "height_driver",
@@ -3829,16 +3838,18 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "lifecycle_run_inner",
         lifecycle_live_loop,
-        "pre-drain typed Apply auxiliary-runtime barrier",
+        "pre-drain lane-only auxiliary-runtime barrier",
         (
-            "let apply_completion_barrier = producer_claim.blocks_runtime()",
-            "if apply_completion_barrier",
+            "let lane_only_completion_barrier = producer_claim.blocks_runtime()",
+            "if lane_only_completion_barrier",
+            "if producer_claim.permits_decided_lane_recovery_ingress()",
+            "drain_decided_lane_recovery_ingress(",
             "drain_lane_relay_ingress(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
             "else",
             "broadcast_npos_vrf_messages(",
-            "let discovery_was_outstanding = if apply_completion_barrier",
+            "let discovery_was_outstanding = if lane_only_completion_barrier",
             "block_sync_request.is_some()",
             "retry_exact_output_and_apply_sidecar_admissions(",
             "drain_lifecycle_v2_ingress(",
@@ -3846,7 +3857,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
     if lifecycle_live_loop is not None:
         barrier_start = lifecycle_live_loop.source.find(
-            "if apply_completion_barrier {"
+            "if lane_only_completion_barrier {"
         )
         barrier_end = lifecycle_live_loop.source.find("} else {", barrier_start)
         barrier_source = (
@@ -3856,6 +3867,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         )
         barrier_tokens = rust_code_tokens(barrier_source)
         for required in (
+            "drain_decided_lane_recovery_ingress(",
             "drain_lane_relay_ingress(",
             "lane_work.schedule_retransmission()",
             "dispatch_lane_work_effects(",
@@ -3864,7 +3876,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             if count != 1:
                 errors.append(
                     f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                    "typed Apply lane-transport-only barrier must retain exactly "
+                    "lane-transport-only barrier must retain exactly "
                     f"one {required!r} seam; found {count}"
                 )
         forbidden = tuple(
@@ -3886,7 +3898,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         if forbidden:
             errors.append(
                 f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                "typed Apply lane-transport-only barrier retains forbidden "
+                "lane-transport-only barrier retains forbidden "
                 f"ordinary runtime authority {forbidden!r}"
             )
     require_order(

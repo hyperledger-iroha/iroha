@@ -128,6 +128,11 @@ impl LifecycleProducerClaimDispositionV1 {
         matches!(self, Self::ApplyTerminalSettled)
     }
 
+    /// Return whether terminal recovery may consume decided-lane fair ingress.
+    pub(super) const fn permits_decided_lane_recovery_ingress(self) -> bool {
+        matches!(self, Self::ApplyTerminalSettled)
+    }
+
     fn observe_completion(
         self,
         selected: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
@@ -738,6 +743,7 @@ mod tests {
         assert!(claim.requires_yield());
         assert!(claim.blocks_runtime());
         assert!(claim.blocks_ingress());
+        assert!(!claim.permits_decided_lane_recovery_ingress());
 
         let deferred = claim
             .observe_completion(&Completion::RecoveredDecisionApplyCompletionDeferred)
@@ -754,6 +760,7 @@ mod tests {
         assert!(settled.blocks_runtime());
         assert!(settled.blocks_ingress());
         assert!(settled.apply_terminal_settled());
+        assert!(settled.permits_decided_lane_recovery_ingress());
 
         for completed in [
             RecoveredLifecycleOutputSettlementV1::Empty,
@@ -806,6 +813,7 @@ mod tests {
         assert!(waiting.requires_yield());
         assert!(waiting.blocks_runtime());
         assert!(waiting.blocks_ingress());
+        assert!(!waiting.permits_decided_lane_recovery_ingress());
         assert_eq!(
             waiting.observe_completion(&Completion::LifecycleValidateSidecarWaiting),
             Ok(LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar),

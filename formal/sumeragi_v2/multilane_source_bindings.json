@@ -5714,7 +5714,7 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "maybe_apply_nexus_autoscale",
+          "symbol": "apply_staged_nexus_autoscale",
           "required_tokens": [
             "select_autoscale_scale_in_action",
             "apply_autoscale_lane_lifecycle",
@@ -7029,8 +7029,21 @@
           "required_tokens": [
             "prune_lock.lock()",
             "ensure_prune_recovery_not_required",
+            "canonical_chain_lock.lock()",
+            "read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards",
+          "required_tokens": [
+            "lane_geometry_lock.lock()",
+            "sidecar_lock.lock()",
+            "ensure_prune_recovery_not_required",
             "ensure_bound_progress_pair_has_no_recovery_artifacts_locked",
             "BoundProgressPair::Absent",
+            "BoundProgressPair::Present",
             "read_active_certified_lane_block_artifact_from_bound_locked",
             "bound_progress_sidecar_unchanged"
           ]

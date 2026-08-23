@@ -1,4 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
+mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
@@ -149,6 +150,10 @@ use std::{
 use thiserror::Error;
 use url::Url;
 const APPLICATION_JSON: &str = "application/json";
+const PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -6625,6 +6630,12 @@ impl SumeragiEvidenceListFilter<'_> {
 struct TransactionResponseHandler;
 impl TransactionResponseHandler {
     fn handle(resp: &Response<Vec<u8>>) -> Result<()> {
+        if resp.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "transaction response exceeds the {} byte limit",
+                TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
+            ));
+        }
         if matches!(resp.status(), StatusCode::OK | StatusCode::ACCEPTED) {
             Ok(())
         } else {
@@ -6635,46 +6646,6 @@ impl TransactionResponseHandler {
             )
         }
     }
-}
-fn async_http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(build_async_http_client)
-}
-fn build_async_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        // Signed transaction bodies are one-shot. A redirect can arrive after
-        // the original endpoint admitted the request, so replaying the body at
-        // the target would make the transport outcome ambiguous.
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
-        .build()
-        .expect("Failed to build async HTTP client")
-}
-async fn async_client_response_to_response(
-    response: reqwest::Response,
-) -> Result<Response<Vec<u8>>> {
-    let status = response.status();
-    let headers: Vec<_> = response
-        .headers()
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    let body = response
-        .bytes()
-        .await
-        .wrap_err("Failed to get async response as bytes")?;
-    let mut builder = Response::builder().status(status);
-    let headers_map = builder
-        .headers_mut()
-        .ok_or_else(|| eyre!("Failed to get headers map reference."))?;
-    for (key, value) in headers {
-        headers_map.insert(key, value);
-    }
-    builder
-        .body(body.to_vec())
-        .wrap_err("Failed to construct response bytes body")
 }
 /// Decode a `/status` response body, preferring Norito and falling back to JSON.
 fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
@@ -8317,7 +8288,7 @@ mod evidence_http_tests {
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            SumeragiV2Equivocation, ValidatorPower, Vote,
+            QuorumCertificate, SumeragiV2Equivocation, ValidatorPower, Vote,
         },
     };
     use iroha_test_samples::gen_account_in;
@@ -10116,6 +10087,7 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
+    include!("client/activation_evidence_tests.rs");
     fn transaction_hash_pair(
         seed: u8,
     ) -> (HashOf<SignedTransaction>, HashOf<TransactionEntrypoint>) {
@@ -10562,6 +10534,10 @@ mod evidence_http_tests {
                 .expect("transaction status response")
                 .expect("status payload"),
             payload
+        );
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
         );
         snapshot
     }
@@ -11247,10 +11223,9 @@ impl fmt::Debug for Client {
             .finish()
     }
 }
-
 include!("client/canonical_request_auth.rs");
-
 include!("client/operator_request_auth.rs");
+include!("client/activation_evidence.rs");
 /// Representation of `Iroha` client.
 impl Client {
     /// Constructor for client from configuration
@@ -12185,7 +12160,7 @@ impl Client {
         iroha_logger::trace!(tx=?transaction, "Submitting");
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
-        let req = self.prepare_transaction_payload_request::<DefaultRequestBuilder>(&payload);
+        let req = self.prepare_transaction_payload_request(&payload);
         let response = req
             .build()?
             .send()
@@ -12205,7 +12180,7 @@ impl Client {
         self.ensure_transaction_submit_compatibility()?;
         let hash = payload.hash();
         let response = self
-            .prepare_transaction_payload_request::<DefaultRequestBuilder>(payload)
+            .prepare_transaction_payload_request(payload)
             .build()?
             .send()
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
@@ -12241,7 +12216,7 @@ impl Client {
         self.ensure_transaction_submit_compatibility()?;
         let hash = payload.hash();
         iroha_logger::trace!(%hash, "Submitting prepared transaction payload");
-        let mut request = async_http_client()
+        let mut request = bounded_async_response::client()
             .post(join_torii_url(&self.torii_url, torii_uri::TRANSACTION))
             .timeout(self.torii_request_timeout)
             .header("Content-Type", APPLICATION_NORITO)
@@ -12254,7 +12229,11 @@ impl Client {
             .send()
             .await
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
-        let response = async_client_response_to_response(response).await?;
+        let response = bounded_async_response::into_response(
+            response,
+            TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES,
+        )
+        .await?;
         TransactionResponseHandler::handle(&response)?;
         Ok(hash)
     }
@@ -12283,7 +12262,7 @@ impl Client {
             .map(|payload| payload.as_bytes().to_vec())
             .collect::<Vec<_>>();
         let body = to_bytes(&body).wrap_err("failed to encode transaction batch as Norito")?;
-        let mut request = async_http_client()
+        let mut request = bounded_async_response::client()
             .post(join_torii_url(
                 &self.torii_url,
                 torii_uri::TRANSACTIONS_BATCH,
@@ -12300,7 +12279,11 @@ impl Client {
             .send()
             .await
             .wrap_err("Failed to send transaction batch")?;
-        let response = async_client_response_to_response(response).await?;
+        let response = bounded_async_response::into_response(
+            response,
+            TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES,
+        )
+        .await?;
         TransactionResponseHandler::handle(&response)?;
         let accepted_count = response
             .headers()
@@ -12761,7 +12744,8 @@ impl Client {
         let builder = self
             .default_request(HttpMethod::GET, url)
             .param("hash", &hash_hex)
-            .header("Accept", APPLICATION_JSON);
+            .header("Accept", APPLICATION_JSON)
+            .max_response_bytes(PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES);
         let builder = if let Some(scope) = scope {
             builder.param("scope", scope)
         } else {
@@ -13017,13 +13001,13 @@ impl Client {
         headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
         headers
     }
-    fn prepare_transaction_payload_request<B: RequestBuilder>(
+    fn prepare_transaction_payload_request(
         &self,
         payload: &PreparedTransactionPayload,
-    ) -> B {
+    ) -> DefaultRequestBuilder {
         // Public Torii ingress accepts a versioned SignedTransaction; internal
         // TransactionEntrypoint wrapping happens on the server boundary.
-        B::new(
+        DefaultRequestBuilder::new(
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
         )
@@ -13031,6 +13015,7 @@ impl Client {
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", self.wire_format_preference.accept_header())
         .body(payload.as_bytes().to_vec())
+        .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES)
     }
     /// Submits and waits until the transaction is either rejected or committed.
     /// Returns rejection reason if transaction was rejected.
@@ -13264,7 +13249,8 @@ impl Client {
             HttpMethod::GET,
             join_torii_url(&self.torii_url, torii_uri::STATUS),
         )
-        .headers(self.headers.clone());
+        .headers(self.headers.clone())
+        .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
@@ -13280,7 +13266,8 @@ impl Client {
                         HttpMethod::GET,
                         join_torii_url(&self.torii_url, torii_uri::STATUS),
                     )
-                    .header(http::header::ACCEPT, APPLICATION_JSON),
+                    .header(http::header::ACCEPT, APPLICATION_JSON)
+                    .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES),
                 )?;
                 match decode_status_response(&json_resp) {
                     Ok(status) => Ok(status),
@@ -14275,11 +14262,19 @@ impl Client {
         let body = norito::json::to_vec(&FeeQuoteRequest {
             payload: payload.clone(),
         })?;
-        self.send_builder(
+        let response = self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
+        )?;
+        if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "fee quote response exceeds the {} byte limit",
+                FEE_QUOTE_RESPONSE_MAX_BYTES
+            ));
+        }
+        Ok(response)
     }
     /// Quote the exact fee intent that must be inserted before signing a payload.
     ///
@@ -20689,7 +20684,7 @@ mod tests {
             });
             let response = runtime
                 .block_on(async {
-                    build_async_http_client()
+                    bounded_async_response::build_client()
                         .post(format!("http://{redirect_addr}/transaction"))
                         .body(vec![0x01, 0x02, 0x03])
                         .send()
@@ -20740,7 +20735,7 @@ mod tests {
             .expect("build async HTTP test runtime");
         let response = runtime
             .block_on(async {
-                build_async_http_client()
+                bounded_async_response::build_client()
                     .post(format!("http://{address}/transaction"))
                     .body(vec![0x01, 0x02, 0x03])
                     .send()
@@ -22556,6 +22551,7 @@ mod tests {
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), "/v1/fees/quote");
+        assert_eq!(snapshot.max_response_bytes, FEE_QUOTE_RESPONSE_MAX_BYTES);
         let decoded: FeeQuoteRequest =
             norito::json::from_slice(&snapshot.body).expect("decode fee quote body");
         assert_eq!(decoded.payload, payload);
@@ -24862,6 +24858,10 @@ mod tests {
         let submitted = SignedTransaction::decode_all_versioned(&snapshot.body)
             .expect("transaction request body must be a versioned SignedTransaction");
         assert_eq!(submitted.hash(), expected_hash);
+        assert_eq!(
+            snapshot.max_response_bytes,
+            TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
+        );
     }
     fn empty_transaction(client: &Client) -> SignedTransaction {
         client.build_transaction(
@@ -25559,16 +25559,7 @@ mod tests {
         let response = mk_response(StatusCode::ACCEPTED, Vec::new(), None);
         assert!(TransactionResponseHandler::handle(&response).is_ok());
     }
-    #[test]
-    fn decode_status_response_returns_err_on_internal_server_error() {
-        let response = mk_response(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), None);
-        assert!(Client::decode_status_for_test(&response).is_err());
-    }
-    #[test]
-    fn decode_parameters_response_returns_err_on_bad_status() {
-        let response = mk_response(StatusCode::BAD_REQUEST, Vec::new(), None);
-        assert!(decode_parameters_for_test(&response).is_err());
-    }
+    include!("client/status_response_tests.rs");
     #[test]
     fn decode_parameters_response_parses_json_payload() {
         let params = iroha_data_model::parameter::Parameters::default();

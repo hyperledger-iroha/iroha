@@ -1,0 +1,5 @@
+module Tests {
+            koto_test { target: "../contracts/demo.ko" }
+            #[test]
+            fn smoke() { test::assert(true); }
+        }

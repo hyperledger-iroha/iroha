@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "06dffacf4bc23172c71a76fa7e4a21bd0c953a8a7cfe9b5d0345013a33037c32"
+    "6830478f0523f8e320378200b67894bf9a6a3c09574a99741a3a04b76a457990"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -896,8 +896,10 @@ class ReviewedRustSourceClosure:
 @dataclass(frozen=True)
 class _RustIncludeInvocation:
     relative: str
+    start: int
     end: int
     line: int
+    binding: str
 
 
 _ACTIVE_REVIEWED_RUST_SOURCE_CACHE: (
@@ -943,6 +945,23 @@ def _canonical_provider_relative(raw: str) -> Path | None:
     return Path(*posix.parts)
 
 
+def _normalized_provider_spelling(raw: str) -> str:
+    """Normalize separators and dot segments only for alias detection."""
+
+    portable = unicodedata.normalize("NFC", raw).replace("\\", "/")
+    absolute = portable.startswith("/")
+    parts: list[str] = []
+    for part in portable.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == ".." and parts and parts[-1] != "..":
+            parts.pop()
+        else:
+            parts.append(part)
+    normalized = "/".join(parts)
+    return f"/{normalized}" if absolute else normalized
+
+
 def _portable_provider_key(relative: Path) -> str:
     return unicodedata.normalize("NFC", relative.as_posix()).casefold()
 
@@ -951,10 +970,13 @@ def _rust_include_invocations(
     source: str,
     provider: Path,
     errors: list[str],
+    masked_source: str | None = None,
 ) -> tuple[_RustIncludeInvocation, ...]:
     """Parse every code-level ``include!`` as one standalone string literal."""
 
-    masked = _mask_rust_comments(source)
+    masked = (
+        _mask_rust_comments(source) if masked_source is None else masked_source
+    )
     invocations: list[_RustIncludeInvocation] = []
     include_start = re.compile(r"\binclude\s*!\s*\(")
     cursor = 0
@@ -1025,11 +1047,196 @@ def _rust_include_invocations(
                 invocations.append(
                     _RustIncludeInvocation(
                         relative=relative,
+                        start=match.start(),
                         end=insertion_end,
                         line=line,
+                        binding="include!",
                     )
                 )
         cursor = insertion_end if insertion_end > match.start() else semicolon + 1
+    return tuple(invocations)
+
+
+def _rust_path_module_invocations(
+    source: str,
+    provider: Path,
+    expected: tuple[str, ...] | None,
+    errors: list[str],
+    masked_source: str | None = None,
+) -> tuple[_RustIncludeInvocation, ...]:
+    """Parse manifest-declared literal ``#[path] mod`` provider bindings."""
+
+    masked = (
+        _mask_rust_comments(source) if masked_source is None else masked_source
+    )
+    expected_paths = frozenset(expected or ())
+    if not expected_paths:
+        return ()
+    expected_module_names = frozenset(
+        PurePosixPath(relative).stem for relative in expected_paths
+    )
+    invocations: list[_RustIncludeInvocation] = []
+    attribute_start = re.compile(r"#\s*\[\s*path\b")
+    module_binding = re.compile(
+        r"\s*(?:(?:pub(?:\s*\([^\r\n)]*\))?)\s+)?"
+        r"mod\s+(?P<module>(?:r#)?[A-Za-z_][A-Za-z0-9_]*)\s*;"
+    )
+    cursor = 0
+    while True:
+        match = attribute_start.search(masked, cursor)
+        if match is None:
+            break
+        line = source.count("\n", 0, match.start()) + 1
+        open_bracket = masked.find("[", match.start(), match.end())
+        depth = 0
+        close_bracket = None
+        for offset in range(open_bracket, len(masked)):
+            char = masked[offset]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    close_bracket = offset
+                    break
+        if close_bracket is None:
+            errors.append(
+                f"{provider}:{line}: reviewed Rust #[path] attribute is "
+                "unterminated"
+            )
+            break
+
+        attribute_source = source[match.start() : close_bracket + 1]
+        literal = re.fullmatch(
+            r'#\s*\[\s*path\s*=\s*"(?P<relative>[^"\\\r\n]+)"\s*\]',
+            attribute_source,
+        )
+        binding_start = close_bracket + 1
+        while True:
+            outer_start = binding_start
+            while outer_start < len(masked) and masked[outer_start].isspace():
+                outer_start += 1
+            outer_match = re.match(r"#\s*\[", masked[outer_start:])
+            if outer_match is None or attribute_start.match(masked, outer_start):
+                break
+            outer_bracket = masked.find(
+                "[", outer_start, outer_start + outer_match.end()
+            )
+            outer_depth = 0
+            outer_end = None
+            for offset in range(outer_bracket, len(masked)):
+                if masked[offset] == "[":
+                    outer_depth += 1
+                elif masked[offset] == "]":
+                    outer_depth -= 1
+                    if outer_depth == 0:
+                        outer_end = offset + 1
+                        break
+            if outer_end is None:
+                break
+            binding_start = outer_end
+        binding_match = module_binding.match(masked, binding_start)
+        if binding_match is None:
+            literal_relative = (
+                None if literal is None else literal.group("relative")
+            )
+            if (
+                literal_relative in expected_paths
+                or (
+                    literal_relative is not None
+                    and _normalized_provider_spelling(literal_relative)
+                    in expected_paths
+                )
+                or (
+                    literal is None
+                    and any(
+                        f'"{relative}"' in attribute_source
+                        for relative in expected_paths
+                    )
+                )
+            ):
+                errors.append(
+                    f"{provider}:{line}: reviewed Rust #[path] attribute must "
+                    "bind one out-of-line mod item"
+                )
+            cursor = close_bracket + 1
+            continue
+        semicolon = binding_match.end() - 1
+        line_end = source.find("\n", semicolon + 1)
+        if line_end < 0:
+            line_end = len(source)
+            line_ending = line_end
+        else:
+            line_ending = line_end + 1
+        suffix = masked[semicolon + 1 : line_end]
+        insertion_end = line_ending if not suffix.strip() else semicolon + 1
+
+        module_name = binding_match.group("module").removeprefix("r#")
+        if literal is None:
+            if module_name in expected_module_names:
+                errors.append(
+                    f"{provider}:{line}: reviewed Rust #[path] path must be one "
+                    "literal canonical .rs string"
+                )
+        else:
+            relative = literal.group("relative")
+            canonical = _canonical_provider_relative(relative)
+            if relative in expected_paths:
+                if canonical is None:
+                    errors.append(
+                        f"{provider}:{line}: reviewed Rust #[path] path is "
+                        f"unsafe or noncanonical: {relative!r}"
+                    )
+                else:
+                    invocations.append(
+                        _RustIncludeInvocation(
+                            relative=relative,
+                            start=match.start(),
+                            end=insertion_end,
+                            line=line,
+                            binding="#[path] mod",
+                        )
+                    )
+            elif canonical is None and (
+                _normalized_provider_spelling(relative) in expected_paths
+                or module_name in expected_module_names
+            ):
+                errors.append(
+                    f"{provider}:{line}: reviewed Rust #[path] path is unsafe "
+                    f"or noncanonical: {relative!r}"
+                )
+        cursor = insertion_end
+    return tuple(invocations)
+
+
+def _rust_provider_invocations(
+    source: str,
+    provider: Path,
+    expected: tuple[str, ...] | None,
+    errors: list[str],
+) -> tuple[_RustIncludeInvocation, ...]:
+    """Return exact include and manifest-declared path bindings in source order."""
+
+    masked = _mask_rust_comments(source)
+    invocations = sorted(
+        (
+            *_rust_include_invocations(source, provider, errors, masked),
+            *_rust_path_module_invocations(
+                source, provider, expected, errors, masked
+            ),
+        ),
+        key=lambda invocation: invocation.start,
+    )
+    first_bindings: dict[str, _RustIncludeInvocation] = {}
+    for invocation in invocations:
+        first = first_bindings.setdefault(invocation.relative, invocation)
+        if first is invocation:
+            continue
+        errors.append(
+            f"{provider}:{invocation.line}: duplicate reviewed Rust include provider "
+            f"binding {invocation.relative!r} via {invocation.binding}; first "
+            f"bound at line {first.line} via {first.binding}"
+        )
     return tuple(invocations)
 
 
@@ -1242,16 +1449,18 @@ class _ReviewedRustClosureResolver:
             )
             return None
         initial_error_count = len(self.errors)
-        invocations = _rust_include_invocations(source, provider, self.errors)
+        expected = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative.as_posix())
+        invocations = _rust_provider_invocations(
+            source, provider, expected, self.errors
+        )
         if len(self.errors) != initial_error_count:
             return None
-        expected = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative.as_posix())
         observed = tuple(invocation.relative for invocation in invocations)
         if expected is not None and observed != expected:
             self.errors.append(
                 f"{provider}: reviewed Rust include inventory must equal "
                 f"{expected!r}; found {observed!r} across {len(invocations)} "
-                "include invocation(s)"
+                "code-level binding(s)"
             )
             return None
 

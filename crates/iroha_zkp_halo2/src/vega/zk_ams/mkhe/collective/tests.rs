@@ -1,8 +1,5 @@
 use super::*;
-use crate::vega::{
-    MaskedRelaxedRandomErrorV1, sponge::shake256,
-    zk_ams::mkhe::manifest::ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
-};
+use crate::vega::{MaskedRelaxedRandomErrorV1, sponge::shake256};
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
 pub(super) fn test_profile() -> BgvProfile {
@@ -51,58 +48,6 @@ impl MaskedRelaxedRandomSourceV1 for KatRandom {
             written += take;
         }
         Ok(())
-    }
-}
-struct BufferedExerciseRandom {
-    state: [u8; 32],
-    counter: u64,
-    block: [u8; 64],
-    cursor: usize,
-}
-impl BufferedExerciseRandom {
-    fn new(label: &[u8]) -> Self {
-        Self {
-            state: keccak256(label),
-            counter: 0,
-            block: [0; 64],
-            cursor: 64,
-        }
-    }
-    fn refill(&mut self) {
-        let mut frame = Vec::with_capacity(40);
-        frame.extend_from_slice(&self.state);
-        frame.extend_from_slice(&self.counter.to_be_bytes());
-        self.block.copy_from_slice(&shake256(&frame, 64));
-        self.state = keccak256(&self.block);
-        self.counter = self.counter.wrapping_add(1);
-        self.cursor = 0;
-    }
-}
-impl MaskedRelaxedRandomSourceV1 for BufferedExerciseRandom {
-    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
-        let mut written = 0;
-        while written < destination.len() {
-            if self.cursor == self.block.len() {
-                self.refill();
-            }
-            let take = (destination.len() - written).min(self.block.len() - self.cursor);
-            destination[written..written + take]
-                .copy_from_slice(&self.block[self.cursor..self.cursor + take]);
-            self.cursor += take;
-            written += take;
-        }
-        Ok(())
-    }
-}
-impl Drop for BufferedExerciseRandom {
-    fn drop(&mut self) {
-        clear_secret_bytes_v1(&mut self.state);
-        clear_secret_bytes_v1(&mut self.block);
-        self.counter = 0;
-        self.cursor = 0;
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let _ = core::hint::black_box(&mut self.counter);
-        let _ = core::hint::black_box(&mut self.cursor);
     }
 }
 struct ConstantRandom(u8);
@@ -309,77 +254,6 @@ pub(super) fn test_key(label: u8) -> (ZkAmsMkheCollectivePublicKeyV1, SecretPoly
     key.digest = collective_public_key_digest(&key, &profile).unwrap();
     key.validate(&profile).unwrap();
     (key, aggregate_secret)
-}
-fn release_native_bgv_test_key() -> ZkAmsMkheCollectivePublicKeyV1 {
-    let profile = release_profile_v1();
-    profile.validate().expect("release profile validates");
-    let parties = test_parties();
-    let mut public_a_coefficients = vec![0_u64; profile.ring_degree];
-    public_a_coefficients[0] = 1;
-    public_a_coefficients[1] = 2;
-    let mut collective_public_b_coefficients = vec![0_u64; profile.ring_degree];
-    collective_public_b_coefficients[0] = 3;
-    collective_public_b_coefficients[1] = 5;
-    let epoch = 23;
-    let mut key = ZkAmsMkheCollectivePublicKeyV1 {
-        version: MKHE_VERSION_V1,
-        profile_digest: profile.digest().expect("release profile digest"),
-        security_certificate_digest: release_security_certificate_digest()
-            .expect("release security certificate"),
-        roster_digest: governed_roster_digest(
-            profile.digest().expect("release profile digest"),
-            epoch,
-            &parties.parties,
-        ),
-        key_material_digest: [0x91; 32],
-        epoch,
-        transcript_digest: [0x92; 32],
-        parties,
-        public_a: RnsPolynomial::from_unsigned(&profile, &public_a_coefficients)
-            .expect("release public a"),
-        collective_public_b: RnsPolynomial::from_unsigned(
-            &profile,
-            &collective_public_b_coefficients,
-        )
-        .expect("release collective public b"),
-        share_digests: core::array::from_fn(|index| [index as u8 + 1; 32]),
-        digest: [0; 32],
-    };
-    key.digest = collective_public_key_digest(&key, &profile).expect("release key digest");
-    key.validate(&profile).expect("release test key validates");
-    key
-}
-fn release_packed_slots(first: u64) -> Vec<[u8; 32]> {
-    let mut slots = vec![[0_u8; 32]; ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1];
-    slots[0][24..].copy_from_slice(&first.to_be_bytes());
-    slots
-}
-fn release_native_bgv_encryption_fixture(
-    key: &ZkAmsMkheCollectivePublicKeyV1,
-    label: &[u8],
-) -> (
-    ZkAmsT256PackingLayoutV1,
-    ZkAmsT256PackedPlaintextV1,
-    ZkAmsMkheCollectiveCiphertextV1,
-    ZkAmsMkheCollectiveEncryptionOpeningV1,
-) {
-    let layout =
-        super::super::packing::zk_ams_t256_packing_layout_v1(1).expect("one-slot release layout");
-    let plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
-        layout,
-        0,
-        &release_packed_slots(7),
-    )
-    .expect("canonical release packed plaintext");
-    let (ciphertext, opening) = encrypt_zk_ams_mkhe_collective_packed_with_opening_v1(
-        key,
-        layout,
-        &plaintext,
-        11,
-        &mut BufferedExerciseRandom::new(label),
-    )
-    .expect("release native BGV encryption with opening");
-    (layout, plaintext, ciphertext, opening)
 }
 pub(super) fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
     values
@@ -841,86 +715,6 @@ fn collective_opening_adapter_recomputes_both_rlwe_equations_independently() {
         .unwrap();
 }
 #[test]
-#[ignore = "release-size 38-limb native BGV opening exercise; not KAT/readiness evidence"]
-fn release_native_bgv_capability_executes_and_rejects_stale_packing() {
-    let key = release_native_bgv_test_key();
-    let (layout, plaintext, ciphertext, opening) =
-        release_native_bgv_encryption_fixture(&key, b"native-bgv-capability-success");
-    super::super::phase23_rns_link::test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
-        &key,
-        layout,
-        &plaintext,
-        &ciphertext,
-        opening,
-    )
-    .expect("native BGV opening is verified and consumed in process");
-    drop(plaintext);
-    drop(ciphertext);
-    let (layout, original_plaintext, ciphertext, opening) =
-        release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-plaintext");
-    let changed_plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
-        layout,
-        0,
-        &release_packed_slots(8),
-    )
-    .expect("different canonical packed plaintext");
-    assert_ne!(changed_plaintext.digest, original_plaintext.digest);
-    assert!(
-        matches!(
-                super::super::phase23_rns_link::
-                    test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
-                        &key,
-                        layout,
-                        &changed_plaintext,
-                        &ciphertext,
-                        opening,
-                    ),
-                Err(ZkAmsMkheErrorV1::InvalidCiphertext)
-            ),
-        "a stale opening must not authorize changed packed content"
-    );
-    drop(changed_plaintext);
-    drop(original_plaintext);
-    drop(ciphertext);
-    let (original_layout, original_plaintext, ciphertext, opening) =
-        release_native_bgv_encryption_fixture(&key, b"native-bgv-stale-layout");
-    let changed_layout = super::super::packing::zk_ams_t256_packing_layout_v1(65_537)
-        .expect("different canonical two-chunk layout");
-    assert_ne!(changed_layout.digest, original_layout.digest);
-    let changed_layout_plaintext = super::super::packing::encode_zk_ams_t256_packed_plaintext_v1(
-        changed_layout,
-        0,
-        &release_packed_slots(7),
-    )
-    .expect("canonical first chunk under changed layout");
-    assert!(
-        matches!(
-                super::super::phase23_rns_link::
-                    test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1(
-                        &key,
-                        changed_layout,
-                        &changed_layout_plaintext,
-                        &ciphertext,
-                        opening,
-                    ),
-                Err(ZkAmsMkheErrorV1::InvalidCiphertext)
-            ),
-        "a stale opening must not authorize a different canonical layout"
-    );
-    drop(changed_layout_plaintext);
-    drop(original_plaintext);
-    drop(ciphertext);
-    let receipt_audit =
-        super::super::receipt_capability_audit::zk_ams_mkhe_receipt_capability_audit_v1();
-    assert_eq!(receipt_audit.blocker_mask, 0xff);
-    assert!(!receipt_audit.release_available);
-    let readiness =
-        super::super::manifest::zk_ams_mkhe_readiness_v1().expect("readiness remains queryable");
-    assert_eq!(readiness.receipt_capability_blocker_mask, 0xff);
-    assert!(!readiness.receipt_capability_gate);
-    assert!(!readiness.is_ready());
-}
-#[test]
 fn collective_opening_rejects_key_ciphertext_message_and_context_splices() {
     let profile = test_profile();
     let (key, _) = test_key(0x73);
@@ -1213,14 +1007,7 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .expect("fresh encryption source slice");
     assert!(!fresh_encryption.contains("plaintext.digest"));
     assert!(fresh_encryption.contains("CollectiveEncryptionInputTopologyV1::from_packed"));
-    let opening_verifier = module_source
-        .split("fn verify_and_consume_phase23_native_bgv_opening_v1")
-        .nth(1)
-        .expect("opening verifier")
-        .split("fn with_validated_native_proof_witness_v1")
-        .next()
-        .expect("opening verifier source slice");
-    assert!(!opening_verifier.contains("plaintext.digest"));
+    assert!(!module_source.contains("verify_and_consume_phase23_native_bgv_opening_v1"));
     let transcript = module_source
         .split("fn collective_encryption_transcript_digest_v1")
         .nth(1)

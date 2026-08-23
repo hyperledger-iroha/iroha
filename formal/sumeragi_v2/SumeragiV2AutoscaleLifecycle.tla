@@ -6,7 +6,7 @@ Bounded executable model for one automatically managed lane across creation,
 activation, drain, archival, destruction, and same-ID recreation.
 
 The production refinement is source-bound separately to
-`StateBlock::maybe_apply_nexus_autoscale`,
+`StateBlock::apply_staged_nexus_autoscale`,
 `State::preflight_committed_autoscale_lane_geometry`,
 `State::apply_committed_autoscale_lane_geometry`,
 `State::apply_committed_autoscale_lane_lifecycle`, and

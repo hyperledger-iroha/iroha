@@ -1,0 +1,5 @@
+
+seiyaku ContractCallNoopTest {
+
+  kotoage fn main() authorize("CanEnactGovernance") {}
+}

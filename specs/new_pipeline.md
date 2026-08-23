@@ -565,8 +565,9 @@ Scheduling policy & backpressure
 ### TTL and Replay Protection (normative)
 
 - Height‑based TTL: each transaction MUST include `expires_at_height: u64` (or
-  an equivalent height window). Stateless validation rejects txs whose expiry
-  has passed at the receiver’s current height.
+  an equivalent height window). The expiry is exclusive: validation rejects a
+  transaction when `current_height >= expires_at_height`, so it is eligible
+  only while `current_height < expires_at_height`.
 - Per‑sender sequence: each transaction MUST include `(sender, seq)` where `seq`
   is strictly increasing per `sender`. Stateless validation rejects duplicates
   or regressions. Replay checks bind to `(chain_id, sender, seq)`.
@@ -1783,7 +1784,9 @@ Data Availability
 Additional consensus/determinism checks
 - Range conflicts: partial overlaps (e.g., `asset/foo/*` vs `asset/foo/bar`) produce correct conflict edges; no parallel execution when unsafe.
 - DAG scale: T=10k txs, avg K=8 keys, conflict‑graph build < 1s target; epoch partitioning stable.
-- TTL/seq edges: `expires_at_height == current_height` acceptance semantics; duplicates/regressions on `(sender, seq)` rejected at stateless validation.
+- TTL/seq edges: `expires_at_height == current_height` is rejected while
+  `expires_at_height == current_height + 1` remains eligible;
+  duplicates/regressions on `(sender, seq)` are rejected at stateless validation.
 - DA gating: mandatory signed RS16 geometry and exact-body availability are
   enforced before Prepare; missing or invalid manifest/chunk/body evidence is
   rejected deterministically.

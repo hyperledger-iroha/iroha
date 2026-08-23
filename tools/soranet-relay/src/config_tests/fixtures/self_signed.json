@@ -1,0 +1,10 @@
+
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "admin_listen": "127.0.0.1:0",
+                "admin_auth_token_path": "/run/secrets/soranet-admin-token",
+                "tls": {},
+                "pow": { "required": true, "difficulty": 18 },
+                "padding": { "cell_size": 1024, "max_idle_millis": 150 }
+            }

@@ -1,11 +1,11 @@
 use super::{
     BlockSignaturePolicy, RecoveredCompleteTipActivationAuthority,
-    RecoveredLifecycleStorageMintPermitV1, RecoveredSuccessorActivationAuthority,
-    V2RecoveryError, V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
+    RecoveredLifecycleStorageMintPermitV1, RecoveredSuccessorActivationAuthority, V2RecoveryError,
+    V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
     authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
-    build_verified_successor, committed_execution_policy_hash,
-    committed_nexus_amx_context_hash, plan_v2_startup_replay, recover_active_height,
-    recover_active_height_with_plan, successor_proofs_of_possession,
+    build_verified_successor, committed_execution_policy_hash, committed_nexus_amx_context_hash,
+    plan_v2_startup_replay, recover_active_height, recover_active_height_with_plan,
+    successor_proofs_of_possession,
 };
 use crate::{
     block::{CommittedBlock, ValidBlock},
@@ -93,8 +93,7 @@ fn verified_context_for_policy_state(
     let proofs = keys
         .iter()
         .map(|key| {
-            iroha_crypto::bls_normal_pop_prove(key.private_key())
-                .expect("BLS proof of possession")
+            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS proof of possession")
         })
         .collect();
     VerifiedHeightContext::genesis(context, proofs).expect("verified context")
@@ -144,21 +143,14 @@ fn lifecycle_storage_mint_permit_binds_kura_context_and_policy() {
         &policy,
         &genesis_account,
     );
-    assert!(
-        !substituted.authorizes(kura.as_ref(), &verified, &wrong_policy, &genesis_account,)
-    );
+    assert!(!substituted.authorizes(kura.as_ref(), &verified, &wrong_policy, &genesis_account,));
     let substituted = RecoveredLifecycleStorageMintPermitV1::new(
         kura.as_ref(),
         &verified,
         &policy,
         &genesis_account,
     );
-    assert!(!substituted.authorizes(
-        kura.as_ref(),
-        &verified,
-        &policy,
-        &foreign_genesis_account,
-    ));
+    assert!(!substituted.authorizes(kura.as_ref(), &verified, &policy, &foreign_genesis_account,));
 }
 fn state_for(kura: &Arc<Kura>, network_id: iroha_data_model::NetworkId) -> State {
     State::new_with_chain_and_network_id_for_testing(
@@ -206,11 +198,7 @@ fn state_with_consensus_keys(
         network_id,
     )
 }
-fn dummy_block(
-    key: &KeyPair,
-    height: u64,
-    parent: Option<HashOf<BlockHeader>>,
-) -> CommittedBlock {
+fn dummy_block(key: &KeyPair, height: u64, parent: Option<HashOf<BlockHeader>>) -> CommittedBlock {
     dummy_block_with_time(key, height, parent, height)
 }
 fn dummy_block_with_time(
@@ -253,8 +241,7 @@ fn autonomous_lane_carrier_block_for_recovery(
     );
     let mut builder = BlockBuilder::new(header);
     builder.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new())
-            .with_autonomous_lane_payloads(vec![envelope]),
+        BlockExecutionContextBundle::new(Vec::new()).with_autonomous_lane_payloads(vec![envelope]),
     ));
     let leader = usize::try_from(context.leader(0)).expect("leader index fits usize");
     let signed = builder.build_with_signature(
@@ -443,8 +430,7 @@ fn authenticated_artifact_for(
     let validator_set_pops = keys
         .iter()
         .map(|key| {
-            iroha_crypto::bls_normal_pop_prove(key.private_key())
-                .expect("fixture validator PoP")
+            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture validator PoP")
         })
         .collect();
     wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
@@ -505,6 +491,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
     context_store
         .persist(&PersistedHeightContext::from_verified(&verified_genesis))
         .expect("persist signed genesis context");
+
     let recovered = recover_active_height(
         kura.as_ref(),
         state.as_ref(),
@@ -527,8 +514,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         signature_policy,
         BlockSignaturePolicy::RotatingLeader
     ));
-    let Some(RecoveredSuccessorActivationAuthority::CompleteTip(complete_tip)) = activation
-    else {
+    let Some(RecoveredSuccessorActivationAuthority::CompleteTip(complete_tip)) = activation else {
         panic!("a complete signed genesis tip must recover CompleteTip authority")
     };
     let predecessor_frame = complete_tip
@@ -567,8 +553,7 @@ fn hash_only_snapshot_boundary(
     assert!(anchor_height > 0);
     let (genesis_context, keys) = verified_context();
     let kura = Kura::blank_kura_for_testing();
-    let mut state =
-        state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
+    let mut state = state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
     let mut parent = None;
     for height in 1..=anchor_height {
         let block = dummy_block(&keys[0], height, parent);
@@ -665,10 +650,7 @@ fn store_context(kura: &Kura, height: u64) -> PersistedHeightContext {
         .expect("read context store")
         .expect("persisted context exists")
 }
-fn model_successful_snapshot_finalization(
-    kura: &Kura,
-    record: &wire::SnapshotV2BootstrapRecord,
-) {
+fn model_successful_snapshot_finalization(kura: &Kura, record: &wire::SnapshotV2BootstrapRecord) {
     let verified = VerifiedHeightContext::snapshot_bootstrap(record)
         .expect("fixture snapshot bootstrap is valid");
     V2ContextStore::open(kura.sumeragi_v2_storage_root())
@@ -768,8 +750,7 @@ fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
             panic!("snapshot bootstrap must not masquerade as durable CommitQC authority")
         }
     }
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     let persisted = store
         .load(record.context.height)
         .expect("load context")
@@ -781,8 +762,7 @@ fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
 fn audited_snapshot_prefix_classifies_retained_legacy_bodies_without_sidecars() {
     let (genesis_context, keys) = verified_context();
     let kura = Kura::blank_kura_for_testing();
-    let mut state =
-        state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
+    let mut state = state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
     let mut parent = None;
     for height in 1..=3 {
         let block = dummy_block(&keys[0], height, parent);
@@ -978,8 +958,7 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
             power: 1,
         })
         .collect::<Vec<_>>();
-    let attacker_quorum =
-        wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
+    let attacker_quorum = wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
     let child_context = wire::HeightContext {
         network_id: parent_context.network_id,
         protocol_version: parent_context.protocol_version,
@@ -1071,8 +1050,7 @@ fn later_snapshot_before_first_full_finality_is_rejected_without_mutation() {
     persist_checkpoint_and_manifest(kura.as_ref(), &state, &artifact);
     let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(&state);
     let hashes_before = state.committed_block_hashes_snapshot();
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     let context_before = store
         .load(record.context.height)
         .expect("read immutable context")
@@ -1108,8 +1086,7 @@ fn later_snapshot_requires_retained_original_bootstrap_lineage() {
     let (kura, state, record, keys) = hash_only_snapshot_boundary(2, false);
     let verified = VerifiedHeightContext::snapshot_bootstrap(&record)
         .expect("fixture bootstrap context is valid");
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist original boundary context");
@@ -1297,8 +1274,7 @@ fn later_snapshot_uses_historical_lineage_not_current_topology_or_anchor_wsv() {
 fn hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution() {
     let (genesis_context, keys) = verified_context();
     let kura = Kura::blank_kura_for_testing();
-    let mut state =
-        state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
+    let mut state = state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
     let mut parent = None;
     for height in 1..=3 {
         let block = dummy_block(&keys[0], height, parent);
@@ -1333,8 +1309,7 @@ fn hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution() {
         "hash-vector substitution must fail before any storage publication"
     );
 }
-const STARTUP_FINALITY_PLANNER_CHILD_ENV: &str =
-    "IROHA_STARTUP_FINALITY_PLANNER_DEADLOCK_CHILD";
+const STARTUP_FINALITY_PLANNER_CHILD_ENV: &str = "IROHA_STARTUP_FINALITY_PLANNER_DEADLOCK_CHILD";
 const STARTUP_FINALITY_PLANNER_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn run_startup_finality_planner_deadlock_child() {
@@ -1353,8 +1328,7 @@ fn run_startup_finality_planner_deadlock_child() {
         "autonomous payload must use the State-owned two-lane Kura"
     );
     let mut verified = verified_context_for_policy_state(&state, network_id, &keys);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist height-one context");
@@ -1363,12 +1337,7 @@ fn run_startup_finality_planner_deadlock_child() {
         let context = verified.context().clone();
         assert_eq!(context.height, height);
         let block = if height == 4 {
-            autonomous_lane_carrier_block_for_recovery(
-                &fixture.payload,
-                &context,
-                &keys,
-                parent,
-            )
+            autonomous_lane_carrier_block_for_recovery(&fixture.payload, &context, &keys, parent)
         } else {
             dummy_block(&keys[0], height, parent)
         };
@@ -1405,11 +1374,10 @@ fn run_startup_finality_planner_deadlock_child() {
                 .v2_finality_artifact_with_receipt(height)
                 .expect("read parent finality")
                 .expect("parent finality exists");
-            verified =
-                build_verified_successor(&state, &store, &parent_artifact, &parent_receipt)
-                    .expect("derive exact successor context")
-                    .into_parts()
-                    .0;
+            verified = build_verified_successor(&state, &store, &parent_artifact, &parent_receipt)
+                .expect("derive exact successor context")
+                .into_parts()
+                .0;
         }
     }
 
@@ -1431,15 +1399,14 @@ fn startup_finality_planner_deadlock_child() {
 
 #[test]
 fn startup_finality_planner_with_certified_autonomous_tip_does_not_deadlock() {
-    let mut child = Command::new(
-        std::env::current_exe().expect("resolve current iroha_core test executable"),
-    )
-    .arg("startup_finality_planner_deadlock_child")
-    .arg("--nocapture")
-    .arg("--test-threads=1")
-    .env(STARTUP_FINALITY_PLANNER_CHILD_ENV, "1")
-    .spawn()
-    .expect("spawn isolated startup planner regression");
+    let mut child =
+        Command::new(std::env::current_exe().expect("resolve current iroha_core test executable"))
+            .arg("startup_finality_planner_deadlock_child")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(STARTUP_FINALITY_PLANNER_CHILD_ENV, "1")
+            .spawn()
+            .expect("spawn isolated startup planner regression");
     let deadline = Instant::now() + STARTUP_FINALITY_PLANNER_TIMEOUT;
     loop {
         if let Some(status) = child
@@ -1467,8 +1434,7 @@ fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partia
         NonZeroUsize::new(1).expect("non-zero body retention"),
     );
     let state = state_with_consensus_keys(&kura, verified.context().network_id, &keys);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist height-one context");
@@ -1488,11 +1454,10 @@ fn replay_body_preflight_rejects_a_later_unavailable_evicted_body_without_partia
                 .v2_finality_artifact_with_receipt(height)
                 .expect("read parent finality")
                 .expect("parent finality exists");
-            verified =
-                build_verified_successor(&state, &store, &parent_artifact, &parent_receipt)
-                    .expect("derive exact successor context")
-                    .into_parts()
-                    .0;
+            verified = build_verified_successor(&state, &store, &parent_artifact, &parent_receipt)
+                .expect("derive exact successor context")
+                .into_parts()
+                .0;
         }
     }
     let evicted_height = NonZeroUsize::new(2).expect("non-zero evicted height");
@@ -1544,8 +1509,7 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
     let (verified, current_keys) = verified_context();
     let current_context = verified.context().clone();
     let block = dummy_block(&current_keys[0], current_context.height, None);
-    let parent =
-        authenticated_artifact_for(current_context.clone(), block.as_ref(), &current_keys);
+    let parent = authenticated_artifact_for(current_context.clone(), block.as_ref(), &current_keys);
     parent.verify().expect("authenticated non-boundary parent");
     assert_eq!(
         successor_proofs_of_possession(&parent),
@@ -1608,8 +1572,7 @@ fn durable_block_before_wsv_reopens_only_its_persisted_height_context() {
     let block = dummy_block(&keys[0], 1, None);
     kura.store_block(block.clone())
         .expect("persist canonical block");
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist active context");
@@ -1691,8 +1654,7 @@ fn checkpoint_before_finality_reopens_same_height_without_reapplying() {
     let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist interrupted post-WSV checkpoint");
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist active context");
@@ -1727,8 +1689,7 @@ fn finality_complete_tip_with_incomplete_lane_completion_reopens_same_height() {
     commit_to_state(&state, &block, &context);
     let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
     persist_complete_height(kura.as_ref(), &state, &artifact);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist active context");
@@ -1784,8 +1745,7 @@ fn applied_tip_without_persisted_checkpoint_fails_closed() {
     kura.store_block(block.clone())
         .expect("persist canonical block");
     commit_to_state(&state, &block, &context);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist active context");
@@ -1831,14 +1791,12 @@ fn parent_finality_and_immutable_context_mismatch_fails_closed() {
     let proofs = keys
         .iter()
         .map(|key| {
-            iroha_crypto::bls_normal_pop_prove(key.private_key())
-                .expect("BLS proof of possession")
+            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS proof of possession")
         })
         .collect();
     let different = VerifiedHeightContext::genesis(different, proofs)
         .expect("different context is independently valid");
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&different))
         .expect("persist mismatching context");
@@ -1925,8 +1883,7 @@ fn startup_audit_is_reused_by_planning_and_recovery_then_cleared() {
         .expect("persist authenticated parent context");
     kura.clear_v2_finality_verification_cache_for_test();
     kura.reset_v2_finality_crypto_verifications_for_test();
-    let first_plan =
-        plan_v2_startup_replay(kura.as_ref()).expect("audit and plan complete height");
+    let first_plan = plan_v2_startup_replay(kura.as_ref()).expect("audit and plan complete height");
     assert_eq!(
         kura.v2_finality_crypto_verifications_for_test(),
         1,
@@ -1935,8 +1892,7 @@ fn startup_audit_is_reused_by_planning_and_recovery_then_cleared() {
     assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
     kura.clear_v2_finality_verification_cache_for_test();
     kura.reset_startup_replay_historical_payload_reads_for_test();
-    let second_plan =
-        plan_v2_startup_replay(kura.as_ref()).expect("reuse exact startup inventory");
+    let second_plan = plan_v2_startup_replay(kura.as_ref()).expect("reuse exact startup inventory");
     assert_eq!(first_plan.complete_prefix_height(), 1);
     assert_eq!(second_plan.complete_prefix_height(), 1);
     assert_eq!(
@@ -2099,8 +2055,7 @@ fn startup_plan_rejects_an_incomplete_interior_height() {
     kura.store_block(first.clone())
         .expect("persist first canonical block");
     commit_to_state(&state, &first, verified.context());
-    let artifact =
-        authenticated_artifact_for(verified.context().clone(), first.as_ref(), &keys);
+    let artifact = authenticated_artifact_for(verified.context().clone(), first.as_ref(), &keys);
     // Model a crash after manifest publication but before finality, followed by an
     // impossible later durable block. The gap is interior and must never be treated as a
     // multi-height recovery suffix.
@@ -2125,8 +2080,7 @@ fn startup_plan_accepts_each_post_checkpoint_crash_window_as_one_tip() {
     kura.store_block(block.clone())
         .expect("persist canonical block");
     commit_to_state(&state, &block, verified.context());
-    let artifact =
-        authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
+    let artifact = authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
     let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist checkpoint-only crash image");
@@ -2139,8 +2093,7 @@ fn startup_plan_accepts_each_post_checkpoint_crash_window_as_one_tip() {
             .with_authenticated_v2_commit_authority(&artifact),
     )
     .expect("persist manifest-only-before-finality crash image");
-    let manifest_only =
-        plan_v2_startup_replay(kura.as_ref()).expect("manifest tip is recoverable");
+    let manifest_only = plan_v2_startup_replay(kura.as_ref()).expect("manifest tip is recoverable");
     assert_eq!(manifest_only.complete_prefix_height(), 0);
     assert_eq!(manifest_only.pending_tip_height(), Some(1));
     let _commit_receipt = kura
@@ -2207,8 +2160,7 @@ fn startup_plan_rejects_finality_bound_to_an_unauthenticated_manifest() {
     kura.store_block(block.clone())
         .expect("persist canonical block");
     commit_to_state(&state, &block, verified.context());
-    let artifact =
-        authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
+    let artifact = authenticated_artifact_for(verified.context().clone(), block.as_ref(), &keys);
     let checkpoint = crate::snapshot::canonical_state_snapshot_hash(&state);
     kura.store_wsv_checkpoint(1, block.as_ref().hash(), checkpoint)
         .expect("persist WSV checkpoint");
@@ -2241,14 +2193,12 @@ fn finalized_tip_derives_one_idempotent_successor_context() {
     commit_to_state(&state, &block, &context);
     let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
     persist_complete_height(kura.as_ref(), &state, &artifact);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist parent context");
-    let first =
-        recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
-            .expect("derive successor");
+    let first = recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
+        .expect("derive successor");
     assert_eq!(first.verified_context().context().height, 2);
     assert_eq!(
         first.verified_context().context().parent_commit_qc,
@@ -2317,9 +2267,8 @@ fn finalized_tip_derives_one_idempotent_successor_context() {
     }
     let first_context = first.verified_context().context().clone();
     drop(first);
-    let repeated =
-        recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
-            .expect("reopen identical successor");
+    let repeated = recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
+        .expect("reopen identical successor");
     assert_eq!(repeated.verified_context().context(), &first_context);
     assert!(repeated.pending_kura_apply().is_none());
     assert!(matches!(
@@ -2341,8 +2290,7 @@ fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
     commit_to_state(&state, &block, &context);
     let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
     let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist canonical predecessor context");
@@ -2361,10 +2309,8 @@ fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
     let successor = build_verified_successor(&state, &store, &artifact, &receipt)
         .expect("rebuild successor before foreign Kura rejection");
     assert!(matches!(
-        successor.into_parts_with_lifecycle_storage_authority(
-            foreign_kura.as_ref(),
-            &genesis_account,
-        ),
+        successor
+            .into_parts_with_lifecycle_storage_authority(foreign_kura.as_ref(), &genesis_account,),
         Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 2 })
     ));
 }
@@ -2381,8 +2327,7 @@ fn successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt() {
     commit_to_state(&state, &block, &context);
     let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
     let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
-    let store =
-        V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+    let store = V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     store
         .persist(&PersistedHeightContext::from_verified(&verified))
         .expect("persist canonical predecessor context");

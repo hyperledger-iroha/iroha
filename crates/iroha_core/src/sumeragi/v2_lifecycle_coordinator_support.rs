@@ -347,6 +347,8 @@ enum SourceId {
     RegistryRecovery,
     RegistryRecoveryImpl,
     ReplayAuthority,
+    ReplayAuthorityBase,
+    ReplayAuthorityCertifiedBody,
     Runner,
     RunnerHeightDriver,
     RunnerOuterCursor,
@@ -389,6 +391,8 @@ impl SourceId {
             "registry_recovery" => Self::RegistryRecovery,
             "registry_recovery_impl" => Self::RegistryRecoveryImpl,
             "replay_authority" => Self::ReplayAuthority,
+            "replay_authority_base" => Self::ReplayAuthorityBase,
+            "replay_authority_certified_body" => Self::ReplayAuthorityCertifiedBody,
             "runner" => Self::Runner,
             "runner_height_driver" => Self::RunnerHeightDriver,
             "runner_outer_cursor" => Self::RunnerOuterCursor,
@@ -500,6 +504,12 @@ fn source(id: SourceId) -> String {
                 include_str!("v2_lifecycle_replay_authority_output_recovery.rs"),
                 1,
             ),
+        SourceId::ReplayAuthorityBase => {
+            include_str!("v2_lifecycle_replay_authority.rs").to_owned()
+        }
+        SourceId::ReplayAuthorityCertifiedBody => {
+            include_str!("v2_lifecycle_replay_authority_certified_body.rs").to_owned()
+        }
         SourceId::Runner => include_str!("v2_runner.rs").to_owned(),
         SourceId::RunnerHeightDriver => {
             include_str!("v2_runner/lifecycle_height_driver.rs").to_owned()
@@ -736,9 +746,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 47 {
+    if current.is_some() || cases.len() != 50 {
         return Err(format!(
-            "source contract asset must contain exactly 47 closed cases"
+            "source contract asset must contain exactly 50 closed cases"
         ));
     }
     Ok(cases)
@@ -869,7 +879,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 47, "source contract inventory drifted");
+    assert_eq!(ids.len(), 50, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

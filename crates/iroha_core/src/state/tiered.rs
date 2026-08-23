@@ -37,7 +37,7 @@ pub struct TieredStateBackend {
     enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     hot_retained_keys: usize,
-    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
+    /// Hot-tier byte budget using canonical encoded-key bytes plus measured value bytes.
     hot_retained_bytes: u64,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     hot_retained_grace_snapshots: u64,
@@ -475,8 +475,8 @@ impl TieredStateBackend {
                 cold_reused_bytes: 0,
                 hot_promotions: 0,
                 hot_demotions: 0,
-                hot_grace_overflow_keys: 0,
-                hot_grace_overflow_bytes: 0,
+                hot_budget_overflow_keys: 0,
+                hot_budget_overflow_bytes: 0,
             };
             return Ok(TieredSnapshotPlan {
                 root,
@@ -508,12 +508,12 @@ impl TieredStateBackend {
             max_bytes: u64,
         ) {
             let meta = entries.get(&entry.id).expect("metadata populated");
-            let entry_bytes = meta.value_size_bytes as u64;
+            let entry_bytes = entry.hot_budget_bytes(meta);
             if enforce_budget {
                 if hot_ids.len() >= max_keys {
                     return;
                 }
-                if max_bytes != 0 && retained_bytes.saturating_add(entry_bytes) > max_bytes {
+                if !hot_budget_has_capacity(*retained_bytes, entry_bytes, max_bytes) {
                     return;
                 }
             }
@@ -582,9 +582,8 @@ impl TieredStateBackend {
                     && !payloads.contains_key(&entry.id)
                 {
                     if hot_ids.insert(entry.id) {
-                        retained_bytes = retained_bytes.saturating_add(
-                            u64::try_from(meta.value_size_bytes).unwrap_or(u64::MAX),
-                        );
+                        retained_bytes =
+                            retained_bytes.saturating_add(entry.hot_budget_bytes(meta));
                         hot_list.push(entry.id);
                     }
                     hot_manifest_entries.push(entry.manifest_entry(meta, None));
@@ -626,27 +625,27 @@ impl TieredStateBackend {
                 meta.last_hot_snapshot = snapshot_idx;
             }
         }
-        let hot_grace_overflow_keys = if self.hot_retained_keys == 0 {
+        let hot_budget_overflow_keys = if self.hot_retained_keys == 0 {
             0
         } else {
             hot_ids.len().saturating_sub(self.hot_retained_keys)
         };
-        let hot_grace_overflow_bytes = if self.hot_retained_bytes == 0 {
+        let hot_budget_overflow_bytes = if self.hot_retained_bytes == 0 {
             0
         } else {
             retained_bytes.saturating_sub(self.hot_retained_bytes)
         };
-        if (self.hot_retained_keys > 0 && hot_grace_overflow_keys > 0)
-            || (self.hot_retained_bytes > 0 && hot_grace_overflow_bytes > 0)
+        if (self.hot_retained_keys > 0 && hot_budget_overflow_keys > 0)
+            || (self.hot_retained_bytes > 0 && hot_budget_overflow_bytes > 0)
         {
             iroha_logger::warn!(
                 hot_limit_keys = self.hot_retained_keys,
                 hot_limit_bytes = self.hot_retained_bytes,
                 hot_entries = hot_ids.len(),
                 hot_bytes = retained_bytes,
-                hot_grace_overflow_keys,
-                hot_grace_overflow_bytes,
-                "tiered-state: hot tier budget exceeded due to grace retention"
+                hot_budget_overflow_keys,
+                hot_budget_overflow_bytes,
+                "tiered-state: hot tier budget exceeded by grace or unspillable retention"
             );
         }
         let manifest = TieredSnapshotManifest {
@@ -659,8 +658,8 @@ impl TieredStateBackend {
             cold_reused_bytes: 0,
             hot_promotions,
             hot_demotions,
-            hot_grace_overflow_keys,
-            hot_grace_overflow_bytes,
+            hot_budget_overflow_keys,
+            hot_budget_overflow_bytes,
         };
         Ok(TieredSnapshotPlan {
             root,
@@ -4988,10 +4987,10 @@ pub struct TieredSnapshotManifest {
     pub hot_promotions: usize,
     /// Entries demoted into the cold tier since the previous snapshot.
     pub hot_demotions: usize,
-    /// Hot-tier key budget overflow caused by grace retention.
-    pub hot_grace_overflow_keys: usize,
-    /// Hot-tier byte budget overflow caused by grace retention.
-    pub hot_grace_overflow_bytes: u64,
+    /// Hot-tier key budget overflow in the latest snapshot.
+    pub hot_budget_overflow_keys: usize,
+    /// Hot-tier byte budget overflow in the latest snapshot.
+    pub hot_budget_overflow_bytes: u64,
 }
 /// Per-entry metadata persisted in manifests.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
@@ -5006,13 +5005,7 @@ pub struct TieredManifestEntry {
     spill_path: Option<PathBuf>,
     spill_bytes: Option<u64>,
 }
-impl TieredManifestEntry {
-    /// Returns the deterministic payload size for the entry.
-    #[must_use]
-    pub fn value_size_bytes(&self) -> usize {
-        self.value_size_bytes
-    }
-}
+include!("tiered_hot_byte_accounting.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5667,30 +5660,6 @@ mod tests {
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
     }
     #[test]
-    fn record_world_snapshot_with_payload_keeps_unspillable_entries_hot() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
-        let mut world = World::default();
-        let (key1, value1) = dummy_state_entry(1);
-        world.smart_contract_state.insert(key1, value1);
-        backend
-            .record_world_snapshot(&world)
-            .expect("initial snapshot");
-        let (key2, value2) = dummy_state_entry(2);
-        world
-            .smart_contract_state
-            .insert(key2.clone(), value2.clone());
-        let mut payload = TieredSnapshotPayload::default();
-        payload.push_value(TieredKeyHandle::SmartContractState(key2), Some(value2));
-        backend
-            .record_world_snapshot_with_payload(&payload)
-            .expect("payload snapshot");
-        let manifest = backend.last_manifest().expect("manifest recorded");
-        assert_eq!(manifest.hot_entries.len(), 2);
-        assert!(manifest.cold_entries.is_empty());
-    }
-    #[test]
     fn da_store_root_used_when_cold_root_missing() {
         let temp = tempdir().expect("tmpdir");
         let da_root = temp.path().join("da");
@@ -5906,27 +5875,6 @@ mod tests {
         let manifest2 = backend.last_manifest().expect("manifest recorded");
         let hot_hash2 = manifest2.hot_entries[0].key_hash_hex.clone();
         assert_eq!(hot_hash2, hot_hash, "hot grace should preserve hot entry");
-    }
-    #[test]
-    fn hot_grace_allows_budget_overflow_for_previous_hot_entries() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
-        let mut world = World::default();
-        let (key1, value1) = dummy_state_entry(1);
-        let (key2, value2) = dummy_state_entry(2);
-        world.smart_contract_state.insert(key1, value1);
-        world.smart_contract_state.insert(key2, value2);
-        backend
-            .record_world_snapshot(&world)
-            .expect("first snapshot");
-        backend.reconfigure(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
-        backend
-            .record_world_snapshot(&world)
-            .expect("second snapshot");
-        let manifest = backend.last_manifest().expect("manifest recorded");
-        assert_eq!(manifest.hot_entries.len(), 2);
-        assert_eq!(manifest.hot_grace_overflow_keys, 1);
     }
     #[test]
     fn tiered_backend_reports_budget_limits_and_cold_bytes() {

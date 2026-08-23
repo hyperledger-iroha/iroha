@@ -53,7 +53,6 @@ def load_checker():
 
 def copy_chain_epoch_compact_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
     """Copy the async source and reconstructed chain/epoch source."""
-
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     async_name = "SumeragiV2AsyncNetwork.tla"
@@ -96,7 +95,6 @@ assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPO
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
-
     path = Path(__file__).with_name(filename)
     if path.is_symlink() or not path.is_file():
         raise RuntimeError(f"proof-ledger test component is unavailable: {path}")
@@ -106,7 +104,6 @@ def _execute_test_component(filename: str) -> None:
 
 def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
     """Reject lexical test shadows and ownership drift across case components."""
-
     expected_component_providers = {
         "test_async_source_fidelity_pins_validator_progress_capacity":
             "sumeragi_v2_proof_ledger_async_source_cases.py",
@@ -136,7 +133,6 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
         "build_cross_tool_fixture":
             "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     }
-
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
         providers: dict[str, list[str]] = {}
         for path, source in sources:
@@ -150,7 +146,6 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
                 ):
                     continue
                 providers.setdefault(node.name, []).append(path.name)
-
         errors = [
             f"test provider {name} is not unique: {locations!r}"
             for name, locations in sorted(providers.items())
@@ -163,7 +158,6 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
                     f"{expected_provider}; found {providers.get(name)!r}"
                 )
         return errors
-
     main_path = Path(__file__)
     canonical_sources = (
         (main_path, main_path.read_text(encoding="utf-8")),
@@ -176,7 +170,6 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
         ),
     )
     assert provider_errors(canonical_sources) == []
-
     target = "test_exact_output_production_source_mutations_fail_closed"
     shadow = f"\n\ndef {target}():\n    pass\n"
     mutated_sources = (
@@ -192,7 +185,6 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
 
 def checker_source_paths() -> tuple[Path, ...]:
     """Return the canonical checker and its exact lexical component inventory."""
-
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
     assert len(filenames) == len(set(filenames)) == 36
@@ -201,7 +193,6 @@ def checker_source_paths() -> tuple[Path, ...]:
 
 def test_release_inventory_checker_has_one_component_owned_provider() -> None:
     """Reject monolithic shadows of component-owned checker providers."""
-
     expected_providers = {
         "_production_liveness_release_inventory_errors": (
             "sumeragi_v2_proof_ledger_release_inventory_contracts.py"
@@ -210,7 +201,6 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
             "sumeragi_v2_proof_ledger_cross_tool_contracts.py"
         ),
     }
-
     def provider_errors(sources: tuple[tuple[Path, str], ...]) -> list[str]:
         providers: dict[str, list[str]] = {}
         for path, source in sources:
@@ -225,13 +215,11 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
             for name, expected_provider in expected_providers.items()
             if providers.get(name) != [expected_provider]
         ]
-
     canonical_sources = tuple(
         (path, path.read_text(encoding="utf-8"))
         for path in checker_source_paths()
     )
     assert provider_errors(canonical_sources) == []
-
     shadows = {
         "_production_liveness_release_inventory_errors": (
             "\n\ndef _production_liveness_release_inventory_errors(repo_root=ROOT_DIR):\n"
@@ -269,7 +257,6 @@ def test_checker_remains_python39_compatible() -> None:
 
 def copy_transport_hardening_fixture(tmp_path: Path) -> None:
     """Copy only production sources bound by the sidecar transport checker."""
-
     for relative in (
         Path("crates/iroha_core/src/lib.rs"),
         Path("crates/iroha_core/src/merge_sidecar.rs"),
@@ -289,7 +276,6 @@ def copy_transport_hardening_fixture(tmp_path: Path) -> None:
 
 def copy_process_lifetime_worker_launch_fixture(tmp_path: Path) -> Path:
     """Copy the authoritative worker-launch latch and its guard."""
-
     repo_root = tmp_path / "repo"
     for relative in (
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
@@ -303,7 +289,6 @@ def copy_process_lifetime_worker_launch_fixture(tmp_path: Path) -> Path:
 
 def copy_serve_lifecycle_production_fixture(tmp_path: Path, module) -> Path:
     """Copy the coordinator-owned Serve lifecycle and regression closure."""
-
     for relative in (
         Path("crates/iroha_core/src/sumeragi/v2_body_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"),
@@ -331,7 +316,6 @@ def copy_serve_lifecycle_production_fixture(tmp_path: Path, module) -> Path:
 
 def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
     """Copy only sources bound by the exact-reply writer deadline checker."""
-
     for relative in (
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
@@ -348,7 +332,6 @@ def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
 
 def copy_reply_writer_deadline_formal_fixture(tmp_path: Path, module) -> Path:
     """Copy the complete deadline proof and mutation corpus."""
-
     formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True, exist_ok=True)
     for name in (
@@ -367,7 +350,6 @@ def copy_reply_writer_deadline_formal_fixture(tmp_path: Path, module) -> Path:
 
 def copy_typed_rollover_handoff_formal_fixture(tmp_path: Path, module) -> Path:
     """Copy the complete typed rollover proof and mutation corpus."""
-
     formal_dir = tmp_path / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True, exist_ok=True)
     for name in module._TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256:
@@ -389,7 +371,6 @@ def copy_liveness_ownership_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy the complete exact-ingress/adequate-leader mutation corpus."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -416,7 +397,6 @@ def copy_serve_scheduler_ordinal_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy all six exact Serve scheduler mutation pairs."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -442,7 +422,6 @@ def copy_indexed_service_activation_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy the indexed activation lasso and re-entry mutation matrix."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -464,7 +443,6 @@ def copy_commit_import_provenance_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy the exact Commit-import source seal and mutation matrix."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -490,7 +468,6 @@ def copy_historical_discovery_occurrence_rank_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy the historical-discovery count-first rank mutation pair."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -519,7 +496,6 @@ def copy_replenishment_regression_mutation_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
     """Copy all seven newly registered replenishment mutation families."""
-
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
@@ -536,7 +512,6 @@ def copy_replenishment_regression_mutation_fixture(
 
 def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
     """Copy the shared QueuePlan identity kernel and every production consumer."""
-
     for relative in (
         Path("crates/iroha_core/src/torii_proxy.rs"),
         Path("crates/iroha_core/src/queue.rs"),
@@ -550,7 +525,6 @@ def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
 
 def copy_reviewed_rust_include_components(tmp_path: Path) -> None:
     """Copy each reviewed include closure whose parent is in the fixture."""
-
     for parent_relative, component_relatives in REVIEWED_RUST_INCLUDE_MANIFESTS.items():
         parent = tmp_path / parent_relative
         if not parent.is_file():
@@ -564,7 +538,6 @@ def copy_reviewed_rust_include_components(tmp_path: Path) -> None:
 
 def copy_flat_async_architecture_fixture(tmp_path: Path, module) -> Path:
     """Materialize the async base and virtual facade for architecture tests."""
-
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
     shutil.copy2(
@@ -585,7 +558,6 @@ def copy_acyclic_liveness_debt_topology_fixture(
     tmp_path: Path, module
 ) -> Path:
     """Copy the lower retained-lock vocabulary and every debt consumer."""
-
     formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
     for name in (
@@ -608,7 +580,6 @@ def mutate_tla_operator(
     new: str,
 ) -> str:
     """Replace one exact fragment inside a named top-level TLA+ operator."""
-
     declaration = re.search(
         rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==", source
     )
@@ -635,7 +606,6 @@ def replace_tla_operator_body(
     replacement: str,
 ) -> str:
     """Replace the complete body of one named top-level TLA+ operator."""
-
     declaration = re.search(
         rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==", source
     )
@@ -669,7 +639,6 @@ def mutate_tla_theorem(
     new: str,
 ) -> str:
     """Replace one exact fragment inside a named top-level TLA+ theorem."""
-
     declaration = re.search(
         rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
         source,
@@ -693,7 +662,6 @@ def mutate_tla_theorem(
 
 def delete_tla_theorem_token(source: str, symbol: str, token: str) -> str:
     """Delete every occurrence of a token inside one top-level theorem."""
-
     declaration = re.search(
         rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
         source,
@@ -727,7 +695,6 @@ def mutate_rust_item_source(
     new: str,
 ) -> None:
     """Mutate one exact fragment inside one real named Rust function item."""
-
     source = path.read_text(encoding="utf-8")
     items = module.rust_items(source, item_name)
     assert len(items) == 1, item_name
@@ -740,7 +707,6 @@ def mutate_rust_item_source(
 
 def mutate_source_once(path: Path, old: str, new: str) -> None:
     """Replace one exact source fragment without selecting a Rust item."""
-
     source = path.read_text(encoding="utf-8")
     assert source.count(old) == 1, (path, old)
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
@@ -755,7 +721,6 @@ def mutate_rust_item_source_in_context(
     new: str,
 ) -> None:
     """Mutate one exact Rust item selected by name and brace context."""
-
     source = path.read_text(encoding="utf-8")
     items = [
         item
@@ -772,7 +737,6 @@ def mutate_rust_item_source_in_context(
 
 def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
     """Seal a claim's current authoritative call items for mutation fixtures."""
-
     def freeze(call_sites):
         frozen = []
         for call_site in call_sites:
@@ -795,7 +759,6 @@ def freeze_cross_tool_claim_call_sites(module, claim, root: Path = ROOT_DIR):
                 )
             )
         return tuple(frozen)
-
     supplemental = tuple(
         replace(
             kernel,
@@ -834,15 +797,12 @@ def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
     module = load_checker()
     source = 'Value == "kept" (* stripped *)\n'
     module.strip_tla_comments.cache_clear()
-
     assert module.strip_tla_comments(source) == 'Value == "    "               \n'
     first = module.strip_tla_comments.cache_info()
     assert (first.hits, first.misses, first.maxsize) == (0, 1, 64)
-
     assert module.strip_tla_comments(source) == 'Value == "    "               \n'
     second = module.strip_tla_comments.cache_info()
     assert (second.hits, second.misses, second.maxsize) == (1, 1, 64)
-
     assert module.strip_tla_comments(
         source, preserve_string_contents=True
     ) == 'Value == "kept"               \n'
@@ -855,7 +815,6 @@ def test_repository_ledger_has_machine_checked_completion() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     result = module.validate_ledger(ledger)
-
     height = next(
         obligation
         for obligation in ledger["obligations"]

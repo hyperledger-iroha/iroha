@@ -48,12 +48,7 @@ fn can_burn_asset_definition(
     .into()
 }
 fn contract_call_noop_program() -> Vec<u8> {
-    let src = r#"
-seiyaku ContractCallNoopTest {
-
-  kotoage fn main() authorize("CanEnactGovernance") {}
-}
-"#;
+    let src = include_str!("fixtures/contracts_call/noop.ko");
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract call no-op test program")
@@ -268,19 +263,7 @@ seiyaku ContractCallN3xLikeTest {{
         .expect("compile contract call n3x-like test program")
 }
 fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
-    let src = r#"
-seiyaku ContractViewTrapTest {
-
-  error enum ViewError {
-    Boom = 1
-  }
-
-  view fn explode() -> int {
-    require(false, ViewError::Boom);
-    return 1;
-  }
-}
-"#;
+    let src = include_str!("fixtures/contracts_call/trap.ko");
     CompilerSession::default()
         .build(CompileRequest {
             source: src,
@@ -290,133 +273,19 @@ seiyaku ContractViewTrapTest {
         .artifact
 }
 fn contract_view_bytes_program() -> Vec<u8> {
-    let src = r#"
-seiyaku ContractViewBytesTest {
-
-  state AssetDefinitionId Asset;
-  state bytes Target;
-
-  fn configure_impl(AssetDefinitionId asset_input, bytes target_bytes) {
-    Asset = asset_input;
-    Target = target_bytes;
-  }
-
-  hajimari(AssetDefinitionId asset_input) {
-    Asset = asset_input;
-    Target = b"";
-  }
-
-  kotoage fn configure(AssetDefinitionId asset_input, bytes target_bytes) authorize("CanEnactGovernance") {
-    configure_impl(asset_input: asset_input, target_bytes: target_bytes);
-  }
-
-  view fn literal() -> bytes {
-    return b"risk";
-  }
-
-  view fn target() -> bytes {
-    return Target;
-  }
-
-  view fn config() -> (AssetDefinitionId, bytes) {
-    return (Asset, Target);
-  }
-}
-"#;
+    let src = include_str!("fixtures/contracts_call/bytes.ko");
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract view bytes test program")
 }
 fn contract_view_account_id_program() -> Vec<u8> {
-    let src = r#"
-seiyaku ContractViewAccountIdTest {
-
-  state AccountId Stored;
-
-  fn bind_impl(AccountId account_id) {
-    Stored = account_id;
-  }
-
-  hajimari(AccountId account_id) {
-    bind_impl(account_id: account_id);
-  }
-
-  kotoage fn bind(AccountId account_id) authorize("CanEnactGovernance") {
-    bind_impl(account_id: account_id);
-  }
-
-  view fn literal() -> AccountId {
-    return context::authority();
-  }
-
-  view fn stored() -> AccountId {
-    return Stored;
-  }
-
-  view fn stored_tuple() -> (AccountId, int) {
-    return (Stored, 1);
-  }
-}
-"#;
+    let src = include_str!("fixtures/contracts_call/account_id.ko");
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract view AccountId test program")
 }
 fn contract_call_configure_account_map_program() -> Vec<u8> {
-    let src = r#"
-seiyaku ContractCallConfigureAccountMapTest {
-
-  error enum ConfigureError {
-    UnauthorizedExisting = 1,
-    UnauthorizedInitial = 2
-  }
-
-  state StateMap<Name, AccountId> ConfigAccount;
-  state StateMap<Name, int> ConfigInt;
-
-  fn key_admin() -> Name {
-    return Name::parse("admin");
-  }
-
-  fn key_inori() -> Name {
-    return Name::parse("inori");
-  }
-
-  fn key_paused() -> Name {
-    return Name::parse("paused");
-  }
-
-  fn initialize_config_defaults() {
-    if (!ConfigInt.contains(key_paused())) {
-      ConfigInt[key_paused()] = 0;
-    }
-  }
-
-  kotoage fn configure(AccountId admin_account, AccountId inori_account) authorize("CanEnactGovernance") {
-    let has_admin = ConfigAccount.contains(key_admin());
-    if (has_admin) {
-      require(context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin_account), ConfigureError::UnauthorizedExisting);
-    } else {
-      require(context::authority() == admin_account, ConfigureError::UnauthorizedInitial);
-    }
-    ConfigAccount[key_admin()] = admin_account;
-    ConfigAccount[key_inori()] = inori_account;
-    initialize_config_defaults();
-  }
-
-  view fn admin() -> AccountId {
-    return ConfigAccount.get(key_admin()).unwrap_or(context::authority());
-  }
-
-  view fn inori() -> AccountId {
-    return ConfigAccount.get(key_inori()).unwrap_or(context::authority());
-  }
-
-  view fn paused() -> int {
-    return ConfigInt.get(key_paused()).unwrap_or(0);
-  }
-}
-"#;
+    let src = include_str!("fixtures/contracts_call/account_map.ko");
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract call configure account-map test program")

@@ -675,9 +675,24 @@ fn run_lifecycle_active_height(
                     // Keep only the lane transport needed to recover an exact
                     // certified sidecar or finish durable output handoff alive.
                     // In particular, do not reconcile or advance the reducer,
-                    // wake generic deferred Apply work, or admit consensus
-                    // ingress while the lane-only Completion barrier owns the
-                    // current cut.
+                    // wake generic deferred Apply work, or admit ordinary
+                    // consensus ingress while the lane-only Completion barrier
+                    // owns the current cut. Once Apply is terminal, the decided-
+                    // lane recovery seam may consume one authenticated lane-local
+                    // carrier needed to persist the exact certified artifact.
+                    if producer_claim.permits_decided_lane_recovery_ingress() {
+                        drain_decided_lane_recovery_ingress(
+                            receiver,
+                            executor,
+                            services,
+                            &mut lane_work,
+                            executor.current_tag().view(),
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server,
+                        )?;
+                    }
                     drain_lane_relay_ingress(
                         lane_relay_rx,
                         &mut lane_work,

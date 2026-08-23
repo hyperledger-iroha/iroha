@@ -1357,7 +1357,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         lifecycle_run_inner_source,
         &[
             "executor.ready_to_finish()",
-            "if !ready_to_finish || producer_turn.is_some()",
+            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
             "let finalization_ready =",
             "activated.ready_for_finalized_rollover(&mut active_runner)",

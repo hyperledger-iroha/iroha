@@ -309,6 +309,42 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
 fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
     use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+    fn result_bearing_retry_block(
+        state: &State,
+        update_header: impl FnOnce(&mut BlockHeader),
+    ) -> CommittedBlock {
+        let signer = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            signer.public_key().clone(),
+        )]);
+        let valid = ValidBlock::new_dummy_and_modify_header(signer.private_key(), update_header);
+        let mut signed: SignedBlock = valid.into();
+        let snapshot = state.block(signed.header()).axt_policy_snapshot();
+        signed
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                snapshot,
+            )
+            .expect("attach the required retry-fixture AXT policy snapshot");
+        let signature =
+            iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), signed.header().hash())
+                .expect("sign the result-bearing retry fixture block");
+        signed
+            .replace_signatures(
+                [iroha_data_model::block::BlockSignature::new(0, signature)]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("replace the retry fixture signature after attaching results");
+        ValidBlock::new_unverified_for_tests(signed)
+            .commit(&topology)
+            .unpack(|_| {})
+            .expect("commit the result-bearing retry fixture block")
+    }
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
@@ -327,7 +363,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         [],
     );
     let state = State::new(world, kura.clone(), query_handle);
-    let block1 = new_dummy_block_with_payload(|header| {
+    let block1 = result_bearing_retry_block(&state, |header| {
         header.set_height(NonZeroU64::new(1).unwrap());
         header.creation_time_ms = 0;
     });
@@ -356,7 +392,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
     let _ = state_block1.apply_without_execution(&block1, Vec::new());
     state_block1.commit().unwrap();
     persist_committed_test_block(&kura, &block1);
-    let block2 = new_dummy_block_with_payload(|header| {
+    let block2 = result_bearing_retry_block(&state, |header| {
         header.set_height(NonZeroU64::new(2).unwrap());
         header.creation_time_ms = 6;
     });
@@ -404,7 +440,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
             })
         );
     }
-    let block3 = new_dummy_block_with_payload(|header| {
+    let block3 = result_bearing_retry_block(&state, |header| {
         header.set_height(NonZeroU64::new(3).unwrap());
         header.creation_time_ms = 12;
     });

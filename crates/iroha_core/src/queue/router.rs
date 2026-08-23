@@ -13269,88 +13269,72 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-    #[test]
-    fn asset_definition_permission_grant_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+    macro_rules! stored_alias_permission_route_test {
+        (
+            $name:ident,
+            $operation:ident,
+            $permission:path,
+            $without_state_message:literal,
+            $with_state_message:literal $(,)?
+        ) => {
+            #[test]
+            fn $name() {
+                let (alice_id, alice_keypair) = gen_account_in("wonderland");
+                let (bob_id, _) = gen_account_in("wonderland");
+                let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
+                    routed_dataspace_fixture("paynet");
+                let asset_definition = AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("cash", "universal").expect("asset definition domain"),
+                    "pkr".parse().expect("asset definition name"),
+                );
+                type Permission = $permission;
+                let permission = Permission {
                     asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("asset-definition permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+                };
+                let tx = sample_transaction(
+                    &alice_id,
+                    alice_keypair.private_key(),
+                    vec![InstructionBox::from($operation::account_permission(
+                        permission, bob_id,
+                    ))],
+                );
+                let state = state_with_bound_numeric_asset_definition(
+                    &asset_definition,
+                    "pkr#paynet",
+                    "pkr",
+                    &alice_id,
+                    dataspace_catalog,
+                    lane_catalog,
+                );
+                assert_eq!(
+                    router
+                        .try_route_without_state(&tx)
+                        .expect($without_state_message),
+                    None
+                );
+                assert_eq!(
+                    router
+                        .try_route_with_view(&tx, &state.view())
+                        .expect($with_state_message),
+                    RoutingDecision::new(lane_id, dataspace_id)
+                );
+            }
+        };
     }
-    #[test]
-    fn asset_definition_permission_revoke_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Revoke::account_permission(
-                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("asset-definition permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias permission revoke route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
+    stored_alias_permission_route_test!(
+        asset_definition_permission_grant_uses_stored_alias_dataspace,
+        Grant,
+        iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
+        "asset-definition permission alias lookup should defer to state",
+        "stored alias permission route must resolve with state",
+    );
+    stored_alias_permission_route_test!(
+        asset_definition_permission_revoke_uses_stored_alias_dataspace,
+        Revoke,
+        iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
+        "asset-definition permission alias lookup should defer to state",
+        "stored alias permission revoke route must resolve with state",
+    );
     #[test]
     fn asset_home_coverage_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -16149,88 +16133,13 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-    #[test]
-    fn asset_home_coverage_modify_asset_metadata_permission_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("asset metadata permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias metadata permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn asset_home_coverage_unregister_asset_definition_permission_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("unregister permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias unregister permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
+    stored_alias_permission_route_test!(
+        asset_home_coverage_modify_asset_metadata_permission_uses_stored_alias_dataspace,
+        Grant,
+        iroha_executor_data_model::permission::asset::CanModifyAssetMetadataWithDefinition,
+        "asset metadata permission alias lookup should defer to state",
+        "stored alias metadata permission route must resolve with state",
+    );
     #[test]
     fn asset_home_extra_coverage_mint_permissions_use_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -16281,130 +16190,27 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn asset_home_extra_coverage_burn_permission_uses_stored_alias_dataspace() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("burn permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias burn permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn asset_home_more_coverage_modify_definition_metadata_permission_uses_stored_alias_dataspace()
-    {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("definition metadata permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias definition metadata permission route must resolve"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
-    #[test]
-    fn asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("wonderland");
-        let (dataspace_id, lane_id, dataspace_catalog, lane_catalog, router) =
-            routed_dataspace_fixture("paynet");
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "pkr".parse().expect("asset definition name"),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Revoke::account_permission(
-                iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
-        let state = state_with_bound_numeric_asset_definition(
-            &asset_definition,
-            "pkr#paynet",
-            "pkr",
-            &alice_id,
-            dataspace_catalog,
-            lane_catalog,
-        );
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("definition metadata revoke alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias definition metadata revoke route must resolve"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
-    }
+    stored_alias_permission_route_test!(
+        asset_home_extra_coverage_burn_permission_uses_stored_alias_dataspace,
+        Grant,
+        iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
+        "burn permission alias lookup should defer to state",
+        "stored alias burn permission route must resolve with state",
+    );
+    stored_alias_permission_route_test!(
+        asset_home_more_coverage_modify_definition_metadata_permission_uses_stored_alias_dataspace,
+        Grant,
+        iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata,
+        "definition metadata permission alias lookup should defer to state",
+        "stored alias definition metadata permission route must resolve",
+    );
+    stored_alias_permission_route_test!(
+        asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias,
+        Revoke,
+        iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata,
+        "definition metadata revoke alias lookup should defer to state",
+        "stored alias definition metadata revoke route must resolve",
+    );
     include!("router_opaque_asset_scope_tests.rs");
     include!("router_cross_dataspace_plan_tests.rs"); // Preserve stable `queue::router::tests` paths.
     include!("router_multisig_scope_tests.rs");

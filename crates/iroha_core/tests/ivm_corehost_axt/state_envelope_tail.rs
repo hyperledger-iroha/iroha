@@ -2,6 +2,119 @@
 
 #[cfg(feature = "app_api")]
 #[test]
+fn core_host_from_state_enforces_space_directory_policy() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(77);
+    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-state"));
+    let manifest = AssetPermissionManifest {
+        version: ManifestVersion::default(),
+        uaid,
+        dataspace: dsid,
+        issued_ms: 0,
+        activation_epoch: 3,
+        expiry_epoch: None,
+        entries: Vec::new(),
+    };
+    let mut manifest_record = SpaceDirectoryManifestRecord::new(manifest);
+    manifest_record.lifecycle.mark_activated(3);
+    let mut manifest_set = SpaceDirectoryManifestSet::default();
+    manifest_set.upsert(manifest_record.clone());
+    let mut world = World::new();
+    world
+        .space_directory_manifests_mut_for_testing()
+        .insert(uaid, manifest_set);
+    let lane_meta = LaneConfig {
+        id: LaneId::new(0),
+        dataspace_id: dsid,
+        alias: "primary".to_owned(),
+        ..LaneConfig::default()
+    };
+    let lane_catalog = LaneCatalog::new(nonzero!(1_u32), vec![lane_meta]).expect("catalog");
+    let nexus = nexus_with_lane_catalog(lane_catalog);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(world, kura, query);
+    *state.nexus.get_mut() = nexus;
+    anchor_axt_test_header(
+        &mut state,
+        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+    );
+    assert!(
+        state
+            .view()
+            .axt_policy_snapshot()
+            .entries
+            .iter()
+            .any(|entry| entry.dsid == dsid),
+        "Space Directory manifests should project an AXT policy"
+    );
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let mut manifest_root = [0u8; 32];
+    manifest_root.copy_from_slice(manifest_record.manifest_hash.as_ref());
+    let base_handle = AssetHandle {
+        asset_definition_id: axt_test_asset_definition_id(),
+        scope: vec!["transfer".into()],
+        subject: HandleSubject {
+            account: authority.to_string(),
+            origin_dsid: Some(dsid),
+        },
+        budget: HandleBudget {
+            remaining: Quantity::from(50_u64),
+            per_use: Some(Quantity::from(50_u64)),
+        },
+        handle_era: manifest_record
+            .lifecycle
+            .activated_epoch
+            .unwrap_or(manifest_record.manifest.activation_epoch),
+        sub_nonce: 1,
+        group_binding: GroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: 1,
+        },
+        target_lane: LaneId::new(0),
+        axt_binding: Vec::new(),
+        manifest_view_root: manifest_root.to_vec(),
+        expiry_slot: 5,
+        max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+    };
+    assert_ok_gas!(use_handle_with_state_policy(
+        &state,
+        &authority,
+        dsid,
+        &descriptor,
+        base_handle.clone()
+    ));
+    let mut wrong_lane = base_handle.clone();
+    wrong_lane.target_lane = LaneId::new(1);
+    assert_eq!(
+        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_lane),
+        Err(VMError::PermissionDenied)
+    );
+    let mut wrong_root = base_handle.clone();
+    wrong_root.manifest_view_root = vec![0xCC; 32];
+    assert_eq!(
+        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, wrong_root),
+        Err(VMError::PermissionDenied)
+    );
+    let mut low_era = base_handle.clone();
+    low_era.handle_era = 1;
+    assert_eq!(
+        use_handle_with_state_policy(&state, &authority, dsid, &descriptor, low_era),
+        Err(VMError::PermissionDenied)
+    );
+}
+
+#[cfg(feature = "app_api")]
+#[test]
 fn core_host_exports_axt_envelopes_to_state_block() {
     let authority = fixture_authority();
     let lane = LaneId::new(3);
@@ -98,7 +211,28 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         .expect("commit");
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
+    let mut state = State::new_for_testing(World::new(), kura, query_handle);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(4_u32),
+        vec![LaneConfig {
+            id: lane,
+            dataspace_id: dsid,
+            alias: "axt-envelope-export".to_owned(),
+            ..LaneConfig::default()
+        }],
+    )
+    .expect("AXT envelope export lane catalog");
+    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    state.set_axt_policy(
+        dsid,
+        AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -520,7 +654,46 @@ fn core_host_records_multi_dataspace_envelope() {
         .expect("commit");
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
+    let mut state = State::new_for_testing(World::new(), kura, query_handle);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(3_u32),
+        vec![
+            LaneConfig {
+                id: LaneId::new(1),
+                dataspace_id: dsid_a,
+                alias: "axt-multi-a".to_owned(),
+                ..LaneConfig::default()
+            },
+            LaneConfig {
+                id: LaneId::new(2),
+                dataspace_id: dsid_b,
+                alias: "axt-multi-b".to_owned(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("multi-dataspace AXT lane catalog");
+    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    state.set_axt_policy(
+        dsid_a,
+        AxtPolicyEntry {
+            manifest_root: [0xA1; 32],
+            target_lane: LaneId::new(1),
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
+    state.set_axt_policy(
+        dsid_b,
+        AxtPolicyEntry {
+            manifest_root: [0xB2; 32],
+            target_lane: LaneId::new(2),
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -542,7 +715,7 @@ fn core_host_records_multi_dataspace_envelope() {
 #[test]
 fn axt_sub_nonce_floor_persists_across_restart() {
     use iroha_data_model::nexus::{
-        AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
+        AssetHandleDraft as ModelAssetHandleDraft, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
         AxtHandleFragment as ModelAxtHandleFragment, AxtProofFragment as ModelAxtProofFragment,
         AxtTouchFragment as ModelAxtTouchFragment, GroupBinding as ModelGroupBinding,
         HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject, LaneConfig,
@@ -568,21 +741,19 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         AxtPolicyEntry {
             manifest_root: [0x44; 32],
             target_lane: LaneId::new(0),
-            active_handle_era: 1,
-            next_handle_counter: 1,
+            active_handle_era: 2,
+            next_handle_counter: 5,
             current_slot: 0,
         },
     );
-    state
-        .set_nexus(nexus)
-        .expect("apply Nexus catalog for policy refresh");
+    *state.nexus.get_mut() = nexus;
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
             manifest_root: [0x44; 32],
             target_lane: LaneId::new(0),
-            active_handle_era: 1,
-            next_handle_counter: 1,
+            active_handle_era: 2,
+            next_handle_counter: 5,
             current_slot: 0,
         },
     );
@@ -624,31 +795,32 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             proof: model_proof_blob_for(dsid, manifest_root, b"sub-nonce-floor", 10),
         }],
         handles: vec![ModelAxtHandleFragment {
-            handle: ModelAssetHandle {
-                asset_definition_id: axt_test_asset_definition_id(),
-                scope: vec!["transfer".into()],
-                subject: ModelHandleSubject {
-                    account: authority.to_string(),
-                    origin_dsid: Some(dsid),
+            handle: signed_model_handle(
+                ModelAssetHandleDraft {
+                    asset_definition_id: axt_test_asset_definition_id(),
+                    scope: vec!["transfer".into()],
+                    subject: ModelHandleSubject {
+                        account: authority.to_string(),
+                        origin_dsid: Some(dsid),
+                    },
+                    budget: ModelHandleBudget {
+                        remaining: Quantity::from(50_u64),
+                        per_use: Some(Quantity::from(50_u64)),
+                    },
+                    handle_era: 2,
+                    sub_nonce: 5,
+                    group_binding: ModelGroupBinding {
+                        composability_group_id: vec![0; 32],
+                        epoch_id: 2,
+                    },
+                    target_lane: LaneId::new(0),
+                    axt_binding: binding,
+                    manifest_view_root: manifest_root,
+                    expiry_slot: 50,
+                    max_clock_skew_ms: Some(0),
                 },
-                budget: ModelHandleBudget {
-                    remaining: Quantity::from(50_u64),
-                    per_use: Some(Quantity::from(50_u64)),
-                },
-                handle_era: 2,
-                sub_nonce: 5,
-                group_binding: ModelGroupBinding {
-                    composability_group_id: vec![0; 32],
-                    epoch_id: 2,
-                },
-                target_lane: LaneId::new(0),
-                axt_binding: binding,
-                manifest_view_root: manifest_root,
-                expiry_slot: 50,
-                max_clock_skew_ms: Some(0),
-                issuer_context: Default::default(),
-                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-            },
+                dsid,
+            ),
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
                 op: ModelSpendOp {
@@ -670,6 +842,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         commit_height: 1,
     };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let committed_header = header.clone();
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(LaneId::new(0));
@@ -679,6 +852,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     block
         .commit()
         .expect("commit replay envelope before restart");
+    anchor_axt_test_header(&mut state, committed_header);
     let view = state.view();
     let cached_policy = view
         .world()
@@ -690,6 +864,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
         .expect("fixture state should produce a valid CoreHost");
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
@@ -704,31 +879,34 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-    let stale_handle = AssetHandle {
-        asset_definition_id: axt_test_asset_definition_id(),
-        scope: vec!["transfer".into()],
-        subject: HandleSubject {
-            account: authority.to_string(),
-            origin_dsid: Some(dsid),
+    let stale_handle = signed_abi_handle(
+        AssetHandle {
+            asset_definition_id: axt_test_asset_definition_id(),
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(50_u64)),
+            },
+            handle_era: 2,
+            sub_nonce: 5,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 2,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: binding_bytes.to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 100,
+            max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
-        budget: HandleBudget {
-            remaining: Quantity::from(50_u64),
-            per_use: Some(Quantity::from(50_u64)),
-        },
-        handle_era: 2,
-        sub_nonce: 5,
-        group_binding: GroupBinding {
-            composability_group_id: vec![0; 32],
-            epoch_id: 2,
-        },
-        target_lane: LaneId::new(0),
-        axt_binding: binding_bytes.to_vec(),
-        manifest_view_root: manifest_root.to_vec(),
-        expiry_slot: 100,
-        max_clock_skew_ms: Some(0),
-        issuer_context: Default::default(),
-        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-    };
+        dsid,
+    );
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {

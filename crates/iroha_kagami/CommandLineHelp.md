@@ -529,10 +529,11 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 Build one release-bound activation instruction from an authenticated V4 catalog
 
-**Usage:** `kagami kagemusha prepare-activation-v4 --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
+**Usage:** `kagami kagemusha prepare-activation-v4 --promotion-id <PROMOTION_ID> --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
 
 ###### **Options:**
 
+* `--promotion-id <PROMOTION_ID>` — Unique nonzero promotion-run identity reserved before validator qualification
 * `--artifact-root <ARTIFACT_ROOT>` — Root containing lowercase manifest-digest release directories
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy configured on every validator
 * `--manifest-sha256 <MANIFEST_SHA256>` — Exact lowercase SHA-256 directory name of the release to activate

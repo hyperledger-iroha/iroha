@@ -109,6 +109,187 @@ def test_reviewed_rust_source_recursively_expands_grandchild_with_provenance(
     assert Path("src/nested/grandchild.rs") in expanded
 
 
+def test_reviewed_rust_source_expands_manifest_path_module_in_lexical_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": (
+                "fn root_before() {}\n"
+                '#[path = "../tests/ignored.rs"]\n'
+                "mod ignored;\n"
+                'include!("first.rs");\n'
+                '#[path = "declared.rs"]\n'
+                "#[cfg_attr(test, allow(dead_code))]\n"
+                "pub(crate) mod declared;\n"
+                'include!("last.rs");\n'
+            ),
+            "src/first.rs": "fn reviewed_first() {}\n",
+            "src/declared.rs": (
+                "fn reviewed_declared() {}\n"
+                '#[path = "../tests/unrelated.rs"]\n'
+                "mod unrelated;\n"
+                'include!("nested.rs");\n'
+            ),
+            "src/nested.rs": "fn reviewed_nested() {}\n",
+            "src/last.rs": "fn reviewed_last() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {
+            "src/root.rs": (
+                "first.rs",
+                "declared.rs",
+                "last.rs",
+            )
+        },
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "path-module fixture", errors
+    )
+
+    assert errors == []
+    assert closure is not None
+    assert closure.providers == (
+        Path("src/root.rs"),
+        Path("src/first.rs"),
+        Path("src/declared.rs"),
+        Path("src/nested.rs"),
+        Path("src/last.rs"),
+    )
+    assert Path("tests/ignored.rs") not in closure.providers
+    assert tuple(
+        (edge.parent, edge.provider, edge.line) for edge in closure.provenance
+    ) == (
+        (Path("src/root.rs"), Path("src/first.rs"), 4),
+        (Path("src/root.rs"), Path("src/declared.rs"), 5),
+        (Path("src/declared.rs"), Path("src/nested.rs"), 4),
+        (Path("src/root.rs"), Path("src/last.rs"), 8),
+    )
+    assert closure.source.index("fn reviewed_first()") < closure.source.index(
+        "fn reviewed_declared()"
+    )
+    assert closure.source.index("fn reviewed_nested()") < closure.source.index(
+        "fn reviewed_last()"
+    )
+
+
+def test_reviewed_rust_source_rejects_duplicate_include_and_path_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": (
+                'include!("child.rs");\n'
+                '#[path = "child.rs"]\n'
+                "mod child;\n"
+            ),
+            "src/child.rs": "fn duplicate_provider() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {"src/root.rs": ("child.rs",)},
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "duplicate path-module fixture", errors
+    )
+
+    assert closure is None
+    assert any(
+        "duplicate reviewed Rust include provider binding 'child.rs'" in error
+        and "via #[path] mod" in error
+        and "first bound at line 1 via include!" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("attribute", "diagnostic"),
+    (
+        (
+            '#[path = concat!("child", ".rs")]\n',
+            "#[path] path must be one literal canonical .rs string",
+        ),
+        (
+            '#[path = "./child.rs"]\n',
+            "#[path] path is unsafe or noncanonical",
+        ),
+        (
+            '#[path = "nested/../child.rs"]\n',
+            "#[path] path is unsafe or noncanonical",
+        ),
+    ),
+)
+def test_reviewed_rust_source_rejects_unsafe_path_module_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attribute: str,
+    diagnostic: str,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": attribute + "mod child;\n",
+            "src/child.rs": "fn hidden_provider() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {"src/root.rs": ("child.rs",)},
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "unsafe path-module fixture", errors
+    )
+
+    assert closure is None
+    assert any(diagnostic in error for error in errors), errors
+
+
+def test_reviewed_rust_source_rejects_missing_manifest_path_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = reviewed_rust_source_module()
+    root = write_reviewed_rust_fixture(
+        tmp_path,
+        {
+            "src/root.rs": '#[path = "ignored.rs"]\nmod ignored;\n',
+            "src/child.rs": "fn missing_provider() {}\n",
+        },
+    )
+    monkeypatch.setattr(
+        helper,
+        "_REVIEWED_RUST_INCLUDE_MANIFESTS",
+        {"src/root.rs": ("child.rs",)},
+    )
+    errors: list[str] = []
+    closure = helper._resolve_reviewed_rust_source(
+        root, "src/root.rs", "missing path-module fixture", errors
+    )
+
+    assert closure is None
+    assert any(
+        "reviewed Rust include inventory must equal ('child.rs',)" in error
+        and "found ()" in error
+        for error in errors
+    ), errors
+
+
 def test_reviewed_rust_source_rejects_nested_dynamic_include(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

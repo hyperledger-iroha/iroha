@@ -4074,9 +4074,7 @@ mod tests {
         deployer: &AccountId,
         deployer_key: &KeyPair,
     ) -> ValidationFeePolicyV1 {
-        use iroha_data_model::{
-            nexus::DataSpaceId, prelude::Account, smart_contract::ContractAddress,
-        };
+        use iroha_data_model::{nexus::DataSpaceId, smart_contract::ContractAddress};
         let deployment_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                 .into();
@@ -4110,12 +4108,6 @@ mod tests {
         )
         .expect("activate contract instance");
         let binding = treasury_payout_binding(contract_address, &code);
-        crate::smartcontracts::Execute::execute(
-            Register::account(Account::new(binding.treasury_account_id.clone())),
-            deployer,
-            state_tx,
-        )
-        .expect("register immutable contract subject account");
         let policy = policy_with_treasury_payout_lifecycle(binding);
         install_policy_registry_fixture(&policy_registry(std::slice::from_ref(&policy)), state_tx);
         policy
@@ -6111,12 +6103,6 @@ mod tests {
         .expect("activate contract instance");
         let binding = treasury_payout_binding(contract_address.clone(), &code);
         let treasury = binding.treasury_account_id.clone();
-        crate::smartcontracts::Execute::execute(
-            Register::account(Account::new(treasury.clone())),
-            &deployer,
-            &mut state_tx,
-        )
-        .expect("register immutable contract subject account");
         let policy = policy_with_treasury_payout_lifecycle(binding.clone());
         let mut wrong_code_binding = binding.clone();
         wrong_code_binding.code_hash[0] ^= 0xff;
@@ -6604,11 +6590,6 @@ mod tests {
             "generic-testnet".parse().expect("chain id"),
             validation_fee_test_network_id(),
         );
-        {
-            let mut hashes = state.block_hashes.block();
-            hashes.push_for_tests(block_hash([7; 32]));
-            hashes.commit_for_tests();
-        }
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
                 .expect("test policy effective height is non-zero"),

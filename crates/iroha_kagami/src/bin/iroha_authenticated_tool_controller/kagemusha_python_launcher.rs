@@ -1045,11 +1045,17 @@ mod macos {
     const ACL_FIRST_ENTRY: i32 = 0;
 
     #[derive(Debug)]
-    pub(super) struct PinnedFile {
-        pub(super) path: PathBuf,
-        pub(super) file: File,
-        pub(super) stable: StableMetadata,
-        pub(super) sha256: [u8; 32],
+    pub(crate) struct PinnedFile {
+        path: PathBuf,
+        file: File,
+        stable: StableMetadata,
+        sha256: [u8; 32],
+    }
+
+    impl PinnedFile {
+        pub(crate) fn file_mut(&mut self) -> &mut File {
+            &mut self.file
+        }
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1079,6 +1085,9 @@ mod macos {
     }
 
     unsafe extern "C" {
+        fn getuid() -> u32;
+        fn getgid() -> u32;
+        fn issetugid() -> i32;
         fn acl_get_fd_np(descriptor: i32, acl_type: i32) -> *mut std::ffi::c_void;
         fn acl_get_entry(
             acl: *mut std::ffi::c_void,
@@ -1100,10 +1109,15 @@ mod macos {
         fn waitid(id_type: i32, id: u32, information: *mut std::ffi::c_void, options: i32) -> i32;
     }
 
-    pub(super) fn validate_root_launch_identity() -> Result<()> {
-        if effective_uid() != 0 || effective_gid() != 0 {
+    pub(crate) fn validate_root_launch_identity() -> Result<()> {
+        if effective_uid() != 0
+            || effective_gid() != 0
+            || unsafe { getuid() } != 0
+            || unsafe { getgid() } != 0
+            || unsafe { issetugid() } != 0
+        {
             return Err(ControllerError::policy(
-                "Kagemusha native Python launcher must run as root:wheel",
+                "Kagemusha native launcher requires exact non-set-id root:wheel credentials",
             ));
         }
         validate_no_inherited_fds()?;
@@ -1160,7 +1174,7 @@ mod macos {
         Ok(build)
     }
 
-    pub(super) fn require_macos_tcb(expected: &str) -> Result<[u8; 32]> {
+    pub(crate) fn require_macos_tcb(expected: &str) -> Result<[u8; 32]> {
         if observed_macos_build()? != expected {
             return Err(ControllerError::policy(
                 "macOS build differs from the native-launch TCB pin",
@@ -1173,7 +1187,7 @@ mod macos {
         Ok(os_tcb_digest(expected))
     }
 
-    pub(super) fn require_root_custody(path: &Path, directory: bool) -> Result<()> {
+    pub(crate) fn require_root_custody(path: &Path, directory: bool) -> Result<()> {
         if !path.is_absolute()
             || path
                 .components()
@@ -1252,6 +1266,10 @@ mod macos {
         Ok(())
     }
 
+    pub(crate) fn validate_open_file_custody(file: &File, path: &Path) -> Result<()> {
+        require_no_xattrs(file, path)
+    }
+
     fn open_nofollow(path: &Path, regular: bool) -> Result<File> {
         let mut options = OpenOptions::new();
         options.read(true).custom_flags(O_NOFOLLOW | O_CLOEXEC);
@@ -1314,7 +1332,7 @@ mod macos {
         Ok(hash.finish())
     }
 
-    pub(super) fn pin_regular(path: &Path, expected: [u8; 32]) -> Result<PinnedFile> {
+    pub(crate) fn pin_regular(path: &Path, expected: [u8; 32]) -> Result<PinnedFile> {
         require_root_custody(path, false)?;
         let mut file = open_nofollow(path, true)?;
         let metadata = file
@@ -1347,7 +1365,7 @@ mod macos {
         })
     }
 
-    pub(super) fn validate_pinned(file: &mut PinnedFile) -> Result<()> {
+    pub(crate) fn validate_pinned(file: &mut PinnedFile) -> Result<()> {
         let descriptor_metadata = file
             .file
             .metadata()
@@ -1871,9 +1889,13 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
+pub(super) use macos::{
+    PinnedFile, pin_regular, require_macos_tcb, require_root_custody, validate_open_file_custody,
+    validate_pinned, validate_root_launch_identity,
+};
+#[cfg(target_os = "macos")]
 use macos::{
-    authenticate_runtime, high_descriptor, pin_regular, publish_report, receipt_descriptor,
-    require_macos_tcb, require_root_custody, run_captured, validate_root_launch_identity,
+    authenticate_runtime, high_descriptor, publish_report, receipt_descriptor, run_captured,
     validate_runtime,
 };
 
@@ -1911,9 +1933,9 @@ fn launch_readiness_macos(launch: ReadinessLaunch) -> Result<u8> {
         launch.common.runtime_tree_sha256,
         launch.common.python_sha256,
     )?;
-    let gate_pin_fd = high_descriptor(&gate_pin.file, 64)?;
-    let python_fd = high_descriptor(&runtime.python.file, 65)?;
-    let gate_execution_fd = high_descriptor(&gate_execution.file, 66)?;
+    let gate_pin_fd = high_descriptor(gate_pin.file_mut(), 64)?;
+    let python_fd = high_descriptor(runtime.python.file_mut(), 65)?;
+    let gate_execution_fd = high_descriptor(gate_execution.file_mut(), 66)?;
     let mut command = Command::new("/bin/bash");
     command
         .arg("/dev/fd/10")
@@ -2019,7 +2041,7 @@ fn launch_builder_macos(launch: BuilderLaunch) -> Result<u8> {
         hash.finish()
     };
     let receipt_fd = receipt_descriptor(receipt.as_bytes())?;
-    let builder_fd = high_descriptor(&builder.file, 71)?;
+    let builder_fd = high_descriptor(builder.file_mut(), 71)?;
     let mut command = Command::new(launch.common.runtime_root.join(PYTHON_RELATIVE));
     command
         .arg("-I")

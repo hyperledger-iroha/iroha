@@ -184,9 +184,12 @@ eight-byte little-endian `u64`, where zero means authenticated `None` and any
 non-zero value means `Some(slot)`. The manifest and DA keys are required even
 when DA is absent. Their exact canonical values, the optional committed amount,
 and the expiry are inserted before the batch seal and proof are generated.
-FastPQ commits the complete canonical metadata map with raw Blake2b-256 and
-exposes the digest as eight exact little-endian `u32` trace limbs; every limb is
-constrained by the AIR.
+FastPQ first encodes the complete metadata map with canonical Norito default
+flags. It computes raw Blake2b-256 over
+`u64_le(domain_len) || domain || u64_le(metadata_len) || metadata_bytes`, where
+`domain` is `fastpq:v1:metadata-commitment:blake2b-256` and both lengths count
+bytes. The 256-bit digest is split into eight exact little-endian `u32` trace
+limbs, and the AIR constrains every limb to remain stable.
 
 The V1 Norito JSON layouts are closed and exact. Every nullable proof, handle,
 effect, spend, and rejection-context field is present as either its value or an
@@ -306,6 +309,13 @@ and produces a JSON-friendly report that the SDK manifests can embed. Run it
 alongside `koto check` when publishing UAIDs so the generated R/W summary is
 captured in the validation evidence bundle.
 
+The durable-state control-flow proof is conservative around indirect branches:
+every reachable `JR` or `JALR` makes the exact-access analysis incomplete except
+the canonical protected return `JALR x0, x1, 0`. Prepared execution authenticates
+that one terminal edge with strict return-stack integrity. A `JR`, non-zero link
+register, different source register, or non-zero immediate remains an
+unauthenticated computed edge and cannot support an exact scheduler access set.
+
 ## Space Directory policy enforcement
 
 AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `active_handle_era`, `next_handle_counter`, and `current_slot`. Hosts enforce:
@@ -322,7 +332,26 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 Failures map to `PermissionDenied`. IVM policy tests cover field-level allow/deny
 cases, while CoreHost regressions cover active and completed-envelope counter
 progression.
-Block validation authenticates unique handles before FASTPQ verification, scopes replay by the authenticated asset dataspace, groups budgets by the complete normalized V1 issuer-signed capability statement, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), and checks exact signed-handle/intent/proof asset equality.
+`AXT_COMMIT` is failure-atomic across host implementations: the host validates
+the recorded descriptor, touches, proofs, and handle uses before clearing or
+moving the active envelope. A validation error restores the active state so
+required touches or proofs can be supplied and the same envelope retried; only
+a successful commit ends that envelope.
+
+Block validation authenticates unique handles before FASTPQ verification,
+scopes replay by the authenticated asset dataspace, and groups budgets by the
+normalized V1 issuer-signed family key. `AxtHandleBudgetKey` contains every
+`AssetHandleIssuerPayloadV1` field except `next_handle_counter`; signature bytes
+authenticate the statement but do not identify the family. Validation
+reconstructs each committed per-dataspace pre-state counter with checked
+subtraction from the advertised post-state. It then requires exact ordered
+counter progression and exact equality with the advertised post-state, with a
+consensus ceiling of 65,536 authenticated handles per block. It also requires
+non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with
+the configured skew allowance) and not expiring before the handle, enforces
+descriptor binding plus touch manifests for declared specs (and rejects
+out-of-prefix entries), and checks exact signed-handle/intent/proof asset
+equality.
 Normalized signed handle-family consumption is consensus-persisted and aggregates across completed transaction envelopes, all envelope records in a block, and later blocks; splitting sequential `sub_nonce` values therefore cannot reset `remaining` or `per_use` limits.
 V1 does not yet prune this ledger. The permanent dataspace generation and exact
 asset incarnation provide the authority fences needed for a future deterministic
@@ -342,15 +371,33 @@ only when the stored and recomputed family keys are exactly equal; presenting
 the same compact replay key under a different signed budget, scope, subject,
 asset, expiry, or issuer context fails closed.
 
-Canonical and auxiliary tiered state both account for the permanent counter,
-live asset-incarnation, and family-budget maps. Incarnation rows track exactly
-the currently registered asset definitions and are removed on unregister;
-counter and V1 family-budget rows are non-pruning. Tiered cold payloads retain
-canonical Norito-encoded keys and Norito JSON values and include their measured
-bytes, so the operational cost of every persistent security record is visible
-rather than omitted from state-tiering decisions.
+Canonical and auxiliary tiered state both account for the policy, permanent
+counter, live asset-incarnation, exact-use replay, and family-budget maps.
+Incarnation rows track exactly the currently registered asset definitions and
+are removed on unregister; counter and V1 family-budget rows are non-pruning.
+Replay measured bytes include the dynamically sized authenticated family key,
+not only the compact replay identity. Every tiered map entry separately charges
+the canonical Norito-encoded map-key length plus its measured value footprint;
+the replay value therefore owns and charges its embedded family key in addition
+to the compact replay-map key. Tiered cold payloads retain those canonical keys
+and Norito JSON values, so persistent security records remain visible to
+state-tiering decisions without claiming allocator-exact resident-memory bytes.
 
-These persisted AXT stores and transition evidence are a first-release state- and block-format hard cut. Policy rows, permanent counters, family budgets, replay records, the exact asset-incarnation map, and `BlockResult.axt_transitioned_dataspaces` are required canonical fields and change WSV checkpoint or block-result bytes even when initially empty. Snapshot restoration additionally requires an exact bijection between live asset definitions and valid non-zero incarnation records; missing, extra, or corrupt records are rejected rather than backfilled. Pre-cut snapshots/checkpoints/blocks, including replay records without an exact family key, must not be loaded by defaulting a missing store or field to an empty value; deployments must re-genesis or rebuild at a chain boundary that invalidates every pre-cut handle and family. Exact-use replay rows remain deterministically prunable under the permanent generation fence, while cumulative family-budget rows are deliberately non-pruning in V1.
+These persisted AXT stores and transition evidence are a first-release state- and
+block-format hard cut. The required, non-skipped World fields are
+`axt_policies`, `axt_handle_counters`, `axt_asset_incarnations`,
+`axt_replay_ledger`, and `axt_handle_budget_ledger`. The required block-result
+fields include `BlockResult.axt_policy_snapshot` and
+`BlockResult.axt_transitioned_dataspaces`. They change WSV checkpoint or
+block-result bytes even when their collections are empty. Snapshot restoration
+additionally requires an exact bijection between live asset definitions and
+valid non-zero incarnation records; missing, extra, or corrupt records are
+rejected rather than backfilled. Pre-cut snapshots/checkpoints/blocks, including
+replay records without an exact family key, must not be loaded by defaulting a
+missing store or field to an empty value; deployments must re-genesis or rebuild
+at a chain boundary that invalidates every pre-cut handle and family. Exact-use
+replay rows remain deterministically prunable under the permanent generation
+fence, while cumulative family-budget rows are deliberately non-pruning in V1.
 
 ## Error Catalog
 
@@ -378,11 +425,23 @@ SDK teams should mirror these codes in integration tests so `iroha_cli`, Android
 
 ## Testing & Evidence
 
-- Run the focused data-model, IVM, core-host, and integration suites:
-  `cargo test -p iroha_data_model axt`,
-  `cargo test -p ivm --test ivm_group_01 'axt_host_flow::'`,
-  `cargo test -p iroha_core --features app_api --lib 'ivm_corehost_axt_tests::'`, and
-  `cargo test -p integration_tests --test native_amx_routing`.
+- Check the generated AXT fixtures with
+  `cargo run --locked -p iroha_data_model --features dev-tools,test-fixtures --bin axt_fixtures -- --check`.
+- Run the current grouped data-model and IVM targets:
+  `cargo test --locked -p iroha_data_model --test iroha_data_model_group_01 axt -- --test-threads=1`,
+  `cargo test --locked -p ivm --test ivm_group_01 'axt_host_flow::' -- --test-threads=1`, and
+  `cargo test --locked -p ivm --test ivm_group_02 'core_host_policy::' -- --test-threads=1`.
+- Exercise the protected-return analyzer regression with
+  `cargo test --locked -p ivm --lib 'analysis::tests::protected_contract_return_requires_exact_jalr_encoding' -- --exact --test-threads=1`.
+- Run both Core filters so the AXT paths and persistent-budget tests are covered:
+  `cargo test --locked -p iroha_core --features app_api --lib axt -- --test-threads=1` and
+  `cargo test --locked -p iroha_core --features app_api --lib budget_ -- --test-threads=1`.
+- Run the FastPQ library, grouped integration, and CLI-unit targets separately:
+  `cargo test --locked -p fastpq_prover --features dev-tools --lib -- --test-threads=1`,
+  `cargo test --locked -p fastpq_prover --features dev-tools --test fastpq_integration -- --test-threads=1`, and
+  `cargo test --locked -p fastpq_prover --features dev-tools --bin fastpq_json -- --test-threads=1`.
+- Run the native integration target with
+  `cargo test --locked -p integration_tests --test native_amx_routing -- --test-threads=1`.
 - Archive chaos-drill evidence under `ops/drill-log.md`.
 - Each acceptance record includes the slot SLO report, outstanding error spikes,
   policy snapshot version, and latest AXT proof-cache snapshot.
