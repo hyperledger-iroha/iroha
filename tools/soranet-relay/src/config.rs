@@ -10,6 +10,7 @@ use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
 use iroha_crypto::soranet::{
     certificate::{CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
+    handshake::{HandshakeSuite, update_suite_list},
     pow, puzzle,
     replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
     token::{
@@ -45,7 +46,8 @@ const ML_KEM_768_SECRET_LEN: usize = 2_400;
 // First-release admission limits for operator-controlled relay artifacts. The
 // 1 MiB config corridor fits 8,192 inline 32-byte revocations (the existing
 // replay-store capacity) plus the rest of the config. Its 128 KiB field limit
-// admits the largest legal GREASE value: u16::MAX bytes as 131,070 hex bytes.
+// permits syntactic admission of a u16-sized hex field; handshake validation
+// separately enforces the smaller aggregate capability-vector wire limit.
 const RELAY_CONFIG_JSON_MAX_BYTES_V1: usize = 1024 * 1024;
 const RELAY_CONFIG_JSON_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
 const RELAY_CONFIG_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 768 * 1024;
@@ -539,6 +541,8 @@ pub const PRIVACY_MAX_OPEN_BUCKETS_V1: u64 = 256;
 pub const PRIVACY_MAX_COMPLETED_BUCKETS_V1: usize = 256;
 /// Maximum first-release capacity of either in-memory privacy event queue.
 pub const PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1: usize = 16_384;
+/// Maximum first-release collector contributions retained for one privacy bucket.
+pub const PRIVACY_MAX_EXPECTED_SHARES_V1: u16 = 16;
 /// Maximum first-release entries retained by either admission quota tracker.
 pub const QUOTA_TRACKER_MAX_ENTRIES_V1: usize = 65_536;
 /// Maximum first-release number of simultaneously active relay circuits.
@@ -728,6 +732,12 @@ impl PrivacyTelemetryConfig {
                 "privacy.expected_shares must be greater than zero".to_string(),
             ));
         }
+        if self.expected_shares > PRIVACY_MAX_EXPECTED_SHARES_V1 {
+            return Err(ConfigError::Privacy(format!(
+                "privacy.expected_shares ({}) exceeds the first-release limit of {PRIVACY_MAX_EXPECTED_SHARES_V1}",
+                self.expected_shares
+            )));
+        }
         if self.event_buffer_capacity == 0 {
             self.event_buffer_capacity = DEFAULT_PRIVACY_EVENT_BUFFER_CAPACITY;
         }
@@ -736,6 +746,11 @@ impl PrivacyTelemetryConfig {
                 "privacy.event_buffer_capacity ({}) exceeds the first-release limit of {PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1}",
                 self.event_buffer_capacity
             )));
+        }
+        if self.force_flush_buckets == 0 {
+            return Err(ConfigError::Privacy(
+                "privacy.force_flush_buckets must be greater than zero".to_string(),
+            ));
         }
         if self.flush_delay_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
             || self.force_flush_buckets > PRIVACY_MAX_OPEN_BUCKETS_V1
@@ -2818,7 +2833,7 @@ impl std::fmt::Debug for ComplianceConfig {
 /// Advertised KEM capability in the handshake policy.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct KemPolicyEntry {
-    /// Identifier of the KEM suite (e.g., `ml-kem-768`).
+    /// Identifier of the KEM suite (`ml-kem-512`, `ml-kem-768`, or `ml-kem-1024`).
     pub id: String,
     /// Whether this KEM must be supported by peers.
     #[norito(default)]
@@ -2827,7 +2842,7 @@ pub struct KemPolicyEntry {
 /// Advertised signature capability in the handshake policy.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct SignaturePolicyEntry {
-    /// Identifier of the signature suite (e.g., `dilithium3`).
+    /// Identifier of the v1 transcript signature suite (`dilithium3`).
     pub id: String,
     /// Whether this signature suite must be supported by peers.
     #[norito(default)]
@@ -3079,21 +3094,39 @@ impl HandshakePolicy {
                 "handshake.signatures list cannot be empty".to_string(),
             ));
         }
+        let mut seen_kem = [false; 256];
         for entry in &self.kem {
-            if parse_kem_id(&entry.id).is_none() {
+            let Some(id) = parse_kem_id(&entry.id) else {
                 return Err(ConfigError::Handshake(format!(
                     "unknown KEM identifier `{}`",
                     entry.id
                 )));
+            };
+            let slot = &mut seen_kem[usize::from(id.code())];
+            if *slot {
+                return Err(ConfigError::Handshake(format!(
+                    "duplicate KEM identifier `{}`",
+                    entry.id
+                )));
             }
+            *slot = true;
         }
+        let mut seen_signature = [false; 256];
         for entry in &self.signatures {
-            if parse_signature_id(&entry.id).is_none() {
+            let Some(id) = parse_signature_id(&entry.id) else {
                 return Err(ConfigError::Handshake(format!(
                     "unknown signature identifier `{}`",
                     entry.id
                 )));
+            };
+            let slot = &mut seen_signature[usize::from(id.code())];
+            if *slot {
+                return Err(ConfigError::Handshake(format!(
+                    "duplicate signature identifier `{}`",
+                    entry.id
+                )));
             }
+            *slot = true;
         }
         if let Some(hex) = &self.descriptor_commit_hex {
             if hex.len() != 64 {
@@ -3105,6 +3138,7 @@ impl HandshakePolicy {
                 ConfigError::Handshake("descriptor_commit_hex must decode to 32 bytes".to_string())
             })?;
         }
+        let mut configured_grease = Vec::with_capacity(self.grease.len());
         for grease in &self.grease {
             if !(0x7F00..=0x7FFF).contains(&grease.typ) {
                 return Err(ConfigError::Handshake(format!(
@@ -3120,12 +3154,90 @@ impl HandshakePolicy {
                     grease.value_hex.len()
                 )));
             }
-            hex::decode(&grease.value_hex)
+            let value = hex::decode(&grease.value_hex)
                 .map_err(|err| ConfigError::Hex {
                     field: format!("handshake.grease[{:#06x}]", grease.typ),
                     kind: err,
                 })
-                .and_then(|value| validate_grease_value_len(grease.typ, value.len()))?;
+                .and_then(|value| {
+                    validate_grease_value_len(grease.typ, value.len())?;
+                    Ok(value)
+                })?;
+            configured_grease.push(GreaseEntry {
+                ty: grease.typ,
+                value,
+            });
+        }
+        // Reserve every optional first-release relay capability here. Runtime
+        // negotiation can add a certificate descriptor, constant-rate mode,
+        // and both handshake suites even when they are absent from this policy.
+        // Computing the base through the production encoders keeps admission
+        // aligned with the canonical wire grammar rather than duplicating its
+        // TLV sizes in configuration code.
+        let worst_case_kem = parse_kem_id(&self.kem[0].id).ok_or_else(|| {
+            ConfigError::Handshake("validated KEM identifier became unavailable".to_string())
+        })?;
+        let worst_case_signatures = self
+            .signatures
+            .iter()
+            .map(|entry| {
+                parse_signature_id(&entry.id)
+                    .map(|id| capability::SignatureAdvertisement {
+                        id,
+                        required: entry.required,
+                    })
+                    .ok_or_else(|| {
+                        ConfigError::Handshake(
+                            "validated signature identifier became unavailable".to_string(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let constant_rate_cell_bytes = u16::try_from(CONSTANT_RATE_CELL_BYTES).map_err(|_| {
+            ConfigError::Handshake("first-release constant-rate cell size exceeds u16".to_string())
+        })?;
+        let relay_capabilities = capability::encode_relay_advertisement(
+            &capability::NegotiatedCapabilities {
+                kem: capability::KemAdvertisement {
+                    id: worst_case_kem,
+                    required: self.kem[0].required,
+                },
+                signatures: worst_case_signatures,
+                padding: u16::MAX,
+                descriptor_commit: Some([0_u8; 32]),
+                grease: configured_grease,
+                constant_rate: Some(capability::ConstantRateCapability {
+                    version: 1,
+                    mode: ConstantRateMode::Strict,
+                    cell_bytes: constant_rate_cell_bytes,
+                }),
+            },
+            0x07,
+        )
+        .map_err(|error| {
+            ConfigError::Handshake(format!(
+                "failed to encode the worst-case relay capability vector: {error}"
+            ))
+        })?;
+        let relay_capabilities = update_suite_list(
+            &relay_capabilities,
+            &[
+                HandshakeSuite::Nk2Hybrid,
+                HandshakeSuite::Nk3PqForwardSecure,
+            ],
+            true,
+        )
+        .map_err(|error| {
+            ConfigError::Handshake(format!(
+                "failed to encode the worst-case relay handshake suite list: {error}"
+            ))
+        })?;
+        if relay_capabilities.len() > capability::MAX_CAP_VECTOR_LEN {
+            return Err(ConfigError::Handshake(format!(
+                "worst-case relay capability vector is {} bytes; first-release maximum is {} bytes",
+                relay_capabilities.len(),
+                capability::MAX_CAP_VECTOR_LEN
+            )));
         }
         if let Some(certificate) = &self.certificate {
             certificate.validate()?;
@@ -3817,7 +3929,7 @@ pub enum ConfigError {
 }
 pub(crate) fn parse_kem_id(id: &str) -> Option<capability::KemId> {
     match id {
-        "classic" => Some(capability::KemId::Classic),
+        "ml-kem-512" => Some(capability::KemId::MlKem512),
         "ml-kem-768" => Some(capability::KemId::MlKem768),
         "ml-kem-1024" => Some(capability::KemId::MlKem1024),
         _ => None,
@@ -3825,9 +3937,7 @@ pub(crate) fn parse_kem_id(id: &str) -> Option<capability::KemId> {
 }
 pub(crate) fn parse_signature_id(id: &str) -> Option<capability::SignatureId> {
     match id {
-        "ed25519" => Some(capability::SignatureId::Ed25519),
         "dilithium3" => Some(capability::SignatureId::Dilithium3),
-        "falcon512" => Some(capability::SignatureId::Falcon512),
         _ => None,
     }
 }

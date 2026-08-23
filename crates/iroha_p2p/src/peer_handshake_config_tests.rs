@@ -67,6 +67,7 @@ fn mint_test_admission_ticket(
 }
 struct FailingTryRng;
 struct ZeroTryRng;
+struct RepeatedTryRng;
 #[derive(Debug)]
 struct FailingTryRngError;
 impl fmt::Display for FailingTryRngError {
@@ -101,6 +102,20 @@ impl TryRngCore for ZeroTryRng {
     }
 }
 impl TryCryptoRng for ZeroTryRng {}
+impl TryRngCore for RepeatedTryRng {
+    type Error = std::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::from_le_bytes([0xA5; 4]))
+    }
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::from_le_bytes([0xA5; 8]))
+    }
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        dst.fill(0xA5);
+        Ok(())
+    }
+}
+impl TryCryptoRng for RepeatedTryRng {}
 #[test]
 fn soranet_handshake_rng_reads_os_entropy() {
     let mut rng = soranet_handshake_rng().expect("OS RNG should seed SoraNet handshake RNG");
@@ -125,6 +140,14 @@ fn soranet_transport_delegation_challenge_rejects_all_zero_entropy() {
         error,
         Error::HandshakeSoranet(message)
             if message == "SoraNet delegation challenge RNG returned an all-zero value"
+    ));
+
+    let error = generate_soranet_transport_delegation_challenge(&mut RepeatedTryRng)
+        .expect_err("an all-identical-byte challenge must stop the handshake");
+    assert!(matches!(
+        error,
+        Error::HandshakeSoranet(message)
+            if message == "SoraNet delegation challenge RNG returned all-identical-byte material"
     ));
 }
 #[test]
@@ -174,6 +197,105 @@ fn rejects_invalid_kem_and_signature_ids() {
         Error::HandshakeSoranet(message)
             if message == "unsupported SoraNet signature identifier 99"
     ));
+
+    SoranetHandshakeConfig::new(
+        iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+        iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+        true,
+        MlKemSuite::MlKem512.kem_id(),
+        1,
+        None,
+        false,
+        params,
+        None,
+        Duration::from_secs(60),
+        None,
+        None,
+        None,
+    )
+    .expect("every ML-KEM suite in the first-release registry must be accepted");
+}
+#[test]
+fn rejects_noncanonical_transcript_fields_and_capability_vectors_at_construction() {
+    let params = PowParameters::new(0, Duration::from_secs(300), Duration::from_secs(30));
+    let build =
+        |descriptor_commit: Vec<u8>, client_capabilities: Vec<u8>, resume_hash: Option<Vec<u8>>| {
+            SoranetHandshakeConfig::new(
+                descriptor_commit,
+                client_capabilities,
+                iroha_crypto::soranet::handshake::DEFAULT_RELAY_CAPABILITIES.to_vec(),
+                true,
+                1,
+                1,
+                resume_hash,
+                false,
+                params,
+                None,
+                Duration::from_secs(60),
+                None,
+                None,
+                None,
+            )
+        };
+    for (error, expected) in [
+        (
+            build(
+                vec![0; iroha_crypto::Hash::LENGTH - 1],
+                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+                None,
+            )
+            .expect_err("short descriptor commitment must fail"),
+            "descriptor commitment must be 32 bytes",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                iroha_crypto::soranet::handshake::DEFAULT_CLIENT_CAPABILITIES.to_vec(),
+                Some(vec![0; iroha_crypto::Hash::LENGTH - 1]),
+            )
+            .expect_err("short resume hash must fail"),
+            "resume hash must be 32 bytes",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![0x01],
+                None,
+            )
+            .expect_err("malformed capabilities must fail"),
+            "invalid SoraNet client capability vector",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![
+                    0x01, 0x02, 0x00, 0x02, 0x01, 0x01, // signature
+                    0x01, 0x01, 0x00, 0x02, 0x01, 0x01, // KEM
+                ],
+                None,
+            )
+            .expect_err("decreasing client capability types must fail at construction"),
+            "nondecreasing order",
+        ),
+        (
+            build(
+                iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
+                vec![
+                    0;
+                    iroha_crypto::soranet::handshake::MAX_CAPABILITY_VECTOR_LEN + 1
+                ],
+                None,
+            )
+            .expect_err("oversized client capability vector must fail at the shared bound"),
+            "first-release maximum is 4096 bytes",
+        ),
+    ] {
+        assert!(
+            matches!(error, Error::HandshakeSoranet(message) if message.contains(expected)),
+            "unexpected error for {expected}"
+        );
+    }
 }
 #[test]
 fn admission_transcript_binds_resumption_presence_and_value() {

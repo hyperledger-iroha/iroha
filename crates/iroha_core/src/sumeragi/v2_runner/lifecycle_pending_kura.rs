@@ -930,6 +930,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
         attempts = recovery_attempts,
         "finished lifecycle-owned interrupted-tip local Apply recovery"
     );
+    state
+        .require_committed_kagemusha_runtime_effective_config()
+        .map_err(V2RunnerError::Service)?;
 
     let (pending, control) = reconcile_pending_lane_startup(
         pending,

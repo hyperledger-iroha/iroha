@@ -165,7 +165,7 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
 // native instructions that own the records.
 const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "offline_device_attestation_policy/",
-    "kagemusha_online_registration_",
+    "kagemusha",
     "pkdeploy_verified_lane_relay_",
     "pkdeploy_verified_nexus_fee_budget_",
     VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
@@ -24303,7 +24303,7 @@ seiyaku DurableOwner {
         for key in [
             "offline_device_attestation_policy",
             "offline_device_attestation_policy/platform-roots",
-            "kagemusha_online_registration_deadbeef",
+            "kagemusha_release_lifecycle_v4_deadbeef",
             "pkdeploy_verified_lane_relay",
             "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
             "pkdeploy_verified_nexus_fee_budget_deadbeef",
@@ -24330,7 +24330,7 @@ seiyaku DurableOwner {
             "queue_plan_pending_obligation_v1x",
             "queue_plan_pending_route_member_v1x",
             "offline_device_attestation_policyx",
-            "kagemusha_online_registrationx",
+            "kagemushax",
             "pkdeploy_verified_lane_relayx",
             "pkdeploy_verified_fee_sponsor_vault_allocationx",
             "pkdeploy_fee_sponsor_vault_allocation_usagex",

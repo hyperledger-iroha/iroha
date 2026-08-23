@@ -1418,6 +1418,7 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1
             || !is_kagemusha_portable_identifier(&self.policy_id)
+            || self.internal_validation_runner_identity_sha256 == [0; 32]
             || self.roles.len() != expected_roles.len()
         {
             return Err(KagemushaReleaseVerificationError::InvalidPolicy);
@@ -1741,6 +1742,7 @@ fn validate_internal_validation_receipt_v4(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     candidate: &KagemushaRecursiveSpendCandidateV4,
     bytes: &[u8],
+    expected_runner_identity_sha256: Option<[u8; 32]>,
 ) -> Result<(), KagemushaReleaseVerificationError> {
     let receipt = KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(bytes)
         .map_err(|_| KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)?;
@@ -1760,11 +1762,19 @@ fn validate_internal_validation_receipt_v4(
             != manifest.reviewed_source_closure_descriptor_sha256
         || body.authenticated_source_seal_projection_sha256
             != manifest.authenticated_source_seal_projection_sha256
+        || body.tracked_cargo_lock.sha256
+            != manifest.reviewed_source_closure.ignored_cargo_lock_sha256
+        || body.tracked_cargo_lock.size_bytes
+            != manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_size_bytes
         || body.reviewed_cargo_binary_sha256 != manifest.reviewed_cargo_binary_sha256
         || body.reviewed_rustc_binary_sha256 != manifest.reviewed_rustc_binary_sha256
         || body.generator_binary_sha256 != manifest.generator_binary_sha256
         || body.sealed_candidate_build_report_sha256
             != manifest.sealed_candidate_build_report_sha256
+        || expected_runner_identity_sha256
+            .is_some_and(|expected| body.validation_runner_identity_sha256 != expected)
     {
         return Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt);
     }
@@ -1905,7 +1915,12 @@ impl KagemushaAuthenticatedReleaseV4 {
                 manifest.qualified_candidate_sha256,
                 policy,
             )?;
-        validate_internal_validation_receipt_v4(manifest, &candidate, internal_validation_receipt)?;
+        validate_internal_validation_receipt_v4(
+            manifest,
+            &candidate,
+            internal_validation_receipt,
+            Some(policy.internal_validation_runner_identity_sha256),
+        )?;
         let authenticated = Self::verify_attestation(manifest, policy, attestation)?;
         let attested_review_signers = authenticated
             .approved_signers
@@ -2458,6 +2473,7 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
             &self.manifest,
             &candidate,
             &self.internal_validation_receipt,
+            None,
         )?;
         if attestation_sha256 != self.manifest.release_attestation_sha256
             || self.promotion_record.generation != self.manifest.generation

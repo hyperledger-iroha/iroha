@@ -669,6 +669,35 @@ where
         }
     }
 }
+fn collect_ordered_page_bounded<K, T, I>(
+    mut iter: I,
+    offset: u64,
+    limit: u64,
+) -> (Vec<T>, usize, bool)
+where
+    I: Iterator<Item = (K, T)>,
+{
+    let mut observed = 0_usize;
+    for _ in 0..offset {
+        if iter.next().is_none() {
+            return (Vec::new(), observed, false);
+        }
+        observed = observed.saturating_add(1);
+    }
+    let mut items = Vec::new();
+    for _ in 0..limit {
+        let Some((_, item)) = iter.next() else {
+            return (items, observed, false);
+        };
+        observed = observed.saturating_add(1);
+        items.push(item);
+    }
+    let has_more = iter.next().is_some();
+    if has_more {
+        observed = observed.saturating_add(1);
+    }
+    (items, observed, has_more)
+}
 #[derive(Copy, Clone)]
 struct EffectivePagination {
     limit: Option<u64>,
@@ -839,6 +868,50 @@ fn enforce_app_pagination(
         cap: max_cap,
     })
 }
+/// Resolve the effective page requested by the space-directory manifest route.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_pagination(
+    limit: Option<u64>,
+    offset: u64,
+) -> Result<(u64, u64)> {
+    let pagination = enforce_app_pagination(
+        limit,
+        offset,
+        app_query_limits().max_page_limit,
+        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+    )?;
+    let limit = pagination
+        .limit
+        .expect("app pagination always resolves an effective page limit");
+    Ok((pagination.offset, limit))
+}
+/// Return the prefix each shard must expose before global manifest pagination.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_fanout_window(
+    offset: u64,
+    limit: u64,
+) -> Result<u64> {
+    let window = offset
+        .checked_add(limit)
+        .ok_or_else(|| Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "pagination window overflows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
+            ),
+        })?;
+    let max_page_limit = app_query_limits().max_page_limit;
+    if window > max_page_limit {
+        // TODO: fetch bounded multi-page prefixes from each shard before admitting wider fanout
+        // windows; a single shard page cannot currently prove the global prefix.
+        return Err(Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "fanout offset plus limit must not exceed {max_page_limit} rows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
+            ),
+        });
+    }
+    Ok(window)
+}
 fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -> Error {
     match err {
         crate::filter::ValidateError::UnsupportedField(field) => Error::AppQueryValidation {
@@ -850,6 +923,20 @@ fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -
             message: format!("type mismatch at field `{field}` for {endpoint}"),
         },
     }
+}
+fn parse_app_list_filter(
+    raw: Option<&str>,
+    endpoint: &'static str,
+) -> Result<Option<FilterExpr>> {
+    raw.map(|raw| {
+        norito::json::from_str::<FilterExpr>(raw).map_err(|error| Error::AppQueryValidation {
+            code: "invalid_filter",
+            message: format!(
+                "filter must be a valid JSON filter expression for {endpoint}: {error}"
+            ),
+        })
+    })
+    .transpose()
 }
 fn collect_page_linear<T, I>(
     iter: I,
@@ -993,7 +1080,8 @@ fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResul
 mod streaming_pager_tests {
     use super::{
         AppCountMode, MultiSortKey, SortKeyComponent, app_query_limits, app_transaction_count_mode,
-        collect_page_linear, collect_page_streaming, enforce_app_pagination,
+        collect_ordered_page_bounded, collect_page_linear, collect_page_streaming,
+        enforce_app_pagination,
     };
     use std::{cell::Cell, rc::Rc};
     routing_test! { sync omitted_count_mode_is_bounded
@@ -1049,6 +1137,17 @@ mod streaming_pager_tests {
         let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 0, Some(0), Some(3));
         assert_eq!(total, 3);
         assert!(items.is_empty());
+    }
+    routing_test! { sync ordered_bounded_page_stops_after_one_probe
+        let visited = Cell::new(0_usize);
+        let iter = (0..100)
+            .inspect(|_| visited.set(visited.get() + 1))
+            .map(|item| (item, item));
+        let (items, total, has_more) = collect_ordered_page_bounded(iter, 2, 3);
+        assert_eq!(items, vec![2, 3, 4]);
+        assert_eq!(total, 6, "bounded total is the observed lower bound");
+        assert!(has_more);
+        assert_eq!(visited.get(), 6, "only offset + limit + one probe may be read");
     }
     routing_test! { sync orders_multi_key_with_mixed_directions
         let data = vec![
@@ -50517,10 +50616,8 @@ pub async fn handle_v1_repo_agreements(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let mut filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let mut filter_expr =
+        parse_app_list_filter(p.filter.as_deref(), ENDPOINT_REPO_AGREEMENTS_LIST)?;
     if let Some(expr) = filter_expr.as_mut() {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -51423,6 +51520,15 @@ mod pagination_enforcement_tests {
             count_mode: None,
         }
     }
+    fn malformed_list_filter_params() -> ListFilterParams {
+        ListFilterParams {
+            filter: Some("not-json".to_owned()),
+            limit: Some(1),
+            offset: 0,
+            sort: None,
+            count_mode: None,
+        }
+    }
     fn zero_query_envelope() -> crate::filter::QueryEnvelope {
         crate::filter::QueryEnvelope {
             query: None,
@@ -51444,6 +51550,26 @@ mod pagination_enforcement_tests {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected pagination error"),
         }
+    }
+    fn assert_invalid_filter<T>(result: Result<T>, endpoint: &'static str) {
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("malformed filter must not be treated as absent for {endpoint}"),
+        };
+        let Error::AppQueryValidation { code, message } = &error else {
+            panic!("unexpected malformed-filter error for {endpoint}: {error:?}");
+        };
+        assert_eq!(*code, "invalid_filter");
+        assert!(message.contains(endpoint));
+        let response = error.into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_filter")
+        );
     }
     routing_test! { async account_permissions_rejects_limit_zero
         assert_invalid_pagination(
@@ -51552,6 +51678,16 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
+    routing_test! { async assets_definitions_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_assets_definitions(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_ASSET_DEFINITIONS_LIST,
+        );
+    }
     routing_test! { async assets_definitions_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_assets_definitions_query(test_state(), NoritoJson(zero_query_envelope()))
@@ -51568,6 +51704,17 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
+    routing_test! { async repo_agreements_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_repo_agreements(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+                MaybeTelemetry::disabled(),
+            )
+            .await,
+            ENDPOINT_REPO_AGREEMENTS_LIST,
+        );
+    }
     routing_test! { async repo_agreements_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_repo_agreements_query(
@@ -51581,6 +51728,26 @@ mod pagination_enforcement_tests {
     routing_test! { async nfts_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_nfts(test_state(), crate::NoritoQuery(zero_list_filter_params())).await,
+        );
+    }
+    routing_test! { async nfts_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_nfts(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_NFTS_LIST,
+        );
+    }
+    routing_test! { async rwas_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_rwas(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_RWAS_LIST,
         );
     }
     routing_test! { async nfts_query_rejects_limit_zero
@@ -52118,6 +52285,11 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     let canonical_hex = canonicalize_uaid_literal(raw)?;
     let hash = Hash::from_str(&canonical_hex).map_err(|_| uaid_parse_error("hash_decode"))?;
     Ok(UniversalAccountId::from_hash(hash))
+}
+/// Normalize a UAID before routing an account or space-directory read to another Torii peer.
+#[cfg(feature = "app_api")]
+pub(crate) fn canonical_routed_uaid_literal(raw: &str) -> Result<String> {
+    parse_uaid_literal(raw).map(|uaid| uaid.to_string())
 }
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
@@ -53901,10 +54073,7 @@ pub async fn handle_v1_accounts(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_LIST);
-    let mut filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let mut filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_ACCOUNTS_LIST)?;
     if let Some(expr) = filter_expr.as_mut() {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -54696,6 +54865,19 @@ impl core::str::FromStr for SpaceDirectoryManifestStatus {
         }
     }
 }
+/// Parse and validate the optional manifest lifecycle filter before fanout.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_status_filter(
+    raw: Option<&str>,
+) -> Result<SpaceDirectoryManifestStatus> {
+    raw.map_or(Ok(SpaceDirectoryManifestStatus::default()), |raw| {
+        raw.parse().map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
+            ))
+        })
+    })
+}
 struct DataspaceAliasLookup {
     aliases: BTreeMap<DataSpaceId, String>,
 }
@@ -54770,37 +54952,17 @@ pub async fn handle_v1_space_directory_manifests(
     let bindings = world.uaid_dataspaces().get(&uaid);
     record_account_literal_selection(&telemetry, ENDPOINT_SPACE_DIRECTORY_MANIFESTS);
     let mut manifests = Vec::new();
-    let status_filter = match query.status.as_deref() {
-        Some(raw) => raw.parse().map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
-            ))
-        })?,
-        None => SpaceDirectoryManifestStatus::default(),
-    };
-    let pagination = enforce_app_pagination(
-        query.limit,
-        query.offset.unwrap_or(0),
-        app_query_limits().max_page_limit,
-        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-    )?;
-    let offset = pagination.offset;
-    let limit = pagination.limit;
+    let status_filter = space_directory_manifest_status_filter(query.status.as_deref())?;
+    let (offset, limit) =
+        space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
     let count_mode = app_count_mode(
         query.count_mode.as_deref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
     );
-    let (projections, total, filtered_total) = if let Some(set) =
+    let (projections, total, has_more) = if let Some(set) =
         world.space_directory_manifests().get(&uaid)
     {
         let dataspace_filter = filter;
-        let total = set
-            .iter()
-            .filter(|&(dataspace_id, _)| match dataspace_filter {
-                Some(target) => *dataspace_id == target,
-                None => true,
-            })
-            .count();
         let status_filter = status_filter;
         let iter_filter = dataspace_filter;
         let iter = set.iter().filter_map(move |(dataspace_id, record)| {
@@ -54820,11 +54982,26 @@ pub async fn handle_v1_space_directory_manifests(
                 },
             ))
         });
-        let (items, filtered_total) =
-            collect_page_streaming(iter, offset, limit, Some(app_query_limits().max_fetch_size));
-        (items, total, filtered_total)
+        match count_mode {
+            AppCountMode::Exact => {
+                let (items, total) = collect_page_streaming(
+                    iter,
+                    offset,
+                    Some(limit),
+                    Some(app_query_limits().max_fetch_size),
+                );
+                let has_more = u64::try_from(total).unwrap_or(u64::MAX)
+                    > offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+                (items, total, has_more)
+            }
+            AppCountMode::Bounded => {
+                // `SpaceDirectoryManifestSet` is keyed by dataspace, so filtering preserves the
+                // canonical order and a prefix plus one probe is sufficient.
+                collect_ordered_page_bounded(iter, offset, limit)
+            }
+        }
     } else {
-        (Vec::new(), 0, 0)
+        (Vec::new(), 0, false)
     };
     for projection in projections {
         let entry = manifest_entry_to_json(
@@ -54838,13 +55015,7 @@ pub async fn handle_v1_space_directory_manifests(
     let mut root = Map::new();
     root.insert("uaid".into(), Value::from(uaid.to_string()));
     root.insert("total".into(), Value::from(total as u64));
-    root.insert(
-        "has_more".into(),
-        Value::from(
-            u64::try_from(filtered_total).unwrap_or(u64::MAX)
-                > offset.saturating_add(u64::try_from(manifests.len()).unwrap_or(u64::MAX)),
-        ),
-    );
+    root.insert("has_more".into(), Value::from(has_more));
     root.insert("count_mode".into(), Value::from(count_mode.label()));
     root.insert("manifests".into(), Value::Array(manifests));
     pretty_json_response(&Value::Object(root))
@@ -55605,7 +55776,7 @@ mod space_directory_manifest_helper_tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["total"].as_u64(), Some(2));
         let manifests = json["manifests"].as_array().expect("manifests array");
         assert_eq!(manifests.len(), 2);
         assert_eq!(
@@ -55633,8 +55804,7 @@ mod space_directory_manifest_helper_tests {
         );
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_applies_dataspace_filter_and_treats_zero_limit_as_unbounded()
-     {
+    async fn handle_v1_space_directory_manifests_rejects_zero_limit() {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x58; Hash::LENGTH]));
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -55667,7 +55837,7 @@ mod space_directory_manifest_helper_tests {
             .space_directory_manifests_mut_for_testing()
             .insert(uaid, set);
         let state = manifest_state(world, None);
-        let response = handle_v1_space_directory_manifests(
+        let error = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
             crate::NoritoQuery(SpaceDirectoryManifestQuery {
@@ -55678,29 +55848,18 @@ mod space_directory_manifest_helper_tests {
             MaybeTelemetry::disabled(),
         )
         .await
-        .expect("dataspace-filtered manifest query should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(1));
-        let manifests = json["manifests"].as_array().expect("manifests array");
-        assert_eq!(
-            manifests.len(),
-            1,
-            "limit=0 should be treated as an unbounded page for the filtered result",
-        );
-        assert_eq!(
-            manifests[0]["dataspace_id"].as_u64(),
-            Some(second_dataspace.as_u64())
-        );
-        assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
-        assert_eq!(
-            manifests[0]["accounts"][0].as_str(),
-            Some(crate::account_literal::display_literal(&account).as_str())
-        );
+        .err()
+        .expect("limit=0 must not bypass the app pagination cap");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "invalid_pagination",
+                ..
+            }
+        ));
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_keeps_prefilter_total_when_status_and_offset_clear_page()
+    async fn handle_v1_space_directory_manifests_reports_filtered_total_when_offset_clears_page()
      {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
         let active_dataspace = DataSpaceId::new(7);
@@ -55767,12 +55926,53 @@ mod space_directory_manifest_helper_tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(json["total"].as_u64(), Some(1));
         assert_eq!(
             json["manifests"].as_array().expect("manifests array").len(),
             0,
-            "offset is applied after status filtering, but total stays pre-filter",
+            "offset is applied after status filtering and total counts matching rows",
         );
+    }
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_bounded_mode_stops_after_one_probe() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5E; Hash::LENGTH]));
+        let mut set = SpaceDirectoryManifestSet::default();
+        for dataspace_id in 7_u64..=10 {
+            let mut manifest = AssetPermissionManifest {
+                dataspace: DataSpaceId::new(dataspace_id),
+                ..sample_manifest_record().manifest
+            };
+            manifest.uaid = uaid;
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(13);
+            set.upsert(record);
+        }
+        let mut world = World::default();
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+        let response = handle_v1_space_directory_manifests(
+            manifest_state(world, None),
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                limit: Some(1),
+                offset: Some(1),
+                count_mode: Some("bounded".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("bounded manifest query should succeed")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
+        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["has_more"].as_bool(), Some(true));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0]["dataspace_id"].as_u64(), Some(8));
     }
 }
 }
@@ -59498,10 +59698,8 @@ pub async fn handle_v1_assets_definitions(
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_DEFINITIONS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ASSET_DEFINITIONS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr =
+        parse_app_list_filter(p.filter.as_deref(), ENDPOINT_ASSET_DEFINITIONS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -60781,10 +60979,7 @@ pub async fn handle_v1_nfts(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_NFTS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_NFTS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_NFTS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -61019,10 +61214,7 @@ pub async fn handle_v1_rwas(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_RWAS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_RWAS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_RWAS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -64836,7 +65028,7 @@ pub async fn handle_post_soranet_privacy_share(
     if let Err(err) = telemetry.ingest_soranet_privacy_share(share) {
         iroha_logger::warn!(
             ?err,
-            collector_id,
+            collector_id = %hex::encode(collector_id),
             bucket_start_unix,
             bucket_duration_secs,
             mode = %mode,
@@ -64847,7 +65039,7 @@ pub async fn handle_post_soranet_privacy_share(
         )));
     }
     iroha_logger::trace!(
-        collector_id,
+        collector_id = %hex::encode(collector_id),
         bucket_start_unix,
         bucket_duration_secs,
         mode = %mode,
@@ -64857,7 +65049,7 @@ pub async fn handle_post_soranet_privacy_share(
     );
     let mut entries = vec![
         json_entry("status", "accepted"),
-        json_entry("collector_id", collector_id),
+        json_entry("collector_id", hex::encode(collector_id)),
         json_entry("bucket_start_unix", bucket_start_unix),
         json_entry("bucket_duration_secs", bucket_duration_secs),
         json_entry("mode", mode),

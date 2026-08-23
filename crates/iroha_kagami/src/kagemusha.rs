@@ -242,6 +242,9 @@ struct PrepareActivationV4Args {
     /// Exact lowercase SHA-256 directory name of the release to activate.
     #[arg(long, value_parser = parse_manifest_sha256)]
     manifest_sha256: [u8; 32],
+    /// Domain-separated SHA-256 shared by all four validator runtime projections.
+    #[arg(long, value_parser = parse_manifest_sha256)]
+    runtime_effective_config_sha256: [u8; 32],
     /// Next atomic Eq/Ep verifier version observed from live consensus state.
     #[arg(long)]
     verifier_version: u32,
@@ -355,8 +358,12 @@ impl<T: Write> RunArgs<T> for Args {
                 {
                     bail!("promotion binding is non-canonical or differs from --promotion-id");
                 }
-                let instruction =
-                    ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy);
+                let instruction = ActivateKagemushaRecursiveReleaseV4::new(
+                    promotion_binding,
+                    activation,
+                    policy,
+                    args.runtime_effective_config_sha256,
+                );
                 let instructions = vec![InstructionBox::from(instruction)];
                 let instructions_hash = HashOf::new(&instructions);
                 let mut instruction_json = norito::json::to_string(&instructions)
@@ -369,9 +376,10 @@ impl<T: Write> RunArgs<T> for Args {
                 publish_new_durable_file(writer, &args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
-                    "{{\"status\":\"prepared\",\"promotion_id\":\"{}\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
+                    "{{\"status\":\"prepared\",\"promotion_id\":\"{}\",\"manifest_sha256\":\"{}\",\"runtime_effective_config_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
                     hex::encode(args.promotion_id),
                     hex::encode(args.manifest_sha256),
+                    hex::encode(args.runtime_effective_config_sha256),
                     args.verifier_version,
                     instructions_hash,
                     policy_state_sha256,

@@ -1,4 +1,6 @@
 //! `World`-related ISI implementations.
+#[path = "world/parameter_validation.rs"]
+mod parameter_validation;
 use super::prelude::*;
 use crate::{
     prelude::*,
@@ -288,25 +290,6 @@ pub mod isi {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message.into().into(),
         ))
-    }
-    fn validate_ivm_heap_parameter(parameter: &Parameter) -> Result<(), Error> {
-        use iroha_data_model::parameter::SmartContractParameter;
-        let (name, limit) = match parameter {
-            Parameter::SmartContract(SmartContractParameter::Memory(limit)) => {
-                ("smart_contract.memory", limit.get())
-            }
-            Parameter::Executor(SmartContractParameter::Memory(limit)) => {
-                ("executor.memory", limit.get())
-            }
-            _ => return Ok(()),
-        };
-        if limit > iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES {
-            return Err(invalid_smart_contract_parameter(format!(
-                "{name} exceeds the ABI V1 heap window: {limit} > {} bytes",
-                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES
-            )));
-        }
-        Ok(())
     }
     #[derive(crate::json_macros::JsonDeserialize)]
     struct GovernedGasRate {
@@ -18731,7 +18714,12 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            validate_ivm_heap_parameter(self.inner())?;
+            crate::smartcontracts::isi::offline::validate_runtime_consensus_parameter_update(
+                self.inner(),
+                &state_transaction.world,
+                state_transaction.kagemusha_release_catalog.is_configured(),
+            )?;
+            super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_reputation_archive_retention_request(custom, state_transaction)?;

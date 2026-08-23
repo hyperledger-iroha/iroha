@@ -313,6 +313,9 @@ canonical `AssetPermissionManifest` JSON:
 ```jsonc
 {
   "uaid": "uaid:0f4d…ab11",
+  "total": 1,
+  "has_more": false,
+  "count_mode": "exact",
   "manifests": [
     {
       "dataspace_id": 11,
@@ -353,10 +356,28 @@ canonical `AssetPermissionManifest` JSON:
   ledger accounts the manifest currently reaches.
 - `manifest` is the full `AssetPermissionManifest` object, allowing SDKs and
   dashboards to render the entries without bespoke schemas.
+- `total` counts rows that match the dataspace and status filters before
+  pagination. `has_more` indicates another page; a `count_mode` of `bounded`
+  means a routed fanout only established a lower bound for `total`.
 
-Read access controls mirror the bindings and portfolio APIs. Use this surface to verify manifest rotations, ensure revocation
-evidence is visible to regulators, and hydrate SDK caches without scraping the
-Space Directory contract directly.
+Omitting `limit` uses the configured application-API page size. `limit=0`,
+oversized pages, and pagination windows beyond the configured fetch budget are
+rejected rather than treated as unbounded reads. A routed fanout currently
+requires `offset + limit` to fit within one configured maximum page so every
+shard can return the complete global prefix in one bounded request; a
+dataspace-specific direct read may use the larger configured fetch window.
+Shard prefixes use bounded counting internally. The coordinator reports an
+exact count only when every prefix is terminal, and validates canonical order,
+filters, lifecycle status, nested manifest identity, and manifest hash before
+merging any routed row. Unknown page, row, lifecycle, revocation, or nested
+manifest fields are rejected. UAIDs, hashes, account IDs, names, asset IDs, and
+quantities must use their canonical JSON spelling, and typed manifest checking
+runs inside the admitted transient decode-allocation phase.
+
+Read access controls mirror the bindings and portfolio APIs. Use this surface
+to verify manifest rotations, ensure revocation evidence is visible to
+regulators, and hydrate SDK caches without scraping the Space Directory
+contract directly.
 
 ### Manifest publish API
 

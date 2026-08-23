@@ -65,9 +65,53 @@ mod model {
         pub scope: AssetBalanceScope,
     }
 }
-string_id!(AssetDefinitionId);
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for AssetDefinitionId {
+    fn write_json(&self, out: &mut String) {
+        out.push('"');
+        // Writing to `String` is infallible. The only allocation is the caller-owned JSON output;
+        // `AssetDefinitionId::fmt` keeps its Base58 workspace on the stack.
+        let _ = fmt::write(out, format_args!("{self}"));
+        out.push('"');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_display_to(self, out)
+    }
+}
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AssetDefinitionId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        Self::parse_address_literal(&value)
+            .map_err(|err| asset_definition_id_json_error(err.reason()))
+    }
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let candidate = value.as_str().ok_or_else(|| {
+            asset_definition_id_json_error("Asset Definition ID must be a JSON string")
+        })?;
+        Self::parse_address_literal(candidate)
+            .map_err(|err| asset_definition_id_json_error(err.reason()))
+    }
+}
 const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
 const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
+// `bs58` documents this as its allocation-free output bound: ceil(input_len * 1.5).
+const ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN: usize =
+    ASSET_DEFINITION_ADDRESS_LEN + ASSET_DEFINITION_ADDRESS_LEN.div_ceil(2);
+#[cfg(feature = "json")]
+fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error {
+    norito::json::Error::WithPos {
+        msg: message,
+        byte: 0,
+        line: 1,
+        col: 1,
+    }
+}
 impl NoritoSerialize for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
@@ -244,8 +288,7 @@ impl AssetDefinitionId {
     /// Canonical textual address (unprefixed Base58 with version and checksum).
     #[must_use]
     pub fn canonical_address(&self) -> String {
-        let payload = self.address_payload();
-        bs58::encode(payload).into_string()
+        self.to_string()
     }
     /// Parse the canonical unprefixed Base58 address.
     ///
@@ -262,10 +305,11 @@ impl AssetDefinitionId {
                 "Asset Definition ID must use unprefixed Base58 format",
             ));
         }
-        let payload = bs58::decode(trimmed)
-            .into_vec()
+        let mut payload = [0_u8; ASSET_DEFINITION_ADDRESS_LEN];
+        let decoded_len = bs58::decode(trimmed)
+            .onto(&mut payload)
             .map_err(|_| ParseError::new("Asset Definition ID must be valid Base58"))?;
-        if payload.len() != ASSET_DEFINITION_ADDRESS_LEN {
+        if decoded_len != ASSET_DEFINITION_ADDRESS_LEN {
             return Err(ParseError::new(
                 "Asset Definition ID must contain exactly 21 decoded bytes",
             ));
@@ -338,7 +382,12 @@ fn address_checksum(payload: &[u8]) -> [u8; 4] {
 }
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_address())
+        let mut encoded = [0_u8; ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN];
+        let encoded_len = bs58::encode(self.address_payload())
+            .onto(&mut encoded[..])
+            .map_err(|_| fmt::Error)?;
+        let literal = core::str::from_utf8(&encoded[..encoded_len]).map_err(|_| fmt::Error)?;
+        f.write_str(literal)
     }
 }
 /// Asset definition identifier textual representation.
@@ -398,6 +447,94 @@ mod tests {
         let parsed: AssetDefinitionId = literal.parse().expect("address should parse");
         assert_eq!(parsed, expected);
         assert_eq!(parsed.to_string(), literal);
+    }
+    #[test]
+    fn asset_definition_id_formats_into_stack_sink_with_zero_decode_heap() {
+        struct StackText {
+            bytes: [u8; ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN],
+            len: usize,
+        }
+        impl fmt::Write for StackText {
+            fn write_str(&mut self, value: &str) -> fmt::Result {
+                let end = self.len.checked_add(value.len()).ok_or(fmt::Error)?;
+                let destination = self.bytes.get_mut(self.len..end).ok_or(fmt::Error)?;
+                destination.copy_from_slice(value.as_bytes());
+                self.len = end;
+                Ok(())
+            }
+        }
+
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("uuid v4 bytes");
+        let canonical = expected.canonical_address();
+        let mut output = StackText {
+            bytes: [0; ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN],
+            len: 0,
+        };
+        let zero_allocation_limits =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let (formatted, usage) =
+            norito::core::with_decode_limits_measured(zero_allocation_limits, || {
+                fmt::write(&mut output, format_args!("{expected}"))
+            });
+        formatted.expect("stack formatter");
+        assert_eq!(&output.bytes[..output.len], canonical.as_bytes());
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+    #[test]
+    fn asset_definition_id_base58_parse_uses_no_decode_heap() {
+        fn zero_allocation_limits() -> norito::DecodeLimits {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX)
+        }
+
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("uuid v4 bytes");
+        let literal = expected.to_string();
+        let (parsed, usage) =
+            norito::core::with_decode_limits_measured(zero_allocation_limits(), || {
+                AssetDefinitionId::parse_address_literal(&literal)
+            });
+        assert_eq!(parsed.expect("stack Base58 parse"), expected);
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let oversized = "1".repeat(4_096);
+        let (rejected, usage) =
+            norito::core::with_decode_limits_measured(zero_allocation_limits(), || {
+                AssetDefinitionId::parse_address_literal(&oversized)
+            });
+        assert!(rejected.is_err());
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        #[cfg(feature = "json")]
+        {
+            let value = norito::json::Value::String(literal);
+            let (parsed, usage) =
+                norito::core::with_decode_limits_measured(zero_allocation_limits(), || {
+                    <AssetDefinitionId as norito::json::JsonDeserialize>::json_from_value(&value)
+                });
+            assert_eq!(parsed.expect("borrowed stack Base58 parse"), expected);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+
+            for invalid in [
+                norito::json::Value::Bool(true),
+                norito::json::Value::String("not:base58".into()),
+            ] {
+                let (rejected, usage) =
+                    norito::core::with_decode_limits_measured(zero_allocation_limits(), || {
+                        <AssetDefinitionId as norito::json::JsonDeserialize>::json_from_value(
+                            &invalid,
+                        )
+                    });
+                assert!(rejected.is_err());
+                assert_eq!(usage.total_allocated_bytes(), 0);
+            }
+        }
     }
     #[test]
     fn asset_definition_id_rejects_non_v4_uuid_bytes() {

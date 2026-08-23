@@ -12,6 +12,27 @@ fn handler_local_api_token_checks_use_the_canonical_evaluator() {
         "handler-local API-token checks must use evaluate_api_token"
     );
 }
+#[test]
+fn norito_rpc_canary_rejects_duplicate_api_token_headers() {
+    let cfg = actual::NoritoRpcTransport {
+        enabled: true,
+        require_mtls: false,
+        stage: actual::NoritoRpcStage::Canary,
+        allowed_clients: vec!["allowed-canary".into()],
+        mtls_trusted_proxy_cidrs: Vec::new(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.append(HEADER_API_TOKEN, HeaderValue::from_static("allowed-canary"));
+    headers.append(
+        HEADER_API_TOKEN,
+        HeaderValue::from_static("attacker-choice"),
+    );
+
+    assert_eq!(
+        evaluate_norito_rpc_gate(&cfg, &[], &headers, None),
+        Err(NoritoRpcGateFailure::CanaryDenied)
+    );
+}
 #[tokio::test]
 #[cfg(feature = "telemetry")]
 async fn norito_rpc_gate_records_metrics() {

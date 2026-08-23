@@ -5,6 +5,15 @@
 //! reads/apartment observations directly from the committed snapshot plus the
 //! hydrated artifact cache. Soracloud runtime v1 runs IVM handlers directly
 //! and supervises hosted HTTP revisions (`Inrou`) as loopback services.
+//! PortableVM release workers run as an explicitly configured non-root Linux
+//! identity; the supervisor retains the public listener and only forwards to a
+//! QEMU-selected loopback endpoint attested over an anonymous, supervisor-held
+//! QMP socketpair. Every proxy connection re-attests that same QEMU-owned
+//! forward before releasing any client bytes. Root-owned `iptables` OUTPUT
+//! owner barriers in a locked, marker-owned chain admit only supervisor-owned
+//! sockets to both loopback ports, preventing local processes from bypassing
+//! Torii or the proxy. Any preexisting owned chain fails startup for explicit
+//! operator cleanup so a surviving prior QEMU never loses containment.
 //!
 //! Ordered mailbox execution and public query local reads now run admitted IVM
 //! bundles directly through the Soracloud host surface while asset local reads
@@ -114,8 +123,14 @@ use sorafs_car::{
     compute_chunk_plan_digest_sha3, compute_por_root,
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd as _, OwnedFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileTypeExt as _;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
@@ -135,8 +150,6 @@ use std::{
     thread,
     time::Duration,
 };
-#[cfg(target_os = "linux")]
-use std::os::unix::net::UnixStream;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 #[path = "soracloud_runtime/remote_stream_token_auth.rs"]
@@ -191,13 +204,137 @@ const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGES_PER_COMMAND: usize = 32;
 #[cfg(target_os = "linux")]
-const SORACLOUD_INROU_QMP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const SORACLOUD_INROU_QMP_ATTEST_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_PROC_STATUS_MAX_BYTES: u64 = 64 * 1024;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const SORACLOUD_INROU_IPTABLES_CHAIN: &str = "IROHA_INROU_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_CHAIN_MARKER: &str = "iroha-inrou-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_INPUT_CHAIN: &str = "IROHA_INROU_INPUT_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_INPUT_CHAIN_MARKER: &str = "iroha-inrou-input-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IP6TABLES_CHAIN: &str = "IROHA_INROU6_V1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IP6TABLES_CHAIN_MARKER: &str = "iroha-inrou6-owned-v1";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_LOCK_PATH: &str = "/run/iroha-inrou-firewall-v1.lock";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS: usize = 4;
 const SORACLOUD_INROU_PROXY_MAX_CONNECTIONS: usize = 256;
+const SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES: usize = 256 * 1024;
 const SORACLOUD_INROU_PROXY_IO_POLL: Duration = Duration::from_millis(250);
 const SORACLOUD_INROU_PROXY_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_IO_POLL: Duration = Duration::from_millis(100);
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT: Duration = Duration::from_secs(2);
+const SORACLOUD_INROU_CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
+const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_SERVICE_IDENTITY_NAME: &str = "iroha-inrou";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_SERVICE_HOME: &str = "/nonexistent";
+// Linux misc-device major 10, KVM minor 232 in the kernel dev_t encoding.
+const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 232_u64;
+#[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
     "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny";
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_CLOSE_FDS_SCRIPT: &str = r#"inrou_expected_uid=$1
+inrou_expected_gid=$2
+inrou_expected_groups=$3
+shift 3
+set -f
+IFS=$(printf ' \tX')
+IFS=${IFS%X}
+inrou_seen_uid=0
+inrou_seen_gid=0
+inrou_seen_groups=0
+inrou_seen_cap_inh=0
+inrou_seen_cap_prm=0
+inrou_seen_cap_eff=0
+inrou_seen_cap_bnd=0
+inrou_seen_cap_amb=0
+inrou_seen_no_new_privs=0
+inrou_exact_quad() {
+    inrou_expected=$1
+    shift
+    [ "$#" -eq 4 ] && [ "$1" = "${inrou_expected}" ] && [ "$2" = "${inrou_expected}" ] && [ "$3" = "${inrou_expected}" ] && [ "$4" = "${inrou_expected}" ]
+}
+inrou_exact_groups() {
+    inrou_expected=$1
+    shift
+    [ "$*" = "${inrou_expected}" ]
+}
+inrou_zero_capability() {
+    [ "$#" -eq 1 ] || return 1
+    case "$1" in
+        ''|*[!0]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+inrou_exact_one() {
+    inrou_expected=$1
+    shift
+    [ "$#" -eq 1 ] && [ "$1" = "${inrou_expected}" ]
+}
+while IFS=: read -r inrou_status_name inrou_status_value; do
+    case "${inrou_status_name}" in
+        Uid)
+            [ "${inrou_seen_uid}" -eq 0 ] && inrou_exact_quad "${inrou_expected_uid}" ${inrou_status_value} || exit 126
+            inrou_seen_uid=1
+            ;;
+        Gid)
+            [ "${inrou_seen_gid}" -eq 0 ] && inrou_exact_quad "${inrou_expected_gid}" ${inrou_status_value} || exit 126
+            inrou_seen_gid=1
+            ;;
+        Groups)
+            [ "${inrou_seen_groups}" -eq 0 ] && inrou_exact_groups "${inrou_expected_groups}" ${inrou_status_value} || exit 126
+            inrou_seen_groups=1
+            ;;
+        CapInh)
+            [ "${inrou_seen_cap_inh}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_inh=1
+            ;;
+        CapPrm)
+            [ "${inrou_seen_cap_prm}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_prm=1
+            ;;
+        CapEff)
+            [ "${inrou_seen_cap_eff}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_eff=1
+            ;;
+        CapBnd)
+            [ "${inrou_seen_cap_bnd}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_bnd=1
+            ;;
+        CapAmb)
+            [ "${inrou_seen_cap_amb}" -eq 0 ] && inrou_zero_capability ${inrou_status_value} || exit 126
+            inrou_seen_cap_amb=1
+            ;;
+        NoNewPrivs)
+            [ "${inrou_seen_no_new_privs}" -eq 0 ] && inrou_exact_one 1 ${inrou_status_value} || exit 126
+            inrou_seen_no_new_privs=1
+            ;;
+    esac
+done < /proc/self/status || exit 126
+[ "${inrou_seen_uid}" -eq 1 ] && [ "${inrou_seen_gid}" -eq 1 ] && [ "${inrou_seen_groups}" -eq 1 ] && [ "${inrou_seen_cap_inh}" -eq 1 ] && [ "${inrou_seen_cap_prm}" -eq 1 ] && [ "${inrou_seen_cap_eff}" -eq 1 ] && [ "${inrou_seen_cap_bnd}" -eq 1 ] && [ "${inrou_seen_cap_amb}" -eq 1 ] && [ "${inrou_seen_no_new_privs}" -eq 1 ] || exit 126
+set +f
+for inrou_fd_path in /proc/self/fd/*; do
+    inrou_fd=${inrou_fd_path##*/}
+    case "${inrou_fd}" in
+        0|1|2) continue ;;
+        ''|*[!0-9]*) exit 125 ;;
+    esac
+    eval "exec ${inrou_fd}>&-" || exit 125
+done
+exec "$@""#;
 const SORACLOUD_INROU_LOG_TRUNCATION_MARKER: &[u8] =
     b"\n[Inrou runtime log truncated at the configured safety limit]\n";
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -496,6 +633,10 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub local_validator_account_id: Option<AccountId>,
     /// Local peer identifier used to confirm authoritative HF placement assignments.
     pub local_peer_id: Option<String>,
+    /// Test-only admission for exercising the unconfined implementation without
+    /// exposing a shipping configuration or programmatic bypass.
+    #[cfg(test)]
+    allow_unconfined_inrou: bool,
 }
 /// Internal sink used by the runtime manager to enqueue authoritative Soracloud mutations.
 pub(crate) trait SoracloudRuntimeMutationSink: Send + Sync {
@@ -849,32 +990,53 @@ fn portable_vm_guest_machine_profile(
         },
     }
 }
-#[cfg(target_os = "linux")]
-fn ensure_kvm_device_available() -> eyre::Result<()> {
-    fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/kvm")
-        .map(|_| ())
-        .wrap_err("open /dev/kvm for read/write")
-}
 #[cfg(not(target_os = "linux"))]
 fn ensure_portable_vm_backend_available(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     let _ = config;
     eyre::bail!(
-        "Inrou PortableVM release hosting requires Linux process credentials, SO_PEERCRED QMP attestation, and QEMU seccomp"
+        "Inrou PortableVM release hosting requires Linux procfs identity attestation, anonymous QMP capabilities, and QEMU seccomp"
     )
 }
-#[cfg(target_os = "linux")]
-fn ensure_portable_vm_backend_available(
+#[cfg(not(target_os = "linux"))]
+fn ensure_portable_vm_backend_statically_available(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
+    ensure_portable_vm_backend_available(config)
+}
+#[cfg(target_os = "linux")]
+struct PortableVmBackendPreflight {
+    child_identity: PortableVmChildIdentity,
+    setpriv: PathBuf,
+    shell: PathBuf,
+    qemu: PathBuf,
+}
+#[cfg(target_os = "linux")]
+fn portable_vm_backend_static_preflight(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<PortableVmBackendPreflight> {
     let child_identity = portable_vm_child_identity(config)?;
+    ensure_portable_vm_identity_reserved(&child_identity)
+        .wrap_err("validate the locked local Inrou QEMU service identity")?;
     let setpriv = resolve_inrou_setpriv_executable().ok_or_else(|| {
         eyre::eyre!(
             "configured Inrou PortableVM backend requires root-owned `/usr/bin/setpriv` or `/bin/setpriv`"
+        )
+    })?;
+    let shell = resolve_inrou_shell_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires root-owned `/bin/sh` or `/usr/bin/sh` for fail-closed descriptor cleanup"
+        )
+    })?;
+    resolve_inrou_iptables_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires a root-owned iptables executable at a standard system path"
+        )
+    })?;
+    resolve_inrou_ip6tables_executable().ok_or_else(|| {
+        eyre::eyre!(
+            "configured Inrou PortableVM backend requires a root-owned ip6tables executable at a standard system path"
         )
     })?;
     let profile = portable_vm_guest_machine_profile(current_host_inrou_guest_isa());
@@ -886,34 +1048,32 @@ fn ensure_portable_vm_backend_available(
     })?;
     resolve_inrou_qemu_img_executable()
         .ok_or_else(|| eyre::eyre!("configured Inrou PortableVM backend requires qemu-img"))?;
-    match config.portable_vm_acceleration {
-        iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Kvm => {
-            #[cfg(not(target_os = "linux"))]
-            eyre::bail!("PortableVM acceleration `kvm` is only supported on Linux");
-            #[cfg(target_os = "linux")]
-            ensure_kvm_device_available()?;
-        }
-        iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Hvf => {
-            #[cfg(not(target_os = "macos"))]
-            eyre::bail!("PortableVM acceleration `hvf` is only supported on macOS");
-        }
-        iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Whpx => {
-            #[cfg(not(target_os = "windows"))]
-            eyre::bail!("PortableVM acceleration `whpx` is only supported on Windows");
-        }
-        iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Tcg => {}
-    }
+    Ok(PortableVmBackendPreflight {
+        child_identity,
+        setpriv,
+        shell,
+        qemu,
+    })
+}
+#[cfg(target_os = "linux")]
+fn probe_portable_vm_backend(
+    setpriv: &Path,
+    shell: &Path,
+    qemu: &Path,
+    child_identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
     let output = run_inrou_qemu_command_capture_stdout_bounded(
-        &setpriv,
-        &qemu,
-        &child_identity,
+        setpriv,
+        shell,
+        qemu,
+        child_identity,
         &["-accel", "help"],
         SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT,
         SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES,
     )
     .wrap_err_with(|| format!("probe QEMU accelerators with {}", qemu.display()))?;
     let advertised = String::from_utf8_lossy(&output);
-    let accelerator = config.portable_vm_acceleration.as_qemu_name();
+    let accelerator = "kvm";
     if !advertised.lines().any(|line| line.trim() == accelerator) {
         eyre::bail!(
             "configured PortableVM accelerator `{accelerator}` is not advertised by {}",
@@ -921,9 +1081,10 @@ fn ensure_portable_vm_backend_available(
         );
     }
     run_inrou_qemu_command_capture_stdout_bounded(
-        &setpriv,
-        &qemu,
-        &child_identity,
+        setpriv,
+        shell,
+        qemu,
+        child_identity,
         &["-version"],
         SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT,
         SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES,
@@ -936,7 +1097,33 @@ fn ensure_portable_vm_backend_available(
     })?;
     Ok(())
 }
-fn ensure_configured_inrou_backends_available(
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_backend_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    let preflight = portable_vm_backend_static_preflight(config)?;
+    let _single_instance_lock =
+        acquire_inrou_iptables_lock().wrap_err("serialize the full Inrou QEMU startup probe")?;
+    ensure_portable_vm_identity_reserved(&preflight.child_identity)
+        .wrap_err("recheck the locked Inrou QEMU service identity under the global lock")?;
+    ensure_no_process_with_inrou_identity(&preflight.child_identity)
+        .wrap_err("require an exclusive Inrou QEMU identity before backend probes")?;
+    probe_portable_vm_backend(
+        &preflight.setpriv,
+        &preflight.shell,
+        &preflight.qemu,
+        &preflight.child_identity,
+    )?;
+    ensure_no_process_with_inrou_identity(&preflight.child_identity)
+        .wrap_err("require the startup QEMU probes to be fully reaped before advertisement")
+}
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_backend_statically_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    portable_vm_backend_static_preflight(config).map(|_| ())
+}
+fn validate_configured_inrou_backend_shape(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     if !config.enabled {
@@ -952,8 +1139,49 @@ fn ensure_configured_inrou_backends_available(
     {
         eyre::bail!("Inrou V1 runtime startup accepts only the `portable_vm` backend");
     }
-    ensure_portable_vm_backend_available(config)
-        .wrap_err("preflight configured PortableVM backend")?;
+    if config.max_concurrent_vms.get() != 1 {
+        eyre::bail!(
+            "Inrou PortableVM V1 requires max_concurrent_vms = 1 because its dedicated host identity is exclusive to one QEMU process"
+        );
+    }
+    Ok(())
+}
+fn validate_soracloud_runtime_manager_posture(
+    config: &SoracloudRuntimeManagerConfig,
+) -> eyre::Result<()> {
+    if config.inrou.enabled && !manager_allows_unconfined_inrou_for_tests(config) {
+        eyre::bail!(
+            "first-release iroha3d forbids Inrou hosting until PortableVM has mandatory mount, network, IPC, and MAC confinement"
+        );
+    }
+    Ok(())
+}
+fn manager_allows_unconfined_inrou_for_tests(config: &SoracloudRuntimeManagerConfig) -> bool {
+    #[cfg(test)]
+    if config.allow_unconfined_inrou {
+        return true;
+    }
+    let _ = config;
+    false
+}
+fn ensure_configured_inrou_backends_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    validate_configured_inrou_backend_shape(config)?;
+    if config.enabled {
+        ensure_portable_vm_backend_available(config)
+            .wrap_err("preflight configured PortableVM backend")?;
+    }
+    Ok(())
+}
+fn ensure_configured_inrou_backends_statically_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    validate_configured_inrou_backend_shape(config)?;
+    if config.enabled {
+        ensure_portable_vm_backend_statically_available(config)
+            .wrap_err("statically revalidate configured PortableVM backend")?;
+    }
     Ok(())
 }
 #[cfg(test)]
@@ -1108,7 +1336,7 @@ impl SoracloudRuntimeManagerConfig {
     pub fn from_runtime_config(
         config: &iroha_config::parameters::actual::SoracloudRuntime,
     ) -> Self {
-        config.assert_production_posture();
+        config.assert_runtime_posture();
         Self {
             production_mode: config.production_mode,
             state_dir: config.state_dir.clone(),
@@ -1121,6 +1349,8 @@ impl SoracloudRuntimeManagerConfig {
             hf: config.hf.clone(),
             local_validator_account_id: None,
             local_peer_id: None,
+            #[cfg(test)]
+            allow_unconfined_inrou: false,
         }
     }
     /// Attach the local host identity used for placement-aware HF execution.
@@ -4173,7 +4403,9 @@ struct HostedHttpWorker {
     egress_accounting_offset_bytes: u64,
     stderr_log_path: PathBuf,
     port_forward: Option<PortableVmLoopbackProxy>,
-    qmp_control: Option<PortableVmQmpControl>,
+    qmp_control: Option<Arc<Mutex<PortableVmQmpControl>>>,
+    #[cfg(target_os = "linux")]
+    loopback_firewall: Option<InrouLoopbackOwnerFirewall>,
 }
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct InrouTapNetworkAttachment {
@@ -4257,11 +4489,9 @@ struct InrouStartupCapabilitySnapshot {
     supported_guest_isas: BTreeSet<SoraInrouGuestIsaV1>,
 }
 impl InrouStartupCapabilitySnapshot {
-    fn from_config(
-        config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
-    ) -> Option<Self> {
-        config.enabled.then(|| Self {
-            supported_backends: config.backends.clone(),
+    fn from_config(config: &SoracloudRuntimeManagerConfig) -> Option<Self> {
+        (config.inrou.enabled && manager_allows_unconfined_inrou_for_tests(config)).then(|| Self {
+            supported_backends: config.inrou.backends.clone(),
             supported_guest_isas: BTreeSet::from([current_host_inrou_guest_isa()]),
         })
     }
@@ -4447,7 +4677,7 @@ impl SoracloudRuntimeManager {
     /// Construct the runtime manager for the supplied node state.
     #[must_use]
     pub fn new(config: SoracloudRuntimeManagerConfig, state: Arc<State>) -> Self {
-        let inrou_startup_capability = InrouStartupCapabilitySnapshot::from_config(&config.inrou);
+        let inrou_startup_capability = InrouStartupCapabilitySnapshot::from_config(&config);
         Self {
             config,
             state,
@@ -4527,6 +4757,8 @@ impl SoracloudRuntimeManager {
         mut self,
         shutdown_signal: ShutdownSignal,
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("validate Soracloud runtime-manager first-release posture")?;
         if self.operator_preseed_store.is_some() {
             if !self.config.inrou.enabled {
                 eyre::bail!(
@@ -4545,6 +4777,12 @@ impl SoracloudRuntimeManager {
         }
         ensure_configured_inrou_backends_available(&self.config.inrou)
             .wrap_err("validate immutable Inrou startup capability")?;
+        #[cfg(target_os = "linux")]
+        if self.config.inrou.enabled {
+            let identity = portable_vm_child_identity(&self.config.inrou)?;
+            ensure_no_process_with_inrou_identity(&identity)
+                .wrap_err("require an unused dedicated Inrou QEMU identity at startup")?;
+        }
         remote_stream_token_auth::ensure_startup_binding(
             self.remote_stream_token_operator.as_ref(),
             self.state.network_id_ref(),
@@ -4683,6 +4921,8 @@ impl SoracloudRuntimeManager {
     }
     /// Reconcile the node-local materialization plan against authoritative state once.
     pub(crate) fn reconcile_once(&self) -> eyre::Result<()> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("validate Soracloud runtime-manager first-release posture")?;
         fs::create_dir_all(self.services_root())
             .wrap_err_with(|| format!("create {}", self.services_root().display()))?;
         fs::create_dir_all(self.apartments_root())
@@ -4701,7 +4941,7 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
         fs::create_dir_all(self.service_data_root())
             .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
-        let inrou_hosting_available = match ensure_configured_inrou_backends_available(
+        let inrou_hosting_available = match ensure_configured_inrou_backends_statically_available(
             &self.config.inrou,
         ) {
             Ok(()) => self.config.inrou.enabled,
@@ -4710,11 +4950,13 @@ impl SoracloudRuntimeManager {
                     ?error,
                     "configured Inrou backend is unavailable; withdrawing host and stopping local replicas"
                 );
-                let view = self.state.view();
-                self.withdraw_local_inrou_host_if_needed(&view);
                 false
             }
         };
+        if !inrou_hosting_available {
+            let view = self.state.view();
+            self.withdraw_local_inrou_host_if_needed(&view);
+        }
         let (
             bundle_registry,
             initial_snapshot,
@@ -5784,6 +6026,8 @@ impl SoracloudRuntimeManager {
         cache_key: HostedHttpWorkerCacheKey,
         egress_accounting_offset_bytes: u64,
     ) -> eyre::Result<HostedHttpWorker> {
+        validate_soracloud_runtime_manager_posture(&self.config)
+            .wrap_err("enforce first-release Inrou admission before worker launch")?;
         let selected_backend = plan
             .inrou
             .as_ref()
@@ -5809,7 +6053,7 @@ impl SoracloudRuntimeManager {
         _egress_accounting_offset_bytes: u64,
     ) -> eyre::Result<HostedHttpWorker> {
         eyre::bail!(
-            "Inrou PortableVM release hosting requires Linux process credentials, SO_PEERCRED QMP attestation, and QEMU seccomp"
+            "Inrou PortableVM release hosting requires Linux procfs identity attestation, anonymous QMP capabilities, and QEMU seccomp"
         )
     }
     #[cfg(target_os = "linux")]
@@ -5835,20 +6079,41 @@ impl SoracloudRuntimeManager {
         let qemu_img = resolve_inrou_qemu_img_executable()
             .ok_or_else(|| eyre::eyre!("Inrou PortableVm execution requires `qemu-img` on PATH"))?;
         let child_identity = portable_vm_child_identity(&self.config.inrou)?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("require an unused dedicated Inrou QEMU identity before disk delegation")?;
         let setpriv = resolve_inrou_setpriv_executable().ok_or_else(|| {
             eyre::eyre!(
                 "Inrou PortableVm execution requires root-owned `/usr/bin/setpriv` or `/bin/setpriv`"
             )
         })?;
-        let materialization_dir = PathBuf::from(&plan.materialization_dir);
-        ensure_secure_inrou_disk_directory(&materialization_dir)
-            .wrap_err("secure Inrou PortableVm materialization directory")?;
-        let materialization_dir = fs::canonicalize(&materialization_dir).wrap_err_with(|| {
-            format!(
-                "canonicalize Inrou PortableVm materialization directory {}",
-                materialization_dir.display()
+        let shell = resolve_inrou_shell_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVm execution requires root-owned `/bin/sh` or `/usr/bin/sh` for fail-closed descriptor cleanup"
             )
         })?;
+        let materialization_dir =
+            ensure_secure_inrou_disk_directory(Path::new(&plan.materialization_dir))
+                .wrap_err("secure and canonicalize Inrou PortableVm materialization directory")?;
+        // Reconciliation kills and waits for a tracked previous worker before
+        // reaching this launch. A daemon crash is covered by QEMU's
+        // exit-with-parent policy; after revoking path access, reclaim still
+        // scans procfs and fails closed if that old identity retains an fd.
+        for volume in &plan.lease_volumes {
+            let file_name = if volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume {
+                "rootfs.qcow2"
+            } else {
+                "lease.raw"
+            };
+            let volume_dir =
+                ensure_secure_inrou_disk_directory(Path::new(&volume.local_materialization_dir))
+                    .wrap_err_with(|| {
+                        format!(
+                            "secure and canonicalize Inrou volume `{}`",
+                            volume.volume_name
+                        )
+                    })?;
+            reclaim_inrou_qemu_file_if_present(&volume_dir.join(file_name), &child_identity)?;
+        }
         let archive_limits = inrou_bundle_archive_limits(
             &self.config.inrou,
             self.config.cache_budgets.bundle_bytes.get(),
@@ -5891,10 +6156,7 @@ impl SoracloudRuntimeManager {
             .ok_or_else(|| eyre::eyre!("Inrou service requires a route"))?
             .service_port
             .get();
-        let stdout_log_path = materialization_dir.join("inrou.stdout.log");
         let stderr_log_path = materialization_dir.join("inrou.stderr.log");
-        let stdout_log = open_inrou_runtime_log(&stdout_log_path, "Inrou stdout log")
-            .wrap_err_with(|| format!("open {}", stdout_log_path.display()))?;
         let stderr_log = open_inrou_runtime_log(&stderr_log_path, "Inrou stderr log")
             .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
         let (root_disk_path, root_disk_format) = match plan
@@ -5917,10 +6179,31 @@ impl SoracloudRuntimeManager {
         let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, plan)
             .wrap_err("prepare PortableVm lease disks")?;
         let shared_filesystem_mounts = build_inrou_portable_shared_filesystem_mounts(&lease_disks);
-        let network_plan = build_portable_vm_network_plan(guest_port, &firewall_plan)
+        let PortableVmNetworkPlan {
+            netdev,
+            listen_base_url,
+            public_listener,
+            backend_reservation,
+            expected_backend,
+        } = build_portable_vm_network_plan(guest_port, &firewall_plan)
             .wrap_err("prepare PortableVm user-mode networking")?;
-        let hosts_overlay =
-            build_portable_vm_allowlist_hosts_overlay(&network_plan.allowlist_hosts);
+        let mut loopback_firewall = Some(
+            InrouLoopbackOwnerFirewall::install(
+                &public_listener,
+                &backend_reservation,
+                child_identity.uid,
+            )
+            .wrap_err("isolate Inrou loopback listeners by supervisor socket owner")?,
+        );
+        ensure_portable_vm_identity_reserved(&child_identity)
+            .wrap_err("recheck the locked Inrou QEMU service identity under the firewall lock")?;
+        ensure_no_process_with_inrou_identity(&child_identity).wrap_err(
+            "recheck the exclusive Inrou QEMU identity under the firewall lock before delegation",
+        )?;
+        probe_portable_vm_backend(&setpriv, &shell, &qemu, &child_identity)
+            .wrap_err("requalify the exact QEMU backend under the launch firewall lock")?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("require the QEMU backend probe to be fully reaped before delegation")?;
         let network_config = build_inrou_portable_network_config();
         let portable_bundle_max_bytes = archive_limits.max_compressed_bytes;
         let (portable_bundle_path, portable_bundle_exact_bytes) =
@@ -5942,7 +6225,7 @@ impl SoracloudRuntimeManager {
             guest_port,
             &shared_filesystem_mounts,
             bootstrap_user_data.as_deref(),
-            hosts_overlay.as_deref(),
+            None,
             Some(portable_bundle),
         )?;
         let cloud_init_root = write_inrou_cloud_init_documents(
@@ -5952,13 +6235,52 @@ impl SoracloudRuntimeManager {
             &user_data,
         )
         .wrap_err("write PortableVm cloud-init documents")?;
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("recheck the exclusive Inrou QEMU identity before file delegation")?;
+        let runtime_root = &self.config.state_dir;
+        prepare_inrou_qemu_file_access(runtime_root, &kernel_image_path, &child_identity, false)?;
+        prepare_inrou_qemu_file_access(
+            runtime_root,
+            &base_rootfs_image_path,
+            &child_identity,
+            false,
+        )?;
+        if let Some(initrd_image_path) = initrd_image_path.as_ref() {
+            prepare_inrou_qemu_file_access(
+                runtime_root,
+                initrd_image_path,
+                &child_identity,
+                false,
+            )?;
+        }
+        prepare_inrou_qemu_file_access(runtime_root, &root_disk_path, &child_identity, true)?;
+        prepare_inrou_qemu_file_access(
+            runtime_root,
+            &portable_bundle_path,
+            &child_identity,
+            false,
+        )?;
+        for disk in &lease_disks {
+            prepare_inrou_qemu_file_access(runtime_root, &disk.image_path, &child_identity, true)?;
+        }
+        for document in ["meta-data", "network-config", "user-data"] {
+            prepare_inrou_qemu_file_access(
+                runtime_root,
+                &cloud_init_root.join(document),
+                &child_identity,
+                false,
+            )?;
+        }
+        // vvfat enumerates this directory, so grant group read only after the
+        // individual no-follow file checks have finished preparing its chain.
+        prepare_inrou_qemu_readable_directory(runtime_root, &cloud_init_root, &child_identity)?;
         let memory_mib = portable_vm_memory_mib(&bundle.container.resources);
         let machine_arg = format!(
             "{},accel={},memory-backend=vmmem",
-            profile.machine_type,
-            self.config.inrou.portable_vm_acceleration.as_qemu_name()
+            profile.machine_type, "kvm"
         );
-        let mut command = build_inrou_portable_vm_command(&setpriv, &qemu, &child_identity)?;
+        let mut command =
+            build_inrou_portable_vm_command(&setpriv, &shell, &qemu, &child_identity)?;
         command
             .arg("-object")
             .arg(format!(
@@ -5985,15 +6307,13 @@ impl SoracloudRuntimeManager {
             .arg("none")
             .arg("-monitor")
             .arg("none")
-            .arg("-serial")
-            .arg("stdio")
             .arg("-netdev")
-            .arg(&network_plan.netdev)
+            .arg(&netdev)
             .arg("-device")
             .arg(format!("{},netdev=net0", profile.net_device))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let qmp_stream = configure_inrou_qmp_stdio(&mut command)
+            .wrap_err("create capability-bound Inrou QMP socketpair")?;
         append_portable_vm_drive(
             &mut command,
             profile,
@@ -6030,6 +6350,15 @@ impl SoracloudRuntimeManager {
             )
             .wrap_err_with(|| format!("attach PortableVm lease disk {index}"))?;
         }
+        ensure_no_process_with_inrou_identity(&child_identity)
+            .wrap_err("finalize the exclusive Inrou QEMU identity immediately before spawn")?;
+        ensure_portable_vm_identity_reserved(&child_identity)
+            .wrap_err("finalize the locked Inrou QEMU service identity before spawn")?;
+        // Keep the backend port reserved until the command is completely
+        // constructed. The owner firewall is already active, so an untrusted
+        // local process can only make QEMU's explicit bind fail after release;
+        // it cannot receive supervisor traffic on the reserved port.
+        drop(backend_reservation);
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -6037,8 +6366,77 @@ impl SoracloudRuntimeManager {
                     .wrap_err_with(|| format!("spawn Inrou PortableVm via {}", qemu.display()));
             }
         };
-        let mut log_drains = attach_inrou_runtime_log_drains(&mut child, stdout_log, stderr_log)
-            .wrap_err("attach bounded Inrou PortableVm log drains")?;
+        let mut log_drains = match attach_inrou_runtime_log_drains(&mut child, stderr_log) {
+            Ok(log_drains) => log_drains,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "attach bounded Inrou PortableVm log drains{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        let (qemu_forward, qmp_control) = match query_inrou_qmp_host_forward(
+            &mut child,
+            qmp_stream,
+            &qemu,
+            &child_identity,
+            guest_port,
+        ) {
+            Ok(qemu_forward) => qemu_forward,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                join_inrou_log_drains_bounded(&mut log_drains);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "attest QEMU-owned Inrou host forwarding over QMP{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        if qemu_forward != expected_backend {
+            let termination = terminate_inrou_child_bounded(&mut child);
+            preserve_inrou_firewall_after_failed_termination(&termination, &mut loopback_firewall);
+            join_inrou_log_drains_bounded(&mut log_drains);
+            eyre::bail!(
+                "QEMU published Inrou host forward {qemu_forward} instead of the firewall-protected endpoint {expected_backend}{}",
+                inrou_termination_error_suffix(&termination)
+            );
+        }
+        let qmp_control = Arc::new(Mutex::new(qmp_control));
+        let mut port_forward = match PortableVmLoopbackProxy::start(
+            public_listener,
+            qemu_forward,
+            Arc::clone(&qmp_control),
+            guest_port,
+        ) {
+            Ok(port_forward) => port_forward,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                preserve_inrou_firewall_after_failed_termination(
+                    &termination,
+                    &mut loopback_firewall,
+                );
+                join_inrou_log_drains_bounded(&mut log_drains);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "start supervisor-owned Inrou loopback proxy{}",
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
         let started_at = std::time::Instant::now();
         let startup_grace = self
             .config
@@ -6052,32 +6450,36 @@ impl SoracloudRuntimeManager {
             let child_status = match child.try_wait() {
                 Ok(status) => status,
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    join_inrou_log_drains(&mut log_drains);
-                    return Err(error).wrap_err("poll Inrou PortableVm process during startup");
+                    port_forward.stop();
+                    let termination = terminate_inrou_child_bounded(&mut child);
+                    preserve_inrou_firewall_after_failed_termination(
+                        &termination,
+                        &mut loopback_firewall,
+                    );
+                    join_inrou_log_drains_bounded(&mut log_drains);
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "poll Inrou PortableVm process during startup{}",
+                            inrou_termination_error_suffix(&termination)
+                        )
+                    });
                 }
             };
             if let Some(status) = child_status {
-                join_inrou_log_drains(&mut log_drains);
+                port_forward.stop();
+                join_inrou_log_drains_bounded(&mut log_drains);
                 let stderr = stderr_log_excerpt(&stderr_log_path);
-                let console = stderr_log_excerpt(&stdout_log_path);
                 eyre::bail!(
-                    "Inrou PortableVm process exited during startup with status {status}{}{}",
+                    "Inrou PortableVm process exited during startup with status {status}{}",
                     if stderr.is_empty() {
                         String::new()
                     } else {
                         format!(": {stderr}")
                     },
-                    if console.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\nserial console:\n{console}")
-                    },
                 );
             }
             match probe_hosted_http_health(
-                &network_plan.listen_base_url,
+                &listen_base_url,
                 bundle.container.lifecycle.healthcheck_path.as_deref(),
             ) {
                 Ok(()) => {
@@ -6085,9 +6487,14 @@ impl SoracloudRuntimeManager {
                         cache_key,
                         child,
                         log_drains,
-                        network_plan.listen_base_url,
+                        listen_base_url,
                         egress_accounting_offset_bytes,
                         stderr_log_path,
+                        port_forward,
+                        qmp_control,
+                        loopback_firewall
+                            .take()
+                            .expect("installed Inrou loopback firewall"),
                     ));
                 }
                 Err(error) if started_at.elapsed() < startup_grace => {
@@ -6095,18 +6502,23 @@ impl SoracloudRuntimeManager {
                     thread::sleep(Duration::from_millis(250));
                 }
                 Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    join_inrou_log_drains(&mut log_drains);
+                    port_forward.stop();
+                    let termination = terminate_inrou_child_bounded(&mut child);
+                    preserve_inrou_firewall_after_failed_termination(
+                        &termination,
+                        &mut loopback_firewall,
+                    );
+                    join_inrou_log_drains_bounded(&mut log_drains);
                     let stderr = stderr_log_excerpt(&stderr_log_path);
                     eyre::bail!(
-                        "Inrou PortableVm failed healthcheck during startup: {}{}",
+                        "Inrou PortableVm failed healthcheck during startup: {}{}{}",
                         error,
                         if stderr.is_empty() {
                             String::new()
                         } else {
                             format!(": {stderr}")
-                        }
+                        },
+                        inrou_termination_error_suffix(&termination),
                     );
                 }
             }
@@ -12865,49 +13277,109 @@ fn spawn_inrou_runtime_log_drain(
 }
 fn attach_inrou_runtime_log_drains(
     child: &mut std::process::Child,
-    stdout_log: fs::File,
     stderr_log: fs::File,
 ) -> eyre::Result<Vec<thread::JoinHandle<()>>> {
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            eyre::bail!("Inrou runtime stdout pipe was not configured");
-        }
-    };
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            eyre::bail!("Inrou runtime stderr pipe was not configured");
-        }
+        None => eyre::bail!("Inrou runtime stderr pipe was not configured"),
     };
-    let stdout_drain =
-        match spawn_inrou_runtime_log_drain(stdout, stdout_log, "inrou-runtime-stdout") {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error).wrap_err("spawn Inrou stdout drain");
-            }
-        };
-    let stderr_drain =
-        match spawn_inrou_runtime_log_drain(stderr, stderr_log, "inrou-runtime-stderr") {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_drain.join();
-                return Err(error).wrap_err("spawn Inrou stderr drain");
-            }
-        };
-    Ok(vec![stdout_drain, stderr_drain])
+    let stderr_drain = spawn_inrou_runtime_log_drain(stderr, stderr_log, "inrou-runtime-stderr")
+        .wrap_err("spawn Inrou stderr drain")?;
+    Ok(vec![stderr_drain])
 }
-fn join_inrou_log_drains(log_drains: &mut Vec<thread::JoinHandle<()>>) {
+fn terminate_inrou_child_bounded(
+    child: &mut std::process::Child,
+) -> eyre::Result<std::process::ExitStatus> {
+    let initial_poll_error = match child.try_wait() {
+        Ok(Some(status)) => return Ok(status),
+        Ok(None) => None,
+        Err(error) => Some(error),
+    };
+    let kill_error = child.kill().err();
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_CHILD_STOP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                eyre::bail!(
+                    "Inrou child pid {} did not exit within {:?} after SIGKILL{}",
+                    child.id(),
+                    SORACLOUD_INROU_CHILD_STOP_TIMEOUT,
+                    format_inrou_child_stop_errors(
+                        initial_poll_error.as_ref(),
+                        kill_error.as_ref()
+                    ),
+                );
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll Inrou child pid {} after SIGKILL{}",
+                        child.id(),
+                        format_inrou_child_stop_errors(
+                            initial_poll_error.as_ref(),
+                            kill_error.as_ref()
+                        ),
+                    )
+                });
+            }
+        }
+    }
+}
+fn format_inrou_child_stop_errors(
+    initial_poll_error: Option<&io::Error>,
+    kill_error: Option<&io::Error>,
+) -> String {
+    let mut suffix = String::new();
+    if let Some(error) = initial_poll_error {
+        suffix.push_str(&format!("; initial status poll failed: {error}"));
+    }
+    if let Some(error) = kill_error {
+        suffix.push_str(&format!("; sending SIGKILL failed: {error}"));
+    }
+    suffix
+}
+fn inrou_termination_error_suffix(termination: &eyre::Result<std::process::ExitStatus>) -> String {
+    termination
+        .as_ref()
+        .err()
+        .map_or_else(String::new, |error| {
+            format!("; bounded child termination also failed: {error}")
+        })
+}
+#[cfg(target_os = "linux")]
+fn preserve_inrou_firewall_after_failed_termination(
+    termination: &eyre::Result<std::process::ExitStatus>,
+    firewall: &mut Option<InrouLoopbackOwnerFirewall>,
+) {
+    if termination.is_err()
+        && let Some(firewall) = firewall.take()
+    {
+        // A child that survived SIGKILL must never outlive the loopback owner
+        // barrier. Leaking the lock/rules makes the supervisor fail closed
+        // until process exit, when the kernel releases the lock descriptor.
+        std::mem::forget(firewall);
+    }
+}
+fn join_inrou_log_drains_bounded(log_drains: &mut Vec<thread::JoinHandle<()>>) {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
+    while log_drains.iter().any(|drain| !drain.is_finished())
+        && std::time::Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
     for drain in log_drains.drain(..) {
-        let _ = drain.join();
+        if drain.is_finished() {
+            let _ = drain.join();
+        } else {
+            iroha_logger::warn!(
+                timeout_ms = SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT.as_millis(),
+                "detaching an Inrou log drain that did not stop before its deadline"
+            );
+        }
     }
 }
 fn stderr_log_excerpt(path: &Path) -> String {
@@ -13245,6 +13717,9 @@ impl HostedHttpWorker {
         listen_base_url: String,
         egress_accounting_offset_bytes: u64,
         stderr_log_path: PathBuf,
+        port_forward: PortableVmLoopbackProxy,
+        qmp_control: Arc<Mutex<PortableVmQmpControl>>,
+        #[cfg(target_os = "linux")] loopback_firewall: InrouLoopbackOwnerFirewall,
     ) -> Self {
         Self {
             cache_key,
@@ -13253,6 +13728,10 @@ impl HostedHttpWorker {
             listen_base_url,
             egress_accounting_offset_bytes,
             stderr_log_path,
+            port_forward: Some(port_forward),
+            qmp_control: Some(qmp_control),
+            #[cfg(target_os = "linux")]
+            loopback_firewall: Some(loopback_firewall),
         }
     }
     fn pid(&self) -> Option<u32> {
@@ -13269,9 +13748,23 @@ impl HostedHttpWorker {
     }
     fn stop(&mut self) {
         let _ = &self.stderr_log_path;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        join_inrou_log_drains(&mut self.log_drains);
+        if let Some(mut port_forward) = self.port_forward.take() {
+            port_forward.stop();
+        }
+        let termination = terminate_inrou_child_bounded(&mut self.child);
+        #[cfg(target_os = "linux")]
+        preserve_inrou_firewall_after_failed_termination(&termination, &mut self.loopback_firewall);
+        if let Err(error) = termination {
+            iroha_logger::warn!(
+                ?error,
+                pid = self.child.id(),
+                "Inrou PortableVM child did not stop before its deadline; retaining the owner firewall"
+            );
+        }
+        join_inrou_log_drains_bounded(&mut self.log_drains);
+        let _ = self.qmp_control.take();
+        #[cfg(target_os = "linux")]
+        let _ = self.loopback_firewall.take();
     }
 }
 impl Drop for HostedHttpWorker {
@@ -13660,27 +14153,76 @@ struct PortableVmNetworkPlan {
     netdev: String,
     listen_base_url: String,
     public_listener: TcpListener,
-    allowlist_hosts: Vec<(String, Ipv4Addr)>,
+    backend_reservation: TcpListener,
+    expected_backend: SocketAddr,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PortableVmChildIdentity {
     uid: u32,
     gid: u32,
     supplementary_gids: Vec<u32>,
-    control_dir: PathBuf,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PortableVmKvmDeviceAccess {
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    hard_links: u64,
+    rdev: u64,
+    is_character_device: bool,
 }
 struct PortableVmQmpControl {
-    directory: PathBuf,
-    socket_path: PathBuf,
-    directory_identity: InrouMaterializationDirectoryIdentity,
-    child_uid: u32,
-    child_gid: u32,
+    #[cfg(target_os = "linux")]
+    reader: io::BufReader<UnixStream>,
 }
 struct PortableVmLoopbackProxy {
     listen_address: SocketAddr,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
+#[cfg(target_os = "linux")]
+struct InrouLoopbackOwnerFirewall {
+    iptables_binary: PathBuf,
+    ip6tables_binary: PathBuf,
+    _single_instance_lock: fs::File,
+    owns_chains: [bool; 3],
+}
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum InrouIptablesFamily {
+    Ipv4,
+    Ipv6,
+}
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+struct InrouOwnedIptablesChain {
+    name: &'static str,
+    marker: &'static str,
+    hook: &'static str,
+    family: InrouIptablesFamily,
+}
+#[cfg(target_os = "linux")]
+const SORACLOUD_INROU_IPTABLES_CHAINS: [InrouOwnedIptablesChain; 3] = [
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IPTABLES_CHAIN,
+        marker: SORACLOUD_INROU_IPTABLES_CHAIN_MARKER,
+        hook: "OUTPUT",
+        family: InrouIptablesFamily::Ipv4,
+    },
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IPTABLES_INPUT_CHAIN,
+        marker: SORACLOUD_INROU_IPTABLES_INPUT_CHAIN_MARKER,
+        hook: "INPUT",
+        family: InrouIptablesFamily::Ipv4,
+    },
+    InrouOwnedIptablesChain {
+        name: SORACLOUD_INROU_IP6TABLES_CHAIN,
+        marker: SORACLOUD_INROU_IP6TABLES_CHAIN_MARKER,
+        hook: "OUTPUT",
+        family: InrouIptablesFamily::Ipv6,
+    },
+];
+type PortableVmBackendAttestor = Arc<dyn Fn(SocketAddr, &AtomicBool) -> bool + Send + Sync>;
 #[derive(Clone, Copy)]
 struct PortableVmGuestMachineProfile {
     emulator_candidates: &'static [&'static str],
@@ -13762,6 +14304,85 @@ fn resolve_inrou_setpriv_executable() -> Option<PathBuf> {
         })
 }
 #[cfg(target_os = "linux")]
+fn resolve_inrou_shell_executable() -> Option<PathBuf> {
+    [Path::new("/bin/sh"), Path::new("/usr/bin/sh")]
+        .into_iter()
+        .find_map(|candidate| {
+            let canonical = fs::canonicalize(candidate).ok()?;
+            let command_metadata = fs::symlink_metadata(candidate).ok()?;
+            let command_entry_is_trusted = (command_metadata.is_file()
+                || command_metadata.file_type().is_symlink())
+                && command_metadata.uid() == 0
+                && candidate.ancestors().skip(1).all(|ancestor| {
+                    fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                        metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                    })
+                });
+            // Preserve the shell entry path in case the platform uses a
+            // multi-call binary whose applet is selected from argv[0].
+            (command_entry_is_trusted
+                && is_resolved_executable(&canonical)
+                && is_root_owned_executable_path(&canonical))
+            .then(|| candidate.to_path_buf())
+        })
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_iptables_executable() -> Option<PathBuf> {
+    [
+        Path::new("/usr/sbin/iptables"),
+        Path::new("/sbin/iptables"),
+        Path::new("/usr/bin/iptables"),
+        Path::new("/bin/iptables"),
+    ]
+    .into_iter()
+    .find_map(|candidate| {
+        let canonical = fs::canonicalize(candidate).ok()?;
+        let command_metadata = fs::symlink_metadata(candidate).ok()?;
+        let command_entry_is_trusted = (command_metadata.is_file()
+            || command_metadata.file_type().is_symlink())
+            && command_metadata.uid() == 0
+            && candidate.ancestors().skip(1).all(|ancestor| {
+                fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                    metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                })
+            });
+        // Preserve the absolute `iptables` entry path: common Linux systems
+        // use an argv[0]-dispatched xtables multi-call binary, so executing its
+        // canonical target directly changes semantics. Both the entry chain
+        // and canonical target remain under root-only custody.
+        (command_entry_is_trusted
+            && is_resolved_executable(&canonical)
+            && is_root_owned_executable_path(&canonical))
+        .then(|| candidate.to_path_buf())
+    })
+}
+#[cfg(target_os = "linux")]
+fn resolve_inrou_ip6tables_executable() -> Option<PathBuf> {
+    [
+        Path::new("/usr/sbin/ip6tables"),
+        Path::new("/sbin/ip6tables"),
+        Path::new("/usr/bin/ip6tables"),
+        Path::new("/bin/ip6tables"),
+    ]
+    .into_iter()
+    .find_map(|candidate| {
+        let canonical = fs::canonicalize(candidate).ok()?;
+        let command_metadata = fs::symlink_metadata(candidate).ok()?;
+        let command_entry_is_trusted = (command_metadata.is_file()
+            || command_metadata.file_type().is_symlink())
+            && command_metadata.uid() == 0
+            && candidate.ancestors().skip(1).all(|ancestor| {
+                fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                    metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+                })
+            });
+        (command_entry_is_trusted
+            && is_resolved_executable(&canonical)
+            && is_root_owned_executable_path(&canonical))
+        .then(|| candidate.to_path_buf())
+    })
+}
+#[cfg(target_os = "linux")]
 fn is_root_owned_executable_path(candidate: &Path) -> bool {
     candidate.ancestors().enumerate().all(|(index, path)| {
         fs::metadata(path).ok().is_some_and(|metadata| {
@@ -13769,6 +14390,564 @@ fn is_root_owned_executable_path(candidate: &Path) -> bool {
                 && metadata.uid() == 0
                 && metadata.mode() & 0o022 == 0
         })
+    })
+}
+fn validate_portable_vm_kvm_identity(
+    identity: &PortableVmChildIdentity,
+    device: PortableVmKvmDeviceAccess,
+) -> eyre::Result<()> {
+    if !device.is_character_device
+        || device.uid != 0
+        || device.hard_links != 1
+        || device.rdev != SORACLOUD_INROU_KVM_DEVICE_RDEV
+        || device.mode & 0o007 != 0
+    {
+        eyre::bail!(
+            "`/dev/kvm` must be one direct root-owned Linux KVM character device (major 10, minor 232) with no world access"
+        );
+    }
+    if device.mode & 0o070 != 0o060 {
+        eyre::bail!("`/dev/kvm` must grant its owning group exact read/write access");
+    }
+    if device.gid == 0 {
+        eyre::bail!(
+            "`/dev/kvm` group is root, so the dedicated non-root QEMU identity cannot receive exact group access"
+        );
+    }
+    if identity.gid == device.gid {
+        eyre::bail!(
+            "the `/dev/kvm` group must remain distinct from the dedicated primary gid that protects QEMU disks"
+        );
+    }
+    let expected_supplementary_gids = vec![device.gid];
+    if identity.supplementary_gids != expected_supplementary_gids {
+        eyre::bail!(
+            "KVM PortableVM supplementary gids must be exactly {:?}, derived only from the direct `/dev/kvm` group",
+            expected_supplementary_gids
+        );
+    }
+    Ok(())
+}
+fn validate_portable_vm_child_identity_values(
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    for (label, id) in [("uid", identity.uid), ("primary gid", identity.gid)] {
+        if !(SORACLOUD_INROU_PRIMARY_ID_MIN..SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE).contains(&id)
+        {
+            eyre::bail!(
+                "dedicated Inrou QEMU {label} {id} must be in the fixed host-reserved corridor {}..{} (upper bound exclusive)",
+                SORACLOUD_INROU_PRIMARY_ID_MIN,
+                SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE,
+            );
+        }
+    }
+    if let Some(gid) = identity
+        .supplementary_gids
+        .iter()
+        .copied()
+        .find(|gid| inrou_supplementary_gid_is_host_reserved(*gid))
+    {
+        eyre::bail!(
+            "Inrou QEMU supplementary gid {gid} is a Linux overflow, nobody, dynamic-service, container, foreign, or unchanged-credential sentinel id"
+        );
+    }
+    Ok(())
+}
+fn inrou_supplementary_gid_is_host_reserved(gid: u32) -> bool {
+    matches!(gid, 65_534 | 65_535)
+        || (60_001..=60_705).contains(&gid)
+        || (61_184..=65_519).contains(&gid)
+        || (524_288..=1_879_048_191).contains(&gid)
+        || (2_147_352_576..=2_147_418_111).contains(&gid)
+        || gid >= 1 << 31
+}
+#[cfg(target_os = "linux")]
+fn read_inrou_root_custodied_identity_file(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> eyre::Result<String> {
+    for (index, component) in path.ancestors().enumerate() {
+        let metadata = fs::symlink_metadata(component)
+            .wrap_err_with(|| format!("inspect {label} path component {}", component.display()))?;
+        if metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || (index == 0 && !metadata.is_file())
+            || (index != 0 && !metadata.is_dir())
+        {
+            eyre::bail!(
+                "{label} path component {} must be direct, root-owned, and non-writable by group/other",
+                component.display()
+            );
+        }
+    }
+    read_soracloud_regular_text_bounded(path, maximum_bytes, label).map_err(eyre::Report::from)
+}
+#[cfg(target_os = "linux")]
+fn read_optional_inrou_root_custodied_identity_file(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> eyre::Result<Option<String>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => read_inrou_root_custodied_identity_file(path, maximum_bytes, label).map(Some),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).wrap_err_with(|| format!("inspect optional {label}")),
+    }
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_local_nsswitch(contents: &str) -> eyre::Result<()> {
+    let mut required = BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((database, sources)) = line.split_once(':') else {
+            continue;
+        };
+        let database = database.trim().to_ascii_lowercase();
+        if !matches!(database.as_str(), "passwd" | "group" | "subid") {
+            continue;
+        }
+        if required.insert(database.clone(), sources.trim()).is_some() {
+            eyre::bail!("/etc/nsswitch.conf repeats the `{database}` database");
+        }
+    }
+    for database in ["passwd", "group"] {
+        let sources = required
+            .get(database)
+            .ok_or_else(|| eyre::eyre!("/etc/nsswitch.conf omits `{database}: files`"))?;
+        if sources.split_ascii_whitespace().collect::<Vec<_>>() != ["files"] {
+            eyre::bail!(
+                "Inrou PortableVM requires deterministic `{database}: files` NSS resolution; found `{sources}`"
+            );
+        }
+    }
+    if let Some(sources) = required.get("subid")
+        && sources.split_ascii_whitespace().collect::<Vec<_>>() != ["files"]
+    {
+        eyre::bail!(
+            "Inrou PortableVM requires deterministic `subid: files` resolution when that database is declared; found `{sources}`"
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inrou_configured_decimal_identity_names(identity: &PortableVmChildIdentity) -> BTreeSet<String> {
+    [identity.uid, identity.gid]
+        .into_iter()
+        .chain(identity.supplementary_gids.iter().copied())
+        .map(|id| id.to_string())
+        .collect()
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_passwd(
+    contents: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<PathBuf> {
+    let forbidden_names = inrou_configured_decimal_identity_names(identity);
+    let mut names = BTreeSet::new();
+    let mut target_shell = None;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 7 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local passwd database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if forbidden_names.contains(fields[0]) {
+            eyre::bail!(
+                "local passwd name `{}` collides with a configured numeric Inrou identity",
+                fields[0]
+            );
+        }
+        let record_uid = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local passwd uid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let record_gid = fields[3].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local passwd primary gid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let is_target_name = fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME;
+        let is_target_uid = record_uid == identity.uid;
+        if is_target_name || is_target_uid {
+            if !(is_target_name && is_target_uid) || target_shell.is_some() {
+                eyre::bail!(
+                    "local passwd must contain exactly one `{}` record with uid {}",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.uid
+                );
+            }
+            if fields[1] != "x"
+                || record_gid != identity.gid
+                || fields[5] != SORACLOUD_INROU_SERVICE_HOME
+                || !matches!(
+                    fields[6],
+                    "/usr/sbin/nologin" | "/sbin/nologin" | "/usr/bin/false" | "/bin/false"
+                )
+            {
+                eyre::bail!(
+                    "the `{}` passwd record must use `x`, primary gid {}, home `{}`, and a literal trusted nologin/false shell",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.gid,
+                    SORACLOUD_INROU_SERVICE_HOME
+                );
+            }
+            target_shell = Some(PathBuf::from(fields[6]));
+        } else if record_gid == identity.gid {
+            eyre::bail!(
+                "dedicated Inrou primary gid {} is assigned to another passwd account `{}`",
+                identity.gid,
+                fields[0]
+            );
+        }
+    }
+    target_shell.ok_or_else(|| {
+        eyre::eyre!(
+            "local passwd must reserve uid {} as the locked `{}` service account",
+            identity.uid,
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        )
+    })
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_group(
+    contents: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let forbidden_names = inrou_configured_decimal_identity_names(identity);
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 4 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local group database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if forbidden_names.contains(fields[0]) {
+            eyre::bail!(
+                "local group name `{}` collides with a configured numeric Inrou gid",
+                fields[0]
+            );
+        }
+        let record_gid = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local group gid on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let is_target_name = fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME;
+        let is_target_gid = record_gid == identity.gid;
+        if is_target_name || is_target_gid {
+            if !(is_target_name && is_target_gid) || found_target {
+                eyre::bail!(
+                    "local group must contain exactly one `{}` record with gid {}",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                    identity.gid
+                );
+            }
+            if fields[1] != "x" || !fields[3].is_empty() {
+                eyre::bail!(
+                    "the `{}` primary group must use `x` and have no explicit members",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        } else if fields[3]
+            .split(',')
+            .any(|member| member == SORACLOUD_INROU_SERVICE_IDENTITY_NAME)
+        {
+            eyre::bail!(
+                "the `{}` service account must not be listed in supplementary group `{}`",
+                SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                fields[0]
+            );
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local group must reserve gid {} as the empty `{}` primary group",
+            identity.gid,
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_shadow(contents: &str) -> eyre::Result<()> {
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 9 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local shadow database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME {
+            if found_target || !matches!(fields[1].as_bytes().first(), Some(b'!' | b'*')) {
+                eyre::bail!(
+                    "the `{}` shadow record must occur once with a locked password",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local shadow must contain a locked `{}` record",
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_reserved_gshadow(contents: &str) -> eyre::Result<()> {
+    let mut names = BTreeSet::new();
+    let mut found_target = false;
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 4 || fields[0].is_empty() || !names.insert(fields[0]) {
+            eyre::bail!(
+                "local gshadow database has a malformed or duplicate-name record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME {
+            if found_target
+                || !matches!(fields[1].as_bytes().first(), Some(b'!' | b'*'))
+                || !fields[2].is_empty()
+                || !fields[3].is_empty()
+            {
+                eyre::bail!(
+                    "the `{}` gshadow record must occur once, be locked, and have no administrators or members",
+                    SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+                );
+            }
+            found_target = true;
+        } else if fields[2]
+            .split(',')
+            .chain(fields[3].split(','))
+            .any(|name| name == SORACLOUD_INROU_SERVICE_IDENTITY_NAME)
+        {
+            eyre::bail!(
+                "the `{}` service account must not administer or join gshadow group `{}`",
+                SORACLOUD_INROU_SERVICE_IDENTITY_NAME,
+                fields[0]
+            );
+        }
+    }
+    if !found_target {
+        eyre::bail!(
+            "local gshadow must contain a locked empty `{}` record",
+            SORACLOUD_INROU_SERVICE_IDENTITY_NAME
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_subordinate_id_unmapped(
+    contents: &str,
+    database: &str,
+    id: u32,
+) -> eyre::Result<()> {
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() != 3 || fields[0].is_empty() {
+            eyre::bail!(
+                "local {database} database has a malformed record on line {}",
+                line_index.saturating_add(1)
+            );
+        }
+        if fields[0] == SORACLOUD_INROU_SERVICE_IDENTITY_NAME || fields[0] == id.to_string() {
+            eyre::bail!(
+                "local {database} must not delegate a range to Inrou owner `{}` on line {}",
+                fields[0],
+                line_index.saturating_add(1)
+            );
+        }
+        let start = fields[1].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local {database} range start on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        let count = fields[2].parse::<u32>().wrap_err_with(|| {
+            format!(
+                "parse local {database} range count on line {}",
+                line_index.saturating_add(1)
+            )
+        })?;
+        if count == 0 {
+            eyre::bail!(
+                "local {database} range on line {} must be nonempty",
+                line_index.saturating_add(1)
+            );
+        }
+        let end_exclusive = u64::from(start)
+            .checked_add(u64::from(count))
+            .filter(|end| *end <= u64::from(u32::MAX) + 1)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "local {database} range on line {} overflows Linux uid_t/gid_t",
+                    line_index.saturating_add(1)
+                )
+            })?;
+        if u64::from(id) >= u64::from(start) && u64::from(id) < end_exclusive {
+            eyre::bail!(
+                "dedicated Inrou id {id} falls within local {database} range {start}:{count}"
+            );
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_inrou_service_shell_custody(shell: &Path) -> eyre::Result<()> {
+    let entry = fs::symlink_metadata(shell)
+        .wrap_err_with(|| format!("inspect Inrou service shell {}", shell.display()))?;
+    if !(entry.is_file() || entry.file_type().is_symlink())
+        || entry.uid() != 0
+        || entry.mode() & 0o022 != 0
+        || !shell.ancestors().skip(1).all(|ancestor| {
+            fs::metadata(ancestor).ok().is_some_and(|metadata| {
+                metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0
+            })
+        })
+    {
+        eyre::bail!(
+            "Inrou service shell {} and its resolved ancestor chain must be root-custodied and non-writable by group/other",
+            shell.display()
+        );
+    }
+    let canonical = fs::canonicalize(shell)
+        .wrap_err_with(|| format!("resolve Inrou service shell {}", shell.display()))?;
+    if !is_resolved_executable(&canonical) || !is_root_owned_executable_path(&canonical) {
+        eyre::bail!(
+            "resolved Inrou service shell {} must be a root-custodied executable",
+            canonical.display()
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_portable_vm_identity_reserved(identity: &PortableVmChildIdentity) -> eyre::Result<()> {
+    const IDENTITY_FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let nsswitch = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/nsswitch.conf"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou NSS configuration",
+    )?;
+    validate_inrou_local_nsswitch(&nsswitch)?;
+    let passwd = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/passwd"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local passwd database",
+    )?;
+    let shell = validate_inrou_reserved_passwd(&passwd, identity)?;
+    let group = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/group"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local group database",
+    )?;
+    validate_inrou_reserved_group(&group, identity)?;
+    let shadow = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/shadow"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local shadow database",
+    )?;
+    validate_inrou_reserved_shadow(&shadow)?;
+    let gshadow = read_inrou_root_custodied_identity_file(
+        Path::new("/etc/gshadow"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local gshadow database",
+    )?;
+    validate_inrou_reserved_gshadow(&gshadow)?;
+    match fs::symlink_metadata(SORACLOUD_INROU_SERVICE_HOME) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            eyre::bail!("the Inrou service home `{SORACLOUD_INROU_SERVICE_HOME}` must not exist")
+        }
+        Err(error) => return Err(error).wrap_err("inspect the canonical Inrou service home"),
+    }
+    ensure_inrou_service_shell_custody(&shell)?;
+    let subuid = read_optional_inrou_root_custodied_identity_file(
+        Path::new("/etc/subuid"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local subordinate uid database",
+    )?;
+    if let Some(subuid) = subuid {
+        validate_inrou_subordinate_id_unmapped(&subuid, "subuid", identity.uid)?;
+    }
+    let subgid = read_optional_inrou_root_custodied_identity_file(
+        Path::new("/etc/subgid"),
+        IDENTITY_FILE_MAX_BYTES,
+        "Inrou local subordinate gid database",
+    )?;
+    if let Some(subgid) = subgid {
+        validate_inrou_subordinate_id_unmapped(&subgid, "subgid", identity.gid)?;
+        for supplementary_gid in &identity.supplementary_gids {
+            validate_inrou_subordinate_id_unmapped(&subgid, "subgid", *supplementary_gid)?;
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inspect_inrou_kvm_device() -> eyre::Result<PortableVmKvmDeviceAccess> {
+    let path = Path::new("/dev/kvm");
+    for ancestor in path.parent().into_iter().flat_map(Path::ancestors) {
+        let metadata = fs::symlink_metadata(ancestor)
+            .wrap_err_with(|| format!("inspect `/dev/kvm` ancestor {}", ancestor.display()))?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "`/dev/kvm` ancestor {} must be a direct root-owned non-writable directory",
+                ancestor.display()
+            );
+        }
+    }
+    let metadata = fs::symlink_metadata(path).wrap_err("inspect direct `/dev/kvm`")?;
+    Ok(PortableVmKvmDeviceAccess {
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+        mode: metadata.mode(),
+        hard_links: metadata.nlink(),
+        rdev: metadata.rdev(),
+        is_character_device: metadata.file_type().is_char_device(),
     })
 }
 #[cfg(target_os = "linux")]
@@ -13788,29 +14967,16 @@ fn portable_vm_child_identity(
         .portable_vm_gid
         .ok_or_else(|| eyre::eyre!("Inrou PortableVM hosting requires portable_vm_gid"))?
         .get();
-    let supplementary_gids = config
-        .portable_vm_supplementary_gids
-        .iter()
-        .map(|gid| gid.get())
-        .collect::<Vec<_>>();
-    if supplementary_gids.contains(&gid) {
-        eyre::bail!(
-            "portable_vm_supplementary_gids must not repeat the dedicated primary gid {gid}"
-        );
-    }
-    let control_dir = config
-        .portable_vm_control_dir
-        .clone()
-        .ok_or_else(|| eyre::eyre!("Inrou PortableVM hosting requires portable_vm_control_dir"))?;
-    if !control_dir.is_absolute() || control_dir.parent().is_none() {
-        eyre::bail!("portable_vm_control_dir must be an absolute non-root directory");
-    }
-    Ok(PortableVmChildIdentity {
+    let kvm_device = inspect_inrou_kvm_device()?;
+    let supplementary_gids = vec![kvm_device.gid];
+    let identity = PortableVmChildIdentity {
         uid,
         gid,
         supplementary_gids,
-        control_dir,
-    })
+    };
+    validate_portable_vm_child_identity_values(&identity)?;
+    validate_portable_vm_kvm_identity(&identity, kvm_device)?;
+    Ok(identity)
 }
 #[cfg(target_os = "linux")]
 fn resolve_inrou_exportfs_executable() -> Option<PathBuf> {
@@ -13896,11 +15062,444 @@ fn validate_reusable_inrou_disk(path: &Path, exact_bytes: Option<u64>) -> eyre::
     }
     Ok(())
 }
-fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<()> {
-    let existed = match fs::symlink_metadata(path) {
+#[cfg(target_os = "linux")]
+struct InrouWriteLease<'a> {
+    file: &'a fs::File,
+    active: bool,
+}
+#[cfg(target_os = "linux")]
+impl InrouWriteLease<'_> {
+    fn release(mut self) -> io::Result<()> {
+        set_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)?;
+        verify_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)?;
+        self.active = false;
+        Ok(())
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for InrouWriteLease<'_> {
+    fn drop(&mut self) {
+        if self.active
+            && let Err(error) =
+                set_inrou_linux_file_lease(self.file, rustix::process::FlockType::Unlocked)
+        {
+            iroha_logger::error!(?error, "failed to release the Inrou QEMU disk write lease");
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+fn acquire_inrou_write_lease(file: &fs::File) -> io::Result<InrouWriteLease<'_>> {
+    // Linux F_SETLEASE/F_WRLCK. Unlike an advisory record lock, a write lease
+    // fails while any conflicting open file description exists and therefore
+    // closes the SCM_RIGHTS race that a sequential procfs scan cannot close.
+    const F_SETOWN: i32 = 8;
+    const F_SETSIG: i32 = 10;
+    inrou_linux_fcntl_with_arg(file, F_SETOWN, rustix::process::getpid().as_raw_pid())?;
+    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::runtime::Signal::URG.as_raw())?;
+    set_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock)?;
+    if let Err(error) = verify_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock) {
+        let _ = set_inrou_linux_file_lease(file, rustix::process::FlockType::Unlocked);
+        return Err(error);
+    }
+    Ok(InrouWriteLease { file, active: true })
+}
+#[cfg(target_os = "linux")]
+fn set_inrou_linux_file_lease(
+    file: &fs::File,
+    lease: rustix::process::FlockType,
+) -> io::Result<()> {
+    const F_SETLEASE: i32 = 1_024;
+    inrou_linux_fcntl_with_arg(file, F_SETLEASE, lease as i16 as i32).map(|_| ())
+}
+#[cfg(target_os = "linux")]
+fn verify_inrou_linux_file_lease(
+    file: &fs::File,
+    expected: rustix::process::FlockType,
+) -> io::Result<()> {
+    const F_GETLEASE: i32 = 1_025;
+    let actual = inrou_linux_fcntl(file, F_GETLEASE)?;
+    if actual == expected as i16 as i32 {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "Linux returned lease type {actual} instead of {}",
+            expected as i16 as i32
+        )))
+    }
+}
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn inrou_linux_fcntl_with_arg(file: &fs::File, command: i32, argument: i32) -> io::Result<i32> {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: `file.as_raw_fd()` is live for this call; these Linux fcntl
+    // commands consume one integer variadic argument and do not access memory.
+    let result = unsafe { fcntl(file.as_raw_fd(), command, argument) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn inrou_linux_fcntl(file: &fs::File, command: i32) -> io::Result<i32> {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, command: i32, ...) -> i32;
+    }
+    // SAFETY: `file.as_raw_fd()` is live for this call and F_GETLEASE takes no
+    // variadic argument and does not access user memory.
+    let result = unsafe { fcntl(file.as_raw_fd(), command) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
+}
+#[cfg(target_os = "linux")]
+fn reclaim_inrou_qemu_file_if_present(
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", path.display())),
+    };
+    let mode = metadata.mode() & 0o7777;
+    let private_runtime_file = metadata.gid() == 0 && mode == 0o600;
+    let delegated_qemu_file = metadata.gid() == identity.gid && mode == 0o660;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != 0
+        || (!private_runtime_file && !delegated_qemu_file)
+    {
+        eyre::bail!(
+            "reusable Inrou QEMU file {} is outside root/dedicated-child custody",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+        eyre::bail!("reusable Inrou QEMU file changed while it was reclaimed");
+    }
+    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(0o600))?;
+    rustix::fs::fchown(
+        &file,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::ROOT),
+    )?;
+    let reclaimed = file.metadata()?;
+    let write_lease = acquire_inrou_write_lease(&file).wrap_err_with(|| {
+        format!(
+            "acquire an exclusive Linux write lease for reclaimed Inrou QEMU disk {}; the backing filesystem must support leases and no stale descriptor may remain",
+            path.display()
+        )
+    })?;
+    ensure_no_process_open_file(&reclaimed, std::process::id(), file.as_raw_fd())?;
+    let named_after = fs::symlink_metadata(path)?;
+    if named_after.dev() != reclaimed.dev()
+        || named_after.ino() != reclaimed.ino()
+        || named_after.uid() != 0
+        || named_after.gid() != 0
+        || named_after.mode() & 0o7777 != 0o600
+        || named_after.nlink() != 1
+    {
+        eyre::bail!("reusable Inrou QEMU file changed after stale-fd exclusion");
+    }
+    validate_reusable_inrou_disk(path, None)?;
+    write_lease
+        .release()
+        .wrap_err("release the reclaimed Inrou QEMU disk write lease")
+}
+#[cfg(target_os = "linux")]
+fn ensure_no_process_open_file(
+    target: &fs::Metadata,
+    custody_pid: u32,
+    custody_fd: std::os::fd::RawFd,
+) -> eyre::Result<()> {
+    let processes = fs::read_dir("/proc").wrap_err("enumerate procfs for stale Inrou QEMU fds")?;
+    for process in processes {
+        let process = process.wrap_err("enumerate procfs process entry")?;
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let descriptors = match fs::read_dir(process.path().join("fd")) {
+            Ok(descriptors) => descriptors,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .wrap_err_with(|| format!("inspect procfs descriptors for process {pid}"));
+            }
+        };
+        for descriptor in descriptors {
+            let descriptor = match descriptor {
+                Ok(descriptor) => descriptor,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!("enumerate procfs descriptors for process {pid}")
+                    });
+                }
+            };
+            let descriptor_fd = descriptor
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<std::os::fd::RawFd>().ok());
+            if pid == custody_pid && descriptor_fd == Some(custody_fd) {
+                continue;
+            }
+            let opened = match fs::metadata(descriptor.path()) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error)
+                        .wrap_err_with(|| format!("inspect procfs descriptor for process {pid}"));
+                }
+            };
+            if opened.dev() == target.dev() && opened.ino() == target.ino() {
+                eyre::bail!("process {pid} still has the reclaimed Inrou QEMU disk open");
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn ensure_no_process_with_inrou_identity(identity: &PortableVmChildIdentity) -> eyre::Result<()> {
+    let processes =
+        fs::read_dir("/proc").wrap_err("enumerate procfs for the Inrou QEMU identity")?;
+    for process in processes {
+        let process = process.wrap_err("enumerate procfs process entry")?;
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        match read_inrou_proc_status(pid) {
+            Ok(status) => {
+                if !inrou_proc_status_matches_identity(&status, identity)? {
+                    continue;
+                }
+                eyre::bail!(
+                    "dedicated Inrou uid {} or primary gid {} is already active in process {pid}; the first-release identity and group must be locked and exclusive to one QEMU",
+                    identity.uid,
+                    identity.gid,
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| format!("inspect procfs process {pid}"));
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_directory_chain(
+    anchor: &Path,
+    target_parent: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let anchor = fs::canonicalize(anchor)
+        .wrap_err_with(|| format!("canonicalize Inrou runtime root {}", anchor.display()))?;
+    let target_parent = fs::canonicalize(target_parent).wrap_err_with(|| {
+        format!(
+            "canonicalize Inrou QEMU file parent {}",
+            target_parent.display()
+        )
+    })?;
+    if !target_parent.starts_with(&anchor) {
+        eyre::bail!(
+            "Inrou QEMU file parent {} escapes runtime root {}",
+            target_parent.display(),
+            anchor.display()
+        );
+    }
+    for ancestor in anchor.ancestors().skip(1) {
+        let metadata = fs::metadata(ancestor)?;
+        let child_can_traverse = metadata.mode() & 0o001 != 0
+            || (metadata.gid() == identity.gid
+                || identity.supplementary_gids.contains(&metadata.gid()))
+                && metadata.mode() & 0o010 != 0
+            || metadata.uid() == identity.uid && metadata.mode() & 0o100 != 0;
+        if !metadata.is_dir() || !child_can_traverse {
+            eyre::bail!(
+                "dedicated Inrou QEMU identity cannot traverse ancestor {}",
+                ancestor.display()
+            );
+        }
+    }
+    let mut directories = target_parent
+        .ancestors()
+        .take_while(|path| path.starts_with(&anchor))
+        .collect::<Vec<_>>();
+    directories.reverse();
+    for directory in directories {
+        let named = fs::symlink_metadata(directory)?;
+        if named.file_type().is_symlink()
+            || !named.is_dir()
+            || named.uid() != 0
+            || named.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "Inrou QEMU ancestor {} must be root-owned, direct, and non-writable",
+                directory.display()
+            );
+        }
+        let mut options = fs::OpenOptions::new();
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.read(true).custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC)
+                .bits() as i32,
+        );
+        let opened = options.open(directory)?;
+        let opened_metadata = opened.metadata()?;
+        if opened_metadata.dev() != named.dev() || opened_metadata.ino() != named.ino() {
+            eyre::bail!("Inrou QEMU ancestor changed while it was opened");
+        }
+        rustix::fs::fchown(
+            &opened,
+            Some(rustix::fs::Uid::ROOT),
+            Some(rustix::fs::Gid::from_raw(identity.gid)),
+        )?;
+        rustix::fs::fchmod(&opened, rustix::fs::Mode::from_raw_mode(0o710))?;
+        let after = opened.metadata()?;
+        let named_after = fs::symlink_metadata(directory)?;
+        if after.dev() != named_after.dev()
+            || after.ino() != named_after.ino()
+            || after.uid() != 0
+            || after.gid() != identity.gid
+            || after.mode() & 0o7777 != 0o710
+        {
+            eyre::bail!("Inrou QEMU ancestor did not retain exact delegated custody");
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_file_access(
+    anchor: &Path,
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+    writable: bool,
+) -> eyre::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou QEMU file must have a parent"))?;
+    prepare_inrou_qemu_directory_chain(anchor, parent, identity)?;
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() || named.nlink() != 1 || named.uid() != 0
+    {
+        eyre::bail!(
+            "Inrou QEMU file {} must be a singly-linked root-owned regular file",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options
+        .read(true)
+        .write(writable)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+        eyre::bail!("Inrou QEMU file changed while it was opened");
+    }
+    let mode = if writable { 0o660 } else { 0o640 };
+    rustix::fs::fchown(
+        &file,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::from_raw(identity.gid)),
+    )?;
+    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(mode))?;
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if opened_after.dev() != named_after.dev()
+        || opened_after.ino() != named_after.ino()
+        || opened_after.uid() != 0
+        || opened_after.gid() != identity.gid
+        || opened_after.mode() & 0o7777 != mode
+        || opened_after.nlink() != 1
+    {
+        eyre::bail!("Inrou QEMU file did not retain exact delegated custody");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn prepare_inrou_qemu_readable_directory(
+    anchor: &Path,
+    path: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou QEMU directory must have a parent"))?;
+    prepare_inrou_qemu_directory_chain(anchor, parent, identity)?;
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_dir() || named.uid() != 0 {
+        eyre::bail!("Inrou QEMU readable directory must be direct and root-owned");
+    }
+    let mut options = fs::OpenOptions::new();
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.read(true).custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC)
+            .bits() as i32,
+    );
+    let directory = options.open(path)?;
+    let opened = directory.metadata()?;
+    if opened.dev() != named.dev() || opened.ino() != named.ino() {
+        eyre::bail!("Inrou QEMU readable directory changed while it was opened");
+    }
+    rustix::fs::fchown(
+        &directory,
+        Some(rustix::fs::Uid::ROOT),
+        Some(rustix::fs::Gid::from_raw(identity.gid)),
+    )?;
+    rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o750))?;
+    let after = directory.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if after.dev() != named_after.dev()
+        || after.ino() != named_after.ino()
+        || after.uid() != 0
+        || after.gid() != identity.gid
+        || after.mode() & 0o7777 != 0o750
+    {
+        eyre::bail!("Inrou QEMU readable directory did not retain exact delegated custody");
+    }
+    Ok(())
+}
+fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<PathBuf> {
+    let original = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .wrap_err("resolve the current directory for an Inrou disk path")?
+            .join(path)
+    };
+    ensure_inrou_path_has_no_symlink_components(&original)?;
+    let existed = match fs::symlink_metadata(&original) {
         Ok(_) => true,
         Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", path.display())),
+        Err(error) => {
+            return Err(error).wrap_err_with(|| format!("inspect {}", original.display()));
+        }
     };
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -13910,23 +15509,28 @@ fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<()> {
         builder.mode(0o700);
     }
     builder
-        .create(path)
-        .wrap_err_with(|| format!("create {}", path.display()))?;
+        .create(&original)
+        .wrap_err_with(|| format!("create {}", original.display()))?;
+    ensure_inrou_path_has_no_symlink_components(&original)?;
     if !existed {
         #[cfg(unix)]
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .wrap_err_with(|| format!("secure {}", path.display()))?;
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o700))
+            .wrap_err_with(|| format!("secure {}", original.display()))?;
     }
-    let named = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("inspect Inrou disk directory {}", path.display()))?;
+    let named = fs::symlink_metadata(&original)
+        .wrap_err_with(|| format!("inspect Inrou disk directory {}", original.display()))?;
     if named.file_type().is_symlink() || !named.is_dir() {
         eyre::bail!(
             "Inrou disk directory {} must be a real directory",
-            path.display()
+            original.display()
         );
     }
-    let canonical = fs::canonicalize(path)
-        .wrap_err_with(|| format!("canonicalize Inrou disk directory {}", path.display()))?;
+    let canonical = fs::canonicalize(&original).wrap_err_with(|| {
+        format!(
+            "canonicalize Inrou disk directory {}",
+            original.display()
+        )
+    })?;
     #[cfg(unix)]
     {
         let effective_uid = rustix::process::geteuid().as_raw();
@@ -13942,7 +15546,7 @@ fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<()> {
             if index == 0 && metadata.uid() != effective_uid {
                 eyre::bail!(
                     "Inrou disk directory {} is owned by uid {} instead of the runtime uid {effective_uid}",
-                    path.display(),
+                    original.display(),
                     metadata.uid()
                 );
             }
@@ -13959,6 +15563,30 @@ fn ensure_secure_inrou_disk_directory(path: &Path) -> eyre::Result<()> {
                     "Inrou disk directory custody permits path replacement through {}",
                     ancestor.display()
                 );
+            }
+        }
+    }
+    Ok(canonical)
+}
+
+fn ensure_inrou_path_has_no_symlink_components(path: &Path) -> eyre::Result<()> {
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        prefix.push(component.as_os_str());
+        match fs::symlink_metadata(&prefix) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                eyre::bail!(
+                    "Inrou disk path {} contains symlink component {}",
+                    path.display(),
+                    prefix.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!("inspect Inrou disk path component {}", prefix.display())
+                });
             }
         }
     }
@@ -14272,8 +15900,8 @@ fn ensure_inrou_root_disk(
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
     base_binding: Hash,
 ) -> eyre::Result<PathBuf> {
-    let root_volume_dir = PathBuf::from(&root_volume.local_materialization_dir);
-    ensure_secure_inrou_disk_directory(&root_volume_dir)?;
+    let root_volume_dir =
+        ensure_secure_inrou_disk_directory(Path::new(&root_volume.local_materialization_dir))?;
     let root_disk_path = root_volume_dir.join("rootfs.ext4");
     let (mut base_file, base_metadata) = open_soracloud_regular_file_no_follow(
         base_rootfs_image_path,
@@ -14347,8 +15975,8 @@ fn ensure_inrou_portable_root_disk(
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
     base_binding: Hash,
 ) -> eyre::Result<PathBuf> {
-    let root_volume_dir = PathBuf::from(&root_volume.local_materialization_dir);
-    ensure_secure_inrou_disk_directory(&root_volume_dir)?;
+    let root_volume_dir =
+        ensure_secure_inrou_disk_directory(Path::new(&root_volume.local_materialization_dir))?;
     let root_disk_path = root_volume_dir.join("rootfs.qcow2");
     let (_, base_metadata) = open_soracloud_regular_file_no_follow(
         base_rootfs_image_path,
@@ -14522,8 +16150,8 @@ fn ensure_inrou_portable_lease_disks(
         .iter()
         .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
     {
-        let volume_dir = PathBuf::from(&volume.local_materialization_dir);
-        ensure_secure_inrou_disk_directory(&volume_dir)?;
+        let volume_dir =
+            ensure_secure_inrou_disk_directory(Path::new(&volume.local_materialization_dir))?;
         let image_path = volume_dir.join("lease.raw");
         let initialize_filesystem = match fs::symlink_metadata(&image_path) {
             Ok(_) => {
@@ -14610,39 +16238,717 @@ fn build_portable_vm_network_plan(
     let public_address = public_listener
         .local_addr()
         .wrap_err("query supervisor-owned PortableVm listener")?;
-    let mut netdev_parts = vec![
+    let backend_reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .wrap_err("reserve the QEMU loopback host-forward port")?;
+    let expected_backend = backend_reservation
+        .local_addr()
+        .wrap_err("query reserved QEMU host-forward port")?;
+    if !matches!(firewall_plan, InrouTapFirewallPlan::Isolated) {
+        eyre::bail!(
+            "PortableVM V1 supports only isolated networking until kernel-backed egress accounting is available"
+        );
+    }
+    let netdev_parts = [
         "user".to_owned(),
         "id=net0".to_owned(),
         "ipv6=off".to_owned(),
-        format!("hostfwd=tcp:127.0.0.1:0-:{guest_port}"),
+        "restrict=on".to_owned(),
+        format!(
+            "hostfwd=tcp:127.0.0.1:{}-:{guest_port}",
+            expected_backend.port()
+        ),
     ];
-    let mut allowlist_hosts = Vec::new();
-    match firewall_plan {
-        InrouTapFirewallPlan::Isolated => {
-            netdev_parts.push("restrict=on".to_owned());
-        }
-        InrouTapFirewallPlan::Allowlist(endpoints) => {
-            netdev_parts.push("restrict=on".to_owned());
-            for endpoint in endpoints {
-                netdev_parts.push(format!(
-                    "guestfwd=tcp:{}:{}-tcp:{}:{}",
-                    endpoint.address, endpoint.port, endpoint.address, endpoint.port
-                ));
-                allowlist_hosts.push((endpoint.host.clone(), endpoint.address));
-            }
-            allowlist_hosts.sort();
-            allowlist_hosts.dedup();
-        }
-    }
     Ok(PortableVmNetworkPlan {
         netdev: netdev_parts.join(","),
         listen_base_url: format!("http://{public_address}"),
         public_listener,
-        allowlist_hosts,
+        backend_reservation,
+        expected_backend,
     })
 }
+#[cfg(target_os = "linux")]
+impl InrouLoopbackOwnerFirewall {
+    fn install(
+        public_listener: &TcpListener,
+        backend_reservation: &TcpListener,
+        child_uid: u32,
+    ) -> eyre::Result<Self> {
+        let supervisor_uid = rustix::process::geteuid().as_raw();
+        if supervisor_uid != 0 {
+            eyre::bail!("Inrou loopback ownership firewall requires the root supervisor identity");
+        }
+        let iptables_binary = resolve_inrou_iptables_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVM hosting requires root-owned `/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`"
+            )
+        })?;
+        let ip6tables_binary = resolve_inrou_ip6tables_executable().ok_or_else(|| {
+            eyre::eyre!(
+                "Inrou PortableVM hosting requires root-owned `/usr/sbin/ip6tables`, `/sbin/ip6tables`, `/usr/bin/ip6tables`, or `/bin/ip6tables`"
+            )
+        })?;
+        let public_address = public_listener
+            .local_addr()
+            .wrap_err("query the Inrou public loopback listener")?;
+        let backend_address = backend_reservation
+            .local_addr()
+            .wrap_err("query the reserved Inrou QEMU loopback listener")?;
+        if public_address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || backend_address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
+            || public_address.port() == 0
+            || backend_address.port() == 0
+            || public_address == backend_address
+        {
+            eyre::bail!("Inrou ownership firewall requires two distinct IPv4 loopback ports");
+        }
+        let single_instance_lock = acquire_inrou_iptables_lock()?;
+        let mut firewall = Self {
+            iptables_binary,
+            ip6tables_binary,
+            _single_instance_lock: single_instance_lock,
+            owns_chains: [false; 3],
+        };
+        for chain in SORACLOUD_INROU_IPTABLES_CHAINS {
+            firewall.reject_preexisting_owned_chain(chain)?;
+        }
+        for (index, chain) in SORACLOUD_INROU_IPTABLES_CHAINS.into_iter().enumerate() {
+            firewall.create_owned_chain(index, chain)?;
+        }
+        for (context, args) in planned_inrou_output_isolation_rules(
+            public_address.port(),
+            backend_address.port(),
+            supervisor_uid,
+            child_uid,
+        ) {
+            run_inrou_iptables_command(&firewall.iptables_binary, &args).wrap_err(context)?;
+        }
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &planned_inrou_backend_input_rule(backend_address.port()),
+        )
+        .wrap_err("install the non-loopback Inrou backend INPUT firewall")?;
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &inrou_iptables_output_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou OUTPUT jump")?;
+        run_inrou_iptables_command(
+            &firewall.iptables_binary,
+            &inrou_iptables_input_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou INPUT jump")?;
+        run_inrou_iptables_command(
+            &firewall.ip6tables_binary,
+            &planned_inrou_qemu_ipv6_output_reject_rule(child_uid),
+        )
+        .wrap_err("deny every IPv6 packet from the Inrou QEMU identity")?;
+        run_inrou_iptables_command(
+            &firewall.ip6tables_binary,
+            &inrou_ip6tables_output_jump_args("-I", true),
+        )
+        .wrap_err("install the single owned Inrou IPv6 OUTPUT jump")?;
+        drain_inrou_pre_firewall_connections(public_listener)
+            .wrap_err("drain pre-firewall Inrou public connections")?;
+        Ok(firewall)
+    }
+
+    fn reject_preexisting_owned_chain(&self, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain);
+        let chain_exists = inrou_iptables_chain_exists(binary, chain.name)?;
+        let jump_exists = inrou_iptables_rule_exists(
+            binary,
+            chain.hook,
+            &inrou_iptables_hook_jump_args(chain, "-C", false),
+        )?;
+        if chain_exists || jump_exists {
+            eyre::bail!(
+                "preexisting Inrou firewall chain `{}` or its {} jump may contain a surviving prior QEMU; refusing automatic reconciliation and requiring explicit operator cleanup",
+                chain.name,
+                chain.hook
+            );
+        }
+        Ok(())
+    }
+
+    fn create_owned_chain(
+        &mut self,
+        index: usize,
+        chain: InrouOwnedIptablesChain,
+    ) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain).to_path_buf();
+        self.reject_preexisting_owned_chain(chain)?;
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-N"))
+            .wrap_err("create the owned Inrou firewall chain")?;
+        self.owns_chains[index] = true;
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_marker_args(chain, "-A"))
+            .wrap_err("mark the owned Inrou firewall chain")?;
+        Ok(())
+    }
+
+    fn remove_owned_jumps(&self, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        let binary = self.binary_for_chain(chain);
+        for _ in 0..SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS {
+            if !inrou_iptables_rule_exists(
+                binary,
+                chain.hook,
+                &inrou_iptables_hook_jump_args(chain, "-C", false),
+            )? {
+                return Ok(());
+            }
+            run_inrou_iptables_command(binary, &inrou_iptables_hook_jump_args(chain, "-D", false))
+                .wrap_err_with(|| format!("remove a stale owned Inrou {} jump", chain.hook))?;
+        }
+        if inrou_iptables_rule_exists(
+            binary,
+            chain.hook,
+            &inrou_iptables_hook_jump_args(chain, "-C", false),
+        )? {
+            eyre::bail!(
+                "more than {SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS} Inrou {} jumps exist; refusing ambiguous firewall reconciliation",
+                chain.hook
+            );
+        }
+        Ok(())
+    }
+
+    fn cleanup(&mut self) -> eyre::Result<()> {
+        for (index, chain) in SORACLOUD_INROU_IPTABLES_CHAINS
+            .into_iter()
+            .enumerate()
+            .rev()
+        {
+            self.cleanup_chain(index, chain)?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_chain(&mut self, index: usize, chain: InrouOwnedIptablesChain) -> eyre::Result<()> {
+        if !self.owns_chains[index] {
+            return Ok(());
+        }
+        self.remove_owned_jumps(chain)?;
+        let binary = self.binary_for_chain(chain).to_path_buf();
+        run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-F"))
+            .wrap_err("flush the owned Inrou firewall chain during cleanup")?;
+        if let Err(error) =
+            run_inrou_iptables_command(&binary, &inrou_iptables_chain_control_args(chain, "-X"))
+        {
+            let marker_error =
+                run_inrou_iptables_command(&binary, &inrou_iptables_chain_marker_args(chain, "-A"))
+                    .err();
+            return Err(error).wrap_err_with(|| {
+                marker_error.map_or_else(
+                    || format!("delete the owned Inrou firewall chain `{}`", chain.name),
+                    |marker_error| {
+                        format!(
+                            "delete the owned Inrou firewall chain `{}`; restoring its ownership marker also failed: {marker_error}",
+                            chain.name
+                        )
+                    },
+                )
+            });
+        }
+        self.owns_chains[index] = false;
+        Ok(())
+    }
+
+    fn binary_for_chain(&self, chain: InrouOwnedIptablesChain) -> &Path {
+        match chain.family {
+            InrouIptablesFamily::Ipv4 => &self.iptables_binary,
+            InrouIptablesFamily::Ipv6 => &self.ip6tables_binary,
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for InrouLoopbackOwnerFirewall {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            iroha_logger::warn!(
+                ?error,
+                "failed to reconcile the owned Inrou firewall chain during cleanup"
+            );
+        }
+    }
+}
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn planned_inrou_loopback_owner_rule(port: u16, supervisor_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-o".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "-d".to_owned(),
+        Ipv4Addr::LOCALHOST.to_string(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "!".to_owned(),
+        "--uid-owner".to_owned(),
+        supervisor_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_backend_owner_rule(port: u16, supervisor_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "!".to_owned(),
+        "--uid-owner".to_owned(),
+        supervisor_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_output_reject_rule(child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "icmp-port-unreachable".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_ipv6_output_reject_rule(child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IP6TABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "icmp6-port-unreachable".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_qemu_backend_reply_accept_rule(port: u16, child_uid: u32) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_CHAIN.to_owned(),
+        "1".to_owned(),
+        "-o".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "-s".to_owned(),
+        Ipv4Addr::LOCALHOST.to_string(),
+        "--sport".to_owned(),
+        port.to_string(),
+        "-m".to_owned(),
+        "conntrack".to_owned(),
+        "--ctstate".to_owned(),
+        "ESTABLISHED".to_owned(),
+        "-m".to_owned(),
+        "owner".to_owned(),
+        "--uid-owner".to_owned(),
+        child_uid.to_string(),
+        "-j".to_owned(),
+        "ACCEPT".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_output_isolation_rules(
+    public_port: u16,
+    backend_port: u16,
+    supervisor_uid: u32,
+    child_uid: u32,
+) -> Vec<(&'static str, Vec<String>)> {
+    // Each rule is inserted at position one. Install the narrow QEMU reply
+    // allowance last so it lands above the catch-all QEMU OUTPUT rejection.
+    vec![
+        (
+            "install the Inrou public-listener loopback owner firewall",
+            planned_inrou_loopback_owner_rule(public_port, supervisor_uid),
+        ),
+        (
+            "install the destination-independent Inrou backend owner firewall",
+            planned_inrou_backend_owner_rule(backend_port, supervisor_uid),
+        ),
+        (
+            "deny every non-proxy network action by the Inrou QEMU identity",
+            planned_inrou_qemu_output_reject_rule(child_uid),
+        ),
+        (
+            "allow only established Inrou QEMU backend replies to the supervisor proxy",
+            planned_inrou_qemu_backend_reply_accept_rule(backend_port, child_uid),
+        ),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn planned_inrou_backend_input_rule(port: u16) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-I".to_owned(),
+        SORACLOUD_INROU_IPTABLES_INPUT_CHAIN.to_owned(),
+        "1".to_owned(),
+        "!".to_owned(),
+        "-i".to_owned(),
+        "lo".to_owned(),
+        "-p".to_owned(),
+        "tcp".to_owned(),
+        "--dport".to_owned(),
+        port.to_string(),
+        "-j".to_owned(),
+        "REJECT".to_owned(),
+        "--reject-with".to_owned(),
+        "tcp-reset".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_output_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[0],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_input_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[1],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_ip6tables_output_jump_args(operation: &str, include_position: bool) -> Vec<String> {
+    inrou_iptables_hook_jump_args(
+        SORACLOUD_INROU_IPTABLES_CHAINS[2],
+        operation,
+        include_position,
+    )
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_hook_jump_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+    include_position: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.hook.to_owned(),
+    ];
+    if include_position {
+        args.push("1".to_owned());
+    }
+    args.extend(["-j".to_owned(), chain.name.to_owned()]);
+    args
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_control_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.name.to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_marker_args(
+    chain: InrouOwnedIptablesChain,
+    operation: &str,
+) -> Vec<String> {
+    vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        operation.to_owned(),
+        chain.name.to_owned(),
+        "-m".to_owned(),
+        "comment".to_owned(),
+        "--comment".to_owned(),
+        chain.marker.to_owned(),
+        "-j".to_owned(),
+        "RETURN".to_owned(),
+    ]
+}
+#[cfg(target_os = "linux")]
+fn acquire_inrou_iptables_lock() -> eyre::Result<fs::File> {
+    let lock_path = Path::new(SORACLOUD_INROU_IPTABLES_LOCK_PATH);
+    let lock_parent = lock_path
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Inrou firewall lock path has no parent"))?;
+    for ancestor in lock_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).wrap_err_with(|| {
+            format!(
+                "inspect Inrou firewall lock ancestor {}",
+                ancestor.display()
+            )
+        })?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.gid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            eyre::bail!(
+                "Inrou firewall lock ancestor {} must be a root-owned, non-writable directory without symlink indirection",
+                ancestor.display()
+            );
+        }
+    }
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    let file = options
+        .open(lock_path)
+        .wrap_err_with(|| format!("open Inrou firewall lock {}", lock_path.display()))?;
+    let opened = file.metadata()?;
+    let named = fs::symlink_metadata(lock_path)?;
+    if !opened.is_file()
+        || opened.nlink() != 1
+        || opened.uid() != 0
+        || opened.gid() != 0
+        || opened.mode() & 0o7777 != 0o600
+        || named.file_type().is_symlink()
+        || named.dev() != opened.dev()
+        || named.ino() != opened.ino()
+    {
+        eyre::bail!(
+            "Inrou firewall lock {} must be one root-owned, owner-private regular file",
+            lock_path.display()
+        );
+    }
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).wrap_err(
+        "acquire the global Inrou firewall lock; another PortableVM supervisor may be active",
+    )?;
+    Ok(file)
+}
+#[cfg(target_os = "linux")]
+fn run_inrou_iptables_status(
+    program: &Path,
+    args: &[String],
+) -> eyre::Result<std::process::ExitStatus> {
+    let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut command = Command::new(program);
+    sanitize_host_command_environment(&mut command);
+    command
+        .args(&borrowed)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .wrap_err_with(|| format!("spawn {} {}", program.display(), borrowed.join(" ")))?;
+    let started_at = std::time::Instant::now();
+    loop {
+        let poll = match child.try_wait() {
+            Ok(poll) => poll,
+            Err(error) => {
+                let termination = terminate_inrou_iptables_child_bounded(&mut child);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        borrowed.join(" "),
+                        termination
+                    )
+                });
+            }
+        };
+        match poll {
+            Some(status) => return Ok(status),
+            None if started_at.elapsed() < SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            None => {
+                let termination = terminate_inrou_iptables_child_bounded(&mut child);
+                eyre::bail!(
+                    "{} {} exceeded its {:?} Inrou firewall deadline{}",
+                    program.display(),
+                    borrowed.join(" "),
+                    SORACLOUD_INROU_IPTABLES_COMMAND_TIMEOUT,
+                    termination,
+                );
+            }
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+fn terminate_inrou_iptables_child_bounded(child: &mut std::process::Child) -> String {
+    let kill_error = child.kill().err();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let mut reap_error = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                reap_error = Some("did not exit before the one-second reap deadline".to_owned());
+                break;
+            }
+            Err(error) => {
+                reap_error = Some(format!("reaping the command failed: {error}"));
+                break;
+            }
+        }
+    }
+    let mut suffix = String::new();
+    if let Some(error) = kill_error {
+        suffix.push_str(&format!("; terminating the command failed: {error}"));
+    }
+    if let Some(error) = reap_error {
+        suffix.push_str("; ");
+        suffix.push_str(&error);
+    }
+    suffix
+}
+#[cfg(target_os = "linux")]
+fn run_inrou_iptables_command(program: &Path, args: &[String]) -> eyre::Result<()> {
+    let status = run_inrou_iptables_status(program, args)?;
+    if !status.success() {
+        eyre::bail!(
+            "{} {} failed with status {status}",
+            program.display(),
+            args.join(" ")
+        );
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_chain_exists(program: &Path, chain: &str) -> eyre::Result<bool> {
+    let list = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-L".to_owned(),
+        chain.to_owned(),
+        "-n".to_owned(),
+    ];
+    let status = run_inrou_iptables_status(program, &list)?;
+    if status.success() {
+        return Ok(true);
+    }
+    let output_probe = vec![
+        "-w".to_owned(),
+        "5".to_owned(),
+        "-L".to_owned(),
+        "OUTPUT".to_owned(),
+        "-n".to_owned(),
+    ];
+    let probe_status = run_inrou_iptables_status(program, &output_probe)?;
+    if !probe_status.success() {
+        eyre::bail!(
+            "iptables could not distinguish missing chain `{chain}` from an unavailable filter table (statuses {status} and {probe_status})"
+        );
+    }
+    Ok(false)
+}
+#[cfg(target_os = "linux")]
+fn inrou_iptables_rule_exists(
+    program: &Path,
+    chain: &str,
+    check_args: &[String],
+) -> eyre::Result<bool> {
+    let status = run_inrou_iptables_status(program, check_args)?;
+    if status.success() {
+        return Ok(true);
+    }
+    if !inrou_iptables_chain_exists(program, chain)? {
+        eyre::bail!("iptables chain `{chain}` disappeared while its Inrou rules were checked");
+    }
+    Ok(false)
+}
+#[cfg(target_os = "linux")]
+fn drain_inrou_pre_firewall_connections(listener: &TcpListener) -> io::Result<()> {
+    listener.set_nonblocking(true)?;
+    loop {
+        match listener.accept() {
+            Ok((stream, _peer)) => {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+}
 impl PortableVmLoopbackProxy {
-    fn start(public_listener: TcpListener, backend: SocketAddr) -> io::Result<Self> {
+    #[cfg(target_os = "linux")]
+    fn start(
+        public_listener: TcpListener,
+        backend: SocketAddr,
+        qmp_control: Arc<Mutex<PortableVmQmpControl>>,
+        guest_port: u16,
+    ) -> io::Result<Self> {
+        let attestor = Arc::new(move |expected_backend: SocketAddr, stop: &AtomicBool| {
+            let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT;
+            loop {
+                if stop.load(AtomicOrdering::Acquire) {
+                    return false;
+                }
+                if let Some(mut control) = qmp_control.try_lock() {
+                    return attest_inrou_qmp_host_forward(
+                        &mut control,
+                        guest_port,
+                        expected_backend,
+                        deadline,
+                        Some(stop),
+                    )
+                    .is_ok();
+                }
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        Self::start_with_attestor(public_listener, backend, attestor)
+    }
+
+    fn start_with_attestor(
+        public_listener: TcpListener,
+        backend: SocketAddr,
+        attestor: PortableVmBackendAttestor,
+    ) -> io::Result<Self> {
         if !backend.ip().is_loopback() || backend.port() == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -14677,12 +16983,18 @@ impl PortableVmLoopbackProxy {
                                 continue;
                             }
                             let session_stop = Arc::clone(&worker_stop);
+                            let session_attestor = Arc::clone(&attestor);
                             match thread::Builder::new()
                                 .name("inrou-port-session".to_owned())
+                                .stack_size(SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES)
                                 .spawn(move || {
-                                    proxy_portable_vm_connection(client, backend, session_stop);
-                                })
-                            {
+                                    proxy_portable_vm_connection(
+                                        client,
+                                        backend,
+                                        session_stop,
+                                        session_attestor,
+                                    );
+                                }) {
                                 Ok(session) => sessions.push(session),
                                 Err(error) => {
                                     iroha_logger::warn!(
@@ -14734,15 +17046,30 @@ fn proxy_portable_vm_connection(
     client: TcpStream,
     backend: SocketAddr,
     global_stop: Arc<AtomicBool>,
+    attestor: PortableVmBackendAttestor,
 ) {
     let Ok(server) = TcpStream::connect_timeout(&backend, Duration::from_secs(1)) else {
         let _ = client.shutdown(Shutdown::Both);
         return;
     };
+    if global_stop.load(AtomicOrdering::Acquire) || !attestor(backend, &global_stop) {
+        let _ = client.shutdown(Shutdown::Both);
+        let _ = server.shutdown(Shutdown::Both);
+        return;
+    }
     for stream in [&client, &server] {
-        let _ = stream.set_nodelay(true);
-        let _ = stream.set_read_timeout(Some(SORACLOUD_INROU_PROXY_IO_POLL));
-        let _ = stream.set_write_timeout(Some(SORACLOUD_INROU_PROXY_WRITE_TIMEOUT));
+        if stream.set_nodelay(true).is_err()
+            || stream
+                .set_read_timeout(Some(SORACLOUD_INROU_PROXY_IO_POLL))
+                .is_err()
+            || stream
+                .set_write_timeout(Some(SORACLOUD_INROU_PROXY_IO_POLL))
+                .is_err()
+        {
+            let _ = client.shutdown(Shutdown::Both);
+            let _ = server.shutdown(Shutdown::Both);
+            return;
+        }
     }
     let Ok(client_reader) = client.try_clone() else {
         return;
@@ -14755,6 +17082,7 @@ fn proxy_portable_vm_connection(
     let upstream_session_stop = Arc::clone(&session_stop);
     let upstream = thread::Builder::new()
         .name("inrou-port-upstream".to_owned())
+        .stack_size(SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES)
         .spawn(move || {
             proxy_portable_vm_direction(
                 client_reader,
@@ -14776,13 +17104,19 @@ fn proxy_portable_vm_direction(
     session_stop: &AtomicBool,
 ) {
     let mut buffer = [0_u8; 16 * 1024];
-    while !global_stop.load(AtomicOrdering::Acquire)
-        && !session_stop.load(AtomicOrdering::Acquire)
+    while !global_stop.load(AtomicOrdering::Acquire) && !session_stop.load(AtomicOrdering::Acquire)
     {
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
-                if writer.write_all(&buffer[..read]).is_err() {
+                if write_inrou_proxy_buffer_bounded(
+                    &mut writer,
+                    &buffer[..read],
+                    global_stop,
+                    session_stop,
+                )
+                .is_err()
+                {
                     break;
                 }
             }
@@ -14797,6 +17131,45 @@ fn proxy_portable_vm_direction(
     session_stop.store(true, AtomicOrdering::Release);
     let _ = reader.shutdown(Shutdown::Both);
     let _ = writer.shutdown(Shutdown::Both);
+}
+fn write_inrou_proxy_buffer_bounded(
+    writer: &mut TcpStream,
+    mut payload: &[u8],
+    global_stop: &AtomicBool,
+    session_stop: &AtomicBool,
+) -> io::Result<()> {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_PROXY_WRITE_TIMEOUT;
+    while !payload.is_empty() {
+        if global_stop.load(AtomicOrdering::Acquire) || session_stop.load(AtomicOrdering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Inrou proxy stopped during a buffered write",
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Inrou proxy buffered write exceeded its absolute deadline",
+            ));
+        }
+        match writer.write(payload) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "Inrou proxy socket stopped accepting bytes",
+                ));
+            }
+            Ok(written) => payload = &payload[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 fn write_inrou_cloud_init_documents(
     materialization_dir: &Path,
@@ -14861,20 +17234,6 @@ fn stage_portable_vm_bundle_block_device(
     write_bytes_atomic(&bundle_path, &bundle_bytes)
         .wrap_err_with(|| format!("stage verified bundle block {}", bundle_path.display()))?;
     Ok((bundle_path, exact_bytes))
-}
-fn build_portable_vm_allowlist_hosts_overlay(
-    allowlist_hosts: &[(String, Ipv4Addr)],
-) -> Option<String> {
-    let lines = allowlist_hosts
-        .iter()
-        .filter(|(host, _address)| host.parse::<IpAddr>().is_err())
-        .map(|(host, address)| format!("{address} {host}"))
-        .collect::<Vec<_>>();
-    (!lines.is_empty()).then(|| {
-        let mut overlay = lines.join("\n");
-        overlay.push('\n');
-        overlay
-    })
 }
 fn portable_vm_kernel_cmdline(profile: PortableVmGuestMachineProfile) -> String {
     format!(
@@ -15091,9 +17450,9 @@ fn inrou_tap_firewall_plan(
             eyre::bail!("Inrou V1 forbids unrestricted network egress")
         }
         SoraNetworkPolicyV1::Isolated => Ok(InrouTapFirewallPlan::Isolated),
-        SoraNetworkPolicyV1::Allowlist(allowed_hosts) => Ok(InrouTapFirewallPlan::Allowlist(
-            resolve_inrou_allowlist_endpoints(allowed_hosts)?,
-        )),
+        SoraNetworkPolicyV1::Allowlist(_) => eyre::bail!(
+            "Inrou V1 forbids allowlisted egress until kernel-backed byte accounting is enforced"
+        ),
     }
 }
 #[cfg(target_os = "linux")]
@@ -15453,9 +17812,14 @@ fn sanitize_host_command_environment(command: &mut Command) {
 }
 #[cfg(target_os = "linux")]
 fn inrou_setpriv_qemu_arguments(
+    shell: &Path,
     qemu: &Path,
     identity: &PortableVmChildIdentity,
 ) -> eyre::Result<Vec<String>> {
+    validate_portable_vm_child_identity_values(identity)?;
+    let shell = shell
+        .to_str()
+        .ok_or_else(|| eyre::eyre!("descriptor-cleanup shell path must be UTF-8"))?;
     let qemu = qemu
         .to_str()
         .ok_or_else(|| eyre::eyre!("QEMU executable path must be UTF-8"))?;
@@ -15479,11 +17843,24 @@ fn inrou_setpriv_qemu_arguments(
         );
     }
     args.extend([
+        "--securebits=+noroot,+noroot_locked,+no_setuid_fixup,+no_setuid_fixup_locked".to_owned(),
         "--bounding-set=-all".to_owned(),
         "--inh-caps=-all".to_owned(),
         "--ambient-caps=-all".to_owned(),
         "--no-new-privs".to_owned(),
         "--".to_owned(),
+        shell.to_owned(),
+        "-c".to_owned(),
+        SORACLOUD_INROU_CLOSE_FDS_SCRIPT.to_owned(),
+        "inrou-close-fds".to_owned(),
+        identity.uid.to_string(),
+        identity.gid.to_string(),
+        identity
+            .supplementary_gids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
         qemu.to_owned(),
         "-no-user-config".to_owned(),
         "-sandbox".to_owned(),
@@ -15496,24 +17873,45 @@ fn inrou_setpriv_qemu_arguments(
 #[cfg(target_os = "linux")]
 fn build_inrou_portable_vm_command(
     setpriv: &Path,
+    shell: &Path,
     qemu: &Path,
     identity: &PortableVmChildIdentity,
 ) -> eyre::Result<Command> {
     let mut command = Command::new(setpriv);
     sanitize_host_command_environment(&mut command);
-    command.args(inrou_setpriv_qemu_arguments(qemu, identity)?);
+    command
+        .current_dir("/")
+        .args(inrou_setpriv_qemu_arguments(shell, qemu, identity)?);
     Ok(command)
+}
+#[cfg(target_os = "linux")]
+fn configure_inrou_qmp_stdio(command: &mut Command) -> io::Result<UnixStream> {
+    let (supervisor, child) = UnixStream::pair()?;
+    let child_output = child.try_clone()?;
+    command
+        .arg("-qmp")
+        .arg("stdio")
+        .arg("-chardev")
+        .arg(format!(
+            "ringbuf,id=inrou-serial,size={SORACLOUD_INROU_LOG_MAX_BYTES}"
+        ))
+        .arg("-serial")
+        .arg("chardev:inrou-serial")
+        .stdin(Stdio::from(OwnedFd::from(child)))
+        .stdout(Stdio::from(OwnedFd::from(child_output)));
+    Ok(supervisor)
 }
 #[cfg(target_os = "linux")]
 fn run_inrou_qemu_command_capture_stdout_bounded(
     setpriv: &Path,
+    shell: &Path,
     qemu: &Path,
     identity: &PortableVmChildIdentity,
     qemu_args: &[&str],
     timeout: Duration,
     maximum_stdout_bytes: usize,
 ) -> eyre::Result<Vec<u8>> {
-    let mut args = inrou_setpriv_qemu_arguments(qemu, identity)?;
+    let mut args = inrou_setpriv_qemu_arguments(shell, qemu, identity)?;
     args.extend(qemu_args.iter().map(|argument| (*argument).to_owned()));
     let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_host_command_capture_stdout_bounded(setpriv, &borrowed, timeout, maximum_stdout_bytes)
@@ -15555,6 +17953,28 @@ fn run_host_command_capture_stdout_bounded(
     timeout: Duration,
     maximum_stdout_bytes: usize,
 ) -> eyre::Result<Vec<u8>> {
+    let (status, output) = run_host_command_capture_stdout_status_bounded(
+        program,
+        args,
+        timeout,
+        maximum_stdout_bytes,
+    )?;
+    if !status.success() {
+        eyre::bail!(
+            "{} {} failed with status {}",
+            program.display(),
+            args.join(" "),
+            status,
+        );
+    }
+    Ok(output)
+}
+fn run_host_command_capture_stdout_status_bounded(
+    program: &Path,
+    args: &[&str],
+    timeout: Duration,
+    maximum_stdout_bytes: usize,
+) -> eyre::Result<(std::process::ExitStatus, Vec<u8>)> {
     if timeout.is_zero() {
         eyre::bail!("host-command execution deadline must be positive");
     }
@@ -15571,12 +17991,12 @@ fn run_host_command_capture_stdout_bounded(
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            let termination = terminate_inrou_child_bounded(&mut child);
             eyre::bail!(
-                "stdout pipe was not available for {} {}",
+                "stdout pipe was not available for {} {}{}",
                 program.display(),
-                args.join(" ")
+                args.join(" "),
+                inrou_termination_error_suffix(&termination),
             );
         }
     };
@@ -15586,9 +18006,13 @@ fn run_host_command_capture_stdout_bounded(
     {
         Ok(drain) => drain,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error).wrap_err("spawn bounded host-command stdout drain");
+            let termination = terminate_inrou_child_bounded(&mut child);
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "spawn bounded host-command stdout drain{}",
+                    inrou_termination_error_suffix(&termination)
+                )
+            });
         }
     };
     let started_at = std::time::Instant::now();
@@ -15596,41 +18020,35 @@ fn run_host_command_capture_stdout_bounded(
         let poll = match child.try_wait() {
             Ok(poll) => poll,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = drain.join();
-                return Err(error)
-                    .wrap_err_with(|| format!("poll {} {}", program.display(), args.join(" ")));
+                let termination = terminate_inrou_child_bounded(&mut child);
+                finish_inrou_stdout_drain_bounded(drain).ok();
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        args.join(" "),
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
             }
         };
         match poll {
             Some(status) => break status,
             None if started_at.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
             None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = drain.join();
+                let termination = terminate_inrou_child_bounded(&mut child);
+                finish_inrou_stdout_drain_bounded(drain).ok();
                 eyre::bail!(
-                    "{} {} exceeded its {:?} execution deadline",
+                    "{} {} exceeded its {:?} execution deadline{}",
                     program.display(),
                     args.join(" "),
                     timeout,
+                    inrou_termination_error_suffix(&termination),
                 );
             }
         }
     };
-    let (output, truncated) = drain
-        .join()
-        .map_err(|_| eyre::eyre!("host-command stdout drain panicked"))?
-        .wrap_err("drain bounded host-command stdout")?;
-    if !status.success() {
-        eyre::bail!(
-            "{} {} failed with status {}",
-            program.display(),
-            args.join(" "),
-            status,
-        );
-    }
+    let (output, truncated) = finish_inrou_stdout_drain_bounded(drain)?;
     if truncated {
         eyre::bail!(
             "{} {} exceeded the {maximum_stdout_bytes}-byte stdout limit",
@@ -15638,7 +18056,25 @@ fn run_host_command_capture_stdout_bounded(
             args.join(" "),
         );
     }
-    Ok(output)
+    Ok((status, output))
+}
+fn finish_inrou_stdout_drain_bounded(
+    drain: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
+) -> eyre::Result<(Vec<u8>, bool)> {
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT;
+    while !drain.is_finished() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !drain.is_finished() {
+        eyre::bail!(
+            "host-command stdout drain did not stop within {:?}",
+            SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT
+        );
+    }
+    drain
+        .join()
+        .map_err(|_| eyre::eyre!("host-command stdout drain panicked"))?
+        .wrap_err("drain bounded host-command stdout")
 }
 fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
     run_host_command_with_timeout(program, args, Duration::from_secs(10 * 60))
@@ -15660,10 +18096,21 @@ fn run_host_command_with_timeout(
         .wrap_err_with(|| format!("spawn {} {}", program.display(), args.join(" ")))?;
     let started_at = std::time::Instant::now();
     loop {
-        match child
-            .try_wait()
-            .wrap_err_with(|| format!("poll {} {}", program.display(), args.join(" ")))?
-        {
+        let poll = match child.try_wait() {
+            Ok(poll) => poll,
+            Err(error) => {
+                let termination = terminate_inrou_child_bounded(&mut child);
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "poll {} {}{}",
+                        program.display(),
+                        args.join(" "),
+                        inrou_termination_error_suffix(&termination)
+                    )
+                });
+            }
+        };
+        match poll {
             Some(status) if status.success() => return Ok(()),
             Some(status) => {
                 eyre::bail!(
@@ -15677,19 +18124,13 @@ fn run_host_command_with_timeout(
                 thread::sleep(Duration::from_millis(25));
             }
             None => {
-                let kill_error = child.kill().err();
-                let wait_error = child.wait().err();
+                let termination = terminate_inrou_child_bounded(&mut child);
                 eyre::bail!(
-                    "{} {} exceeded its {:?} execution deadline{}{}",
+                    "{} {} exceeded its {:?} execution deadline{}",
                     program.display(),
                     args.join(" "),
                     timeout,
-                    kill_error.map_or_else(String::new, |error| format!(
-                        "; terminating the command failed: {error}"
-                    )),
-                    wait_error.map_or_else(String::new, |error| format!(
-                        "; reaping the command failed: {error}"
-                    )),
+                    inrou_termination_error_suffix(&termination),
                 );
             }
         }
@@ -16484,183 +18925,36 @@ impl InrouMaterializationDirectoryIdentity {
     }
 }
 #[cfg(target_os = "linux")]
-fn ensure_inrou_qmp_control_root(path: &Path) -> eyre::Result<PathBuf> {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    if !path.is_absolute() || path.parent().is_none() {
-        eyre::bail!("Inrou QMP control root must be an absolute non-root path");
-    }
-    let leaf = path
-        .file_name()
-        .ok_or_else(|| eyre::eyre!("Inrou QMP control root must have a leaf name"))?;
-    let configured_parent = path
-        .parent()
-        .ok_or_else(|| eyre::eyre!("Inrou QMP control root must have a parent"))?;
-    let parent = fs::canonicalize(configured_parent).wrap_err_with(|| {
-        format!(
-            "canonicalize Inrou QMP control parent {}",
-            configured_parent.display()
-        )
-    })?;
-    for ancestor in parent.ancestors() {
-        let metadata = fs::metadata(ancestor).wrap_err_with(|| {
-            format!("inspect Inrou QMP control ancestor {}", ancestor.display())
-        })?;
-        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
-            eyre::bail!(
-                "Inrou QMP control ancestor {} must be a root-owned, non-writable directory",
-                ancestor.display()
-            );
-        }
-    }
-    let root = parent.join(leaf);
-    match fs::create_dir(&root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error).wrap_err_with(|| format!("create {}", root.display())),
-    }
-    let mut options = fs::OpenOptions::new();
-    use std::os::unix::fs::OpenOptionsExt as _;
-    options.read(true).custom_flags(
-        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC)
-            .bits() as i32,
-    );
-    let directory = options
-        .open(&root)
-        .wrap_err_with(|| format!("open Inrou QMP control root {}", root.display()))?;
-    let metadata = directory.metadata()?;
-    if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
-        eyre::bail!(
-            "Inrou QMP control root {} must remain root-owned and non-writable",
-            root.display()
-        );
-    }
-    rustix::fs::fchown(
-        &directory,
-        Some(rustix::fs::Uid::ROOT),
-        Some(rustix::fs::Gid::ROOT),
-    )?;
-    rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o711))?;
-    let canonical = fs::canonicalize(&root)?;
-    if canonical.as_os_str().as_bytes().len() >= 80 {
-        eyre::bail!(
-            "Inrou QMP control root {} is too long for bounded per-VM Unix socket paths",
-            canonical.display()
-        );
-    }
-    Ok(canonical)
-}
-#[cfg(target_os = "linux")]
-fn create_inrou_qmp_control(
-    identity: &PortableVmChildIdentity,
-) -> eyre::Result<PortableVmQmpControl> {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    let root = ensure_inrou_qmp_control_root(&identity.control_dir)?;
-    for _ in 0..128 {
-        let mut suffix = [0_u8; 16];
-        OsRng
-            .try_fill_bytes(&mut suffix)
-            .map_err(|error| eyre::eyre!("Inrou QMP control OS RNG failed: {error}"))?;
-        let directory = root.join(format!("vm-{}", hex::encode(suffix)));
-        let mut builder = fs::DirBuilder::new();
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-        match builder.create(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error)
-                    .wrap_err_with(|| format!("create QMP directory {}", directory.display()));
-            }
-        }
-        let setup = (|| -> eyre::Result<PortableVmQmpControl> {
-            let mut options = fs::OpenOptions::new();
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.read(true).custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW
-                    | rustix::fs::OFlags::DIRECTORY
-                    | rustix::fs::OFlags::CLOEXEC)
-                    .bits() as i32,
-            );
-            let opened = options.open(&directory)?;
-            let before = opened.metadata()?;
-            if !before.is_dir() || before.uid() != 0 || before.mode() & 0o077 != 0 {
-                eyre::bail!("new Inrou QMP directory did not retain private root custody");
-            }
-            rustix::fs::fchown(
-                &opened,
-                Some(rustix::fs::Uid::from_raw(identity.uid)),
-                Some(rustix::fs::Gid::from_raw(identity.gid)),
-            )?;
-            rustix::fs::fchmod(&opened, rustix::fs::Mode::from_raw_mode(0o700))?;
-            let after = opened.metadata()?;
-            if after.uid() != identity.uid
-                || after.gid() != identity.gid
-                || after.mode() & 0o7777 != 0o700
-            {
-                eyre::bail!("Inrou QMP directory did not retain the dedicated child identity");
-            }
-            let socket_path = directory.join("qmp.sock");
-            if socket_path.as_os_str().as_bytes().len() >= 104 {
-                eyre::bail!("Inrou QMP Unix socket path exceeds the Linux sun_path bound");
-            }
-            Ok(PortableVmQmpControl {
-                directory_identity: InrouMaterializationDirectoryIdentity::inspect(&directory)?,
-                directory,
-                socket_path,
-                child_uid: identity.uid,
-                child_gid: identity.gid,
-            })
-        })();
-        match setup {
-            Ok(control) => return Ok(control),
-            Err(error) => {
-                let _ = fs::remove_dir(&directory);
-                return Err(error);
-            }
-        }
-    }
-    eyre::bail!("failed to allocate an exclusive Inrou QMP control directory")
-}
-impl PortableVmQmpControl {
-    fn cleanup(&mut self) {
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::fs::FileTypeExt as _;
-
-            match fs::symlink_metadata(&self.socket_path) {
-                Ok(metadata)
-                    if metadata.file_type().is_socket()
-                        && metadata.uid() == self.child_uid
-                        && metadata.gid() == self.child_gid
-                        && metadata.nlink() == 1 =>
-                {
-                    let _ = fs::remove_file(&self.socket_path);
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Ok(_) | Err(_) => return,
-            }
-            if InrouMaterializationDirectoryIdentity::inspect(&self.directory)
-                .is_ok_and(|identity| identity == self.directory_identity)
-            {
-                let _ = fs::remove_dir(&self.directory);
-            }
-        }
-    }
-}
-impl Drop for PortableVmQmpControl {
-    fn drop(&mut self) {
-        self.cleanup();
-    }
-}
-#[cfg(target_os = "linux")]
 fn read_inrou_qmp_message(
-    reader: &mut impl io::BufRead,
+    reader: &mut io::BufReader<UnixStream>,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
 ) -> eyre::Result<norito::json::Value> {
     let mut line = Vec::new();
     loop {
-        let available = reader.fill_buf().wrap_err("read Inrou QMP response")?;
+        if stop.is_some_and(|stop| stop.load(AtomicOrdering::Acquire)) {
+            eyre::bail!("Inrou QMP response was cancelled during proxy shutdown");
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            eyre::bail!("Inrou QMP response exceeded its absolute deadline");
+        }
+        reader
+            .get_mut()
+            .set_read_timeout(Some(remaining.min(SORACLOUD_INROU_QMP_IO_POLL)))
+            .wrap_err("set bounded Inrou QMP read timeout")?;
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error).wrap_err("read Inrou QMP response"),
+        };
         if available.is_empty() {
             eyre::bail!("Inrou QMP closed before a complete response");
         }
@@ -16685,11 +18979,13 @@ fn read_inrou_qmp_message(
 }
 #[cfg(target_os = "linux")]
 fn read_inrou_qmp_command_response(
-    reader: &mut impl io::BufRead,
+    reader: &mut io::BufReader<UnixStream>,
     expected_id: &str,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
 ) -> eyre::Result<norito::json::Value> {
     for _ in 0..SORACLOUD_INROU_QMP_MAX_MESSAGES_PER_COMMAND {
-        let message = read_inrou_qmp_message(reader)?;
+        let message = read_inrou_qmp_message(reader, deadline, stop)?;
         if message.get("id").and_then(norito::json::Value::as_str) != Some(expected_id) {
             continue;
         }
@@ -16747,100 +19043,269 @@ fn parse_inrou_qmp_usernet_forward(
     Ok(forwards[0])
 }
 #[cfg(target_os = "linux")]
-fn validate_inrou_qmp_socket(
-    control: &PortableVmQmpControl,
-) -> eyre::Result<fs::Metadata> {
-    use std::os::unix::fs::FileTypeExt as _;
+fn query_inrou_qmp_usernet_forward(
+    control: &mut PortableVmQmpControl,
+    guest_port: u16,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<SocketAddr> {
+    if stop.is_some_and(|stop| stop.load(AtomicOrdering::Acquire)) {
+        eyre::bail!("Inrou QMP forwarding attestation was cancelled");
+    }
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        eyre::bail!("Inrou QMP forwarding attestation exceeded its absolute deadline");
+    }
+    control
+        .reader
+        .get_mut()
+        .set_write_timeout(Some(remaining.min(SORACLOUD_INROU_QMP_IO_POLL)))?;
+    control.reader.get_mut().write_all(
+        b"{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info usernet\"},\"id\":\"inrou-usernet\"}\n",
+    )?;
+    let usernet =
+        read_inrou_qmp_command_response(&mut control.reader, "inrou-usernet", deadline, stop)?
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Inrou QMP usernet response must be text"))?
+            .to_owned();
+    parse_inrou_qmp_usernet_forward(&usernet, guest_port)
+}
+#[cfg(target_os = "linux")]
+fn attest_inrou_qmp_host_forward(
+    control: &mut PortableVmQmpControl,
+    guest_port: u16,
+    expected_backend: SocketAddr,
+    deadline: std::time::Instant,
+    stop: Option<&AtomicBool>,
+) -> eyre::Result<()> {
+    let actual = query_inrou_qmp_usernet_forward(control, guest_port, deadline, stop)?;
+    if actual != expected_backend {
+        eyre::bail!("live Inrou QEMU forwarding changed from {expected_backend} to {actual}");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_inrou_qemu_proc_status(
+    status: &str,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    const REQUIRED_FIELDS: [&str; 9] = [
+        "Uid",
+        "Gid",
+        "Groups",
+        "CapInh",
+        "CapPrm",
+        "CapEff",
+        "CapBnd",
+        "CapAmb",
+        "NoNewPrivs",
+    ];
+    let mut fields = BTreeMap::new();
+    for line in status.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if (REQUIRED_FIELDS.contains(&name) || name == "Seccomp")
+            && fields.insert(name, value.trim()).is_some()
+        {
+            eyre::bail!("Inrou QEMU process status repeats `{name}`");
+        }
+    }
+    let required = |name: &str| {
+        fields
+            .get(name)
+            .copied()
+            .ok_or_else(|| eyre::eyre!("Inrou QEMU process status omitted `{name}`"))
+    };
+    let parse_ids = |name: &str| -> eyre::Result<Vec<u32>> {
+        required(name)?
+            .split_ascii_whitespace()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .wrap_err_with(|| format!("parse Inrou QEMU process `{name}` value"))
+            })
+            .collect()
+    };
+    if parse_ids("Uid")? != vec![identity.uid; 4] {
+        eyre::bail!("Inrou QEMU process did not retain the exact configured uid");
+    }
+    if parse_ids("Gid")? != vec![identity.gid; 4] {
+        eyre::bail!("Inrou QEMU process did not retain the exact configured gid");
+    }
+    if parse_ids("Groups")? != identity.supplementary_gids {
+        eyre::bail!("Inrou QEMU process did not retain the exact supplementary groups");
+    }
+    for name in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        let capabilities = u128::from_str_radix(required(name)?, 16)
+            .wrap_err_with(|| format!("parse Inrou QEMU process `{name}` value"))?;
+        if capabilities != 0 {
+            eyre::bail!("Inrou QEMU process retained capabilities in `{name}`");
+        }
+    }
+    if required("NoNewPrivs")? != "1" {
+        eyre::bail!("Inrou QEMU process did not enable NoNewPrivs");
+    }
+    if required("Seccomp")? != "2" {
+        eyre::bail!("Inrou QEMU process did not enter seccomp filter mode");
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn read_inrou_proc_status(pid: u32) -> io::Result<String> {
+    let path = PathBuf::from(format!("/proc/{pid}/status"));
+    let mut bytes = Vec::new();
+    fs::File::open(&path)?
+        .take(SORACLOUD_INROU_PROC_STATUS_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > SORACLOUD_INROU_PROC_STATUS_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Inrou QEMU process status exceeds its fixed byte limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_field<'a>(status: &'a str, name: &str) -> io::Result<&'a str> {
+    let prefix = format!("{name}:");
+    let mut fields = status.lines().filter_map(|line| line.strip_prefix(&prefix));
+    let value = fields.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("procfs status omitted {name}"),
+        )
+    })?;
+    if fields.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("procfs status repeated {name}"),
+        ));
+    }
+    Ok(value)
+}
 
-    if InrouMaterializationDirectoryIdentity::inspect(&control.directory)?
-        != control.directory_identity
-    {
-        eyre::bail!("Inrou QMP control directory changed identity");
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_ids(status: &str, name: &str) -> io::Result<Vec<u32>> {
+    inrou_proc_status_field(status, name)?
+        .split_ascii_whitespace()
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_quad_ids(status: &str, name: &str) -> io::Result<[u32; 4]> {
+    inrou_proc_status_ids(status, name)?
+        .try_into()
+        .map_err(|_ids: Vec<u32>| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("procfs status {name} must contain four credentials"),
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn inrou_proc_status_matches_identity(
+    status: &str,
+    identity: &PortableVmChildIdentity,
+) -> io::Result<bool> {
+    let uids = inrou_proc_status_quad_ids(status, "Uid")?;
+    let gids = inrou_proc_status_quad_ids(status, "Gid")?;
+    let groups = inrou_proc_status_ids(status, "Groups")?;
+    Ok(uids.contains(&identity.uid)
+        || gids.contains(&identity.gid)
+        || groups.contains(&identity.gid))
+}
+#[cfg(target_os = "linux")]
+fn attest_inrou_qemu_process(
+    child: &mut std::process::Child,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+) -> eyre::Result<()> {
+    let expected_executable = fs::metadata(qemu)
+        .wrap_err_with(|| format!("inspect configured QEMU executable {}", qemu.display()))?;
+    let process_executable = PathBuf::from(format!("/proc/{}/exe", child.id()));
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
+    let mut last_mismatch = "setpriv has not exec'd QEMU".to_owned();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            eyre::bail!("Inrou QEMU exited before process attestation with status {status}");
+        }
+        match fs::metadata(&process_executable) {
+            Ok(actual_executable)
+                if actual_executable.dev() == expected_executable.dev()
+                    && actual_executable.ino() == expected_executable.ino() =>
+            {
+                match read_inrou_proc_status(child.id())
+                    .map_err(eyre::Report::from)
+                    .and_then(|status| validate_inrou_qemu_proc_status(&status, identity))
+                {
+                    Ok(()) => break,
+                    Err(error) => last_mismatch = error.to_string(),
+                }
+            }
+            Ok(_) => last_mismatch = "setpriv has not exec'd the pinned QEMU image".to_owned(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                last_mismatch = "spawned process has not published procfs identity".to_owned();
+            }
+            Err(error) => return Err(error).wrap_err("inspect spawned Inrou QEMU executable"),
+        }
+        if std::time::Instant::now() >= deadline {
+            eyre::bail!(
+                "spawned Inrou QEMU did not reach the exact sandboxed identity before the fixed deadline: {last_mismatch}"
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
     }
-    let metadata = fs::symlink_metadata(&control.socket_path)
-        .wrap_err("inspect dedicated Inrou QMP socket")?;
-    if !metadata.file_type().is_socket()
-        || metadata.uid() != control.child_uid
-        || metadata.gid() != control.child_gid
-        || metadata.nlink() != 1
-    {
-        eyre::bail!(
-            "Inrou QMP endpoint must be a singly-linked socket owned by the dedicated child identity"
-        );
+    if let Some(status) = child.try_wait()? {
+        eyre::bail!("Inrou QEMU exited during process attestation with status {status}");
     }
-    Ok(metadata)
+    Ok(())
 }
 #[cfg(target_os = "linux")]
 fn query_inrou_qmp_host_forward(
     child: &mut std::process::Child,
-    control: &PortableVmQmpControl,
+    stream: UnixStream,
+    qemu: &Path,
     identity: &PortableVmChildIdentity,
     guest_port: u16,
-) -> eyre::Result<SocketAddr> {
-    let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_CONNECT_TIMEOUT;
-    let stream = loop {
-        if let Some(status) = child.try_wait()? {
-            eyre::bail!("Inrou QEMU exited before QMP attestation with status {status}");
-        }
-        match fs::symlink_metadata(&control.socket_path) {
-            Ok(_) => {
-                validate_inrou_qmp_socket(control)?;
-                match UnixStream::connect(&control.socket_path) {
-                    Ok(stream) => break stream,
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-                        ) && std::time::Instant::now() < deadline => {}
-                    Err(error) => return Err(error).wrap_err("connect dedicated Inrou QMP socket"),
-                }
-            }
-            Err(error)
-                if error.kind() == io::ErrorKind::NotFound
-                    && std::time::Instant::now() < deadline => {}
-            Err(error) => return Err(error).wrap_err("inspect dedicated Inrou QMP socket"),
-        }
-        if std::time::Instant::now() >= deadline {
-            eyre::bail!("Inrou QEMU did not publish its QMP socket before the fixed deadline");
-        }
-        thread::sleep(Duration::from_millis(10));
+) -> eyre::Result<(SocketAddr, PortableVmQmpControl)> {
+    attest_inrou_qemu_process(child, qemu, identity)?;
+    let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
+    let mut control = PortableVmQmpControl {
+        reader: io::BufReader::new(stream),
     };
-    let peer = rustix::net::sockopt::socket_peercred(&stream)
-        .wrap_err("attest Inrou QMP peer credentials")?;
-    if peer.pid.as_raw_pid() as u32 != child.id()
-        || peer.uid.as_raw() != identity.uid
-        || peer.gid.as_raw() != identity.gid
+    let greeting = read_inrou_qmp_message(&mut control.reader, deadline, None)?;
+    if greeting
+        .get("QMP")
+        .and_then(norito::json::Value::as_object)
+        .is_none()
     {
-        eyre::bail!(
-            "Inrou QMP peer credentials do not match the spawned QEMU pid and dedicated identity"
-        );
-    }
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let mut reader = io::BufReader::new(stream);
-    let greeting = read_inrou_qmp_message(&mut reader)?;
-    if greeting.get("QMP").and_then(norito::json::Value::as_object).is_none() {
         eyre::bail!("Inrou QMP endpoint did not send a canonical greeting");
     }
-    reader
+    control
+        .reader
+        .get_mut()
+        .set_write_timeout(Some(SORACLOUD_INROU_QMP_IO_POLL))?;
+    control
+        .reader
         .get_mut()
         .write_all(b"{\"execute\":\"qmp_capabilities\",\"id\":\"inrou-capabilities\"}\n")?;
-    let capabilities = read_inrou_qmp_command_response(&mut reader, "inrou-capabilities")?;
+    let capabilities =
+        read_inrou_qmp_command_response(&mut control.reader, "inrou-capabilities", deadline, None)?;
     if !capabilities.is_object() {
         eyre::bail!("Inrou QMP capabilities response must be an object");
     }
-    reader.get_mut().write_all(
-        b"{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info usernet\"},\"id\":\"inrou-usernet\"}\n",
-    )?;
-    let usernet = read_inrou_qmp_command_response(&mut reader, "inrou-usernet")?
-        .as_str()
-        .ok_or_else(|| eyre::eyre!("Inrou QMP usernet response must be text"))?
-        .to_owned();
-    validate_inrou_qmp_socket(control)?;
+    let forward = query_inrou_qmp_usernet_forward(&mut control, guest_port, deadline, None)?;
     if let Some(status) = child.try_wait()? {
         eyre::bail!("Inrou QEMU exited during QMP attestation with status {status}");
     }
-    parse_inrou_qmp_usernet_forward(&usernet, guest_port)
+    Ok((forward, control))
 }
 fn random_inrou_materialization_path(
     parent: &Path,
@@ -23353,12 +25818,18 @@ mod tests {
         Ok(())
     }
     fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
-        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
             state_dir,
             ..Default::default()
         };
-        runtime.inrou.enabled = true;
-        SoracloudRuntimeManagerConfig::from_runtime_config(&runtime)
+        let mut config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        config.inrou.enabled = true;
+        config
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        config.allow_unconfined_inrou = true;
+        config
     }
     fn test_runtime_handle(
         manager: &SoracloudRuntimeManager,
@@ -24245,7 +26716,7 @@ mod tests {
     #[test]
     fn manager_config_uses_explicit_soracloud_runtime_settings() {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
-            production_mode: true,
+            production_mode: false,
             state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
             reconcile_interval: Duration::from_secs(17),
             hydration_concurrency: std::num::NonZeroUsize::new(9)
@@ -24259,11 +26730,11 @@ mod tests {
                 model_weight_bytes: std::num::NonZeroU64::new(6_144).expect("nonzero"),
             },
             inrou: iroha_config::parameters::actual::SoracloudRuntimeInrou {
-                max_concurrent_vms: std::num::NonZeroU16::new(2).expect("nonzero concurrent vms"),
-                enabled: true,
-                backends: BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm]),
-                portable_vm_acceleration:
-                    iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Tcg,
+                max_concurrent_vms: std::num::NonZeroU16::new(1).expect("nonzero concurrent vms"),
+                enabled: false,
+                backends: BTreeSet::new(),
+                portable_vm_uid: None,
+                portable_vm_gid: None,
                 max_cpu_millis: std::num::NonZeroU32::new(2_000).expect("nonzero CPU budget"),
                 max_memory_bytes: std::num::NonZeroU64::new(2 * 1024 * 1024 * 1024)
                     .expect("nonzero memory budget"),
@@ -24338,11 +26809,49 @@ mod tests {
             production_mode: true,
             ..Default::default()
         };
-        runtime.inrou.enabled = true;
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
         let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    #[should_panic(expected = "first-release iroha3d forbids")]
+    fn manager_config_rejects_direct_actual_nonproduction_inrou() {
+        let mut runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            production_mode: false,
+            ..Default::default()
+        };
+        runtime.inrou.enabled = true;
+        runtime
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        let _ = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+    }
+    #[test]
+    fn programmatic_manager_cannot_enable_or_advertise_inrou() {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime::default();
+        let mut config = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        let temp_dir = tempfile::tempdir().expect("temporary posture directory");
+        config.state_dir = temp_dir.path().join("must-not-materialize");
+        config.production_mode = false;
+        config.inrou.enabled = true;
+        config
+            .inrou
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+
+        let error = validate_soracloud_runtime_manager_posture(&config)
+            .expect_err("programmatic config must not bypass the release-wide Inrou posture gate");
+        assert!(error.to_string().contains("first-release iroha3d forbids Inrou"));
+        assert!(InrouStartupCapabilitySnapshot::from_config(&config).is_none());
+
+        let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
+        let error = manager
+            .reconcile_once()
+            .expect_err("reconcile must enforce the release-wide posture gate before writes");
+        assert!(error.to_string().contains("first-release posture"));
+        assert!(!temp_dir.path().join("must-not-materialize").exists());
     }
     #[test]
     #[should_panic(expected = "bundle_archive_max_compressed_bytes exceeds its hard ceiling")]
@@ -24394,6 +26903,18 @@ mod tests {
         assert!(error.to_string().contains("nonempty backend allowlist"));
     }
     #[test]
+    fn enabled_portable_vm_preflight_rejects_shared_identity_capacity() {
+        let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
+        config.enabled = true;
+        config
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        config.max_concurrent_vms = std::num::NonZeroU16::new(2).expect("nonzero Inrou capacity");
+        let error = ensure_configured_inrou_backends_available(&config)
+            .expect_err("one dedicated identity cannot isolate multiple live QEMUs");
+        assert!(error.to_string().contains("max_concurrent_vms = 1"));
+    }
+    #[test]
     fn inrou_archive_limits_use_the_tighter_bundle_cache_bound() {
         let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
         config.bundle_archive_max_compressed_bytes =
@@ -24408,20 +26929,20 @@ mod tests {
         );
     }
     #[test]
-    fn hosted_http_concurrency_limit_uses_inrou_vm_budget() {
+    fn hosted_http_concurrency_limit_uses_single_portable_vm_budget() {
         let mut config =
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-limit"));
         config.inrou.max_concurrent_vms =
-            std::num::NonZeroU16::new(2).expect("nonzero inrou vm limit");
+            std::num::NonZeroU16::new(1).expect("nonzero inrou vm limit");
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
-        assert_eq!(manager.hosted_http_concurrency_limit(), 2);
+        assert_eq!(manager.hosted_http_concurrency_limit(), 1);
     }
     #[test]
     fn inrou_host_advertises_exact_configured_capacity() {
         let mut config =
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-capacity"));
         config.inrou.max_concurrent_vms =
-            std::num::NonZeroU16::new(7).expect("nonzero inrou vm limit");
+            std::num::NonZeroU16::new(1).expect("nonzero inrou vm limit");
         config.inrou.max_cpu_millis = std::num::NonZeroU32::new(7_000).expect("CPU budget");
         config.inrou.max_memory_bytes =
             std::num::NonZeroU64::new(14 * 1024 * 1024 * 1024).expect("memory budget");
@@ -24430,11 +26951,11 @@ mod tests {
         config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostAdvertCapacity");
         let manager = SoracloudRuntimeManager::new(config, test_state().expect("test state"));
-        assert_eq!(manager.hosted_http_concurrency_limit(), 7);
+        assert_eq!(manager.hosted_http_concurrency_limit(), 1);
         let capability = manager
             .build_local_inrou_host_capability_record(123)
             .expect("host identity configured");
-        assert_eq!(capability.max_hosted_replica_capacity, 7);
+        assert_eq!(capability.max_hosted_replica_capacity, 1);
         assert_eq!(capability.max_cpu_millis, 7_000);
         assert_eq!(capability.max_memory_bytes, 14 * 1024 * 1024 * 1024);
         assert_eq!(capability.max_storage_bytes, 70 * 1024 * 1024 * 1024);
@@ -24672,6 +27193,35 @@ mod tests {
             .with_mutation_sink(mutation_sink.clone());
         let view = state.view();
         manager.withdraw_local_inrou_host_if_needed(&view);
+        assert_eq!(mutation_sink.submitted_inrou_host_withdrawals(), 1);
+        assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
+        Ok(())
+    }
+    #[test]
+    fn disabled_inrou_reconcile_withdraws_existing_local_host_advert() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let mut state = test_state()?;
+        let enabled_config = test_runtime_manager_config(temp_dir.path().join("runtime"))
+            .with_local_host_identity(ALICE_ID.clone(), "12D3KooWDisabledHostWithdraw");
+        let capability = SoracloudRuntimeManager::new(
+            enabled_config.clone(),
+            Arc::clone(&state),
+        )
+        .build_local_inrou_host_capability_record(123)
+        .expect("enabled fixture has a local Inrou host capability");
+        Arc::get_mut(&mut state)
+            .expect("unique test state")
+            .world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(ALICE_ID.clone(), capability);
+
+        let mut disabled_config = enabled_config;
+        disabled_config.inrou.enabled = false;
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(disabled_config, Arc::clone(&state))
+            .with_mutation_sink(mutation_sink.clone());
+        manager.reconcile_once()?;
+
         assert_eq!(mutation_sink.submitted_inrou_host_withdrawals(), 1);
         assert_eq!(mutation_sink.submitted_inrou_placement_reconciles(), 1);
         Ok(())
@@ -28683,34 +31233,16 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_tap_firewall_plan_rejects_open_and_supports_isolated() -> Result<()> {
+    fn inrou_tap_firewall_plan_accepts_only_isolated() -> Result<()> {
         inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)
             .expect_err("Inrou V1 must reject unrestricted egress");
+        inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
+            SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
+        ]))
+        .expect_err("Inrou V1 must reject unmetered allowlist egress");
         assert_eq!(
             inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Isolated)?,
             InrouTapFirewallPlan::Isolated
-        );
-        Ok(())
-    }
-    #[test]
-    fn inrou_tap_firewall_plan_resolves_allowlist_ipv4_endpoints() -> Result<()> {
-        let plan = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new("8.8.8.8", [80, 443]),
-        ]))?;
-        assert_eq!(
-            plan,
-            InrouTapFirewallPlan::Allowlist(vec![
-                InrouTapResolvedAllowlistEndpoint {
-                    host: "8.8.8.8".to_owned(),
-                    address: "8.8.8.8".parse().expect("valid IPv4"),
-                    port: 80,
-                },
-                InrouTapResolvedAllowlistEndpoint {
-                    host: "8.8.8.8".to_owned(),
-                    address: "8.8.8.8".parse().expect("valid IPv4"),
-                    port: 443,
-                },
-            ])
         );
         Ok(())
     }
@@ -28749,14 +31281,16 @@ mod tests {
         assert!(message.contains("8.8.8.8"));
     }
     #[test]
-    fn inrou_tap_firewall_plan_rejects_allowlist_without_ipv4_endpoints() {
+    fn inrou_tap_firewall_plan_rejects_allowlist_before_resolution() {
         let error = inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
             SoraNetworkAllowlistEntryV1::new("::1", [443]),
         ]))
         .expect_err("allowlist should fail closed when no IPv4 endpoint is enforceable");
-        let message = error.to_string();
-        assert!(message.contains("no IPv4 endpoints"));
-        assert!(message.contains("::1"));
+        assert!(
+            error
+                .to_string()
+                .contains("kernel-backed egress accounting")
+        );
     }
     #[test]
     fn inrou_allowlist_accepts_only_public_ipv4_endpoints() {
@@ -28959,27 +31493,441 @@ mod tests {
     fn build_portable_vm_network_plan_projects_host_forwarding_and_restricts_egress() -> Result<()>
     {
         let isolated = build_portable_vm_network_plan(8080, &InrouTapFirewallPlan::Isolated)?;
-        assert!(isolated.netdev.contains("hostfwd=tcp:127.0.0.1:"));
+        assert!(isolated.netdev.contains(&format!(
+            "hostfwd=tcp:127.0.0.1:{}-:8080",
+            isolated.expected_backend.port()
+        )));
         assert!(isolated.netdev.contains("restrict=on"));
         assert!(isolated.listen_base_url.starts_with("http://127.0.0.1:"));
-        assert!(isolated.allowlist_hosts.is_empty());
-        let allowlist = build_portable_vm_network_plan(
+        let public_address = isolated.public_listener.local_addr()?;
+        assert_eq!(
+            isolated.backend_reservation.local_addr()?,
+            isolated.expected_backend
+        );
+        assert_ne!(public_address, isolated.expected_backend);
+        assert!(
+            TcpListener::bind(public_address).is_err(),
+            "the supervisor must retain the public port from allocation through proxy startup"
+        );
+        assert!(
+            TcpListener::bind(isolated.expected_backend).is_err(),
+            "the supervisor must retain the QEMU port until its owner firewall is active"
+        );
+        build_portable_vm_network_plan(
             8080,
             &InrouTapFirewallPlan::Allowlist(vec![InrouTapResolvedAllowlistEndpoint {
                 host: "ton.example".to_owned(),
                 address: "8.8.8.8".parse().expect("IPv4"),
                 port: 443,
             }]),
-        )?;
-        assert!(allowlist.netdev.contains("restrict=on"));
+        )
+        .expect_err("PortableVM V1 must not construct unmetered guestfwd egress");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_loopback_owner_rule_targets_the_dedicated_chain() {
+        let insert = planned_inrou_loopback_owner_rule(41_231, 0);
+        assert_eq!(
+            insert,
+            [
+                "-w",
+                "5",
+                "-I",
+                "IROHA_INROU_V1",
+                "1",
+                "-o",
+                "lo",
+                "-p",
+                "tcp",
+                "-d",
+                "127.0.0.1",
+                "--dport",
+                "41231",
+                "-m",
+                "owner",
+                "!",
+                "--uid-owner",
+                "0",
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            ]
+            .map(ToOwned::to_owned)
+        );
+        let backend = planned_inrou_backend_owner_rule(41_232, 0);
+        assert!(!backend.iter().any(|argument| argument == "-o"));
+        assert!(!backend.iter().any(|argument| argument == "-d"));
         assert!(
-            allowlist
-                .netdev
-                .contains("guestfwd=tcp:8.8.8.8:443-tcp:8.8.8.8:443")
+            backend
+                .windows(2)
+                .any(|pair| pair[0] == "--dport" && pair[1] == "41232")
+        );
+        let input = planned_inrou_backend_input_rule(41_232);
+        assert!(
+            input
+                .windows(3)
+                .any(|args| args[0] == "!" && args[1] == "-i" && args[2] == "lo")
+        );
+        assert!(
+            input
+                .windows(2)
+                .any(|pair| pair[0] == "--dport" && pair[1] == "41232")
+        );
+        let output_rules = planned_inrou_output_isolation_rules(41_231, 41_232, 0, 60_001);
+        assert_eq!(output_rules.len(), 4);
+        assert!(
+            output_rules[2]
+                .1
+                .windows(2)
+                .any(|pair| { pair[0] == "--uid-owner" && pair[1] == "60001" })
         );
         assert_eq!(
-            allowlist.allowlist_hosts,
-            vec![("ton.example".to_owned(), "8.8.8.8".parse().expect("IPv4"))]
+            output_rules[2].1.last().map(String::as_str),
+            Some("icmp-port-unreachable")
+        );
+        assert_eq!(output_rules[3].1.last().map(String::as_str), Some("ACCEPT"));
+        assert!(
+            output_rules[3]
+                .1
+                .windows(2)
+                .any(|pair| pair[0] == "--sport" && pair[1] == "41232")
+        );
+        let ipv6_reject = planned_inrou_qemu_ipv6_output_reject_rule(60_001);
+        assert_eq!(ipv6_reject[3], "IROHA_INROU6_V1");
+        assert!(
+            ipv6_reject
+                .windows(2)
+                .any(|pair| pair[0] == "--uid-owner" && pair[1] == "60001")
+        );
+        assert_eq!(
+            ipv6_reject.last().map(String::as_str),
+            Some("icmp6-port-unreachable")
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_owned_chain_commands_reconcile_only_the_reserved_chain() {
+        assert_eq!(
+            inrou_iptables_output_jump_args("-I", true),
+            ["-w", "5", "-I", "OUTPUT", "1", "-j", "IROHA_INROU_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_output_jump_args("-D", false),
+            ["-w", "5", "-D", "OUTPUT", "-j", "IROHA_INROU_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_chain_marker_args(SORACLOUD_INROU_IPTABLES_CHAINS[0], "-A"),
+            [
+                "-w",
+                "5",
+                "-A",
+                "IROHA_INROU_V1",
+                "-m",
+                "comment",
+                "--comment",
+                "iroha-inrou-owned-v1",
+                "-j",
+                "RETURN",
+            ]
+            .map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_iptables_input_jump_args("-I", true),
+            ["-w", "5", "-I", "INPUT", "1", "-j", "IROHA_INROU_INPUT_V1"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            inrou_ip6tables_output_jump_args("-I", true),
+            ["-w", "5", "-I", "OUTPUT", "1", "-j", "IROHA_INROU6_V1"].map(ToOwned::to_owned)
+        );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_owner_firewall_setup_drains_preexisting_public_connections() -> Result<()> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let mut client = TcpStream::connect(listener.local_addr()?)?;
+        drain_inrou_pre_firewall_connections(&listener)?;
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("the accept queue must be empty")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        client.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut byte = [0_u8; 1];
+        match client.read(&mut byte) {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) => {}
+            outcome => panic!("drained connection remained usable: {outcome:?}"),
+        }
+        Ok(())
+    }
+    #[test]
+    fn inrou_qmp_usernet_parser_requires_one_exact_loopback_forward() -> Result<()> {
+        let valid = concat!(
+            "VLAN -1 (net0):\n",
+            "  Protocol[State]    FD  Source Address  Port   Dest. Address  Port RecvQ SendQ\n",
+            "  TCP[HOST_FORWARD]  13  127.0.0.1       41231  10.0.2.15     8080 0     0\n",
+        );
+        assert_eq!(
+            parse_inrou_qmp_usernet_forward(valid, 8080)?,
+            "127.0.0.1:41231".parse::<SocketAddr>()?
+        );
+
+        let duplicate = format!(
+            "{valid}  TCP[HOST_FORWARD]  14  127.0.0.1       41232  10.0.2.15     8080 0     0\n"
+        );
+        parse_inrou_qmp_usernet_forward(&duplicate, 8080)
+            .expect_err("multiple forwards must fail closed");
+        parse_inrou_qmp_usernet_forward(
+            "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
+            8080,
+        )
+        .expect_err("a non-loopback forward must fail closed");
+        parse_inrou_qmp_usernet_forward(valid, 8081)
+            .expect_err("a forward to the wrong guest port must fail closed");
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_qemu_proc_status_requires_exact_sandboxed_identity() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 60_001,
+            gid: 60_002,
+            supplementary_gids: vec![108, 109],
+        };
+        let valid = concat!(
+            "Name:\tqemu-system-x86\n",
+            "Uid:\t60001\t60001\t60001\t60001\n",
+            "Gid:\t60002\t60002\t60002\t60002\n",
+            "Groups:\t108 109\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+            "NoNewPrivs:\t1\n",
+            "Seccomp:\t2\n",
+        );
+        assert!(inrou_proc_status_matches_identity(valid, &identity)?);
+        assert!(inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: identity.gid,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        assert!(inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: 109,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        assert!(!inrou_proc_status_matches_identity(
+            valid,
+            &PortableVmChildIdentity {
+                uid: 70_001,
+                gid: 70_002,
+                supplementary_gids: Vec::new(),
+            },
+        )?);
+        validate_inrou_qemu_proc_status(valid, &identity)?;
+        validate_inrou_qemu_proc_status(
+            &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
+            &identity,
+        )
+        .expect_err("a retained bounding capability must fail closed");
+        validate_inrou_qemu_proc_status(
+            &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
+            &identity,
+        )
+        .expect_err("supplementary group drift must fail closed");
+        validate_inrou_qemu_proc_status(&valid.replace("Seccomp:\t2", "Seccomp:\t0"), &identity)
+            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted");
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_forwards_through_supervisor_listener() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = backend.accept()?;
+            let mut request = [0_u8; 4];
+            stream.read_exact(&mut request)?;
+            if request != *b"ping" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "proxy changed the request",
+                ));
+            }
+            stream.write_all(b"pong")
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| true),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        client.set_read_timeout(Some(Duration::from_secs(2)))?;
+        client.write_all(b"ping")?;
+        let mut response = [0_u8; 4];
+        client.read_exact(&mut response)?;
+        assert_eq!(&response, b"pong");
+        drop(client);
+        proxy.stop();
+        backend_worker.join().expect("backend worker")?;
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_sends_no_bytes_when_backend_attestation_fails() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let backend_worker = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let (mut stream, _) = backend.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut observed = Vec::new();
+            match stream.read_to_end(&mut observed) {
+                Ok(_) => Ok(observed),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(observed)
+                }
+                Err(error) => Err(error),
+            }
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| false),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        client.write_all(b"must-not-reach-rebound-backend")?;
+        let _ = client.shutdown(Shutdown::Both);
+        drop(client);
+        let observed = backend_worker.join().expect("backend worker")?;
+        proxy.stop();
+        assert!(
+            observed.is_empty(),
+            "proxy must attest the live QEMU forward before copying client bytes"
+        );
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_stop_is_bounded_with_a_nonreading_backend() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (stream, _) = backend.accept()?;
+            accepted_tx
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(stream);
+            Ok(())
+        });
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start_with_attestor(
+            public,
+            backend_address,
+            Arc::new(|_, _| true),
+        )?;
+        let mut client = TcpStream::connect(public_address)?;
+        let client_writer = thread::spawn(move || {
+            let payload = [0x5a_u8; 64 * 1024];
+            while client.write_all(&payload).is_ok() {}
+        });
+        accepted_rx.recv_timeout(Duration::from_secs(2))?;
+        thread::sleep(Duration::from_millis(100));
+
+        let (stopped_tx, stopped_rx) = mpsc::sync_channel(1);
+        let stop_worker = thread::spawn(move || {
+            let started_at = std::time::Instant::now();
+            proxy.stop();
+            let _ = stopped_tx.send(started_at.elapsed());
+        });
+        let stopped = stopped_rx.recv_timeout(Duration::from_secs(2));
+        let _ = release_tx.send(());
+        let _ = stop_worker.join();
+        let _ = client_writer.join();
+        backend_worker.join().expect("backend worker")?;
+        let elapsed = stopped.expect("proxy stop must not wait on a non-reading backend");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "proxy stop exceeded its absolute teardown bound: {elapsed:?}"
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portable_vm_loopback_proxy_stop_cancels_stalled_qmp_attestation() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let (backend_release_tx, backend_release_rx) = mpsc::sync_channel(1);
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (stream, _) = backend.accept()?;
+            let _ = backend_release_rx.recv_timeout(Duration::from_secs(5));
+            drop(stream);
+            Ok(())
+        });
+        let (supervisor_qmp, mut stalled_qmp) = UnixStream::pair()?;
+        let (qmp_started_tx, qmp_started_rx) = mpsc::sync_channel(1);
+        let (qmp_release_tx, qmp_release_rx) = mpsc::sync_channel(1);
+        let qmp_worker = thread::spawn(move || -> io::Result<()> {
+            stalled_qmp.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut request = [0_u8; 256];
+            let read = stalled_qmp.read(&mut request)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "proxy closed QMP before issuing attestation",
+                ));
+            }
+            qmp_started_tx
+                .send(())
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let _ = qmp_release_rx.recv_timeout(Duration::from_secs(5));
+            Ok(())
+        });
+        let qmp_control = Arc::new(Mutex::new(PortableVmQmpControl {
+            reader: io::BufReader::new(supervisor_qmp),
+        }));
+        let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start(public, backend_address, qmp_control, 8080)?;
+        let client = TcpStream::connect(public_address)?;
+        qmp_started_rx.recv_timeout(Duration::from_secs(2))?;
+
+        let started_at = std::time::Instant::now();
+        proxy.stop();
+        let elapsed = started_at.elapsed();
+        let _ = client.shutdown(Shutdown::Both);
+        let _ = backend_release_tx.send(());
+        let _ = qmp_release_tx.send(());
+        backend_worker.join().expect("backend worker")?;
+        qmp_worker.join().expect("QMP worker")?;
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "proxy stop waited on the stalled QMP command: {elapsed:?}"
         );
         Ok(())
     }
@@ -29038,16 +31986,6 @@ mod tests {
         );
         Ok(())
     }
-    #[test]
-    fn build_portable_vm_allowlist_hosts_overlay_skips_ip_literals() {
-        let overlay = build_portable_vm_allowlist_hosts_overlay(&[
-            ("ton.example".to_owned(), "8.8.8.8".parse().expect("IPv4")),
-            ("8.8.8.8".to_owned(), "8.8.8.8".parse().expect("IPv4")),
-        ])
-        .expect("overlay should be generated");
-        assert!(overlay.contains("8.8.8.8 ton.example"));
-        assert!(!overlay.contains("8.8.8.8 8.8.8.8"));
-    }
     #[cfg(unix)]
     #[test]
     fn inrou_executable_resolution_requires_absolute_non_writable_custody() -> Result<()> {
@@ -29103,24 +32041,408 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_portable_vm_command_disables_user_config_and_enables_platform_sandbox() {
-        let mut command = Command::new("qemu-system-test");
-        harden_inrou_portable_vm_command(&mut command);
-        let args = command
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        #[cfg(target_os = "linux")]
+    fn portable_vm_kvm_identity_allows_only_the_derived_device_group() -> Result<()> {
+        let mut identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_001,
+            supplementary_gids: vec![108],
+        };
+        let kvm_device = PortableVmKvmDeviceAccess {
+            uid: 0,
+            gid: 108,
+            mode: 0o660,
+            hard_links: 1,
+            rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV,
+            is_character_device: true,
+        };
+        validate_portable_vm_kvm_identity(&identity, kvm_device)?;
+        identity.supplementary_gids.push(999);
+        validate_portable_vm_kvm_identity(&identity, kvm_device)
+            .expect_err("KVM must reject unrelated supplementary groups");
+        identity.gid = 108;
+        identity.supplementary_gids.clear();
+        validate_portable_vm_kvm_identity(&identity, kvm_device)
+            .expect_err("the shared KVM group must not protect tenant disks");
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_identity_requires_the_fixed_primary_id_corridor() -> Result<()> {
+        let accepted = PortableVmChildIdentity {
+            uid: SORACLOUD_INROU_PRIMARY_ID_MIN,
+            gid: SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE - 1,
+            supplementary_gids: vec![108],
+        };
+        validate_portable_vm_child_identity_values(&accepted)?;
+        for id in [0, 60_001, 65_535, 524_288, 1_879_048_191, u32::MAX] {
+            for rejected in [
+                PortableVmChildIdentity {
+                    uid: id,
+                    ..accepted.clone()
+                },
+                PortableVmChildIdentity {
+                    gid: id,
+                    ..accepted.clone()
+                },
+            ] {
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("primary ids outside the fixed corridor must fail closed");
+            }
+        }
+        for gid in [60_001, 65_534, 524_288, 2_147_483_648, u32::MAX] {
+            let rejected = PortableVmChildIdentity {
+                supplementary_gids: vec![gid],
+                ..accepted.clone()
+            };
+            validate_portable_vm_child_identity_values(&rejected)
+                .expect_err("Linux host-reserved supplementary gids must fail closed");
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_local_identity_reservation_requires_a_locked_service_account() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_000,
+            supplementary_gids: vec![108],
+        };
+        validate_inrou_local_nsswitch("passwd: files\ngroup: files\nhosts: files dns\n")?;
+        validate_inrou_local_nsswitch("passwd: files\ngroup: files\nSuBiD: files\n")?;
+        for invalid in [
+            "passwd: files sss\ngroup: files\n",
+            "passwd: files\ngroup: compat\n",
+            "passwd: files\n",
+            "passwd: files\npasswd: files\ngroup: files\n",
+            "passwd: files\ngroup: files\nSUBID: sss\n",
+        ] {
+            validate_inrou_local_nsswitch(invalid)
+                .expect_err("remote, missing, or ambiguous NSS identity sources must fail closed");
+        }
+
+        let passwd = "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n";
+        assert_eq!(
+            validate_inrou_reserved_passwd(passwd, &identity)?,
+            PathBuf::from("/usr/sbin/nologin")
+        );
+        for invalid in [
+            "root:x:0:0:root:/root:/bin/sh\nother:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\n70000:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70001::/nonexistent:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/tmp/inrou:/usr/sbin/nologin\n",
+            "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/bin/sh\n",
+            "other:x:1234:70000::/nonexistent:/usr/sbin/nologin\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
+        ] {
+            validate_inrou_reserved_passwd(invalid, &identity)
+                .expect_err("an ambiguous or login-capable service passwd row must fail closed");
+        }
+
+        let group = "root:x:0:\nkvm:x:108:\niroha-inrou:x:70000:\n";
+        validate_inrou_reserved_group(group, &identity)?;
+        for invalid in [
+            "root:x:0:\nkvm:x:108:\nother:x:70000:\n",
+            "root:x:0:\n108:x:108:\niroha-inrou:x:70000:\n",
+            "root:x:0:\ndocker:x:999:iroha-inrou\niroha-inrou:x:70000:\n",
+            "root:x:0:\niroha-inrou:x:70000:iroha-inrou\n",
+        ] {
+            validate_inrou_reserved_group(invalid, &identity)
+                .expect_err("ambiguous identity groups or memberships must fail closed");
+        }
+        validate_inrou_reserved_shadow("iroha-inrou:!:20000:0:99999:7:::\n")?;
+        validate_inrou_reserved_shadow("iroha-inrou:$6$hash:20000:0:99999:7:::\n")
+            .expect_err("an unlocked password must fail closed");
+        validate_inrou_reserved_gshadow("iroha-inrou:!::\n")?;
+        for invalid in [
+            "iroha-inrou:!:root:iroha-inrou\n",
+            "docker:!:iroha-inrou:\niroha-inrou:!::\n",
+        ] {
+            validate_inrou_reserved_gshadow(invalid)
+                .expect_err("gshadow administrators or members must fail closed");
+        }
+
+        validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 99_999)?;
+        validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 165_536)?;
+        for covered in [100_000, 165_535] {
+            validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", covered)
+                .expect_err("both subordinate-range boundaries must reserve the child id");
+        }
+        validate_inrou_subordinate_id_unmapped("alice:4294967294:1\n", "subuid", u32::MAX - 1)
+            .expect_err("the highest valid subordinate id range must be enforced");
+        for forbidden_owner in ["iroha-inrou:200000:1\n", "70000:200000:1\n"] {
+            validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000)
+                .expect_err("service and numeric identity owners must not receive subids");
+        }
+        for malformed in [
+            "alice:100000:0\n",
+            "alice:4294967295:2\n",
+            "alice:not-a-number:1\n",
+            "alice:100000\n",
+        ] {
+            validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000)
+                .expect_err("malformed, empty, or overflowing subordinate ranges must fail closed");
+        }
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_kvm_device_custody_fails_closed() {
+        let identity = PortableVmChildIdentity {
+            uid: 70_000,
+            gid: 70_001,
+            supplementary_gids: vec![108],
+        };
+        let secure = PortableVmKvmDeviceAccess {
+            uid: 0,
+            gid: 108,
+            mode: 0o660,
+            hard_links: 1,
+            rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV,
+            is_character_device: true,
+        };
+        for insecure in [
+            PortableVmKvmDeviceAccess { uid: 1, ..secure },
+            PortableVmKvmDeviceAccess {
+                mode: 0o666,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                mode: 0o640,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                hard_links: 2,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                rdev: SORACLOUD_INROU_KVM_DEVICE_RDEV + 1,
+                ..secure
+            },
+            PortableVmKvmDeviceAccess {
+                is_character_device: false,
+                ..secure
+            },
+        ] {
+            validate_portable_vm_kvm_identity(&identity, insecure)
+                .expect_err("insecure `/dev/kvm` custody must fail closed");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_portable_vm_command_drops_identity_and_enforces_qemu_policy() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 60_001,
+            gid: 60_002,
+            supplementary_gids: vec![108, 109],
+        };
+        let args = inrou_setpriv_qemu_arguments(
+            Path::new("/bin/sh"),
+            Path::new("/usr/bin/qemu-system-test"),
+            &identity,
+        )?;
         assert_eq!(
             args,
             [
+                "--reuid",
+                "60001",
+                "--regid",
+                "60002",
+                "--groups",
+                "108,109",
+                "--securebits=+noroot,+noroot_locked,+no_setuid_fixup,+no_setuid_fixup_locked",
+                "--bounding-set=-all",
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--no-new-privs",
+                "--",
+                "/bin/sh",
+                "-c",
+                SORACLOUD_INROU_CLOSE_FDS_SCRIPT,
+                "inrou-close-fds",
+                "60001",
+                "60002",
+                "108 109",
+                "/usr/bin/qemu-system-test",
                 "-no-user-config",
                 "-sandbox",
-                SORACLOUD_INROU_QEMU_SANDBOX_POLICY
+                SORACLOUD_INROU_QEMU_SANDBOX_POLICY,
+                "-run-with",
+                "exit-with-parent=on",
             ]
         );
-        #[cfg(not(target_os = "linux"))]
-        assert_eq!(args, ["-no-user-config"]);
+        let launch = build_inrou_portable_vm_command(
+            Path::new("/usr/bin/setpriv"),
+            Path::new("/bin/sh"),
+            Path::new("/usr/bin/qemu-system-test"),
+            &identity,
+        )?;
+        assert_eq!(launch.get_current_dir(), Some(Path::new("/")));
+        let mut command = Command::new("unused-qemu-test-command");
+        let _supervisor_qmp = configure_inrou_qmp_stdio(&mut command)?;
+        let qmp_args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qmp_args,
+            [
+                "-qmp",
+                "stdio",
+                "-chardev",
+                "ringbuf,id=inrou-serial,size=8388608",
+                "-serial",
+                "chardev:inrou-serial",
+            ]
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_descriptor_cleanup_shell_closes_an_inherited_fd() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let status_path = temp_dir.path().join("status");
+        fs::write(
+            &status_path,
+            concat!(
+                "Uid:\t60001\t60001\t60001\t60001\n",
+                "Gid:\t60002\t60002\t60002\t60002\n",
+                "Groups:\t108 109\n",
+                "CapInh:\t0000000000000000\n",
+                "CapPrm:\t0000000000000000\n",
+                "CapEff:\t0000000000000000\n",
+                "CapBnd:\t0000000000000000\n",
+                "CapAmb:\t0000000000000000\n",
+                "NoNewPrivs:\t1\n",
+            ),
+        )?;
+        let test_script =
+            SORACLOUD_INROU_CLOSE_FDS_SCRIPT.replacen("/proc/self/status", "/dev/fd/8", 1);
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exec 8<\"$1\"; shift; exec 9</dev/null; exec \"$@\"")
+            .arg("inrou-test-parent")
+            .arg(&status_path)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(&test_script)
+            .arg("inrou-close-fds")
+            .arg("60001")
+            .arg("60002")
+            .arg("108 109")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("test ! -e /proc/self/fd/8 && test ! -e /proc/self/fd/9")
+            .status()?;
+        assert!(
+            status.success(),
+            "the descriptor-cleanup shell must close every inherited fd above stderr"
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_identity_gate_rejects_mismatches_before_exec() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let valid_status = concat!(
+            "Uid:\t60001\t60001\t60001\t60001\n",
+            "Gid:\t60002\t60002\t60002\t60002\n",
+            "Groups:\t108 109\n",
+            "CapInh:\t0000000000000000\n",
+            "CapPrm:\t0000000000000000\n",
+            "CapEff:\t0000000000000000\n",
+            "CapBnd:\t0000000000000000\n",
+            "CapAmb:\t0000000000000000\n",
+            "NoNewPrivs:\t1\n",
+        );
+        let cases = [
+            ("wrong-uid", "60003", "60002", "108 109", valid_status),
+            ("wrong-gid", "60001", "60003", "108 109", valid_status),
+            ("wrong-groups", "60001", "60002", "108 110", valid_status),
+            (
+                "sentinel-uid",
+                "4294967295",
+                "60002",
+                "108 109",
+                valid_status,
+            ),
+            (
+                "retained-capability",
+                "60001",
+                "60002",
+                "108 109",
+                concat!(
+                    "Uid:\t60001\t60001\t60001\t60001\n",
+                    "Gid:\t60002\t60002\t60002\t60002\n",
+                    "Groups:\t108 109\n",
+                    "CapInh:\t0000000000000000\n",
+                    "CapPrm:\t0000000000000000\n",
+                    "CapEff:\t0000000000000001\n",
+                    "CapBnd:\t0000000000000000\n",
+                    "CapAmb:\t0000000000000000\n",
+                    "NoNewPrivs:\t1\n",
+                ),
+            ),
+            (
+                "missing-no-new-privs",
+                "60001",
+                "60002",
+                "108 109",
+                concat!(
+                    "Uid:\t60001\t60001\t60001\t60001\n",
+                    "Gid:\t60002\t60002\t60002\t60002\n",
+                    "Groups:\t108 109\n",
+                    "CapInh:\t0000000000000000\n",
+                    "CapPrm:\t0000000000000000\n",
+                    "CapEff:\t0000000000000000\n",
+                    "CapBnd:\t0000000000000000\n",
+                    "CapAmb:\t0000000000000000\n",
+                ),
+            ),
+        ];
+        for (name, uid, gid, groups, proc_status) in cases {
+            let status_path = temp_dir.path().join(format!("{name}.status"));
+            let marker_path = temp_dir.path().join(format!("{name}.executed"));
+            fs::write(&status_path, proc_status)?;
+            let test_script =
+                SORACLOUD_INROU_CLOSE_FDS_SCRIPT.replacen("/proc/self/status", "/dev/fd/8", 1);
+            let status = Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exec 8<\"$1\"; shift; exec \"$@\"")
+                .arg("inrou-gate-parent")
+                .arg(&status_path)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg(&test_script)
+                .arg("inrou-close-fds")
+                .arg(uid)
+                .arg(gid)
+                .arg(groups)
+                .arg("/bin/sh")
+                .arg("-c")
+                .arg("printf executed > \"$1\"")
+                .arg("inrou-target")
+                .arg(&marker_path)
+                .status()?;
+            assert_eq!(status.code(), Some(126), "gate case {name}");
+            assert!(
+                !marker_path.exists(),
+                "gate case {name} executed its target"
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    #[test]
+    fn inrou_child_termination_kills_and_reaps_without_blocking() -> Result<()> {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "while :; do :; done"])
+            .spawn()?;
+        let started_at = std::time::Instant::now();
+        let status = terminate_inrou_child_bounded(&mut child)?;
+        assert!(!status.success());
+        assert!(started_at.elapsed() < SORACLOUD_INROU_CHILD_STOP_TIMEOUT);
+        assert!(
+            child.try_wait()?.is_some(),
+            "the killed child must be reaped"
+        );
+        Ok(())
     }
     #[cfg(not(windows))]
     #[test]
@@ -29271,7 +32593,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay() -> Result<()> {
+    fn build_inrou_user_data_projects_isolated_portable_block_mounts() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (_temp_dir, replica_plan, cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -29296,7 +32618,7 @@ mod tests {
                 .get(),
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
-            Some("127.0.0.1 api.sora.internal\n10.0.0.5 rpc.sora.internal\n"),
+            None,
             Some(PortableVmBundleBinding {
                 expected_hash: bundle.container.bundle_hash,
                 exact_bytes: 21,
@@ -29325,11 +32647,7 @@ mod tests {
         assert!(user_data.contains(
             "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization"
         ));
-        assert!(user_data.contains("/etc/soracloud/allowlist-hosts"));
-        assert!(user_data.contains("if [ -f /etc/soracloud/allowlist-hosts ]; then"));
-        assert!(user_data.contains(
-            "grep -qxF \"$line\" /tmp/soracloud-hosts || echo \"$line\" >> /tmp/soracloud-hosts"
-        ));
+        assert!(!user_data.contains("/etc/soracloud/allowlist-hosts"));
         assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
         assert!(
             user_data.contains("Inrou volume mount path is unhealthy; failing closed: $mount_path")
@@ -29529,12 +32847,58 @@ mod tests {
             .expect_err("a reusable disk must remain writable by its owner");
         Ok(())
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reclaimed_inrou_disk_skips_only_its_exact_custody_descriptor() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let disk = fs::File::create(temp_dir.path().join("disk.raw"))?;
+        let metadata = disk.metadata()?;
+        let pid = std::process::id();
+        ensure_no_process_open_file(&metadata, pid, disk.as_raw_fd())?;
+
+        let transferred = disk.try_clone()?;
+        let error = ensure_no_process_open_file(&metadata, pid, disk.as_raw_fd())
+            .expect_err("every additional descriptor must block custody reuse");
+        assert!(
+            error
+                .to_string()
+                .contains("still has the reclaimed QEMU disk open")
+        );
+        drop(transferred);
+
+        acquire_inrou_write_lease(&disk)?.release()?;
+        let separately_opened = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp_dir.path().join("disk.raw"))?;
+        assert!(
+            acquire_inrou_write_lease(&disk).is_err(),
+            "a separately opened file description must block the write lease"
+        );
+        drop(separately_opened);
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portable_vm_identity_barrier_rejects_an_active_uid_or_gid() {
+        let identity = PortableVmChildIdentity {
+            uid: rustix::process::geteuid().as_raw(),
+            gid: rustix::process::getegid().as_raw(),
+            supplementary_gids: Vec::new(),
+        };
+        let error = ensure_no_process_with_inrou_identity(&identity)
+            .expect_err("the current test process proves this uid/gid is already active");
+        assert!(error.to_string().contains("is already active in process"));
+    }
     #[cfg(unix)]
     #[test]
     fn inrou_disk_directory_rejects_replaceable_or_linked_custody() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let secure = temp_dir.path().join("secure-volume");
-        ensure_secure_inrou_disk_directory(&secure)?;
+        assert_eq!(
+            ensure_secure_inrou_disk_directory(&secure)?,
+            fs::canonicalize(&secure)?
+        );
         assert_eq!(fs::metadata(&secure)?.permissions().mode() & 0o777, 0o700);
 
         fs::set_permissions(&secure, fs::Permissions::from_mode(0o770))?;
@@ -29545,6 +32909,13 @@ mod tests {
         std::os::unix::fs::symlink(temp_dir.path(), &linked)?;
         ensure_secure_inrou_disk_directory(&linked)
             .expect_err("a disk-directory symbolic link must fail closed");
+
+        let real_parent = temp_dir.path().join("real-parent");
+        fs::create_dir(&real_parent)?;
+        let linked_parent = temp_dir.path().join("linked-parent");
+        std::os::unix::fs::symlink(&real_parent, &linked_parent)?;
+        ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume"))
+            .expect_err("a symbolic-link ancestor must fail before disk creation or delegation");
         Ok(())
     }
     #[cfg(target_os = "linux")]

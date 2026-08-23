@@ -1319,15 +1319,20 @@ impl V2IoHandle {
                                     V2IoCommand::Sign {
                                         task,
                                         restore_outbound_payload,
-                                    } => sign_consensus_task(
-                                        body_store
-                                            .as_ref()
-                                            .expect("body store remains live before Retire"),
-                                        &context,
-                                        &key_pair,
-                                        task,
-                                        restore_outbound_payload,
-                                    ),
+                                    } => {
+                                        apply_service
+                                            .require_committed_kagemusha_runtime_effective_config(
+                                            )?;
+                                        sign_consensus_task(
+                                            body_store
+                                                .as_ref()
+                                                .expect("body store remains live before Retire"),
+                                            &context,
+                                            &key_pair,
+                                            task,
+                                            restore_outbound_payload,
+                                        )
+                                    }
                                     V2IoCommand::Store(task) => body_store
                                         .as_mut()
                                         .expect("body store remains live before Retire")
@@ -1443,6 +1448,9 @@ impl V2IoHandle {
                                             }
                                         }),
                                     V2IoCommand::RecoveredLifecycleSign(task) => {
+                                        apply_service
+                                            .require_committed_kagemusha_runtime_effective_config(
+                                            )?;
                                         sign_recovered_lifecycle_task(
                                             body_store
                                                 .as_ref()

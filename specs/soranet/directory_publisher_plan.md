@@ -34,7 +34,8 @@ summary: Final specification for SNNet-3 covering directory committee processes,
 - Each relay receives a private `RelayDescriptorManifestV1` (not published in
   consensus) bundling the Ed25519 identity seed as
   `identity.ed25519_private_key_hex`. The runtime consumes it through
-  `handshake.descriptor_manifest_path` when the seed is not configured inline.
+  `handshake.descriptor_manifest_path`; the relay configuration has no inline
+  identity-private-key field.
 - Relays publish descriptors via `POST /soranet/descriptor` with signatures; descriptors stored in builder DB.
 
 ## Consensus Artifact

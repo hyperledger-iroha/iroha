@@ -1,13 +1,9 @@
-"""Authenticated source inventory for Kagemusha production readiness."""
-
 import ast
 import re
 
 if globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_CONTEXT_V1") is not True:
     raise RuntimeError("readiness source-support provider must run inside the authenticated gate")
-_readiness_source_support_source = globals().get(
-    "_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1"
-)
+_readiness_source_support_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1")
 if not isinstance(_readiness_source_support_source, str) or not _readiness_source_support_source:
     raise RuntimeError("readiness source-support provider requires its exact loaded bytes")
 
@@ -16,17 +12,11 @@ MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
 MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
 MODEL_VERIFIER_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
 MODEL_VERIFIER_MODULE = "mod kagemusha_release_verifier;"
-MODEL_PROMOTION_RECEIPT_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
-)
+MODEL_PROMOTION_RECEIPT_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
 MODEL_PROMOTION_RECEIPT_MODULE = "mod kagemusha_promotion_receipt;"
-MODEL_CANARY_EVIDENCE_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
-)
+MODEL_CANARY_EVIDENCE_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
 MODEL_CANARY_EVIDENCE_MODULE = "mod kagemusha_canary_evidence;"
-MODEL_CANARY_LIVENESS_COMPONENT = (
-    "crates/iroha_data_model/src/offline/kagemusha_post_canary_validator_liveness.rs"
-)
+MODEL_CANARY_LIVENESS_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_post_canary_validator_liveness.rs"
 MODEL_CANARY_LIVENESS_MODULE = "mod kagemusha_post_canary_validator_liveness;"
 MODEL_DEVICE_ATTESTATION_CONSTANTS_COMPONENT = "crates/iroha_data_model/src/offline/device_attestation_constants.rs"
 MODEL_DEVICE_ATTESTATION_CONSTANTS_INCLUDE = 'include!("device_attestation_constants.rs");'
@@ -41,88 +31,44 @@ HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
 CATALOG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_release_catalog_impl.rs"
 CATALOG_INCLUDE = 'include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");\n'
-CATALOG_VALIDATOR_QUALIFICATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "kagemusha_terminal_registry_v4_validator_qualification.rs"
-)
-CATALOG_VALIDATOR_QUALIFICATION_INCLUDE = (
-    'include!("kagemusha_terminal_registry_v4_validator_qualification.rs");\n'
-)
-QUAL_TESTS = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "kagemusha_terminal_registry_v4/validator_qualification_tests.rs"
-)
-QUAL_TESTS_INCLUDE = (
-    'include!("kagemusha_terminal_registry_v4/validator_qualification_tests.rs");'
-)
+CATALOG_VALIDATOR_QUALIFICATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_validator_qualification.rs"
+CATALOG_VALIDATOR_QUALIFICATION_INCLUDE = 'include!("kagemusha_terminal_registry_v4_validator_qualification.rs");\n'
+QUAL_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4/validator_qualification_tests.rs"
+QUAL_TESTS_INCLUDE = 'include!("kagemusha_terminal_registry_v4/validator_qualification_tests.rs");'
 CORE = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
-CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "kagemusha_runtime_effective_config.rs"
-)
+CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_runtime_effective_config.rs"
 CORE_RUNTIME_EFFECTIVE_CONFIG_MODULE = "mod kagemusha_runtime_effective_config;"
-CORE_KAGEMUSHA_ACTIVATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_activation.rs"
-)
+CORE_KAGEMUSHA_ACTIVATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_activation.rs"
 CORE_KAGEMUSHA_ACTIVATION_INCLUDE = 'include!("offline/kagemusha_activation.rs");'
-CORE_KAGEMUSHA_CANARY_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_taira_canary.rs"
-)
+CORE_KAGEMUSHA_CANARY_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_taira_canary.rs"
 CORE_KAGEMUSHA_CANARY_INCLUDE = 'include!("offline/kagemusha_taira_canary.rs");'
-CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/attestation_certificate_validation.rs"
-)
-CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE = (
-    'include!("offline/attestation_certificate_validation.rs");'
-)
+CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_certificate_validation.rs"
+CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE = 'include!("offline/attestation_certificate_validation.rs");'
 CORE_DEVICE_ATTESTATION_ROOTS_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/device_attestation_roots.rs"
 CORE_DEVICE_ATTESTATION_ROOTS_INCLUDE = 'include!("offline/device_attestation_roots.rs");'
 CORE_ATTESTATION_POLICY_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_policy_validation.rs"
 CORE_ATTESTATION_POLICY_VALIDATION_INCLUDE = 'include!("offline/attestation_policy_validation.rs");'
 CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/attestation_certificate_der_profile.rs"
 CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_INCLUDE = 'include!("offline/attestation_certificate_der_profile.rs");'
-CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "device_attestation_registration_validation.rs"
-)
+CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/device_attestation_registration_validation.rs"
 CORE_DEVICE_ATTESTATION_REGISTRATION_VALIDATION_INCLUDE = 'include!("offline/device_attestation_registration_validation.rs");'
 ANDROID_AUTH = "crates/iroha_core/src/smartcontracts/isi/offline/android_attestation_authorization_validation.rs"
 ANDROID_AUTH_INCLUDE = 'include!("offline/android_attestation_authorization_validation.rs");'
 CORE_ISI_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_tests.rs"
-CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "isi_kagemusha_taira_canary_context_tests.rs"
-)
-CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE = (
-    'include!("isi_kagemusha_taira_canary_context_tests.rs");'
-)
-POLICY_TESTS = (
-    "crates/iroha_core/src/smartcontracts/isi/offline/"
-    "isi_attestation_policy_release_tests.rs"
-)
-POLICY_TESTS_INCLUDE = (
-    'include!("isi_attestation_policy_release_tests.rs");'
-)
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_kagemusha_taira_canary_context_tests.rs"
+CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE = 'include!("isi_kagemusha_taira_canary_context_tests.rs");'
+POLICY_TESTS = "crates/iroha_core/src/smartcontracts/isi/offline/isi_attestation_policy_release_tests.rs"
+POLICY_TESTS_INCLUDE = 'include!("isi_attestation_policy_release_tests.rs");'
 CORE_ISI_TESTS_PARENT_INCLUDE = 'include!("offline/isi_tests.rs");'
 CORE_ISI_MOD = "crates/iroha_core/src/smartcontracts/isi/mod.rs"
 CORE_TX = "crates/iroha_core/src/tx.rs"
 CORE_STATE = "crates/iroha_core/src/state.rs"
 CORE_STATE_TESTS = "crates/iroha_core/src/state/tests.rs"
-CORE_COMMITTED_TX_CONTEXT = (
-    "crates/iroha_core/src/state/committed_transaction_context.rs"
-)
-CORE_AUTONOMOUS_MERGE_TESTS = (
-    "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
-)
-CORE_AUTONOMOUS_MERGE_TESTS_PARENT_INCLUDE = (
-    'include!("autonomous_merge_and_queue_plan_tests.rs");'
-)
-CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS = (
-    "crates/iroha_core/src/state/autonomous_merge_admission_intent_tests.rs"
-)
-CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE = (
-    'include!("autonomous_merge_admission_intent_tests.rs");'
-)
+CORE_COMMITTED_TX_CONTEXT = "crates/iroha_core/src/state/committed_transaction_context.rs"
+CORE_AUTONOMOUS_MERGE_TESTS = "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
+CORE_AUTONOMOUS_MERGE_TESTS_PARENT_INCLUDE = 'include!("autonomous_merge_and_queue_plan_tests.rs");'
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS = "crates/iroha_core/src/state/autonomous_merge_admission_intent_tests.rs"
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE = 'include!("autonomous_merge_admission_intent_tests.rs");'
 CORE_BLOCK = "crates/iroha_core/src/block.rs"
 CORE_EXECUTOR = "crates/iroha_core/src/executor.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
@@ -132,71 +78,30 @@ VALUE_CONTRACT = "crates/iroha_data_model/tests/kagemusha_value_contract.rs"
 SCHEMA_GOLDEN = "crates/iroha_data_model/tests/offline_public_schema_golden.rs"
 CONFIG = "crates/iroha_config/src/parameters/user.rs"
 NODE = "crates/irohad/src/main.rs"
-NODE_VALIDATOR_QUALIFICATION_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_validator_qualification.rs"
-)
-NODE_VALIDATOR_QUALIFICATION_MODULE = (
-    '#[path = "main/kagemusha_validator_qualification.rs"]\n'
-    "mod kagemusha_validator_qualification;"
-)
-NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_runtime_effective_config_projection.rs"
-)
-NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_MODULE = (
-    '#[path = "main/kagemusha_runtime_effective_config_projection.rs"]\n'
-    "mod kagemusha_runtime_effective_config_projection;"
-)
-NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT = (
-    "crates/irohad/src/main/kagemusha_validator_qualification_command.rs"
-)
-NODE_VALIDATOR_QUALIFICATION_COMMAND_MODULE = (
-    '#[path = "main/kagemusha_validator_qualification_command.rs"]\n'
-    "mod kagemusha_validator_qualification_command;"
-)
-NODE_ROOT_OWNED_PUBLICATION_COMPONENT = (
-    "crates/irohad/src/main/root_owned_artifact_publication.rs"
-)
-NODE_ROOT_OWNED_PUBLICATION_MODULE = (
-    '#[path = "main/root_owned_artifact_publication.rs"]\n'
-    "mod root_owned_artifact_publication;"
-)
+NODE_VALIDATOR_QUALIFICATION_COMPONENT = "crates/irohad/src/main/kagemusha_validator_qualification.rs"
+NODE_VALIDATOR_QUALIFICATION_MODULE = '#[path = "main/kagemusha_validator_qualification.rs"]\nmod kagemusha_validator_qualification;'
+NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT = "crates/irohad/src/main/kagemusha_runtime_effective_config_projection.rs"
+NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_MODULE = '#[path = "main/kagemusha_runtime_effective_config_projection.rs"]\nmod kagemusha_runtime_effective_config_projection;'
+NODE_VALIDATOR_QUALIFICATION_COMMAND_COMPONENT = "crates/irohad/src/main/kagemusha_validator_qualification_command.rs"
+NODE_VALIDATOR_QUALIFICATION_COMMAND_MODULE = '#[path = "main/kagemusha_validator_qualification_command.rs"]\nmod kagemusha_validator_qualification_command;'
+NODE_ROOT_OWNED_PUBLICATION_COMPONENT = "crates/irohad/src/main/root_owned_artifact_publication.rs"
+NODE_ROOT_OWNED_PUBLICATION_MODULE = '#[path = "main/root_owned_artifact_publication.rs"]\nmod root_owned_artifact_publication;'
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
-AUTHENTICATED_TOOL_CONTROLLER = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller.rs"
-)
-KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/"
-    "kagemusha_promotion_publisher.rs"
-)
-KAGEMUSHA_PROMOTION_PUBLISHER_MODULE = (
-    '#[path = "iroha_authenticated_tool_controller/'
-    'kagemusha_promotion_publisher.rs"]\n'
-    "mod kagemusha_promotion_publisher;"
-)
-KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT = (
-    "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/"
-    "kagemusha_python_launcher.rs"
-)
-KAGEMUSHA_PYTHON_LAUNCHER_MODULE = (
-    '#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]\n'
-    "mod kagemusha_python_launcher;"
-)
+AUTHENTICATED_TOOL_CONTROLLER = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller.rs"
+KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"
+KAGEMUSHA_PROMOTION_PUBLISHER_MODULE = '#[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]\nmod kagemusha_promotion_publisher;'
+KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT = "crates/iroha_kagami/src/bin/iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"
+KAGEMUSHA_PYTHON_LAUNCHER_MODULE = '#[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]\nmod kagemusha_python_launcher;'
 OFFLINE_CLI = "crates/iroha_cli/src/offline.rs"
 KAGEMUSHA_ROLLOUT_COMPONENT = "crates/iroha_cli/src/offline/kagemusha_rollout.rs"
 KAGEMUSHA_ROLLOUT_MODULE = "mod kagemusha_rollout;"
-KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT = (
-    "crates/iroha_cli/src/offline/kagemusha_rollout/liveness.rs"
-)
+KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT = "crates/iroha_cli/src/offline/kagemusha_rollout/liveness.rs"
 KAGEMUSHA_ROLLOUT_LIVENESS_MODULE = "mod liveness;"
 STATUS_CAPTURE = "scripts/capture_android_attestation_status.py"
 STATUS_CAPTURE_TEST = "scripts/tests/capture_android_attestation_status_test.py"
 ANDROID_CERT = "scripts/android_attestation_certificate_profile.py"
-ANDROID_CERT_FIX = (
-    "scripts/tests/android_attestation_certificate_profile_fixtures.py"
-)
-ANDROID_CERT_TEST = (
-    "scripts/tests/android_attestation_certificate_profile_test.py"
-)
+ANDROID_CERT_FIX = "scripts/tests/android_attestation_certificate_profile_fixtures.py"
+ANDROID_CERT_TEST = "scripts/tests/android_attestation_certificate_profile_test.py"
 ANDROID_DEVICE_LAB_SLOT = "scripts/check_android_device_lab_slot.py"
 ANDROID_DEVICE_LAB_RUNNER = "scripts/run_kagemusha_candidate_android_lab.sh"
 DEVICE_ATTESTATION_SOURCE_PATHS = (
@@ -208,6 +113,7 @@ DEVICE_ATTESTATION_SOURCE_PATHS = (
     ANDROID_DEVICE_LAB_SLOT, ANDROID_DEVICE_LAB_RUNNER,
 )
 KAGEMUSHA_RELEASE_RUST_TEST_FILTERS = (
+    "cargo test -p iroha_data_model --lib --features transparent_api kagemusha_v4 -- --nocapture",
     "cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture",
@@ -283,7 +189,6 @@ D_ANDROID_CAPTURE = ('status capture',)
 def runtime_projection_source_errors(
     core_projection: str, wrapper: str, node: str, catalog: str, model: str
 ) -> list[str]:
-    """Check Core-only projection derivation and verified-value signing."""
     errors: list[str] = []
     validator_check = node.split("fn validate_config_for_check_mode(", 1)[-1].split(
         "fn continue_after_full_kagemusha_check", 1
@@ -312,34 +217,35 @@ def runtime_projection_source_errors(
          r"let staged_pops = bootstrap\.proofs_of_possession\(\);"),
         "opaque Core runtime-effective projection derivation",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"config\.sumeragi\.role != NodeRole::Validator.*?"
-         r"metadata\.mode != SumeragiConsensusMode::Permissioned.*?"
-         r"context\.mode != ConsensusMode::Permissioned.*?"
-         r"metadata\.sumeragi_v2 != staged_parameters.*?"
-         r"context\.roster\.len\(\) != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT.*?"
-         r"staged_pops\.len\(\) != context\.roster\.len\(\).*?"
-         r"context\.roster\.iter\(\)\.any\(\|member\| member\.power != 1\)"),
-        "permissioned four-unit runtime roster",
+        "metadata.mode != SumeragiConsensusMode::Permissioned",
+        "context.mode != ConsensusMode::Permissioned",
+        "metadata.sumeragi_v2 != staged_parameters",
+        "context.roster.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT",
+        "staged_pops.len() != context.roster.len()",
+        "context.roster.iter().any(|member| member.power != 1)",
+        "config.sumeragi.role != NodeRole::Validator",
+        "validator_pops.len() != KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"let signed = signed_genesis_validator_pops\(genesis\).*?"
-         r"signed\.len\(\) == staged_pops\.len\(\).*?"
-         r"signed\.len\(\) == trusted\.pops\.len\(\).*?"
-         r"trusted\.pops\.get\(signed_id\.public_key\(\)\) == Some\(signed_pop\).*?"
-         r"configured_validators != context_validators.*?!exact_pops"),
-        "exact signed/staged/configured PoP map",
+        "signed.len() == staged_pops.len()",
+        "signed_id == staged_id && signed_pop == staged_pop",
+        "trusted.pops.len() == validator_pops.len()",
+        "trusted.pops.get(validator_id.public_key()) == Some(pop)",
+        "bls_normal_pop_verify(validator_id.public_key(), pop).is_ok()",
+        "configured_validators != validator_ids",
+        "|| !exact_pops",
     )
-    require_pattern(
+    require(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
-        (r"if validator_id == local_id \{\s*"
-         r"config\.network\.public_address\.value\(\)\.clone\(\).*?"
-         r"Duration::from_millis\(metadata\.block_cadence_ms\.get\(\)\),\s*context\.mode,.*?"
-         r"projection\.validate\(\)\.map_err\(\|error\| error\.to_string\(\)\)\?;\s*"
-         r"Ok\(Self \{ projection \}\)"),
-        "advertised endpoint, signed cadence, and validated projection",
+        "Duration::from_millis(metadata.block_cadence_ms.get())",
+        "if validator_id == local_id {",
+        "config.network.public_address.value().clone()",
+        ".v2_config(block_cadence, mode)",
+        "projection.validate().map_err(|error| error.to_string())?;",
+        "Ok(Self { projection })",
     )
     require_pattern(
         core_projection, CORE_RUNTIME_EFFECTIVE_CONFIG_COMPONENT, errors,
@@ -394,7 +300,6 @@ def runtime_projection_source_errors(
 
 
 def attestation_certificate_source_errors(attestation: str, core: str) -> list[str]:
-    """Authenticate fail-closed X.509 and platform attestation boundaries."""
     errors: list[str] = []
     require(core, CORE, errors, CORE_ATTESTATION_CERTIFICATE_VALIDATION_INCLUDE)
     forbid(
@@ -951,7 +856,6 @@ def canary_source_errors(
     core_block: str,
     core_executor: str,
 ) -> list[str]:
-    """Check the post-receipt canary, reservation, and four-validator liveness chain."""
     errors = attestation_certificate_source_errors(
         core_attestation_certificate_validation, core
     )
@@ -1795,7 +1699,6 @@ def canary_source_errors(
 def release_closure_source_errors(
     core: str, schema: str, workflow: str, overrides: dict[str, str]
 ) -> list[str]:
-    """Reject release-source gaps that focused filters or compilation would expose."""
     errors: list[str] = []
     isi_tests = (
         overrides[CORE_ISI_TESTS]
@@ -1993,7 +1896,6 @@ def release_closure_source_errors(
 
 
 def source_provider_pipeline_errors(readiness: str) -> list[str]:
-    """Validate authentication and byte-only dispatch for every source provider."""
     errors: list[str] = []
     require_pattern(
         readiness,
@@ -2001,7 +1903,8 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         errors,
         (
             r"READINESS_SOURCE_PROVIDERS = \(\s*READINESS_SOURCE_SUPPORT,\s*"
-            r"READINESS_RECURSION_SOURCE_CONTRACT,\s*READINESS_SOURCE_CONTRACT,\s*\)"
+            r"READINESS_RECURSION_SOURCE_CONTRACT,\s*"
+            r"READINESS_LIFECYCLE_SOURCE_CONTRACT,\s*READINESS_SOURCE_CONTRACT,\s*\)"
         ),
         "exact authenticated source-provider set",
     )
@@ -2030,6 +1933,7 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         expected_names = (
             "READINESS_SOURCE_SUPPORT",
             "READINESS_RECURSION_SOURCE_CONTRACT",
+            "READINESS_LIFECYCLE_SOURCE_CONTRACT",
             "READINESS_SOURCE_CONTRACT",
         )
         exact_provider_tuple = (
@@ -2132,14 +2036,20 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
             r"_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_SOURCE_V1.*?"
             r"compile\(recursion_bytes, READINESS_RECURSION_SOURCE_CONTRACT, \"exec\"\).*?"
             r"recursion_context\.get\(\"recursion_source_contract_errors\"\).*?"
+            r"lifecycle_bytes = source_contract_bytes\.get\("
+            r"READINESS_LIFECYCLE_SOURCE_CONTRACT\).*?"
+            r"_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1.*?"
+            r"compile\(\s*lifecycle_bytes, READINESS_LIFECYCLE_SOURCE_CONTRACT, \"exec\"\s*\).*?"
+            r"lifecycle_context\.get\(\"lifecycle_source_contract_errors\"\).*?"
             r"primary_bytes = source_contract_bytes\.get\(READINESS_SOURCE_CONTRACT\).*?"
             r"_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1.*?"
+            r"_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1.*?"
             r"compile\(\s*primary_bytes,\s*READINESS_SOURCE_CONTRACT,\s*\"exec\",?\s*\).*?"
             r"source_contract_context\.get\(\"static_errors\"\).*?"
             r"callable\(source_contract_evaluator\).*?"
             r"source_contract_errors\.extend\(source_contract_evaluator\(\)\)"
         ),
-        "authenticated byte-only support, recursion, and readiness source-contract dispatch",
+        "authenticated byte-only support, recursion, lifecycle, and readiness source-contract dispatch",
     )
     require(
         source_dispatch,
@@ -2154,7 +2064,11 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         "if recursion_bytes is None:",
         '"recursion source-contract provider bytes are unavailable"',
         '"recursion source-contract provider evaluator is unavailable"',
+        "if lifecycle_bytes is None:",
+        '"lifecycle source-contract provider bytes are unavailable"',
+        '"lifecycle source-contract provider evaluator is unavailable"',
         'source_contract_context = dict(support_context)',
+        "source_contract_context.update(lifecycle_context)",
         "if primary_bytes is None:",
         '"readiness source-contract provider bytes are unavailable"',
         '"readiness source-contract provider evaluator is unavailable"',
@@ -2184,6 +2098,7 @@ def source_provider_pipeline_errors(readiness: str) -> list[str]:
         for target, provider in (
             ("support_bytes", "READINESS_SOURCE_SUPPORT"),
             ("recursion_bytes", "READINESS_RECURSION_SOURCE_CONTRACT"),
+            ("lifecycle_bytes", "READINESS_LIFECYCLE_SOURCE_CONTRACT"),
             ("primary_bytes", "READINESS_SOURCE_CONTRACT"),
         ):
             stores = [

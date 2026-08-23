@@ -6,16 +6,16 @@
 //! `soranet_privacy_bucket_suppressed` markers.
 use crate::config::{
     PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1, PRIVACY_MAX_COMPLETED_BUCKETS_V1,
-    PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
+    PRIVACY_MAX_EXPECTED_SHARES_V1, PRIVACY_MAX_OPEN_BUCKETS_V1, PrivacyTelemetryConfig, RelayMode,
 };
 use blake3::Hasher as Blake3Hasher;
 use hex::ToHex;
 use iroha_data_model::soranet::privacy_metrics::{
-    SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventGarAbuseCategoryV1,
-    SoranetPrivacyEventHandshakeFailureV1, SoranetPrivacyEventHandshakeSuccessV1,
-    SoranetPrivacyEventKindV1, SoranetPrivacyEventThrottleV1, SoranetPrivacyEventV1,
-    SoranetPrivacyEventVerifiedBytesV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
-    SoranetPrivacyThrottleScopeV1,
+    SoranetPowFailureReasonV1, SoranetPrivacyEventActiveSampleV1,
+    SoranetPrivacyEventGarAbuseCategoryV1, SoranetPrivacyEventHandshakeFailureV1,
+    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
+    SoranetPrivacyEventThrottleV1, SoranetPrivacyEventV1, SoranetPrivacyEventVerifiedBytesV1,
+    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
 };
 use norito::json;
 use std::{
@@ -30,14 +30,12 @@ const RTT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99];
 const RTT_BUCKET_BOUNDS_MS: &[u64] = &[
     10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1_000, 1_500, 2_000, 2_500, 3_000,
 ];
-/// Maximum copied detail retained in one first-release privacy event.
-const PRIVACY_EVENT_DETAIL_MAX_BYTES_V1: usize = 256;
 /// Maximum encoded JSON retained transiently for one privacy event.
 const PRIVACY_EVENT_JSON_MAX_BYTES_V1: usize = 2 * 1024;
 /// Maximum distinct privacy-preserving GAR hashes retained in one bucket.
 const PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1: usize = 256;
-/// Conservative Prometheus output allowance for one completed bucket.
-const PRIVACY_PROMETHEUS_MAX_BYTES_PER_BUCKET_V1: usize = 128 * 1024;
+/// Conservative bound for the fixed-cardinality Prometheus snapshot.
+const PRIVACY_PROMETHEUS_MAX_BYTES_V1: usize = 128 * 1024;
 struct BoundedText {
     inner: String,
     maximum: usize,
@@ -215,18 +213,20 @@ impl PrivacyEventBuffer {
         mode: SoranetPrivacyModeV1,
         when: SystemTime,
         reason: SoranetPrivacyHandshakeFailureV1,
-        detail: Option<&str>,
+        pow_reason: Option<SoranetPowFailureReasonV1>,
         rtt_ms: Option<u64>,
     ) {
+        let payload = SoranetPrivacyEventHandshakeFailureV1 {
+            reason,
+            pow_reason,
+            rtt_ms,
+        };
+        if !payload.has_canonical_reason() {
+            return;
+        }
         let event = SoranetPrivacyEventV1 {
             timestamp_unix: unix_seconds(when),
-            kind: SoranetPrivacyEventKindV1::HandshakeFailure(
-                SoranetPrivacyEventHandshakeFailureV1 {
-                    reason,
-                    detail: detail_to_string(detail),
-                    rtt_ms,
-                },
-            ),
+            kind: SoranetPrivacyEventKindV1::HandshakeFailure(payload),
             mode,
         };
         self.push(event);
@@ -327,18 +327,13 @@ impl ProxyPolicyEventBuffer {
         }
     }
     /// Record a downgrade event for downstream remediation hooks.
-    pub fn record_downgrade(
-        &self,
-        mode: SoranetPrivacyModeV1,
-        when: SystemTime,
-        detail: Option<&str>,
-    ) {
+    pub fn record_downgrade(&self, mode: SoranetPrivacyModeV1, when: SystemTime) {
         let event = SoranetPrivacyEventV1 {
             timestamp_unix: unix_seconds(when),
             kind: SoranetPrivacyEventKindV1::HandshakeFailure(
                 SoranetPrivacyEventHandshakeFailureV1 {
                     reason: SoranetPrivacyHandshakeFailureV1::Downgrade,
-                    detail: detail_to_string(detail),
+                    pow_reason: None,
                     rtt_ms: None,
                 },
             ),
@@ -373,23 +368,6 @@ impl ProxyPolicyEventBuffer {
         guard.len()
     }
 }
-fn detail_to_string(detail: Option<&str>) -> Option<String> {
-    detail.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            let mut end = trimmed.len().min(PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
-            while !trimmed.is_char_boundary(end) {
-                end = end.saturating_sub(1);
-            }
-            let mut retained = String::new();
-            retained.try_reserve_exact(end).ok()?;
-            retained.push_str(&trimmed[..end]);
-            Some(retained)
-        }
-    })
-}
 /// Aggregates privacy-aware counters for a relay instance.
 pub struct PrivacyAggregator {
     config: PrivacyConfig,
@@ -400,6 +378,8 @@ pub struct PrivacyAggregator {
 struct PrivacyState {
     open: BTreeMap<u64, BucketStats>,
     completed: VecDeque<CompletedBucket>,
+    prometheus: PrometheusState,
+    finalized_through: Option<u64>,
 }
 /// Completed bucket ready for export.
 #[derive(Debug, Clone)]
@@ -430,6 +410,32 @@ struct BucketSummary {
     rtt_percentiles: Vec<(String, u64)>,
     gar_counts: BTreeMap<String, u64>,
     suppressed: bool,
+}
+/// Lifetime counters and latest-bucket gauges exported with fixed label sets.
+#[derive(Debug, Default)]
+struct PrometheusState {
+    latest_bucket: Option<u64>,
+    latest_suppressed: bool,
+    suppression_total: u64,
+    handshake_success: u64,
+    handshake_pow_rejects: u64,
+    handshake_downgrades: u64,
+    handshake_timeouts: u64,
+    handshake_other_failures: u64,
+    capacity_rejects: u64,
+    throttle_congestion: u64,
+    throttle_cooldown: u64,
+    throttle_emergency: u64,
+    throttle_remote: u64,
+    throttle_descriptor: u64,
+    throttle_descriptor_replay: u64,
+    cooldown_millis_sum: u128,
+    cooldown_count: u64,
+    bytes_verified: u128,
+    gar_reports: u64,
+    latest_active_avg: Option<f64>,
+    latest_active_max: Option<u64>,
+    latest_rtt_millis: [u64; 3],
 }
 /// Running bucket statistics before completion.
 #[derive(Debug, Default)]
@@ -524,18 +530,102 @@ impl ActiveAccumulator {
         (Some(avg), Some(self.max))
     }
 }
-impl CompletedBucket {
+impl PrometheusState {
+    fn record(&mut self, bucket: &CompletedBucket) {
+        let stats = &bucket.stats;
+        if stats.suppressed {
+            self.suppression_total = self.suppression_total.saturating_add(1);
+        } else {
+            self.handshake_success = self
+                .handshake_success
+                .saturating_add(stats.handshake_success);
+            self.handshake_pow_rejects = self
+                .handshake_pow_rejects
+                .saturating_add(stats.handshake_pow_rejects);
+            self.handshake_downgrades = self
+                .handshake_downgrades
+                .saturating_add(stats.handshake_downgrades);
+            self.handshake_timeouts = self
+                .handshake_timeouts
+                .saturating_add(stats.handshake_timeouts);
+            self.handshake_other_failures = self
+                .handshake_other_failures
+                .saturating_add(stats.handshake_other_failures);
+            self.capacity_rejects = self.capacity_rejects.saturating_add(stats.capacity_rejects);
+            self.throttle_congestion = self
+                .throttle_congestion
+                .saturating_add(stats.throttle_congestion);
+            self.throttle_cooldown = self
+                .throttle_cooldown
+                .saturating_add(stats.throttle_cooldown);
+            self.throttle_emergency = self
+                .throttle_emergency
+                .saturating_add(stats.throttle_emergency);
+            self.throttle_remote = self.throttle_remote.saturating_add(stats.throttle_remote);
+            self.throttle_descriptor = self
+                .throttle_descriptor
+                .saturating_add(stats.throttle_descriptor);
+            self.throttle_descriptor_replay = self
+                .throttle_descriptor_replay
+                .saturating_add(stats.throttle_descriptor_replay);
+            self.cooldown_millis_sum = self
+                .cooldown_millis_sum
+                .saturating_add(stats.cooldown_millis_sum);
+            self.cooldown_count = self.cooldown_count.saturating_add(stats.cooldown_count);
+            self.bytes_verified = self.bytes_verified.saturating_add(stats.bytes_verified);
+            let gar_reports = stats
+                .gar_counts
+                .values()
+                .copied()
+                .fold(0_u64, u64::saturating_add);
+            self.gar_reports = self.gar_reports.saturating_add(gar_reports);
+        }
+        if self
+            .latest_bucket
+            .is_some_and(|latest| bucket.start_bucket < latest)
+        {
+            return;
+        }
+        self.latest_bucket = Some(bucket.start_bucket);
+        self.latest_suppressed = stats.suppressed;
+        self.latest_active_avg = (!stats.suppressed).then_some(stats.active_avg).flatten();
+        self.latest_active_max = (!stats.suppressed).then_some(stats.active_max).flatten();
+        self.latest_rtt_millis = [0; 3];
+        if !stats.suppressed {
+            for (label, value) in &stats.rtt_percentiles {
+                let index = match label.as_str() {
+                    "p50" => Some(0),
+                    "p90" => Some(1),
+                    "p99" => Some(2),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    self.latest_rtt_millis[index] = *value;
+                }
+            }
+        }
+    }
     fn render_prometheus(&self, output: &mut impl fmt::Write, mode: RelayMode, bucket_secs: u64) {
-        let bucket_start_secs = self.start_bucket.saturating_mul(bucket_secs);
-        let bucket_label = bucket_start_secs.to_string();
-        if self.stats.suppressed {
+        let Some(latest_bucket) = self.latest_bucket else {
+            return;
+        };
+        let mode = mode.as_label();
+        let latest_bucket_start = latest_bucket.saturating_mul(bucket_secs);
+        let _ = writeln!(
+            output,
+            "soranet_privacy_latest_bucket_start_unixtime{{mode=\"{mode}\"}} {latest_bucket_start}"
+        );
+        let _ = writeln!(
+            output,
+            "soranet_privacy_bucket_suppressed{{mode=\"{mode}\"}} {}",
+            u8::from(self.latest_suppressed)
+        );
+        if self.suppression_total > 0 {
             let _ = writeln!(
                 output,
-                "soranet_privacy_bucket_suppressed{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} 1",
-                mode = mode.as_label(),
-                bucket = bucket_label,
+                "soranet_privacy_suppression_total{{mode=\"{mode}\",reason=\"insufficient_contributors\"}} {}",
+                self.suppression_total
             );
-            return;
         }
         let mut emit_event = |kind: &str, value: u64| {
             if value == 0 {
@@ -543,26 +633,22 @@ impl CompletedBucket {
             }
             let _ = writeln!(
                 output,
-                "soranet_privacy_circuit_events_total{{mode=\"{mode}\",bucket_start=\"{bucket}\",kind=\"{kind}\"}} {value}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                kind = kind,
-                value = value,
+                "soranet_privacy_circuit_events_total{{mode=\"{mode}\",kind=\"{kind}\"}} {value}"
             );
         };
-        emit_event("accepted", self.stats.handshake_success);
-        emit_event("pow_rejected", self.stats.handshake_pow_rejects);
-        emit_event("downgrade", self.stats.handshake_downgrades);
-        emit_event("timeout", self.stats.handshake_timeouts);
-        emit_event("other_failure", self.stats.handshake_other_failures);
-        emit_event("capacity_reject", self.stats.capacity_rejects);
+        emit_event("accepted", self.handshake_success);
+        emit_event("pow_rejected", self.handshake_pow_rejects);
+        emit_event("downgrade", self.handshake_downgrades);
+        emit_event("timeout", self.handshake_timeouts);
+        emit_event("other_failure", self.handshake_other_failures);
+        emit_event("capacity_reject", self.capacity_rejects);
         let throttles = [
-            ("congestion", self.stats.throttle_congestion),
-            ("cooldown", self.stats.throttle_cooldown),
-            ("emergency", self.stats.throttle_emergency),
-            ("remote_quota", self.stats.throttle_remote),
-            ("descriptor_quota", self.stats.throttle_descriptor),
-            ("descriptor_replay", self.stats.throttle_descriptor_replay),
+            ("congestion", self.throttle_congestion),
+            ("cooldown", self.throttle_cooldown),
+            ("emergency", self.throttle_emergency),
+            ("remote_quota", self.throttle_remote),
+            ("descriptor_quota", self.throttle_descriptor),
+            ("descriptor_replay", self.throttle_descriptor_replay),
         ];
         for (scope, value) in throttles {
             if value == 0 {
@@ -570,74 +656,52 @@ impl CompletedBucket {
             }
             let _ = writeln!(
                 output,
-                "soranet_privacy_throttles_total{{mode=\"{mode}\",bucket_start=\"{bucket}\",scope=\"{scope}\"}} {value}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                scope = scope,
-                value = value,
+                "soranet_privacy_throttles_total{{mode=\"{mode}\",scope=\"{scope}\"}} {value}"
             );
         }
-        if self.stats.cooldown_count > 0 {
+        if self.cooldown_count > 0 {
             let _ = writeln!(
                 output,
-                "soranet_privacy_throttle_cooldown_millis_sum{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} {sum}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                sum = self.stats.cooldown_millis_sum,
+                "soranet_privacy_throttle_cooldown_millis_sum{{mode=\"{mode}\"}} {}",
+                self.cooldown_millis_sum
             );
             let _ = writeln!(
                 output,
-                "soranet_privacy_throttle_cooldown_millis_count{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} {count}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                count = self.stats.cooldown_count,
+                "soranet_privacy_throttle_cooldown_millis_count{{mode=\"{mode}\"}} {}",
+                self.cooldown_count
             );
         }
-        if let Some(avg) = self.stats.active_avg {
+        let _ = writeln!(
+            output,
+            "soranet_privacy_active_circuits_avg{{mode=\"{mode}\"}} {}",
+            self.latest_active_avg.unwrap_or(0.0)
+        );
+        let _ = writeln!(
+            output,
+            "soranet_privacy_active_circuits_max{{mode=\"{mode}\"}} {}",
+            self.latest_active_max.unwrap_or(0)
+        );
+        if self.bytes_verified > 0 {
             let _ = writeln!(
                 output,
-                "soranet_privacy_active_circuits_avg{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} {avg}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                avg = avg,
+                "soranet_privacy_verified_bytes_total{{mode=\"{mode}\"}} {}",
+                self.bytes_verified
             );
         }
-        if let Some(max) = self.stats.active_max {
+        for (percentile, value) in ["p50", "p90", "p99"]
+            .into_iter()
+            .zip(self.latest_rtt_millis)
+        {
             let _ = writeln!(
                 output,
-                "soranet_privacy_active_circuits_max{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} {max}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                max = max,
+                "soranet_privacy_rtt_millis{{mode=\"{mode}\",percentile=\"{percentile}\"}} {value}"
             );
         }
-        if self.stats.bytes_verified > 0 {
+        if self.gar_reports > 0 {
             let _ = writeln!(
                 output,
-                "soranet_privacy_verified_bytes_total{{mode=\"{mode}\",bucket_start=\"{bucket}\"}} {value}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                value = self.stats.bytes_verified,
-            );
-        }
-        for (percentile, value) in &self.stats.rtt_percentiles {
-            let _ = writeln!(
-                output,
-                "soranet_privacy_rtt_millis{{mode=\"{mode}\",bucket_start=\"{bucket}\",percentile=\"{percentile}\"}} {value}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                percentile = percentile,
-                value = value,
-            );
-        }
-        for (hash, count) in &self.stats.gar_counts {
-            let _ = writeln!(
-                output,
-                "soranet_privacy_gar_reports_total{{mode=\"{mode}\",bucket_start=\"{bucket}\",category_hash=\"{hash}\"}} {count}",
-                mode = mode.as_label(),
-                bucket = bucket_label,
-                hash = hash,
-                count = count,
+                "soranet_privacy_gar_reports_total{{mode=\"{mode}\"}} {}",
+                self.gar_reports
             );
         }
     }
@@ -722,18 +786,10 @@ impl PrivacyAggregator {
             .expect("soranet privacy aggregator mutex poisoned");
         let current_idx = bucket_index(now, bucket_secs);
         state.flush_ready(current_idx, &self.config);
-        let maximum = match state
-            .completed
-            .len()
-            .checked_mul(PRIVACY_PROMETHEUS_MAX_BYTES_PER_BUCKET_V1)
-        {
-            Some(maximum) => maximum,
-            None => return String::new(),
-        };
-        let mut output = BoundedText::new(maximum);
-        for bucket in &state.completed {
-            bucket.render_prometheus(&mut output, mode, bucket_secs);
-        }
+        let mut output = BoundedText::new(PRIVACY_PROMETHEUS_MAX_BYTES_V1);
+        state
+            .prometheus
+            .render_prometheus(&mut output, mode, bucket_secs);
         output.into_string()
     }
     fn with_bucket<F>(&self, when: SystemTime, mut update: F)
@@ -745,6 +801,12 @@ impl PrivacyAggregator {
             .lock()
             .expect("soranet privacy aggregator mutex poisoned");
         let bucket_idx = bucket_index(when, self.config.bucket_secs);
+        if state
+            .finalized_through
+            .is_some_and(|finalized| bucket_idx <= finalized)
+        {
+            return;
+        }
         if !state.open.contains_key(&bucket_idx)
             && state.open.len()
                 >= usize::try_from(PRIVACY_MAX_OPEN_BUCKETS_V1).unwrap_or(usize::MAX)
@@ -767,8 +829,9 @@ impl PrivacyState {
         }
         for (&bucket_idx, stats) in self.open.iter() {
             let age = current_idx.saturating_sub(bucket_idx);
-            let meets_delay = age >= config.flush_delay_buckets;
-            let force_flush = age >= config.force_flush_buckets;
+            let bucket_closed = age > 0;
+            let meets_delay = bucket_closed && age >= config.flush_delay_buckets;
+            let force_flush = bucket_closed && age >= config.force_flush_buckets;
             if !meets_delay && !force_flush {
                 break;
             }
@@ -791,6 +854,13 @@ impl PrivacyState {
         }
     }
     fn push_completed(&mut self, bucket: CompletedBucket, max_completed: usize) {
+        self.finalized_through = Some(
+            self.finalized_through
+                .map_or(bucket.start_bucket, |current| {
+                    current.max(bucket.start_bucket)
+                }),
+        );
+        self.prometheus.record(&bucket);
         if max_completed == 0 {
             return;
         }
@@ -975,6 +1045,7 @@ fn normalize_config(mut config: PrivacyConfig) -> PrivacyConfig {
     if config.expected_shares == 0 {
         config.expected_shares = PrivacyConfig::default().expected_shares;
     }
+    config.expected_shares = config.expected_shares.min(PRIVACY_MAX_EXPECTED_SHARES_V1);
     if config.event_buffer_capacity == 0 {
         config.event_buffer_capacity = PrivacyConfig::default().event_buffer_capacity;
     }
@@ -982,7 +1053,9 @@ fn normalize_config(mut config: PrivacyConfig) -> PrivacyConfig {
         .event_buffer_capacity
         .min(PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
     config.flush_delay_buckets = config.flush_delay_buckets.min(PRIVACY_MAX_OPEN_BUCKETS_V1);
-    config.force_flush_buckets = config.force_flush_buckets.min(PRIVACY_MAX_OPEN_BUCKETS_V1);
+    config.force_flush_buckets = config
+        .force_flush_buckets
+        .clamp(1, PRIVACY_MAX_OPEN_BUCKETS_V1);
     if config.force_flush_buckets < config.flush_delay_buckets {
         config.force_flush_buckets = config.flush_delay_buckets;
     }
@@ -1047,6 +1120,70 @@ mod tests {
         );
     }
     #[test]
+    fn prometheus_export_has_fixed_labels_cumulative_counters_and_latest_gauges() {
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            bucket_secs: 60,
+            min_handshakes: 1,
+            flush_delay_buckets: 1,
+            force_flush_buckets: 2,
+            ..PrivacyConfig::default()
+        });
+        let first = UNIX_EPOCH + Duration::from_secs(120);
+        aggregator.record_circuit_accepted(first, Some(25), Some(4));
+        aggregator.record_throttle(first, ThrottleScope::Emergency);
+        aggregator.record_gar_category(first, "first-category");
+        let first_render =
+            aggregator.render_prometheus(RelayMode::Entry, first + Duration::from_secs(60));
+        assert!(
+            first_render
+                .contains("soranet_privacy_latest_bucket_start_unixtime{mode=\"entry\"} 120")
+        );
+
+        let second = first + Duration::from_secs(60);
+        aggregator.record_circuit_accepted(second, Some(50), Some(9));
+        aggregator.record_throttle(second, ThrottleScope::Emergency);
+        aggregator.record_gar_category(second, "rotated-category");
+        let output =
+            aggregator.render_prometheus(RelayMode::Entry, second + Duration::from_secs(60));
+        assert!(
+            output.contains(
+                "soranet_privacy_circuit_events_total{mode=\"entry\",kind=\"accepted\"} 2"
+            )
+        );
+        assert!(
+            output
+                .contains("soranet_privacy_throttles_total{mode=\"entry\",scope=\"emergency\"} 2")
+        );
+        assert!(output.contains("soranet_privacy_gar_reports_total{mode=\"entry\"} 2"));
+        assert!(
+            output.contains("soranet_privacy_latest_bucket_start_unixtime{mode=\"entry\"} 180")
+        );
+        assert!(output.contains("soranet_privacy_active_circuits_max{mode=\"entry\"} 9"));
+        assert!(!output.contains("bucket_start=\""));
+        assert!(!output.contains("category_hash=\""));
+        assert!(!output.contains("first-category"));
+        assert!(!output.contains("rotated-category"));
+        assert_eq!(
+            output
+                .lines()
+                .filter(|line| line.starts_with("soranet_privacy_rtt_millis{"))
+                .count(),
+            3,
+            "RTT export must remain limited to fixed p50/p90/p99 series"
+        );
+        assert_eq!(
+            aggregator.render_prometheus(RelayMode::Entry, second + Duration::from_secs(60)),
+            output,
+            "scraping must not count completed buckets again"
+        );
+        aggregator.record_circuit_accepted(first, None, None);
+        assert_eq!(
+            aggregator.render_prometheus(RelayMode::Entry, second + Duration::from_secs(60)),
+            output,
+            "late events must not reopen and recount a finalized bucket"
+        );
+    }
+    #[test]
     fn renders_emergency_scope_metric() {
         let config = PrivacyConfig {
             min_handshakes: 1,
@@ -1088,16 +1225,60 @@ mod tests {
         );
     }
     #[test]
+    fn current_bucket_never_flushes_or_reopens_when_delay_is_zero() {
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            bucket_secs: 60,
+            min_handshakes: 1,
+            flush_delay_buckets: 0,
+            force_flush_buckets: 1,
+            ..PrivacyConfig::default()
+        });
+        let bucket_start = UNIX_EPOCH + Duration::from_secs(120);
+        aggregator.record_circuit_accepted(bucket_start, None, None);
+        assert!(
+            aggregator
+                .render_prometheus(RelayMode::Entry, bucket_start + Duration::from_secs(59))
+                .is_empty(),
+            "an open current bucket must not emit"
+        );
+        aggregator.record_circuit_accepted(bucket_start + Duration::from_secs(30), None, None);
+        let output =
+            aggregator.render_prometheus(RelayMode::Entry, bucket_start + Duration::from_secs(60));
+        assert!(
+            output.contains("kind=\"accepted\"} 2"),
+            "the closed bucket must emit once with both contributions: {output}"
+        );
+    }
+    #[test]
     fn event_buffer_serialises_ndjson() {
         let buffer = PrivacyEventBuffer::new(4);
         let mode = SoranetPrivacyModeV1::Entry;
         let when = base_time();
+        buffer.record_handshake_failure(
+            mode,
+            when,
+            SoranetPrivacyHandshakeFailureV1::Pow,
+            None,
+            None,
+        );
+        buffer.record_handshake_failure(
+            mode,
+            when,
+            SoranetPrivacyHandshakeFailureV1::Timeout,
+            Some(SoranetPowFailureReasonV1::ClockError),
+            None,
+        );
+        assert_eq!(
+            buffer.queue_depth(),
+            0,
+            "non-canonical failures must be dropped"
+        );
         buffer.record_handshake_success(mode, when, Some(12), Some(3));
         buffer.record_handshake_failure(
             mode,
             when,
-            SoranetPrivacyHandshakeFailureV1::Downgrade,
-            Some("suite_no_overlap"),
+            SoranetPrivacyHandshakeFailureV1::Pow,
+            Some(SoranetPowFailureReasonV1::SignatureInvalid),
             Some(24),
         );
         buffer.record_throttle(mode, when, SoranetPrivacyThrottleScopeV1::Congestion);
@@ -1113,8 +1294,12 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("\"detail\":\"suite_no_overlap\"")),
-            "downgrade detail should show up in NDJSON: {body}"
+                .any(|line| line.contains("\"pow_reason\":\"signature_invalid\"")),
+            "typed PoW reason should show up in NDJSON: {body}"
+        );
+        assert!(
+            !body.contains("\"detail\""),
+            "free-form detail must be absent: {body}"
         );
         assert!(
             lines.iter().any(|line| line.contains("Throttle")),
@@ -1131,12 +1316,12 @@ mod tests {
         assert_eq!(buffer.queue_depth(), 0, "drain must empty the queue");
     }
     #[test]
-    fn proxy_policy_buffer_trims_details_and_caps_queue() {
+    fn proxy_policy_buffer_emits_typed_downgrades_and_caps_queue() {
         let buffer = ProxyPolicyEventBuffer::new(2);
         let mode = SoranetPrivacyModeV1::Middle;
         let when = base_time();
-        buffer.record_downgrade(mode, when, Some("  constant-rate capability missing  "));
-        buffer.record_downgrade(mode, when, Some("   "));
+        buffer.record_downgrade(mode, when);
+        buffer.record_downgrade(mode, when + Duration::from_secs(1));
         assert_eq!(buffer.queue_depth(), 2, "queue depth respects capacity");
         let body = buffer.drain_ndjson();
         let lines: Vec<&str> = body.trim_end().split('\n').collect();
@@ -1148,25 +1333,26 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("\"detail\":\"constant-rate capability missing\"")),
-            "trimmed detail should be preserved in NDJSON: {body}"
+                .all(|line| line.contains("\"reason\":\"downgrade\"")),
+            "only typed downgrade events should be emitted: {body}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("\"detail\":null")),
-            "blank detail should serialise as null: {body}"
+            !body.contains("\"detail\""),
+            "free-form detail must be absent: {body}"
         );
         assert_eq!(buffer.queue_depth(), 0, "drain must empty queue");
-        buffer.record_downgrade(mode, when, Some("first"));
-        buffer.record_downgrade(mode, when, Some("second"));
-        buffer.record_downgrade(mode, when, Some("third"));
+        buffer.record_downgrade(mode, when);
+        buffer.record_downgrade(mode, when + Duration::from_secs(1));
+        buffer.record_downgrade(mode, when + Duration::from_secs(2));
         assert_eq!(buffer.queue_depth(), 2, "oldest downgrade must be evicted");
         let truncated = buffer.drain_ndjson();
         assert!(
-            !truncated.contains("first"),
+            !truncated.contains("\"timestamp_unix\":1000"),
             "oldest downgrade should be dropped when capacity exceeded: {truncated}"
         );
         assert!(
-            truncated.contains("second") && truncated.contains("third"),
+            truncated.contains("\"timestamp_unix\":1001")
+                && truncated.contains("\"timestamp_unix\":1002"),
             "newest downgrades must remain in buffer: {truncated}"
         );
     }
@@ -1202,6 +1388,7 @@ mod tests {
             flush_delay_buckets: u64::MAX,
             force_flush_buckets: u64::MAX,
             max_completed_buckets: usize::MAX,
+            expected_shares: u16::MAX,
             event_buffer_capacity: usize::MAX,
             ..PrivacyConfig::default()
         });
@@ -1221,6 +1408,10 @@ mod tests {
             aggregator.config.force_flush_buckets,
             PRIVACY_MAX_OPEN_BUCKETS_V1
         );
+        assert_eq!(
+            aggregator.config.expected_shares,
+            PRIVACY_MAX_EXPECTED_SHARES_V1
+        );
         let buffer = PrivacyEventBuffer::new(usize::MAX);
         assert!(
             buffer.max_events == 0 || buffer.max_events == PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1
@@ -1229,11 +1420,17 @@ mod tests {
         assert!(proxy.max_events == 0 || proxy.max_events == PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
     }
     #[test]
-    fn privacy_detail_and_category_retention_are_bounded() {
-        let detail = "é".repeat(PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
-        let retained = detail_to_string(Some(&detail)).expect("bounded detail");
-        assert_eq!(retained.len(), PRIVACY_EVENT_DETAIL_MAX_BYTES_V1);
-        assert!(retained.is_char_boundary(retained.len()));
+    fn programmatic_zero_force_window_normalizes_to_one_closed_bucket() {
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            flush_delay_buckets: 0,
+            force_flush_buckets: 0,
+            ..PrivacyConfig::default()
+        });
+        assert_eq!(aggregator.config.flush_delay_buckets, 0);
+        assert_eq!(aggregator.config.force_flush_buckets, 1);
+    }
+    #[test]
+    fn privacy_category_retention_is_bounded() {
         let mut bucket = BucketStats::default();
         for index in 0..=PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
             bucket.record_gar_category(format!("{index:016x}"));

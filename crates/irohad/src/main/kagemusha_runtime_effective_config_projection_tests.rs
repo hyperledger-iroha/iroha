@@ -79,6 +79,56 @@ fn runtime_effective_projection_binds_frozen_pops_and_rejects_observers() {
         advertised_peers[0].address().clone(),
         "the projection must seal the advertised endpoint, not the bind address",
     );
+    let signed_genesis_projection = iroha_core::smartcontracts::isi::offline::VerifiedKagemushaV4RuntimeEffectiveConfigV1::derive_from_signed_genesis(
+        &fixture.config,
+        &fixture.genesis,
+    )
+    .expect("signed genesis derives the same runtime projection");
+    assert_eq!(projection, signed_genesis_projection.projection());
+
+    let mut snapshot_context = bootstrap.context().clone();
+    snapshot_context.height = 2;
+    snapshot_context.epoch_end_height = snapshot_context.epoch_end_height.max(2);
+    snapshot_context.parent_commit_qc = None;
+    snapshot_context.nexus_amx_context_hash =
+        iroha_crypto::Hash::new(b"post-genesis authenticated Nexus context");
+    snapshot_context.snapshot_bootstrap = Some(
+        iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor {
+            snapshot_height: 1,
+            snapshot_block_hash: fixture.genesis.0.hash(),
+            snapshot_block_creation_time_ms: 1,
+            snapshot_state_hash: iroha_crypto::Hash::new(b"authenticated snapshot state"),
+        },
+    );
+    let snapshot = iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord {
+        version:
+            iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord::VERSION,
+        context: snapshot_context,
+        validator_set_pops: bootstrap.proofs_of_possession().to_vec(),
+    };
+    snapshot.validate().expect("valid snapshot lineage fixture");
+    let snapshot_projection = iroha_core::smartcontracts::isi::offline::VerifiedKagemushaV4RuntimeEffectiveConfigV1::derive_from_authenticated_snapshot(
+        &fixture.config,
+        &snapshot,
+        std::time::Duration::from_millis(fixture.cadence_ms),
+        projection.genesis_context,
+    )
+    .expect("authenticated snapshot derives the same runtime projection");
+    assert_eq!(projection, snapshot_projection.projection());
+    let mut leader_ordered_snapshot = snapshot;
+    leader_ordered_snapshot.context.roster.reverse();
+    leader_ordered_snapshot.validator_set_pops.reverse();
+    leader_ordered_snapshot
+        .validate()
+        .expect("leader ordering preserves a valid snapshot roster");
+    let leader_ordered_projection = iroha_core::smartcontracts::isi::offline::VerifiedKagemushaV4RuntimeEffectiveConfigV1::derive_from_authenticated_snapshot(
+        &fixture.config,
+        &leader_ordered_snapshot,
+        std::time::Duration::from_millis(fixture.cadence_ms),
+        projection.genesis_context,
+    )
+    .expect("leader-ordered snapshot derives the canonical runtime projection");
+    assert_eq!(projection, leader_ordered_projection.projection());
 
     let mut second_host = fixture.config.clone();
     let second_myself = iroha_data_model::peer::Peer::new(

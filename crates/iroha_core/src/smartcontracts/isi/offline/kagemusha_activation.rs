@@ -8,6 +8,7 @@ impl Execute for ActivateKagemushaRecursiveReleaseV4 {
     ) -> Result<(), Error> {
         kagemusha_release_lifecycle::require_direct_stage(&self, state_transaction)?;
         ensure_kagemusha_recursive_release_v4_activation_authorized(state_transaction, authority)?;
+        let runtime_effective_config_sha256 = self.runtime_effective_config_sha256;
         let promotion_binding = self.promotion_binding;
         let policy = self.device_attestation_policy;
         validate_offline_attestation_policy_for_release_activation(
@@ -152,6 +153,7 @@ impl Execute for ActivateKagemushaRecursiveReleaseV4 {
             binding.clone(),
             policy,
             &release_record_bytes,
+            runtime_effective_config_sha256,
             expected_eq_id.clone(),
             expected_ep_id.clone(),
             expected_version,

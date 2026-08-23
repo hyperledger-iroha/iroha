@@ -662,8 +662,8 @@ def test_runbook_carries_native_runtime_and_sealed_report_inputs() -> None:
         r"After dispatch\s+and before approving the\s+protected environment", runbook
     )
     assert "invokes `revalidate-catalog`" in runbook
-    assert "exact sixteen-file pre-promotion candidate" in runbook
-    assert "full exact\nseventeen-file promoted-release verifier" in runbook
+    assert "exact seventeen-file pre-promotion candidate" in runbook
+    assert "full exact\neighteen-file promoted-release verifier" in runbook
     assert re.search(
         r"workflow does not invoke the authenticated controller's\s+"
         r"`promote-kagemusha-release-v4`",
@@ -683,8 +683,8 @@ def test_kagami_promotion_source_is_verify_publish_verify() -> None:
     publish = helper.index("publish(&candidate)?")
     promoted = helper.index("verify(ReleaseInventoryStateV4::Promoted)")
     assert candidate < publish < promoted
-    assert "Self::Candidate => 16" in source
-    assert "Self::Promoted => 17" in source
+    assert "Self::Candidate => 17" in source
+    assert "Self::Promoted => 18" in source
     assert "supplied.as_os_str() != expected.as_os_str()" in source
 
 

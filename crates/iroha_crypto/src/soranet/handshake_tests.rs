@@ -254,8 +254,8 @@ mod tests {
             .expect("a stuck nonzero RNG must not expose reused secret material");
         match error {
             HarnessError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "building client static Noise secret");
-                assert!(message.contains("repeated client nonce material"));
+                assert_eq!(operation, "building client hello nonce");
+                assert!(message.contains("all-identical-byte material"));
             }
             other => panic!("expected repeated RNG failure, got {other:?}"),
         }
@@ -276,8 +276,8 @@ mod tests {
         .expect("a stuck relay RNG must not reuse public nonce material as a secret");
         match error {
             HarnessError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "building relay ephemeral Noise secret");
-                assert!(message.contains("repeated relay nonce material"));
+                assert_eq!(operation, "building relay nonce");
+                assert!(message.contains("all-identical-byte material"));
             }
             other => panic!("expected repeated relay RNG failure, got {other:?}"),
         }
@@ -525,28 +525,225 @@ mod tests {
         assert!(matches!(err, HarnessError::DuplicateCapability(_)));
     }
     #[test]
-    fn parse_capabilities_allows_duplicate_pqsig() {
+    fn parse_capabilities_rejects_repeated_algorithm_ids_even_when_flags_differ() {
+        for (ty, id) in [(CAPABILITY_PQKEM, 0x01), (CAPABILITY_PQSIG, 0x01)] {
+            let entries = vec![
+                CapabilityTlv {
+                    ty,
+                    value: vec![id, 0x00],
+                    required: false,
+                },
+                CapabilityTlv {
+                    ty,
+                    value: vec![id, CAPABILITY_REQUIRED_FLAG],
+                    required: false,
+                },
+            ];
+            let error = parse_capabilities(&encode_tlvs(&entries))
+                .expect_err("repeated algorithm identifier must fail closed");
+            assert!(
+                matches!(error, HarnessError::DuplicateCapability(ref label) if label.contains(&format!("algorithm id 0x{id:02x}"))),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn parse_capabilities_allows_distinct_kem_ids_and_repeated_grease_types() {
         let entries = vec![
             CapabilityTlv {
-                ty: CAPABILITY_PQSIG,
-                value: vec![0x01, 0x00],
+                ty: CAPABILITY_PQKEM,
+                value: vec![0x00, 0x00],
                 required: false,
             },
             CapabilityTlv {
-                ty: CAPABILITY_PQSIG,
-                value: vec![0x02, 0x00],
+                ty: CAPABILITY_PQKEM,
+                value: vec![0x01, CAPABILITY_REQUIRED_FLAG],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: 0x7F10,
+                value: vec![0xAA],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: 0x7F10,
+                value: vec![0xBB],
                 required: false,
             },
         ];
-        let buf = encode_tlvs(&entries);
-        let parsed = parse_capabilities(&buf).expect("pqsig duplicates allowed");
-        let pqsigs: Vec<_> = parsed
-            .iter()
-            .filter(|cap| cap.ty == CAPABILITY_PQSIG)
-            .collect();
-        assert_eq!(pqsigs.len(), 2);
-        assert_eq!(pqsigs[0].value, vec![0x01, 0x00]);
-        assert_eq!(pqsigs[1].value, vec![0x02, 0x00]);
+        let parsed = parse_capabilities(&encode_tlvs(&entries))
+            .expect("distinct algorithms and repeated GREASE types stay legal");
+        assert_eq!(parsed.len(), entries.len());
+    }
+    #[test]
+    fn parse_capabilities_rejects_unsupported_algorithm_ids() {
+        for (ty, id, expected) in [
+            (CAPABILITY_PQKEM, 0xff, "unsupported ML-KEM identifier"),
+            (
+                CAPABILITY_PQSIG,
+                0x00,
+                "unsupported first-release signature identifier",
+            ),
+            (
+                CAPABILITY_PQSIG,
+                0x02,
+                "unsupported first-release signature identifier",
+            ),
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty,
+                value: vec![id, 0],
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("unsupported algorithm identifier must fail closed");
+            assert!(
+                matches!(error, HarnessError::Validation(ref message) if message.contains(expected)),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn parse_capabilities_rejects_reserved_flag_bits() {
+        for (ty, value, label) in [
+            (CAPABILITY_PQKEM, vec![0x01, 0x02], "snnet.pqkem"),
+            (CAPABILITY_PQSIG, vec![0x01, 0x80], "snnet.pqsig"),
+            (
+                CAPABILITY_CONSTANT_RATE,
+                vec![0x01, 0x40, 0x00, 0x04],
+                "snnet.constant_rate",
+            ),
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty,
+                value,
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("reserved first-release flag bits must fail closed");
+            match error {
+                HarnessError::Validation(message) => {
+                    assert!(message.contains(label), "unexpected error: {message}");
+                    assert!(
+                        message.contains("undefined flag bits"),
+                        "unexpected error: {message}"
+                    );
+                }
+                other => panic!("expected validation error, got {other:?}"),
+            }
+        }
+    }
+    #[test]
+    fn parse_capabilities_rejects_invalid_role_and_constant_rate_payloads() {
+        for role in [0x00, 0x08, 0x80, 0xFF] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty: CAPABILITY_ROLE,
+                value: vec![role],
+                required: false,
+            }]);
+            let error = parse_capabilities(&encoded)
+                .expect_err("zero or reserved role bits must fail closed");
+            assert!(
+                matches!(error, HarnessError::Validation(ref message) if message.contains("invalid first-release role bits")),
+                "unexpected error: {error:?}"
+            );
+        }
+
+        for value in [
+            vec![0x01, 0x00, 0x00],
+            vec![0x01, 0x00, 0x00, 0x04, 0x00],
+            vec![0x02, 0x00, 0x00, 0x04],
+            vec![0x01, 0x00, 0xFF, 0x03],
+        ] {
+            let encoded = encode_tlvs(&[CapabilityTlv {
+                ty: CAPABILITY_CONSTANT_RATE,
+                value,
+                required: false,
+            }]);
+            parse_capabilities(&encoded)
+                .expect_err("noncanonical constant-rate descriptor must fail closed");
+        }
+        let canonical = encode_tlvs(&[CapabilityTlv {
+            ty: CAPABILITY_CONSTANT_RATE,
+            value: vec![0x01, 0x00, 0x00, 0x04],
+            required: true,
+        }]);
+        let parsed = parse_capabilities(&canonical)
+            .expect("canonical first-release constant-rate descriptor");
+        assert_eq!(parsed[0].value, vec![0x01, 0x01, 0x00, 0x04]);
+        assert!(parsed[0].required);
+    }
+    #[test]
+    fn parse_capabilities_rejects_vectors_above_first_release_limit() {
+        let oversized = vec![0_u8; MAX_CAPABILITY_VECTOR_LEN + 1];
+        let error = parse_capabilities(&oversized)
+            .expect_err("oversized capability vector must fail before parsing or allocation");
+        assert!(matches!(
+            error,
+            HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            } if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
+    }
+    #[test]
+    fn update_suite_list_enforces_aggregate_vector_limit() {
+        let suites = [
+            HandshakeSuite::Nk2Hybrid,
+            HandshakeSuite::Nk3PqForwardSecure,
+        ];
+        // The inserted suite-list occupies six encoded bytes. Leave exactly
+        // that much room after a single GREASE TLV.
+        let exact_base = encode_tlvs(&[CapabilityTlv {
+            ty: 0x7F10,
+            value: vec![0xAA; MAX_CAPABILITY_VECTOR_LEN - 10],
+            required: false,
+        }]);
+        let exact = update_suite_list(&exact_base, &suites, true)
+            .expect("suite insertion at the exact aggregate limit must succeed");
+        assert_eq!(exact.len(), MAX_CAPABILITY_VECTOR_LEN);
+
+        let oversized_base = encode_tlvs(&[CapabilityTlv {
+            ty: 0x7F10,
+            value: vec![0xAA; MAX_CAPABILITY_VECTOR_LEN - 9],
+            required: false,
+        }]);
+        assert!(matches!(
+            update_suite_list(&oversized_base, &suites, true),
+            Err(HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            }) if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
+    }
+    #[test]
+    fn handshake_negotiation_rejects_noncanonical_client_capability_order() {
+        let mut client = parse_capabilities(&DEFAULT_CLIENT_CAPABILITIES)
+            .expect("default client capabilities parse");
+        client.swap(0, 1);
+        let encoded_client = encode_tlvs(&client);
+        let error = validate_client_capability_vector(&encoded_client)
+            .expect_err("client vector validation must reject decreasing capability types");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("nondecreasing order")),
+            "unexpected error: {error:?}"
+        );
+        let relay = parse_capabilities(&DEFAULT_RELAY_CAPABILITIES)
+            .expect("default relay capabilities parse");
+        let error = negotiate_handshake_suite(&client, &relay)
+            .expect_err("decreasing client capability types must fail closed");
+        assert!(
+            matches!(error, HarnessError::Validation(ref message) if message.contains("nondecreasing order")),
+            "unexpected error: {error:?}"
+        );
+        let mut reordered_relay = relay;
+        reordered_relay.reverse();
+        negotiate_handshake_suite(
+            &parse_capabilities(&DEFAULT_CLIENT_CAPABILITIES)
+                .expect("canonical client capabilities parse"),
+            &reordered_relay,
+        )
+        .expect("relay capability order is transcript-bound but not client-canonicalized");
     }
     #[test]
     fn build_interop_value_exposes_session_key() {
@@ -637,7 +834,7 @@ mod tests {
     #[test]
     fn decode_handshake_inputs_handles_resume_hash() {
         let base = &super::INTEROP_SPECS[0];
-        let resume_hex = "aabbccddeeff00112233445566778899";
+        let resume_hex = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
         let spec = super::InteropSpec {
             id: "resume-test",
             description: "spec exercising resume hash decoding",
@@ -660,11 +857,21 @@ mod tests {
             super::decode_hex(base.client_static_sk_hex)
                 .expect("decode baseline client static key")
         );
-        let resume = inputs.resume_hash.expect("resume hash decoded");
-        assert_eq!(
-            resume,
-            super::decode_hex(resume_hex).expect("decode resume hex")
-        );
+        let resume = inputs.resume_hash.as_ref().expect("resume hash decoded");
+        let expected_resume = super::decode_hex(resume_hex).expect("decode resume hex");
+        assert_eq!(resume.as_slice(), expected_resume.as_slice());
+
+        let invalid = super::InteropSpec {
+            resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
+            ..spec
+        };
+        let error = super::decode_handshake_inputs(&invalid)
+            .err()
+            .expect("noncanonical resume hash width must fail");
+        assert!(matches!(
+            error,
+            HarnessError::Validation(message) if message.contains("resume_hash_hex must decode to 32 bytes")
+        ));
     }
     #[test]
     fn build_session_artifacts_emits_forward_shared_for_nk3() {
@@ -764,6 +971,146 @@ mod tests {
             decode_hex("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
                 .expect("relay static hex");
         (client_static, relay_static)
+    }
+    #[test]
+    fn simulation_rejects_degenerate_or_reused_static_keys() {
+        for key in [[0_u8; NOISE_SECRET_LEN], [0xA5; NOISE_SECRET_LEN]] {
+            let error = validate_static_key("client", &key)
+                .expect_err("repeated-byte static keys must fail closed");
+            assert!(matches!(
+                error,
+                HarnessError::Validation(message) if message.contains("degenerate key")
+            ));
+        }
+        let client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
+        let relay_caps = DEFAULT_RELAY_CAPABILITIES.to_vec();
+        let shared = decode_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+            .expect("static key");
+        let error = simulate_handshake(&SimulationParams {
+            client_capabilities: &client_caps,
+            relay_capabilities: &relay_caps,
+            client_static_sk: &shared,
+            relay_static_sk: &shared,
+            resume_hash: None,
+            descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
+            client_nonce: &[0x11; NOISE_SECRET_LEN],
+            relay_nonce: &[0x22; NOISE_SECRET_LEN],
+            kem_id: 1,
+            sig_id: 1,
+        })
+        .expect_err("static key reuse across roles must fail closed");
+        assert!(matches!(
+            error,
+            HarnessError::Validation(message) if message.contains("must be distinct")
+        ));
+    }
+    #[test]
+    fn simulation_params_debug_redacts_static_secrets() {
+        let client_secret = [0xDE, 0xAD, 0xBE, 0xEF];
+        let relay_secret = [0xCA, 0xFE, 0xBA, 0xBE];
+        let params = SimulationParams {
+            client_capabilities: &[],
+            relay_capabilities: &[],
+            client_static_sk: &client_secret,
+            relay_static_sk: &relay_secret,
+            resume_hash: None,
+            descriptor_commit: &[],
+            client_nonce: &[],
+            relay_nonce: &[],
+            kem_id: 1,
+            sig_id: 1,
+        };
+        let debug = format!("{params:?}");
+        assert!(debug.contains("client_static_sk: \"[REDACTED]\""));
+        assert!(debug.contains("relay_static_sk: \"[REDACTED]\""));
+        assert!(!debug.contains("222, 173, 190, 239"));
+        assert!(!debug.contains("202, 254, 186, 190"));
+    }
+    #[test]
+    fn deterministic_simulation_intermediates_are_explicitly_zeroizable() {
+        let simulated_kem = || SimulatedKemArtifacts {
+            client_public: vec![1; 2],
+            relay_public: vec![2; 2],
+            ciphertext: vec![3; 2],
+            confirmation: vec![4; 2],
+            shared_secret: vec![5; 2],
+        };
+        let mut kem = simulated_kem();
+        kem.zeroize_sensitive_fields();
+        assert!(
+            [
+                &kem.client_public,
+                &kem.relay_public,
+                &kem.ciphertext,
+                &kem.confirmation,
+                &kem.shared_secret,
+            ]
+            .into_iter()
+            .all(|field| field.iter().all(|byte| *byte == 0))
+        );
+
+        let mut material = DeterministicHandshakeMaterial {
+            client_static_public: [1; NOISE_SECRET_LEN],
+            client_ephemeral_public: [2; NOISE_SECRET_LEN],
+            relay_static_bytes: [3; NOISE_SECRET_LEN],
+            relay_static_public: [4; NOISE_SECRET_LEN],
+            relay_ephemeral_public: [5; NOISE_SECRET_LEN],
+            primary_kem: simulated_kem(),
+            forward_secure_kem: simulated_kem(),
+        };
+        material.zeroize_sensitive_fields();
+        assert_eq!(material.relay_static_bytes, [0; NOISE_SECRET_LEN]);
+        assert!(
+            material
+                .primary_kem
+                .shared_secret
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert!(
+            material
+                .forward_secure_kem
+                .shared_secret
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+
+        let mut inputs = HandshakeInputs {
+            client_static: [1; NOISE_SECRET_LEN],
+            relay_static: [2; NOISE_SECRET_LEN],
+            client_nonce: [3; NOISE_SECRET_LEN],
+            relay_nonce: [4; NOISE_SECRET_LEN],
+            resume_hash: Some(vec![5; TRANSCRIPT_BINDING_LEN]),
+        };
+        inputs.zeroize_sensitive_fields();
+        assert_eq!(inputs.client_static, [0; NOISE_SECRET_LEN]);
+        assert!(
+            inputs
+                .resume_hash
+                .as_ref()
+                .is_none_or(|value| { value.iter().all(|byte| *byte == 0) })
+        );
+
+        let mut session = SessionArtifacts {
+            handshake: HandshakeArtifacts {
+                steps: Vec::new(),
+                telemetry_payloads: Vec::new(),
+            },
+            session_key: vec![1; 32],
+            session_confirmation: vec![2; 32],
+            primary_shared: vec![3; 32],
+            forward_shared: Some(vec![4; 32]),
+            dual_mix: Some(vec![5; 32]),
+        };
+        session.zeroize_sensitive_fields();
+        assert!(session.session_key.iter().all(|byte| *byte == 0));
+        assert!(session.primary_shared.iter().all(|byte| *byte == 0));
+        assert!(
+            session
+                .forward_shared
+                .as_ref()
+                .is_none_or(|value| value.iter().all(|byte| *byte == 0))
+        );
     }
     fn suite_list_tlv(required: bool, suites: &[HandshakeSuite]) -> Vec<u8> {
         assert!(
@@ -1834,6 +2181,32 @@ mod tests {
         assert_eq!(hash.len(), 32);
     }
     #[test]
+    fn transcript_hash_rejects_noncanonical_widths_and_suite_ids() {
+        let field = [0x11_u8; TRANSCRIPT_BINDING_LEN];
+        let short = [0x22_u8; TRANSCRIPT_BINDING_LEN - 1];
+        let base = |client_nonce: &[u8], resume_hash: Option<&[u8]>, kem_id, sig_id| {
+            TranscriptInputs {
+                descriptor_commit: &field,
+                client_nonce,
+                relay_nonce: &field,
+                capability_bytes: &[],
+                kem_id,
+                sig_id,
+                handshake_suite: HandshakeSuite::Nk2Hybrid,
+                resume_hash,
+            }
+            .compute_hash()
+        };
+        for error in [
+            base(&short, None, 1, 1).expect_err("short nonce must fail"),
+            base(&field, Some(&short), 1, 1).expect_err("short resume hash must fail"),
+            base(&field, None, 0xFF, 1).expect_err("unsupported KEM must fail"),
+            base(&field, None, 1, 0xFF).expect_err("unsupported signature must fail"),
+        ] {
+            assert!(matches!(error, HarnessError::Validation(_)));
+        }
+    }
+    #[test]
     fn transcript_capability_length_rejects_u32_overflow() {
         let err = transcript_capability_len_bytes(u32::MAX as usize + 1)
             .expect_err("oversized transcript capability vector must fail");
@@ -2737,13 +3110,7 @@ mod tests {
     fn build_client_hello_rejects_oversized_capabilities_before_rng() {
         let defaults = RuntimeParams::soranet_defaults();
         let mut oversized_client_capabilities = defaults.client_capabilities.to_vec();
-        while u16::try_from(oversized_client_capabilities.len()).is_ok() {
-            oversized_client_capabilities.extend_from_slice(&CAPABILITY_PQSIG.to_be_bytes());
-            oversized_client_capabilities.extend_from_slice(&2_u16.to_be_bytes());
-            oversized_client_capabilities.extend_from_slice(&[0x01, 0x00]);
-        }
-        parse_capabilities(&oversized_client_capabilities)
-            .expect("oversized capability stream remains structurally valid");
+        oversized_client_capabilities.resize(MAX_CAPABILITY_VECTOR_LEN + 1, 0);
         let params = RuntimeParams {
             descriptor_commit: defaults.descriptor_commit,
             client_capabilities: &oversized_client_capabilities,
@@ -2758,14 +3125,13 @@ mod tests {
             Ok(_) => panic!("oversized capabilities must fail before client RNG"),
             Err(err) => err,
         };
-        match err {
-            HarnessError::Validation(message) => assert!(
-                message.contains("client capability vector")
-                    && message.contains("exceeds u16::MAX"),
-                "unexpected message: {message}"
-            ),
-            other => panic!("expected capability validation error, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            HarnessError::CapabilityVectorTooLong {
+                actual,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            } if actual == MAX_CAPABILITY_VECTOR_LEN + 1
+        ));
     }
     #[test]
     fn build_client_hello_rejects_transport_unencodable_aggregate_frame() {
@@ -2879,7 +3245,7 @@ mod tests {
             parse_capabilities(client_params.client_capabilities).expect("parse defaults");
         client_entries.push(CapabilityTlv {
             ty: CAPABILITY_CONSTANT_RATE,
-            value: vec![0x01, 0x01],
+            value: vec![0x01, 0x00, 0x00, 0x04],
             required: true,
         });
         client_entries.sort_by_key(|cap| cap.ty);
@@ -2889,7 +3255,7 @@ mod tests {
             parse_capabilities(client_params.relay_capabilities).expect("parse relay defaults");
         expected_relay_entries.push(CapabilityTlv {
             ty: CAPABILITY_CONSTANT_RATE,
-            value: vec![0x01, 0x01],
+            value: vec![0x01, 0x00, 0x00, 0x04],
             required: true,
         });
         expected_relay_entries.sort_by_key(|cap| cap.ty);

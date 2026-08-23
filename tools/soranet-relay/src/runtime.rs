@@ -38,6 +38,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
+#[cfg(test)]
+use crate::metrics::normalize_downgrade_reason;
 use crate::{
     capability::{
         self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
@@ -68,7 +70,7 @@ use crate::{
         BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
         RelayPerformanceAccumulator,
     },
-    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
+    metrics::{Metrics, VpnRuntimeState},
     privacy::{
         PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
     },
@@ -2489,7 +2491,6 @@ impl RelayRuntime {
                         metrics.record_downgrade(&warning.message);
                     }
                 }
-                let downgrade_detail = downgrade_detail_from_warnings(&warnings);
                 let elapsed = attempt.elapsed();
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let event_time = SystemTime::now();
@@ -2498,14 +2499,12 @@ impl RelayRuntime {
                     privacy_mode,
                     event_time,
                     SoranetPrivacyHandshakeFailureV1::Downgrade,
-                    downgrade_detail.as_deref(),
+                    None,
                     Some(millis),
                 );
-                context.proxy_policy_events.record_downgrade(
-                    privacy_mode,
-                    event_time,
-                    downgrade_detail.as_deref(),
-                );
+                context
+                    .proxy_policy_events
+                    .record_downgrade(privacy_mode, event_time);
                 if let Some(payload) = telemetry.as_ref() {
                     warn!(
                         target: SORANET_HANDSHAKE_LOG_TARGET,
@@ -2555,6 +2554,7 @@ impl RelayRuntime {
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let pow_detail = match &error {
                     HandshakeError::Pow(pow_error) => Some(pow_failure_reason(pow_error)),
+                    HandshakeError::Puzzle(_) => Some(SoranetPowFailureReasonV1::InvalidSolution),
                     _ => None,
                 };
                 let reason = match &error {
@@ -2568,7 +2568,7 @@ impl RelayRuntime {
                     privacy_mode,
                     event_time,
                     SoranetPrivacyHandshakeFailureV1::from(reason),
-                    pow_detail.as_ref().map(|detail| detail.as_label()),
+                    pow_detail,
                     Some(millis),
                 );
                 match &error {
@@ -4151,7 +4151,8 @@ impl RelayRuntime {
         let transcript_binding = pow::derive_admission_transcript(&client_frame);
         let mut response_caps = negotiated.clone();
         response_caps.grease.extend(context.grease.iter().cloned());
-        let grease_entries = std::mem::take(&mut response_caps.grease);
+        let mut grease_entries = std::mem::take(&mut response_caps.grease);
+        grease_entries.sort_by_key(|entry| entry.ty);
         let relay_caps_bytes =
             encode_relay_advertisement(&response_caps, context.server_caps.role_bits)?;
         let relay_caps_bytes =
@@ -4403,14 +4404,59 @@ impl RelayRuntime {
         )
     }
     fn admin_bearer_token(request: &str) -> Option<&str> {
+        let headers = request.strip_suffix("\r\n\r\n")?;
         let mut token = None;
-        for line in request.lines().skip(1) {
-            if line.is_empty() {
-                break;
+        let mut host_seen = false;
+        for line in headers.split("\r\n").skip(1) {
+            if line.is_empty()
+                || line.starts_with(' ')
+                || line.starts_with('\t')
+                || line.contains('\r')
+                || line.contains('\n')
+                || !line.is_ascii()
+            {
+                return None;
             }
             let Some((name, value)) = line.split_once(':') else {
-                continue;
+                return None;
             };
+            if name.is_empty()
+                || !name.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(
+                            byte,
+                            b'!' | b'#'
+                                | b'$'
+                                | b'%'
+                                | b'&'
+                                | b'\''
+                                | b'*'
+                                | b'+'
+                                | b'-'
+                                | b'.'
+                                | b'^'
+                                | b'_'
+                                | b'`'
+                                | b'|'
+                                | b'~'
+                        )
+                })
+            {
+                return None;
+            }
+            if name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding")
+            {
+                // The first-release admin protocol is bodyless. Reject framing headers rather
+                // than letting a local reverse proxy and this parser disagree about boundaries.
+                return None;
+            }
+            if name.eq_ignore_ascii_case("host") {
+                if host_seen || value.trim().is_empty() {
+                    return None;
+                }
+                host_seen = true;
+            }
             if !name.eq_ignore_ascii_case("authorization") {
                 continue;
             }
@@ -4420,7 +4466,11 @@ impl RelayRuntime {
             let mut parts = value.split_ascii_whitespace();
             let scheme = parts.next()?;
             let candidate = parts.next()?;
-            if !scheme.eq_ignore_ascii_case("bearer") || parts.next().is_some() {
+            if !scheme.eq_ignore_ascii_case("bearer")
+                || !(32..=256).contains(&candidate.len())
+                || !candidate.bytes().all(|byte| byte.is_ascii_graphic())
+                || parts.next().is_some()
+            {
                 return None;
             }
             token = Some(candidate);
@@ -4469,9 +4519,6 @@ impl RelayRuntime {
                 "allow: GET\r\n",
             );
         }
-        if path == "/healthz" {
-            return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
-        }
         let authorized = Self::admin_bearer_token(request)
             .is_some_and(|candidate| authorization.matches(candidate));
         if !authorized {
@@ -4481,6 +4528,9 @@ impl RelayRuntime {
                 "authentication required\n",
                 "www-authenticate: Bearer realm=\"soranet-relay-admin\"\r\n",
             );
+        }
+        if path == "/healthz" {
+            return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
         }
         Self::render_admin_response(path, context, relay_id, mode).await
     }

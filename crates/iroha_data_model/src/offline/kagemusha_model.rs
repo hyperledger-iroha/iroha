@@ -1335,6 +1335,9 @@ mod model {
         pub version: u16,
         /// Portable identifier selected by deployment policy.
         pub policy_id: String,
+        /// Domain-separated identity of the only internal-validation runner authorized by policy.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub internal_validation_runner_identity_sha256: [u8; 32],
         /// Exactly release, cryptographic-review, and device-benchmark policies.
         pub roles: Vec<KagemushaRecursiveSpendReleaseRolePolicyV1>,
     }

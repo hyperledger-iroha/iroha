@@ -546,6 +546,8 @@ base genesis and publish its `genesis.expected_hash`; this hash is the sole
 `NetworkId`. Only then may operators build the finality roster and recursive
 release for that exact `NetworkId`, qualify it, and use
 `prepare-activation-v4` to prepare the governed height-two activation. The
+command takes the domain-separated digest of the complete unanimous
+four-validator runtime projection; this is not a caller-selected release tag.
 base-genesis check replays every mint, burn, and transfer of the backing asset
 in instruction order and requires a nonzero final balance. An unsupported
 instruction that could conceal a balance change fails closed; historical mint
@@ -661,7 +663,18 @@ readiness. `ActivateKagemushaRecursiveReleaseV4` carries the complete
 commits the independently pinned controller, exact reservation identity,
 nonzero promotion run, `NetworkId`, reviewed closure, manifest and release
 record, release policy, device-policy bytes, signed genesis, catalog policy,
-and execution-policy hash together with the activation. It also authenticates
+execution-policy hash, and the domain-separated digest of the complete
+unanimous validator runtime projection together with the activation. Candidate
+validation compares that digest to the immutable local startup projection
+before voting, repeats the comparison before durable application and every
+ordinary or recovered consensus signature, and checks reconstructed state
+before startup ingress opens. Authenticated-snapshot startup obtains the stable
+genesis context from the exact verified root-owned local validator seal and the
+current roster/PoPs only from the authenticated snapshot lineage; it never
+substitutes the snapshot's later Nexus context. While a release is staged or
+enabled, consensus runtime parameters covered by this lock cannot be changed.
+Historical replay remains configuration-independent and applies the comparison
+only after reconstruction. It also authenticates
 the signed release and evidence, exact-eight inventory, asset/scale and future
 issuance window, distinct inline Eq/Ep verifier records, matching local cached
 material, and the embedded production iOS and Android device-attestation
@@ -1170,14 +1183,14 @@ and the workflow does not invoke the authenticated controller's
 `promote-kagemusha-release-v4` subcommand.
 
 The local Kagami publication boundary is non-circular. `promote-release-v4`
-first authenticates the exact sixteen-file pre-promotion candidate, including
+first authenticates the exact seventeen-file pre-promotion candidate, including
 the release, cryptographic-review, and physical-device approval roles. It
 requires `--promotion-record` to be the exact canonical absent
 `<bundle-dir>/promotion-record-v4.norito` leaf, publishes the derived record with
 the descriptor-relative no-replace durable writer, and then runs the full exact
-seventeen-file promoted-release verifier. The command reports success only from
+eighteen-file promoted-release verifier. The command reports success only from
 that post-publication verification pass. `verify-release-v4` remains a distinct
-verification-only command and always requires the complete seventeen-file
+verification-only command and always requires the complete eighteen-file
 inventory.
 
 The dedicated authenticated publisher now exists as
@@ -1197,11 +1210,11 @@ additions or reordering:
 
 The controller is macOS-only and root-only. It pins the expected macOS build,
 requires canonical root-custodied controller, Kagami, bundle, and policy paths,
-authenticates the exact Kagami binary and exact sixteen-file candidate, and
+authenticates the exact Kagami binary and exact seventeen-file candidate, and
 confines the authenticated Kagami snapshot to the fixed read roots and fixed
 same-directory staging names plus the single absent
 `promotion-record-v4.norito` leaf. Publication remains no-replace. Success
-requires the exact seventeen-file result and Kagami's exact canonical one-line,
+requires the exact eighteen-file result and Kagami's exact canonical one-line,
 candidate-bound JSON report. Once publication may have started, any cleanup,
 observation, or reporting ambiguity exits with status 75 and requires explicit
 reconciliation rather than automatic retry.

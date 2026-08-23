@@ -1,4 +1,5 @@
 // Included from `runtime.rs` to preserve these handshake diagnostics in their original scope.
+#[cfg(test)]
 fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
     let slug_source = warnings
         .iter()

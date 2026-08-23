@@ -1666,17 +1666,13 @@ mod tests {
         }
     }
     #[test]
-    fn validate_client_selection_rejects_signature_mismatch() {
+    fn validate_client_selection_rejects_unsupported_signature_id() {
         let negotiated = negotiated_caps_fixture();
-        let err = validate_client_selection(
-            &negotiated,
-            KemId::MlKem768.code(),
-            SignatureId::Falcon512.code(),
-        )
-        .expect_err("signature mismatch should fail");
+        let err = validate_client_selection(&negotiated, KemId::MlKem768.code(), 0x02)
+            .expect_err("unsupported signature identifier should fail");
         match err {
             HandshakeError::InvalidClient(field) => {
-                assert_eq!(field, "client sig_id does not match negotiated capability");
+                assert_eq!(field, "client sig_id is not a supported signature suite");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2131,6 +2127,32 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::TimedOut);
     }
     #[test]
+    fn admin_auth_rejects_ambiguous_or_body_framed_headers() {
+        const TOKEN: &str = "soranet-test-admin-token-00000001";
+        let valid = format!(
+            "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        );
+        assert_eq!(RelayRuntime::admin_bearer_token(&valid), Some(TOKEN));
+        for invalid in [
+            format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n folded\r\n\r\n"),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: 0\r\n\r\n"
+            ),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            ),
+            format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nMalformed\r\n\r\n"),
+        ] {
+            assert!(
+                RelayRuntime::admin_bearer_token(&invalid).is_none(),
+                "ambiguous request was accepted: {invalid:?}"
+            );
+        }
+    }
+    #[test]
     fn admin_connection_permits_enforce_capacity() {
         let permits = Arc::new(Semaphore::new(1));
         let permit = RelayRuntime::try_admin_connection_permit(&permits)
@@ -2156,7 +2178,7 @@ mod tests {
             event_time,
             SoranetPrivacyThrottleScopeV1::DescriptorQuota,
         );
-        proxy_policy_events.record_downgrade(privacy_mode, event_time, Some("downgrade"));
+        proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let listener = match StdTcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => {
@@ -2206,6 +2228,23 @@ mod tests {
         assert!(
             unauthorized_text.starts_with("HTTP/1.1 401 Unauthorized"),
             "expected authentication failure, got: {unauthorized_text}"
+        );
+        let mut health_stream = TcpStream::connect(addr)
+            .await
+            .expect("connect to protected health endpoint");
+        health_stream
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write unauthenticated health request");
+        let mut health_response = Vec::new();
+        health_stream
+            .read_to_end(&mut health_response)
+            .await
+            .expect("read unauthenticated health response");
+        let health_text = String::from_utf8(health_response).expect("response must be UTF-8");
+        assert!(
+            health_text.starts_with("HTTP/1.1 401 Unauthorized"),
+            "health endpoint bypassed authentication: {health_text}"
         );
         let mut stream = TcpStream::connect(addr)
             .await
@@ -2288,8 +2327,8 @@ mod tests {
             "downgrade payload missing downgrade event: {downgrade_text}"
         );
         assert!(
-            downgrade_text.contains("\"detail\":\"downgrade\""),
-            "downgrade payload missing slug: {downgrade_text}"
+            !downgrade_text.contains("\"detail\""),
+            "downgrade payload must not expose free-form detail: {downgrade_text}"
         );
         downgrade_stream
             .shutdown()
@@ -2382,7 +2421,7 @@ mod tests {
             metrics.record_downgrade(&warning.message);
         }
         let event_time = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        proxy_policy_events.record_downgrade(privacy_mode, event_time, Some(&detail));
+        proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let rendered = metrics.render_prometheus(mode, proxy_policy_events.queue_depth() as u64);
         let label_block =
             "mode=\"entry\",constant_rate_profile=\"unknown\",constant_rate_neighbors=\"0\"";
@@ -2404,8 +2443,8 @@ mod tests {
             "proxy policy NDJSON must tag downgrade reason slug: {ndjson}"
         );
         assert!(
-            ndjson.contains(&format!("\"detail\":\"{detail}\"")),
-            "proxy policy NDJSON should carry the slugged detail: {ndjson}"
+            !ndjson.contains("\"detail\""),
+            "proxy policy NDJSON must not carry free-form detail: {ndjson}"
         );
     }
 }

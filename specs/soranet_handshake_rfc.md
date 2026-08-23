@@ -1,8 +1,8 @@
-# SoraNet Handshake and Salt Rotation Specification (Draft RFC)
+# SoraNet Handshake and Salt Rotation Specification
 
-> **Status:** Working draft. This document captures the normative requirements
-> agreed by the Networking & Core Protocol working groups on 2026-02-12. It will
-> evolve into the formal SNNet-1 RFC once test vectors and harnesses land.
+> **Status:** First-release profile. The detailed wire layouts and checked
+> fixture hashes in `specs/soranet_handshake.md` and
+> `specs/soranet/capability_registry.md` are authoritative.
 
 ## 1. Introduction
 
@@ -26,9 +26,12 @@ rotation mechanisms required for anonymous circuit establishment.
 2. **Cryptography:**
    - Post-quantum key exchange: ML-KEM-768 (`kem_id = 0x01`) mandatory; optional
      ML-KEM-1024 (`kem_id = 0x02`).
-   - Classical key exchange: X25519 included for auditing, not used for keying.
-   - Signatures: Dilithium3 (`sig_id = 0x01`) primary, Ed25519 (`sig_id = 0x02`)
-     witness signature.
+   - Classical key exchange: X25519 is mixed with the ML-KEM contribution by
+     the hybrid key schedule.
+   - Signature capability: `snnet.pqsig` accepts only Dilithium3
+     (`sig_id = 0x01`) as transcript-bound certificate/descriptor policy.
+     Online relay authentication is a separate Ed25519 signature under the
+     exact directory-authenticated relay identity.
 3. **Failure policy:** Classical-only clients (missing ML-KEM-768 share) MUST be
    rejected prior to key derivation and logged via the downgrade telemetry path.
 
@@ -46,24 +49,21 @@ epoch pointer.
  Client                                          Relay
   |----Descriptor fetch (SoraNS / directory)----->|
   |                                              |
-  |---ClientHello (Noise e, pqkem TLVs, GREASE)-->|
+  |---ClientInit (Noise e, ML-KEM, TLVs, GREASE)->|
   |                                              |
-  |<--ServerHello (Noise re, pqkem echo, sig)----|
-  |                                              |
-  |---ClientFinish (Noise s, transcript hash T)-->|
-  |                                              |
-  |<--RelayConfirm (ticket, salt epoch, retry)--|
+  |<--RelayResponse (Noise re, ML-KEM, auth, T)---|
 ```
 
 | Step | Sender | Payload | Notes |
 |------|--------|---------|-------|
-| 1 | Client | `ClientHello` carrying Noise ephemeral key `e`, ML-KEM-768 share, capability TLVs (with required flags), GREASE entries | Padded to 1024 bytes |
-| 2 | Relay  | `ServerHello` carrying Noise key `re`, ML-KEM-768 response, Dilithium3 signature over transcript-so-far, capability echo | Padded |
-| 3 | Client | `ClientFinish` with ML-KEM confirmation, Dilithium3 signature, transcript hash `T` commitment | Must include `snnet.transcript_commit` TLV |
-| 4 | Relay  | `RelayConfirm` delivering entry ticket, current salt epoch, retry token encrypted under derived traffic keys | |
+| 1 | Client | NK2 `HybridClientInit` or NK3 `PqfsClientCommit` carrying the suite, Noise/X25519 material, ML-KEM public material, capability TLVs, and GREASE | Padded to a 1024-byte multiple. |
+| 2 | Relay | NK2 `HybridRelayResponse` or NK3 `PqfsRelayResponse` carrying Noise/X25519 material, ML-KEM ciphertext and confirmation data, capability echo, transcript hash `T`, and directory-bound Ed25519 authentication | Padded to a 1024-byte multiple. |
 
 Transcript hash `T` MUST be computed as described in `specs/soranet_handshake.md`
-and mixed into the dual HKDF.
+and mixed into the dual HKDF. Both first-release suites complete in two flights;
+there is no `ClientFinish` frame or unauthenticated client-signature slot.
+Tickets, salt metadata, and retry state are protected application data after
+session-key acceptance, not a third handshake flight.
 
 ### 4.3 Circuit Padding
 
@@ -78,25 +78,31 @@ Capability TLVs MUST conform to the registry:
 | Type | Name | Requirement |
 |------|------|-------------|
 | 0x0101 | `snnet.pqkem` | MUST appear in both ClientHello and ServerHello |
-| 0x0102 | `snnet.pqsig` | MUST appear with Dilithium3 + Ed25519 IDs |
+| 0x0102 | `snnet.pqsig` | MUST contain exactly one Dilithium3 (`0x01`) entry |
 | 0x0103 | `snnet.transcript_commit` | Relay MUST include commitment hash |
+| 0x0104 | `snnet.suite_list` | MUST contain at least one suite identifier; `0x04` and `0x05` are the v1 suites |
 | 0x0201 | `snnet.role` | Relay MUST declare role bitfield |
 | 0x0202 | `snnet.padding` | MUST be `0x0400` (1024-byte cells) |
+| 0x0203 | `snnet.constant_rate` | When present, MUST be exactly `version:u8, flags:u8, cell_bytes:u16 LE`; v1 uses 1024-byte cells |
 | 0x7F00–0x7FFF | GREASE | Clients MUST send ≥2 entries |
 
 Relays MUST abort if clients mark a capability `required` and the relay cannot
 satisfy it.
 
-If multiple TLVs of the same type appear, relays MUST respect the `required`
-flag semantics:
+Only `snnet.pqkem`, `snnet.pqsig`, and GREASE types may repeat. Algorithm
+capabilities use one two-byte `algorithm_id, flags` payload per TLV and MUST NOT
+repeat an algorithm identifier, even with different flags. For supported
+multi-entry types, relays MUST respect the `required` flag semantics:
 
 - `required=1`: relay MUST support at least one provided value for that type.
 - `required=0`: relay MAY ignore unsupported values but MUST echo supported
   ones.
 
-All TLVs are serialized as `type(2 bytes) | length(2 bytes) | value`. Unknown
-types in the GREASE range (`0x7F00–0x7FFF`) MUST be ignored for negotiation but
-MUST remain part of the transcript hash.
+All TLVs are serialized as `type(2 bytes, big-endian) | length(2 bytes,
+big-endian) | value`. Clients MUST use nondecreasing type order. Unknown types
+in the GREASE range (`0x7F00–0x7FFF`) MUST be ignored for negotiation but MUST
+remain part of the transcript hash; every other unknown type is rejected. The
+complete encoded vector is limited to 4,096 bytes.
 
 ## 6. Salt Rotation
 
@@ -153,7 +159,8 @@ MUST escalate to the governance channel.
 ## 9. Test Vectors and Fixtures
 
 To guarantee cross-implementation parity, the following fixture bundle MUST be
-maintained under `docs/assets/soranet/fixtures/v1/` and regenerated via
+maintained under `fixtures/soranet_handshake/` (with the interop mirror under
+`tests/interop/soranet/`) and regenerated via
 `cargo xtask soranet-fixtures` whenever the protocol evolves.
 
 1. **Handshake transcripts**
@@ -166,9 +173,9 @@ maintained under `docs/assets/soranet/fixtures/v1/` and regenerated via
      leading to rejection.
    - `snnet-cap-004-grease.norito.json`: Valid handshake preserving multiple
      GREASE TLVs.
-   Each transcript file MUST carry a Dilithium3 signature over the JSON payload
-   and an Ed25519 witness signature. Clients slab-verify these signatures before
-   ingesting the vector.
+   Capability transcript files are deterministic reference vectors. Signed
+   downgrade and telemetry payloads carry their own Dilithium3 and Ed25519
+   witness envelopes.
 2. **Salt announcements**
    - `salt/epoch-000042.norito.json`: Routine rotation example (epoch 41→42).
    - `salt/epoch-000099.norito.json`: Emergency rotation with incident ticket in
@@ -184,18 +191,18 @@ maintained under `docs/assets/soranet/fixtures/v1/` and regenerated via
    - `telemetry/hourly/soranet_telemetry_baseline.norito.json` with cover ratio,
      lagging clients, and incident reference fields populated.
 5. **Harness parity**
-   - `docs/assets/soranet/fixtures/v1/manifest.json` enumerating fixture IDs,
-     version labels, and hashes of each file (Blake2b-256). The `verify` mode of
-     the harness MUST recompute these hashes during CI.
+   - The harness `fixtures --verify` mode regenerates the bundle in a temporary
+     directory and requires byte-for-byte equality with the checked-in files.
 
 SDKs MUST ingest these fixtures, replay the transcript hash, and compare results
 against the declared values during their interoperability suites.
 
 ## 10. Implementation Status
 
-- Draft spec recorded in `specs/soranet_handshake.md` (source of truth).
-- RFC text pending completion by **2026-03-15**.
-- Harness and fixtures due **2026-04-15**.
+- The first-release wire specification is recorded in
+  `specs/soranet_handshake.md`.
+- The Rust harness and checked capability, salt, telemetry, and NK2/NK3 interop
+  fixtures are present and verified byte-for-byte.
 
 
 ## 11. Telemetry Payload Definitions

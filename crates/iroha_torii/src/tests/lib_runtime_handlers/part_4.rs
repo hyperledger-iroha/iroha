@@ -1100,13 +1100,15 @@ fn sample_privacy_event_dto() -> RecordSoranetPrivacyEventDto {
     }
 }
 #[cfg(feature = "telemetry")]
-fn sample_privacy_share_dto() -> RecordSoranetPrivacyShareDto {
+fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDto {
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock must be after UNIX epoch")
         .as_secs();
     let bucket_start = (now_unix / 60) * 60;
-    let mut share = SoranetPrivacyPrioShareV1::new(1, bucket_start, 60);
+    let operator = privacy_operator(app).0;
+    let collector_id = super::collector_id_for_operator(&operator);
+    let mut share = SoranetPrivacyPrioShareV1::new(collector_id, bucket_start, 60);
     share.mode = SoranetPrivacyModeV1::Entry;
     share.handshake_accept_share = 5;
     share.active_circuits_sum_share = 30;
@@ -1507,6 +1509,44 @@ async fn privacy_ingest_blocks_without_allowlist() {
 }
 #[tokio::test]
 #[cfg(feature = "telemetry")]
+async fn privacy_share_binds_collector_id_to_authenticated_operator() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let app_mut =
+            std::sync::Arc::get_mut(&mut app).expect("unique Arc for privacy configuration");
+        app_mut.soranet_privacy_ingest.enabled = true;
+        app_mut.soranet_privacy_ingest.allow_cidrs = vec!["127.0.0.1/32".to_string()];
+        app_mut.soranet_privacy_allow_nets = Arc::new(crate::limits::parse_cidrs(
+            &app_mut.soranet_privacy_ingest.allow_cidrs,
+        ));
+        app_mut.soranet_privacy_rate_limiter = crate::limits::RateLimiter::new(None, None);
+    }
+    let mut mismatched = sample_privacy_share_dto(&app);
+    mismatched.share.collector_id[0] ^= 1;
+    let response = super::test_handler_post_soranet_privacy_share_with_ingress(
+        State(app.clone()),
+        HeaderMap::new(),
+        axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+        privacy_operator(&app),
+        NoritoJson(mismatched),
+    )
+    .await
+    .expect("handler executes");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = super::test_handler_post_soranet_privacy_share_with_ingress(
+        State(app.clone()),
+        HeaderMap::new(),
+        axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+        privacy_operator(&app),
+        NoritoJson(sample_privacy_share_dto(&app)),
+    )
+    .await
+    .expect("handler executes");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+#[tokio::test]
+#[cfg(feature = "telemetry")]
 async fn privacy_share_ingest_enforces_policy() {
     let mut app = mk_app_state_for_tests();
     {
@@ -1532,7 +1572,7 @@ async fn privacy_share_ingest_enforces_policy() {
                 .map(std::num::NonZeroU32::get),
         );
     }
-    let share_dto = sample_privacy_share_dto();
+    let share_dto = sample_privacy_share_dto(&app);
     // Retired bearer credential -> 400, even with an authenticated operator.
     let mut retired_headers = HeaderMap::new();
     retired_headers.insert("x-api-token", HeaderValue::from_static("retired-secret"));

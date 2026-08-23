@@ -344,10 +344,50 @@ the logical mount path declared in the manifest.
 
 ## Inrou Smoke
 
-Inrou V1 has one runtime backend: `PortableVm`. Enabled hosts must configure
-`backends = ["portable_vm"]` plus one explicit `portable_vm_acceleration`.
-The Taira profile uses `hvf`. Retired Firecracker labels are configuration and
-wire-schema errors; no Firecracker or mixed-backend smoke mode is exposed.
+Inrou V1 has one runtime backend: one Linux KVM `PortableVm`. Backend,
+accelerator, concurrency, and supplementary-group configuration selectors are
+retired; an enabled non-production host intrinsically runs at most one VM and
+derives its sole supplementary gid from the validated `/dev/kvm` device.
+Firecracker and TCG labels are configuration and wire-schema errors; no mixed
+backend smoke mode is exposed. Every first-release shipping configuration and
+manager entry point rejects enabled Inrou hosting, and Taira advertises no
+hosting capability, because the QEMU boundary does not yet provide mandatory
+mount, network, IPC, and MAC confinement.
+
+The retained private test implementation reserves its configured uid/gid
+exclusively for the supervised QEMU process. Primary ids must lie in
+`65536..524288`; provision the exact locked local account and primary group
+name `iroha-inrou` (uid/gid `70000` is recommended) with password fields `x`, home
+`/nonexistent`, a trusted literal nologin/false shell, locked shadow/gshadow
+passwords, and no extra group membership or administrator entry. The host must use exactly
+`passwd: files` and `group: files` in root-custodied `/etc/nsswitch.conf`;
+SSS, systemd, LDAP, compat, and other identity sources are rejected. The
+decimal identity names, duplicate records, and another account's use of the
+primary gid are rejected. `subid`, when declared, must also use only `files`;
+local `/etc/subuid` and `/etc/subgid` must not assign a range to the service
+identity/numeric spelling or cover the child uid or any configured gid.
+The runtime refuses disk
+delegation while any process uses that uid or carries the primary gid as a
+real, effective, saved, filesystem, or supplementary group.
+The validated identity retains exactly the direct root-owned `/dev/kvm` device
+group, and only when that character device is the
+Linux KVM misc device (major 10, minor 232) with group read/write access and no
+world access. The launch shim pins the working directory to `/` and closes all
+inherited descriptors above stderr before QEMU exec, so the child receives no
+validator capability other than its anonymous QMP stdin/stdout and bounded
+stderr channel.
+Reclaiming a writable disk requires an exclusive Linux write lease through
+inode/custody revalidation; unsupported filesystems fail closed.
+
+PortableVM also requires root-owned, non-writable `iptables` and `ip6tables`
+executables at standard Linux paths. The supervisor reserves both ports, holds
+a root-private global lock, and creates marker-owned IPv4 OUTPUT/INPUT and
+IPv6 OUTPUT chains. Any preexisting fixed chain or jump aborts startup without
+alteration and requires explicit operator cleanup. Rules admit only established QEMU IPv4 backend replies to
+the root proxy, reject every other packet owned by the child uid, reject
+non-root local backend/public access, and reject non-loopback backend input.
+QMP must attest the protected backend before serving. Graceful cleanup touches
+only chains installed by the current held firewall object; ambiguity aborts.
 
 Prepare verified native-ISA Debian guest assets and run the canonical smoke:
 
@@ -369,15 +409,15 @@ disk, filesystem mismatch, mount failure, or post-mount probe failure aborts
 startup without reformatting. The NoCloud seed and application archive remain
 separate read-only devices.
 
-Inrou V1 rejects unrestricted `Open` egress. `Isolated` is the scaffold
-default; an allowlist must be nonempty and every literal or DNS-resolved IPv4
-endpoint must be publicly routable before QEMU guest forwarding is built.
+Inrou V1 accepts only `Isolated` networking. `Open` and `Allowlist` are
+rejected until kernel-owned counters can meter every guest byte; no unmetered
+QEMU `guestfwd` path is built.
 
 Focused validation includes:
 
 - `enabled_inrou_backend_preflight_rejects_an_empty_allowlist`
-- `inrou_allowlist_accepts_only_public_ipv4_endpoints`
-- `inrou_allowlist_rejects_dns_names_resolving_to_non_public_ipv4`
+- `inrou_tap_firewall_plan_accepts_only_isolated`
+- `inrou_loopback_owner_rule_targets_the_dedicated_chain`
 - `build_inrou_user_data_never_formats_existing_portable_block_mounts`
 - `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`

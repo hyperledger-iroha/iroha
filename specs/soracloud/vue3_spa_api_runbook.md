@@ -168,15 +168,53 @@ eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
 ```
 
-`PortableVm` is the sole first-release backend; Taira configures it with
-explicit `hvf` acceleration. The retired Firecracker backend and mixed-host
-gate are not configuration, status, placement, or tooling paths. The runtime
-rejects such labels rather than falling back.
+`PortableVm` is the sole first-release backend and intrinsically means one
+Linux KVM VM. Backend, accelerator, concurrency, and supplementary-group
+selectors are retired; the runtime rejects Firecracker and TCG labels rather
+than falling back. Every first-release shipping configuration and manager
+entry point rejects enabled Inrou hosting, and Taira advertises no hosting
+capability, because the QEMU boundary does not yet provide mandatory mount,
+network, IPC, and MAC confinement. The retained QEMU path is exercised only by
+private source tests until a mandatory privileged confinement launcher exists.
+
+The locked local host identity is exclusive to the one supervised QEMU
+process. `/etc/nsswitch.conf` must use exactly
+`passwd: files` and `group: files`; SSS, systemd, LDAP, compat, and other
+sources are rejected. The primary uid/gid must be in `65536..524288` and
+reserved by exact `iroha-inrou` passwd/group rows (uid/gid `70000` is the
+recommended qualification profile), with
+password field `x`, nonexistent home `/nonexistent`, a trusted literal
+nologin/false shell, locked shadow/gshadow passwords, and no extra group
+membership or administrator entry. Decimal identity names, primary-gid reuse,
+and duplicate records are rejected. `subid`, when present, must also use only
+`files`; no subordinate range may belong to `iroha-inrou`/its numeric spelling
+or cover the child uid or a configured gid. Startup checks also fail closed if
+any process already uses that uid or primary gid.
+The runtime derives exactly the group of a direct, root-owned Linux KVM
+character device at `/dev/kvm` (misc major 10, minor 232) whose group grants
+read/write access and whose world access is disabled; any additional group
+aborts startup. Before QEMU exec, a trusted system shell closes every inherited
+descriptor above stderr and pins the working directory to `/`, leaving only
+the anonymous QMP stdin/stdout capability and bounded stderr channel.
+Reused writable disks additionally require a successful exclusive Linux write
+lease while root custody and inode identity are revalidated; filesystems that
+do not support leases are rejected.
+
+The Linux host must provide root-owned, non-writable `iptables` and
+`ip6tables` executables. Before QEMU starts, the supervisor holds the
+root-private firewall lock, creates marker-owned IPv4 OUTPUT/INPUT and IPv6
+OUTPUT chains, and reserves both loopback ports. A preexisting fixed chain or
+jump aborts startup unchanged for explicit operator cleanup, because a prior
+QEMU may still depend on it. Exact rules admit only
+established QEMU IPv4 backend replies to the root proxy, reject every other
+child-owned IPv4/IPv6 packet, reject non-root local access, and reject external
+backend input. QMP then attests the protected port; any ambiguity aborts.
 
 PortableVm mounts shared lease storage as persistent block devices. Existing
 volumes are never reformatted after a signature, mount, or health-probe
-failure. The generated scaffold is network-isolated and has no SSH keys; add a
-real key or a nonempty public-endpoint egress allowlist only when required.
+failure. The generated scaffold is network-isolated and has no SSH keys.
+PortableVM V1 rejects `Open` and `Allowlist` networking until kernel-owned
+counters can meter all guest traffic.
 
 Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
 `torii.soracloud_public_max_response_bytes` before buffering. The default is

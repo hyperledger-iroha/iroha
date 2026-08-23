@@ -12,9 +12,10 @@ the full RFC is authored.
 - **Signatures:** Dual Dilithium3 (primary) and Ed25519 (witness) signatures are
   required on salt announcements, relay descriptors, and consensus bundles.
 - **Capability TLV registry:** Type codes finalised: `0x0101 snnet.pqkem`,
-  `0x0102 snnet.pqsig`, `0x0103 snnet.transcript_commit`, `0x0201 snnet.role`,
-  `0x0202 snnet.padding`. GREASE space `0x7F00–0x7FFF` reserved for
-  ossification resistance.
+  `0x0102 snnet.pqsig`, `0x0103 snnet.transcript_commit`,
+  `0x0104 snnet.suite_list`, `0x0201 snnet.role`, `0x0202 snnet.padding`, and
+  `0x0203 snnet.constant_rate`. GREASE space `0x7F00–0x7FFF` is reserved for
+  ossification resistance; other unknown type codes are rejected.
 - **Salt governance:** Daily SaltAnnouncementV1 rotations signed by the Salt
   Council (3-of-5 Dilithium3 multisig plus Ed25519 witness). Emergency rotations
   require an incident ticket reference in `notes`.
@@ -77,10 +78,12 @@ Classical-only initiators (missing ML-KEM-768 share) MUST abort prior to key
 derivation and increment the `downgrade_attempts` metric.
 
 The handshake between a SoraNet client (C) and an entry relay (R) proceeds over
-QUIC using the Noise XX pattern. Clients MUST offer ML-KEM-768 key shares (and
-MAY additionally advertise ML-KEM-1024); relays expose the same capabilities
-and reject classical-only initiators. The flow below records the normative
-sequence.
+QUIC using one of the required first-release two-flight suites,
+`nk2.hybrid.v1` or `nk3.pq_forward_secure.v1`. Clients MUST offer ML-KEM-768
+key shares (and MAY additionally advertise ML-KEM-512 or ML-KEM-1024); relays
+expose the same capabilities and reject classical-only initiators. The retired
+Noise XX/three-flight transcript is not accepted. The flow below records the
+normative sequence.
 
 1. **Descriptor fetch**
    - Client retrieves the relay microdescriptor (signed by the directory
@@ -349,11 +352,12 @@ external revocation list loaded from disk.
     --format json
   ```
 
-  The command emits a Norito JSON object with the base64 and hex encodings, token
+  The command emits a Norito JSON object with one base64 bearer encoding, token
   identifier, issuer fingerprint, flags, and RFC3339 timestamps. Set `--output`
-  to persist the JSON bundle or switch `--format` to `base64`/`hex` to print the
-  raw frame. The issuer-secret file must be owned by the invoking user, have no
-  group/other permissions, and have exactly one link. Use
+  to persist the JSON bundle or switch `--format` to `base64`/`hex` for a single
+  raw-frame encoding. File output is owner-private and refuses to replace an
+  existing path. The issuer-secret file must be owned by the invoking user,
+  have no group/other permissions, and have exactly one link. Use
   `--issuer-secret-file -` for bounded standard-input delivery.
 
   The general `iroha sorafs handshake token issue` command applies the same
@@ -365,15 +369,20 @@ external revocation list loaded from disk.
   stdout. `iroha sorafs handshake token id` likewise accepts bearer bytes only
   from an owner-private bounded binary `--token` file; the retired
   `--issuer-secret-hex`, `--token-hex`, and `--token-base64` argv forms are not
-  accepted.
+  accepted. Explicit `--issued-at`/`--expires-at` values must use whole-second
+  precision, matching the v1 wire fields; only the implicit current-time
+  default is floored to its completed Unix second.
 
-- **Inspection.** `soranet_admission_token inspect --token <base64|hex>` (or
-  `--input <path>`) decodes a frame, verifies its signature against the issuer
-  fingerprint, and prints the bound relay/admission transcript to help operators audit
-  cached credentials.
+- **Inspection.** `soranet_admission_token inspect --input <path>` decodes an
+  owner-private, bounded binary frame and prints non-bearer metadata, including
+  its bound relay/admission transcript. Use `--input -` for bounded standard
+  input. The inspection command parses structure only; signature verification
+  requires the issuer public key at the admission verifier. Bearer token bytes
+  are never accepted in process arguments or echoed by inspection.
 
 - **Revocation.** Maintain a Norito JSON array of token identifiers (each a
-  32-byte hex string). The CLI provides a safe helper:
+  canonical lowercase 32-byte hex string; uppercase input is rejected). The CLI
+  provides a safe helper:
 
   ```bash
   cargo run -p soranet-relay --features dev-tools --bin soranet_admission_token -- revoke \
@@ -383,7 +392,11 @@ external revocation list loaded from disk.
 
   `--dry-run` previews the entry without touching disk and `list-revocations`
   prints the merged set (`norito::json::from_slice` validates the file during
-  relay startup).
+  relay startup). Revocation updates hold a stable, owner-private, no-follow
+  sibling lock across the full read-modify-replace transaction, use a
+  same-directory atomic replacement, refuse linked or writable-by-others state,
+  and durably sync the file and its custodied parent directory. Concurrent
+  helpers therefore cannot silently lose an accepted revocation.
 
 - **Configuration.** Enable tokens with `pow.token.enabled = true` and supply the
   ML-DSA public key via `pow.token.issuer_public_key_hex`. Inline token IDs live
@@ -449,8 +462,8 @@ strings respectively):
 `ml_kem_private_key_hex` MUST decode to 2400 bytes (Kyber-768 secret key) and
 `ml_kem_public_hex` MUST decode to 1184 bytes (Kyber-768 public key). Future
 revisions may extend the manifest with signed operator metadata or rotation
-hints, but the identity section above is required whenever the hot key is not
-embedded directly in the configuration.
+hints, but the identity section above is required. The relay configuration has
+no inline identity-private-key alternative.
 
 First-release relay admission limits this JSON manifest to 64 KiB, one decoded
 string to 8 KiB, one collection to 1,024 entries, the whole document to 4,096
@@ -599,16 +612,28 @@ Types below `0x4000` are controlled by SoraNet governance. Clients MUST send the
 TLVs they are prepared to use sorted by type; relays MAY respond in any order
 but SHOULD maintain the same ordering to simplify transcript analysis. The
 `0x7Fxx` range is reserved for GREASE values and MUST be ignored by parsers.
+Parsers MUST reject every other unknown type, malformed fixed-width payload,
+undefined flag bit, and duplicate singleton instead of assigning it fallback
+semantics. Only `snnet.pqkem`, `snnet.pqsig`, and GREASE may occur more than
+once in a capability vector. Repeated algorithm identifiers within either
+multi-entry algorithm capability are rejected even when their flags differ.
+The complete encoded vector is limited to 4,096 bytes.
 
 | Type (hex) | Label                | Payload layout                                                                 | Notes |
 |-----------:|----------------------|--------------------------------------------------------------------------------|-------|
 | 0x0101     | `snnet.pqkem`        | `kem_id:u8` `flags:u8`                                                         | `flags & 0x01` marks the KEM as *required* for the advertising side. |
-| 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | Multiple TLVs allowed when dual-signing. |
+| 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | V1 accepts only Dilithium3 (`sig_id = 0x01`), so a successful vector contains exactly one entry. |
 | 0x0103     | `snnet.transcript_commit` | `sha256` digest (32 bytes) of the descriptor-advertised capabilities.       | Binds directory metadata into the session. |
 | 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x04` = `nk2.hybrid.v1`, `0x05` = `nk3.pq_forward_secure.v1`; old pre-release identifiers `0x02`/`0x03` are rejected as unsupported. Other unknown identifiers are ignored for negotiation. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
 | 0x0201     | `snnet.role`         | `role_bits:u8` (`0x01` guard, `0x02` middle, `0x04` exit)                      | Relays MUST emit exactly one entry; clients omit. |
 | 0x0202     | `snnet.padding`      | `u16` padded cell size (little-endian)                                         | Used to negotiate circuit padding buckets. |
+| 0x0203     | `snnet.constant_rate` | Exactly four bytes: `version:u8` `flags:u8` `cell_bytes:u16` (little-endian) | Advertises SNNet-17A pacing support; v1 requires `cell_bytes = 1024`, and `flags & 0x01` requires strict constant-rate transport. |
 | 0x7Fxx     | GREASE fillers       | Arbitrary bytes                                                                | Implementations MUST ignore and preserve order. Clients emit ≥2 per handshake. |
+
+For `snnet.pqkem`, `snnet.pqsig`, and `snnet.constant_rate`, bit `0x01` is the
+only defined first-release flag; parsers reject every reserved flag bit. The
+suite-list first-byte MSB uses its separate required-bit encoding described
+above.
 
 #### Handshake suites (SNNet-16)
 
@@ -706,16 +731,17 @@ sequenceDiagram
 
 | `snnet.pqsig` `sig_id` | Meaning         | Status |
 |------------------------|-----------------|--------|
-| `0x00`                 | Ed25519         | Classical baseline. |
-| `0x01`                 | Dilithium3      | Preferred PQ signature. |
-| `0x02`                 | Falcon-512      | Optional extension for constrained deployments. |
+| `0x00`                 | Ed25519         | Not accepted as `pqsig` in the first-release wire protocol. |
+| `0x01`                 | Dilithium3      | The only accepted first-release `pqsig` policy identifier. |
+| `0x02`                 | Falcon-512      | Not accepted in the first-release wire protocol. |
 
-The signature capability identifier remains transcript-bound negotiation
-metadata. It does not create synthetic client or relay signature fields. In the
-first-release wire protocol, relay authentication is one real Ed25519 signature
-under the exact identity selected from the authenticated directory; the client
-verifies that identity before KEM decapsulation and session-key acceptance.
-There is no decorative ML-DSA payload or unauthenticated client-signature slot.
+The signature capability identifier remains transcript-bound certificate and
+descriptor PQ-policy metadata, not the online authentication algorithm. It does
+not create synthetic client or relay signature fields. In the first-release
+wire protocol, relay authentication is one real Ed25519 signature under the
+exact identity selected from the authenticated directory; the client verifies
+that identity before KEM decapsulation and session-key acceptance. There is no
+decorative ML-DSA payload or unauthenticated client-signature slot.
 
 Governance maintains the canonical registry in
 `specs/soranet/capability_registry.md` and the directory service publishes

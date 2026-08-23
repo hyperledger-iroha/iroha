@@ -9,6 +9,7 @@
 //!
 //! This is also where the actual execution of instructions, as well
 //! as various forms of validation are performed.
+mod authority_admission;
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
@@ -21,6 +22,11 @@ use crate::{
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
+};
+pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
+pub(crate) use authority_admission::{
+    instructions_allow_direct_kagemusha_lifecycle_authority,
+    instructions_allow_multisig_envelope_authority,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use core::{fmt, str::FromStr as _};
@@ -48,7 +54,6 @@ use iroha_data_model::{
     },
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
 };
-use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
@@ -748,86 +753,6 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
-}
-fn instruction_self_registers_authority(
-    instruction: &InstructionBox,
-    authority: &AccountId,
-) -> bool {
-    let maybe_registration = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::Register<Account>>()
-        .map(|register| register.object())
-        .or_else(|| {
-            instruction
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
-                .and_then(|register| match register {
-                    iroha_data_model::isi::RegisterBox::Account(register) => {
-                        Some(register.object())
-                    }
-                    _ => None,
-                })
-        });
-    let Some(registration) = maybe_registration else {
-        return false;
-    };
-    registration.clone().build(authority).id == *authority
-}
-/// Return whether the executable's first instruction registers its exact authority.
-///
-/// Self-registering transactions are the only single-signature transactions that may enter
-/// admission before their authority exists in world state. Keeping this recognition in Core lets
-/// pre-admission services, such as fee quoting, apply the same instruction-shape rule.
-#[must_use]
-pub fn executable_self_registers_authority(executable: &Executable, authority: &AccountId) -> bool {
-    match executable {
-        Executable::Instructions(instructions) => {
-            let Some((first, _rest)) = instructions.split_first() else {
-                return false;
-            };
-            instruction_self_registers_authority(first, authority)
-        }
-        Executable::ContractCall(_)
-        | Executable::Batch(_)
-        | Executable::IvmProved(_)
-        | Executable::Ivm(_) => false,
-    }
-}
-/// Return whether admission may accept an authority that is absent from world state.
-///
-/// This includes exact first-instruction account self-registration and the existing multisig
-/// proposal envelope path, whose authorisation is established from multisig membership rather
-/// than a materialised authority account.
-#[must_use]
-pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
-    executable_self_registers_authority(executable, authority)
-        || matches!(
-            executable,
-            Executable::Instructions(instructions)
-                if instructions_allow_multisig_envelope_authority(instructions)
-        )
-}
-pub(crate) fn instructions_allow_multisig_envelope_authority(
-    instructions: &[InstructionBox],
-) -> bool {
-    instructions.iter().all(|instruction| {
-        matches!(
-            MultisigInstructionBox::try_from(instruction),
-            Ok(MultisigInstructionBox::Propose(_))
-                | Ok(MultisigInstructionBox::Approve(_))
-                | Ok(MultisigInstructionBox::Cancel(_))
-        )
-    })
-}
-
-/// Return whether a direct carrier contains exactly one native Kagemusha lifecycle transition.
-pub(crate) fn instructions_allow_direct_kagemusha_lifecycle_authority(
-    instructions: &[InstructionBox],
-) -> bool {
-    let [instruction] = instructions else {
-        return false;
-    };
-    crate::smartcontracts::isi::offline::direct_lifecycle_entrypoint_kind(instruction).is_some()
 }
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
@@ -2595,6 +2520,8 @@ impl StateBlock<'_> {
                 ),
             ));
         }
+        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -5144,32 +5071,7 @@ pub mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
-    fn lifecycle_cancellation_instruction() -> InstructionBox {
-        use iroha_data_model::{
-            isi::offline::CancelKagemushaRecursiveReleaseV4,
-            offline::{
-                KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
-                KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaExactBytesDigestV1,
-                KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseLifecycleReasonV1,
-            },
-        };
-
-        InstructionBox::from(CancelKagemushaRecursiveReleaseV4::new(
-            KagemushaV4ReleaseCancellationV1 {
-                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
-                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
-                promotion_id: [0x11; 32],
-                manifest_sha256: [0x22; 32],
-                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
-                    byte_len: 1,
-                    sha256: [0x33; 32],
-                },
-                transition_id: [0x44; 32],
-                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
-                evidence: None,
-            },
-        ))
-    }
+    include!("tx/kagemusha_lifecycle_admission_tests.rs");
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
@@ -6672,66 +6574,10 @@ pub mod tests {
             &registration_is_not_first,
             &authority
         ));
-    }
-    #[test]
-    fn direct_kagemusha_lifecycle_authority_requires_one_exact_instruction() {
-        let cancellation = lifecycle_cancellation_instruction();
-        let ordinary = InstructionBox::from(Log::new(Level::INFO, "ordinary".into()));
-
-        assert!(instructions_allow_direct_kagemusha_lifecycle_authority(
-            core::slice::from_ref(&cancellation)
+        assert!(!allows_unregistered_authority(
+            &Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            &authority,
         ));
-        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(&[]));
-        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(
-            core::slice::from_ref(&ordinary)
-        ));
-        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(&[
-            cancellation,
-            ordinary,
-        ]));
-    }
-    #[test]
-    fn exact_kagemusha_lifecycle_accepts_verified_multisig_authority_at_stateful_admission() {
-        let member_a = checked_random_tx_keypair();
-        let member_b = checked_random_tx_keypair();
-        let authority = AccountId::new_multisig(
-            MultisigPolicy::new(
-                2,
-                vec![
-                    MultisigMember::new(member_a.public_key().clone(), 1).expect("member a"),
-                    MultisigMember::new(member_b.public_key().clone(), 1).expect("member b"),
-                ],
-            )
-            .expect("multisig lifecycle authority"),
-        );
-        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            "multisig-kagemusha-lifecycle".parse().unwrap(),
-        );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([lifecycle_cancellation_instruction()])
-        .sign_multisig([member_a.private_key(), member_b.private_key()]);
-        let accepted = AcceptedTransaction::accept(
-            tx,
-            &test_network_id(),
-            Duration::ZERO,
-            TransactionParameters::default(),
-            &iroha_config::parameters::actual::Crypto::default(),
-        )
-        .expect("multisig lifecycle signatures must verify before stateful admission");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_transaction = block.transaction();
-
-        StateBlock::validate_stateful_admission(accepted.as_ref(), &mut state_transaction, None)
-            .expect("exact lifecycle carrier must pass the narrow multisig admission exception");
     }
     #[test]
     fn missing_authority_self_register_allows_transaction() {

@@ -112,6 +112,13 @@ pub(crate) struct ActivateReleaseV4Args {
         value_parser = parse_canonical_sha256
     )]
     manifest_sha256: [u8; 32],
+    /// Domain-separated SHA-256 shared by all four validator runtime projections.
+    #[arg(
+        long = "runtime-effective-config-sha256",
+        value_name = "LOWERCASE_HEX",
+        value_parser = parse_nonzero_canonical_sha256
+    )]
+    runtime_effective_config_sha256: [u8; 32],
     /// Next atomic Eq/Ep verifier version in consensus state.
     #[arg(long = "verifier-version")]
     verifier_version: u32,
@@ -163,6 +170,7 @@ impl Run for ActivateReleaseV4Args {
             promotion_binding,
             activation,
             device_attestation_policy,
+            self.runtime_effective_config_sha256,
         );
         context.finish([InstructionBox::from(instruction)])
     }
@@ -181,9 +189,13 @@ fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     Ok(digest)
 }
 fn parse_promotion_id(value: &str) -> Result<[u8; 32], String> {
+    let digest = parse_nonzero_canonical_sha256(value)?;
+    Ok(digest)
+}
+fn parse_nonzero_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     let digest = parse_canonical_sha256(value)?;
     if digest == [0; 32] {
-        return Err("promotion id must be nonzero".to_owned());
+        return Err("digest must be nonzero".to_owned());
     }
     Ok(digest)
 }
@@ -2627,6 +2639,11 @@ mod tests {
         assert_eq!(parse_promotion_id(&"ab".repeat(32)), Ok([0xab; 32]));
         assert!(parse_promotion_id(&"00".repeat(32)).is_err());
         assert!(parse_promotion_id(&"AB".repeat(32)).is_err());
+        assert_eq!(
+            parse_nonzero_canonical_sha256(&"cd".repeat(32)),
+            Ok([0xcd; 32]),
+        );
+        assert!(parse_nonzero_canonical_sha256(&"00".repeat(32)).is_err());
     }
     #[test]
     fn kagemusha_activation_never_allows_fallback_credentials() {
@@ -2637,6 +2654,7 @@ mod tests {
                 release_policy: PathBuf::from("policy.norito"),
                 artifact_dir: PathBuf::from("catalog"),
                 manifest_sha256: [0x11; 32],
+                runtime_effective_config_sha256: [0x12; 32],
                 verifier_version: 1,
                 device_attestation_policy: PathBuf::from("device-attestation-policy.json"),
             }));

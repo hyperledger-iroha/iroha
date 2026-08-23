@@ -34133,9 +34133,9 @@ state_test! { sync block_rejects_failing_execute_trigger_and_rolls_back
         "asset definition created by a failing trigger must not persist after block application",
     );
 }
+include!("tests/kagemusha_runtime_effective_config_tests.rs");
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
-include!("autonomous_merge_and_queue_plan_tests.rs");
-// Queue-plan evidence and merge-ledger state validation, recovery, and cache cases.
+include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.
 include!("tests/queue_plan_and_merge_ledger_tests.rs");
 include!("proof_test_helpers_seed_records.rs");
 include!("trigger_execution_and_delta_merge_tests.rs");

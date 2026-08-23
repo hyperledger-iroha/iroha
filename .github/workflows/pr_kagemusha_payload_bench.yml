@@ -12,6 +12,7 @@ on:
       - "ci/check_kagemusha_production_readiness_source_contract.py"
       - "ci/check_kagemusha_production_readiness_source_support.py"
       - "ci/check_kagemusha_recursion_source_contract.py"
+      - "ci/check_kagemusha_lifecycle_source_contract.py"
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
@@ -871,7 +872,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_v4 -- --nocapture
       - run: cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture
@@ -885,7 +886,7 @@ jobs:
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
       - run: cargo test -p iroha_core active_receiver_snapshot_ --lib
-      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt
+      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_both_receipts
       - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
       - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
       - run: cargo test -p iroha_core sequential_append_paths --lib

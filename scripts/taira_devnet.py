@@ -6,10 +6,8 @@ ingest tool; asks Kagami for a fresh
 four-validator NPoS Nexus network using the canonical Taira chain id; validates
 all four configs; starts the peers; and proves finality with one signed
 ``iroha tx ping`` submission followed by the typed transaction-status waiter.
-An explicit ``--inrou-canary-dir`` additionally builds one owner-only exact
-artifact stage, seeds both artifacts into every disjoint peer store before
-startup, and submits and verifies one typed four-replica Inrou workspace before
-the opt-in full doctor runs.
+The opt-in full doctor remains read-only with respect to Inrou: first-release
+shipping nodes reject Inrou hosting until the confinement boundary is complete.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
@@ -874,19 +872,14 @@ def require_inrou_canary_workspace(
 def requested_inrou_canary_workspace(
     args: argparse.Namespace,
 ) -> tuple[Path, Path, Path] | None:
-    """Validate the opt-in canary contract before mutating the devnet directory."""
+    """Reject the retired production Inrou canary before mutating the devnet."""
 
     configured = args.inrou_canary_dir
-    if args.full_doctor and configured is None:
-        fail("--full-doctor requires --inrou-canary-dir")
-    if configured is None:
-        return None
-    workspace = require_inrou_canary_workspace(configured)
-    managed_candidate = args.dir.expanduser().absolute().resolve(strict=False)
-    workspace_root = workspace[0].parent
-    if workspace_root == managed_candidate or managed_candidate in workspace_root.parents:
-        fail("--inrou-canary-dir must be outside the disposable devnet directory")
-    return workspace
+    if configured is not None:
+        fail(
+            "--inrou-canary-dir is retired because first-release Inrou hosting is disabled"
+        )
+    return None
 
 
 def section_assignment(path: Path, section: str, key: str) -> str:
@@ -1405,6 +1398,8 @@ def run_inrou_canary(
             root,
             "--stage-dir",
             str(stage_dir),
+            "--mode",
+            "deploy",
             "--timeout-secs",
             str(timeout_secs),
             "--json",
@@ -1673,10 +1668,7 @@ def parser() -> argparse.ArgumentParser:
     up_parser.add_argument(
         "--inrou-canary-dir",
         type=Path,
-        help=(
-            "runtime-only workspace containing container_manifest.json, "
-            "service_manifest.json, and bundle.tgz; required by --full-doctor"
-        ),
+        help="retired first-release production Inrou canary option (always rejected)",
     )
     up_parser.set_defaults(handler=up)
 

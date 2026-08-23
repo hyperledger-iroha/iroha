@@ -274,7 +274,7 @@ fn records_privacy_suppression_reason_metrics() {
     metrics.record_soranet_privacy_bucket(&bucket);
     let suppression_gauge = metrics
         .soranet_privacy_bucket_suppressed
-        .with_label_values(&["entry", "1"])
+        .with_label_values(&["entry"])
         .get();
     assert!(
         (suppression_gauge - 1.0).abs() < f64::EPSILON,
@@ -287,6 +287,118 @@ fn records_privacy_suppression_reason_metrics() {
     assert_eq!(
         reason_counter, 1,
         "suppression counter increments for the reason"
+    );
+    assert_eq!(
+        metrics
+            .soranet_privacy_latest_bucket_start_unixtime
+            .with_label_values(&["entry"])
+            .get(),
+        1,
+        "latest privacy bucket timestamp"
+    );
+}
+#[test]
+fn privacy_bucket_metrics_have_fixed_cardinality_and_count_once() {
+    use iroha_data_model::soranet::privacy_metrics::{
+        SoranetGarAbuseCountV1, SoranetLatencyPercentileV1,
+    };
+
+    let metrics = Metrics::default();
+    let mut first = SoranetPrivacyBucketMetricsV1::suppressed_with_reason(
+        SoranetPrivacyModeV1::Entry,
+        60,
+        60,
+        SoranetPrivacySuppressionReasonV1::InsufficientContributors,
+    );
+    first.suppressed = false;
+    first.suppression_reason = None;
+    first.handshake_accept_total = 2;
+    first.throttle_emergency_total = 3;
+    first.active_circuits_mean = Some(4);
+    first.active_circuits_max = Some(7);
+    first.rtt_percentiles_ms = vec![
+        SoranetLatencyPercentileV1::new("p50".to_owned(), 25),
+        SoranetLatencyPercentileV1::new("attacker-controlled".to_owned(), 999),
+    ];
+    first.gar_abuse_counts = vec![
+        SoranetGarAbuseCountV1::new([1; 8], 2),
+        SoranetGarAbuseCountV1::new([2; 8], 3),
+    ];
+    metrics.record_soranet_privacy_bucket(&first);
+
+    let mut second = first;
+    second.bucket_start_unix = 120;
+    second.handshake_accept_total = 5;
+    second.throttle_emergency_total = 4;
+    second.active_circuits_mean = Some(8);
+    second.active_circuits_max = Some(11);
+    second.rtt_percentiles_ms = vec![
+        SoranetLatencyPercentileV1::new("p50".to_owned(), 50),
+        SoranetLatencyPercentileV1::new("rotated-attacker-label".to_owned(), 1_000),
+    ];
+    second.gar_abuse_counts = vec![SoranetGarAbuseCountV1::new([9; 8], 7)];
+    metrics.record_soranet_privacy_bucket(&second);
+
+    assert_eq!(
+        metrics
+            .soranet_privacy_circuit_events_total
+            .with_label_values(&["entry", "accepted"])
+            .get(),
+        7,
+        "fixed outcome counter accumulates across buckets"
+    );
+    assert_eq!(
+        metrics
+            .soranet_privacy_throttles_total
+            .with_label_values(&["entry", "emergency"])
+            .get(),
+        7,
+        "each emergency throttle is counted exactly once"
+    );
+    assert_eq!(
+        metrics
+            .soranet_privacy_gar_reports_total
+            .with_label_values(&["entry"])
+            .get(),
+        12,
+        "GAR categories aggregate into one fixed-cardinality counter"
+    );
+    assert_eq!(
+        metrics
+            .soranet_privacy_latest_bucket_start_unixtime
+            .with_label_values(&["entry"])
+            .get(),
+        120,
+        "latest bucket timestamp replaces the previous gauge value"
+    );
+    assert_float_metric_eq(
+        metrics
+            .soranet_privacy_active_circuits_max
+            .with_label_values(&["entry"])
+            .get(),
+        11.0,
+        "latest active-circuit gauge",
+    );
+    assert_float_metric_eq(
+        metrics
+            .soranet_privacy_rtt_millis
+            .with_label_values(&["entry", "p50"])
+            .get(),
+        50.0,
+        "latest fixed percentile gauge",
+    );
+
+    let rendered = metrics.try_to_string().expect("render privacy metrics");
+    assert!(!rendered.contains("bucket_start=\""));
+    assert!(!rendered.contains("category_hash=\""));
+    assert!(!rendered.contains("attacker-controlled"));
+    assert!(!rendered.contains("rotated-attacker-label"));
+    assert_eq!(
+        metrics.soranet_privacy_rtt_millis.collect()[0]
+            .get_metric()
+            .len(),
+        3,
+        "RTT labels are limited to the fixed p50/p90/p99 set"
     );
 }
 fn sample_privacy_snapshot() -> PrivacyDrainSnapshot {

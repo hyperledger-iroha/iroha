@@ -13,7 +13,8 @@ use iroha_crypto::soranet::pow::TicketRevocationStoreLimits;
 use iroha_crypto::soranet::{
     handshake::{
         HarnessError, RuntimeParams, build_client_hello, client_handle_relay_hello,
-        process_client_hello, relay_finalize_handshake,
+        parse_capabilities, process_client_hello, relay_finalize_handshake,
+        validate_client_capability_vector,
     },
     pow::{
         self, ChallengeBinding as PowBinding, Parameters as PowParameters, SignedTicket,
@@ -30,6 +31,7 @@ use norito::{
 };
 use rand::rand_core::TryCryptoRng;
 use rand::{SeedableRng, rngs::StdRng};
+use soranet_pq::MlKemSuite;
 #[cfg(test)]
 use std::num::NonZeroUsize;
 use std::{
@@ -162,6 +164,11 @@ where
             "SoraNet delegation challenge RNG returned an all-zero value".to_owned(),
         ));
     }
+    if challenge.iter().all(|byte| *byte == challenge[0]) {
+        return Err(Error::HandshakeSoranet(
+            "SoraNet delegation challenge RNG returned all-identical-byte material".to_owned(),
+        ));
+    }
     Ok(challenge)
 }
 /// Runtime configuration shared across `SoraNet` handshake attempts.
@@ -202,7 +209,7 @@ impl SoranetHandshakeConfig {
         revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
         revocation_store_error: Option<String>,
     ) -> Result<Self, Error> {
-        if !matches!(kem_id, 1 | 2) {
+        if MlKemSuite::from_kem_id(kem_id).is_none() {
             return Err(Error::HandshakeSoranet(format!(
                 "unsupported SoraNet ML-KEM identifier {kem_id}"
             )));
@@ -212,6 +219,30 @@ impl SoranetHandshakeConfig {
                 "unsupported SoraNet signature identifier {sig_id}"
             )));
         }
+        if descriptor_commit.len() != iroha_crypto::Hash::LENGTH {
+            return Err(Error::HandshakeSoranet(format!(
+                "SoraNet descriptor commitment must be {} bytes, got {}",
+                iroha_crypto::Hash::LENGTH,
+                descriptor_commit.len()
+            )));
+        }
+        if let Some(resume_hash) = resume_hash.as_ref()
+            && resume_hash.len() != iroha_crypto::Hash::LENGTH
+        {
+            return Err(Error::HandshakeSoranet(format!(
+                "SoraNet resume hash must be {} bytes, got {}",
+                iroha_crypto::Hash::LENGTH,
+                resume_hash.len()
+            )));
+        }
+        validate_client_capability_vector(&client_capabilities).map_err(|error| {
+            Error::HandshakeSoranet(format!("invalid SoraNet client capability vector: {error}"))
+        })?;
+        // Relay ordering is intentionally transcript-bound rather than subject
+        // to the client's canonical nondecreasing-order rule.
+        parse_capabilities(&relay_capabilities).map_err(|error| {
+            Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
+        })?;
         Ok(Self {
             relay_id: Arc::new(descriptor_commit.clone()),
             descriptor_commit: Arc::new(descriptor_commit),

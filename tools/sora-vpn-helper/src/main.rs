@@ -3423,76 +3423,81 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
     let object = value.0.as_object().ok_or_else(|| {
         ControllerError::InvalidPayload("connect payload must be a JSON object".to_owned())
     })?;
+    validate_connect_payload_keys(object)?;
     let payload = ConnectPayload {
-        session_id: require_json_string(object, &["sessionId", "session_id"], "sessionId")?,
-        relay_endpoint: require_json_string(
-            object,
-            &["relayEndpoint", "relay_endpoint"],
-            "relayEndpoint",
-        )?,
-        exit_class: optional_json_string(object, &["exitClass", "exit_class"])?.unwrap_or_default(),
-        helper_ticket_hex: require_json_string(
-            object,
-            &["helperTicketHex", "helper_ticket_hex"],
-            "helperTicketHex",
-        )?,
-        relay_id_hex: require_json_string(object, &["relayIdHex", "relay_id_hex"], "relayIdHex")?,
+        session_id: require_json_string(object, &["sessionId"], "sessionId")?,
+        relay_endpoint: require_json_string(object, &["relayEndpoint"], "relayEndpoint")?,
+        exit_class: optional_json_string(object, &["exitClass"])?.unwrap_or_default(),
+        helper_ticket_hex: require_json_string(object, &["helperTicketHex"], "helperTicketHex")?,
+        relay_id_hex: require_json_string(object, &["relayIdHex"], "relayIdHex")?,
         descriptor_commit_hex: require_json_string(
             object,
-            &["descriptorCommitHex", "descriptor_commit_hex"],
+            &["descriptorCommitHex"],
             "descriptorCommitHex",
         )?,
-        tls_server_name: require_json_string(
-            object,
-            &["tlsServerName", "tls_server_name"],
-            "tlsServerName",
-        )?,
+        tls_server_name: require_json_string(object, &["tlsServerName"], "tlsServerName")?,
         relay_tls_spki_sha256_hex: require_json_string(
             object,
-            &["relayTlsSpkiSha256Hex", "relay_tls_spki_sha256_hex"],
+            &["relayTlsSpkiSha256Hex"],
             "relayTlsSpkiSha256Hex",
         )?,
         relay_certificate_sha256_hex: require_json_string(
             object,
-            &["relayCertificateSha256Hex", "relay_certificate_sha256_hex"],
+            &["relayCertificateSha256Hex"],
             "relayCertificateSha256Hex",
         )?,
         directory_snapshot_digest_hex: require_json_string(
             object,
-            &[
-                "directorySnapshotDigestHex",
-                "directory_snapshot_digest_hex",
-            ],
+            &["directorySnapshotDigestHex"],
             "directorySnapshotDigestHex",
         )?,
-        padding_budget_ms: require_json_u16(
-            object,
-            &["paddingBudgetMs", "padding_budget_ms"],
-            "paddingBudgetMs",
-        )?,
-        route_pushes: optional_json_string_array(object, &["routePushes", "route_pushes"])?,
-        excluded_routes: optional_json_string_array(
-            object,
-            &["excludedRoutes", "excluded_routes"],
-        )?,
-        dns_servers: optional_json_string_array(object, &["dnsServers", "dns_servers"])?,
-        tunnel_addresses: optional_json_string_array(
-            object,
-            &["tunnelAddresses", "tunnel_addresses"],
-        )?,
-        mtu_bytes: require_json_u64(object, &["mtuBytes", "mtu_bytes"], "mtuBytes")?,
-        lease_secs: optional_json_u64(object, &["leaseSecs", "lease_secs"])?.unwrap_or_default(),
+        padding_budget_ms: require_json_u16(object, &["paddingBudgetMs"], "paddingBudgetMs")?,
+        route_pushes: optional_json_string_array(object, &["routePushes"])?,
+        excluded_routes: optional_json_string_array(object, &["excludedRoutes"])?,
+        dns_servers: optional_json_string_array(object, &["dnsServers"])?,
+        tunnel_addresses: optional_json_string_array(object, &["tunnelAddresses"])?,
+        mtu_bytes: require_json_u64(object, &["mtuBytes"], "mtuBytes")?,
+        lease_secs: optional_json_u64(object, &["leaseSecs"])?.unwrap_or_default(),
         metering_private_key_seed_hex: optional_json_string(
             object,
-            &["meteringPrivateKeySeedHex", "metering_private_key_seed_hex"],
+            &["meteringPrivateKeySeedHex"],
         )?,
-        usage_voucher_interval_ms: optional_json_u64(
-            object,
-            &["usageVoucherIntervalMs", "usage_voucher_interval_ms"],
-        )?
-        .unwrap_or_else(default_usage_voucher_interval_ms),
+        usage_voucher_interval_ms: optional_json_u64(object, &["usageVoucherIntervalMs"])?
+            .unwrap_or_else(default_usage_voucher_interval_ms),
     };
     validate_connect_payload(payload)
+}
+fn validate_connect_payload_keys(object: &JsonMap) -> Result<(), ControllerError> {
+    const ALLOWED_KEYS: &[&str] = &[
+        "sessionId",
+        "relayEndpoint",
+        "exitClass",
+        "helperTicketHex",
+        "relayIdHex",
+        "descriptorCommitHex",
+        "tlsServerName",
+        "relayTlsSpkiSha256Hex",
+        "relayCertificateSha256Hex",
+        "directorySnapshotDigestHex",
+        "paddingBudgetMs",
+        "routePushes",
+        "excludedRoutes",
+        "dnsServers",
+        "tunnelAddresses",
+        "mtuBytes",
+        "leaseSecs",
+        "meteringPrivateKeySeedHex",
+        "usageVoucherIntervalMs",
+    ];
+    if let Some(key) = object
+        .keys()
+        .find(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+    {
+        return Err(ControllerError::InvalidPayload(format!(
+            "unknown connect payload field {key:?}"
+        )));
+    }
+    Ok(())
 }
 fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
     validate_connect_payload_ref(&payload)?;
@@ -4180,6 +4185,23 @@ mod tests {
                 .to_string()
                 .contains("exactly 64 lowercase hexadecimal characters")
         );
+    }
+    #[test]
+    fn connect_payload_rejects_unknown_aliases_and_duplicate_fields() {
+        let ticket = test_helper_ticket("session-1");
+        let canonical = test_connect_payload_json("session-1", &ticket, None);
+        let alias = canonical.replacen(
+            r#""sessionId":"#,
+            r#""session_id":"shadow","sessionId":"#,
+            1,
+        );
+        let error = parse_connect_payload(Some(&alias)).expect_err("retired alias must fail");
+        assert!(error.to_string().contains("unknown connect payload field"));
+
+        let duplicate =
+            canonical.replacen(r#""sessionId":"#, r#""sessionId":"shadow","sessionId":"#, 1);
+        let error = parse_connect_payload(Some(&duplicate)).expect_err("duplicate key must fail");
+        assert!(error.to_string().contains("duplicate field"));
     }
     #[test]
     fn connect_payload_rejects_dns_directive_injection() {

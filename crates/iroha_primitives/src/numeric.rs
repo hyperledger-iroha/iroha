@@ -14,7 +14,7 @@ use norito::{
     Archived, Error, NoritoDeserialize, NoritoSerialize,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
-use num_bigint::BigInt as UnboundedBigInt;
+use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
 use num_traits::{One as _, Signed as _, Zero as _};
 use std::{
     string::{String, ToString},
@@ -27,6 +27,15 @@ pub const MAX_MANTISSA_BITS: usize = 512;
 pub const MAX_MANTISSA_BYTES: usize = MAX_MANTISSA_BITS / 8;
 /// Maximum number of fractional decimal digits in a canonical decimal.
 pub const MAX_DECIMAL_SCALE: u32 = 28;
+/// Decimal digits needed to spell the positive half of the signed 512-bit mantissa domain.
+const MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS: usize = 154;
+/// Longest canonical quantity text: 154 mantissa digits and one decimal point.
+const MAX_CANONICAL_QUANTITY_TEXT_BYTES: usize = MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS + 1;
+// `num-bigint` stores magnitude digits as u64 on 64-bit targets and u32 otherwise.
+#[cfg(target_pointer_width = "64")]
+const UNBOUNDED_BIGINT_DIGIT_BYTES: usize = core::mem::size_of::<u64>();
+#[cfg(not(target_pointer_width = "64"))]
+const UNBOUNDED_BIGINT_DIGIT_BYTES: usize = core::mem::size_of::<u32>();
 /// Maximum number of factors accepted by aggregate decimal-product helpers.
 ///
 /// Each factor is individually bounded to a 512-bit canonical mantissa, but the helpers
@@ -1305,7 +1314,107 @@ impl Numeric {
         self.mantissa.is_zero()
     }
 }
+fn invalid_quantity_json(message: &'static str) -> json::Error {
+    json::Error::WithPos {
+        msg: message,
+        byte: 0,
+        line: 1,
+        col: 1,
+    }
+}
 impl Quantity {
+    fn from_canonical_json_text(source: &str) -> Result<Self, json::Error> {
+        if source.len() > MAX_CANONICAL_QUANTITY_TEXT_BYTES {
+            return Err(invalid_quantity_json(
+                "quantity text exceeds the signed 512-bit domain",
+            ));
+        }
+        let (integer, fraction) = match source.split_once('.') {
+            Some((integer, fraction)) => (integer, Some(fraction)),
+            None => (source, None),
+        };
+        if integer.is_empty() || !integer.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid_quantity_json("malformed quantity"));
+        }
+        if integer.len() > 1 && integer.starts_with('0') {
+            return Err(invalid_quantity_json("noncanonical quantity"));
+        }
+        let scale = if let Some(fraction) = fraction {
+            if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(invalid_quantity_json("malformed quantity"));
+            }
+            if fraction.len() > MAX_DECIMAL_SCALE as usize {
+                return Err(invalid_quantity_json("quantity scale exceeds 28 digits"));
+            }
+            if fraction.ends_with('0') {
+                return Err(invalid_quantity_json("noncanonical quantity"));
+            }
+            u32::try_from(fraction.len()).expect("validated quantity scale fits u32")
+        } else {
+            0
+        };
+        let digit_count = integer
+            .len()
+            .checked_add(fraction.map_or(0, str::len))
+            .ok_or_else(|| invalid_quantity_json("quantity text length overflow"))?;
+        if digit_count > MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS {
+            return Err(invalid_quantity_json(
+                "quantity mantissa exceeds the signed 512-bit domain",
+            ));
+        }
+        if integer == "0" && fraction.is_none() {
+            return Ok(Self::zero());
+        }
+
+        // Parse base ten directly into the final 512-bit magnitude shape. This keeps all parsing
+        // scratch on the stack and avoids constructing a decimal String or an unbounded bigint
+        // intermediate that would need guessed allocation accounting.
+        let mut magnitude = [0_u8; MAX_MANTISSA_BYTES];
+        let mut magnitude_len = 0usize;
+        for digit in integer
+            .bytes()
+            .chain(fraction.into_iter().flat_map(str::bytes))
+        {
+            let mut carry = u16::from(digit - b'0');
+            for byte in &mut magnitude[..magnitude_len] {
+                let product = u16::from(*byte) * 10 + carry;
+                *byte = product as u8;
+                carry = product >> 8;
+            }
+            while carry != 0 {
+                if magnitude_len == magnitude.len() {
+                    return Err(invalid_quantity_json(
+                        "quantity mantissa exceeds the signed 512-bit domain",
+                    ));
+                }
+                magnitude[magnitude_len] = carry as u8;
+                magnitude_len += 1;
+                carry >>= 8;
+            }
+        }
+        if magnitude_len == MAX_MANTISSA_BYTES && magnitude[MAX_MANTISSA_BYTES - 1] & 0x80 != 0 {
+            return Err(invalid_quantity_json(
+                "quantity mantissa exceeds the signed 512-bit domain",
+            ));
+        }
+        debug_assert!(magnitude_len != 0, "canonical nonzero quantity");
+
+        // `num-bigint` builds one exactly-sized native-digit Vec from this trimmed byte slice.
+        // Charge that retained allocation before constructing it; `BigInt::from_inner` performs
+        // its signed-width check without another allocation.
+        let allocation_bytes = magnitude_len
+            .div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES)
+            .checked_mul(UNBOUNDED_BIGINT_DIGIT_BYTES)
+            .ok_or(json::Error::DecodeResourceLimit)?;
+        norito::core::reserve_decode_allocation(allocation_bytes)
+            .map_err(json::Error::from_decode_resource)?;
+        let inner =
+            UnboundedBigInt::from_bytes_le(UnboundedSign::Plus, &magnitude[..magnitude_len]);
+        let mantissa = BigInt::from_inner(inner).map_err(|_| {
+            invalid_quantity_json("quantity mantissa exceeds the signed 512-bit domain")
+        })?;
+        Ok(Self(Numeric { mantissa, scale }))
+    }
     /// Zero quantity.
     #[must_use]
     pub fn zero() -> Self {
@@ -1693,7 +1802,7 @@ impl Ord for Quantity {
 }
 impl core::fmt::Display for Quantity {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(f)
+        fmt_numeric_decimal(&self.0, f)
     }
 }
 impl core::str::FromStr for Quantity {
@@ -1768,26 +1877,24 @@ impl FastJsonWrite for Quantity {
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        // A quantity is capped by the 512-bit mantissa and decimal-scale policy.
-        json::write_json_string_to(&self.to_string(), out)
+        json::write_json_display_to(self, out)
     }
 }
 impl JsonDeserialize for Quantity {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let mut preflight = *parser;
+        preflight.skip_string_bounded(MAX_CANONICAL_QUANTITY_TEXT_BYTES)?;
         let value = parser.parse_string()?;
-        let parsed = value
-            .parse::<Self>()
-            .map_err(|error| json::Error::InvalidField {
-                field: "quantity".into(),
-                message: format!("invalid quantity `{value}`: {error}"),
-            })?;
-        if parsed.to_string() != value {
-            return Err(json::Error::InvalidField {
-                field: "quantity".into(),
-                message: format!("noncanonical quantity `{value}`"),
-            });
-        }
-        Ok(parsed)
+        Self::from_canonical_json_text(&value)
+    }
+    fn json_from_value(value: &json::Value) -> Result<Self, json::Error> {
+        let source = value
+            .as_str()
+            .ok_or_else(|| invalid_quantity_json("expected quantity string"))?;
+        Self::from_canonical_json_text(source)
+    }
+    fn json_from_map_key(key: &str) -> Result<Self, json::Error> {
+        Self::from_canonical_json_text(key)
     }
 }
 impl XorQuantity {
@@ -2517,8 +2624,7 @@ impl FastJsonWrite for Numeric {
         &self,
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
-        // A numeric is capped by the 512-bit mantissa and decimal-scale policy.
-        json::write_json_string_to(&self.to_string(), out)
+        json::write_json_display_to(self, out)
     }
 }
 impl JsonDeserialize for Numeric {
@@ -2719,23 +2825,66 @@ impl core::fmt::Display for NumericSpec {
         Ok(())
     }
 }
+fn fmt_numeric_decimal(
+    value: &Numeric,
+    formatter: &mut core::fmt::Formatter<'_>,
+) -> core::fmt::Result {
+    const MAX_U64_LIMBS: usize = MAX_MANTISSA_BYTES / core::mem::size_of::<u64>();
+    const FRACTIONAL_ZEROES: &str = "0000000000000000000000000000";
+
+    let mut limbs = [0_u64; MAX_U64_LIMBS];
+    let mut limb_count = 0usize;
+    for limb in value.mantissa.inner().magnitude().iter_u64_digits() {
+        let slot = limbs.get_mut(limb_count).ok_or(core::fmt::Error)?;
+        *slot = limb;
+        limb_count += 1;
+    }
+
+    let mut digits = [0_u8; MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS];
+    let mut digit_start = digits.len();
+    while limb_count != 0 {
+        let mut remainder = 0_u128;
+        for limb in limbs[..limb_count].iter_mut().rev() {
+            let dividend = (remainder << 64) | u128::from(*limb);
+            *limb = u64::try_from(dividend / 10).expect("base-ten quotient fits u64");
+            remainder = dividend % 10;
+        }
+        while limb_count != 0 && limbs[limb_count - 1] == 0 {
+            limb_count -= 1;
+        }
+        digit_start = digit_start.checked_sub(1).ok_or(core::fmt::Error)?;
+        digits[digit_start] =
+            b'0' + u8::try_from(remainder).expect("base-ten remainder is one digit");
+    }
+    if digit_start == digits.len() {
+        digit_start -= 1;
+        digits[digit_start] = b'0';
+    }
+    let digits = core::str::from_utf8(&digits[digit_start..]).map_err(|_| core::fmt::Error)?;
+    let scale = usize::try_from(value.scale).map_err(|_| core::fmt::Error)?;
+    if scale > FRACTIONAL_ZEROES.len() {
+        return Err(core::fmt::Error);
+    }
+    if value.mantissa.is_negative() {
+        formatter.write_str("-")?;
+    }
+    if scale == 0 {
+        return formatter.write_str(digits);
+    }
+    if digits.len() > scale {
+        let split = digits.len() - scale;
+        formatter.write_str(&digits[..split])?;
+        formatter.write_str(".")?;
+        formatter.write_str(&digits[split..])
+    } else {
+        formatter.write_str("0.")?;
+        formatter.write_str(&FRACTIONAL_ZEROES[..scale - digits.len()])?;
+        formatter.write_str(digits)
+    }
+}
 impl core::fmt::Display for Numeric {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if self.scale == 0 {
-            return write!(f, "{}", self.mantissa);
-        }
-        let rendered = self.mantissa.to_string();
-        let negative = self.mantissa.is_negative();
-        let mut s = rendered.strip_prefix('-').unwrap_or(&rendered).to_owned();
-        while s.len() <= self.scale as usize {
-            s.insert(0, '0');
-        }
-        let (int_part, frac_part) = s.split_at(s.len() - self.scale as usize);
-        if negative {
-            write!(f, "-{int_part}.{frac_part}")
-        } else {
-            write!(f, "{int_part}.{frac_part}")
-        }
+        fmt_numeric_decimal(self, f)
     }
 }
 mod scale_ {
@@ -4188,6 +4337,14 @@ mod tests {
             norito::json::from_str::<Quantity>(&json).expect("json decode"),
             value
         );
+        assert_eq!(
+            norito::json::from_str::<Quantity>(r#""\u003123.45""#).expect("escaped JSON quantity"),
+            value
+        );
+        assert_eq!(
+            <Quantity as JsonDeserialize>::json_from_map_key("123.45").expect("quantity map key"),
+            value
+        );
         for noncanonical in ["+1", "01", "-0", "1.0", "123.4500"] {
             let source = format!("\"{noncanonical}\"");
             assert!(
@@ -4197,6 +4354,112 @@ mod tests {
         }
         let schema = <Quantity as iroha_schema::IntoSchema>::schema();
         assert!(schema.contains_key::<Quantity>());
+    }
+    fn quantity_json_allocation_limits(bytes: usize) -> norito::core::DecodeLimits {
+        norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+    }
+    fn maximum_scaled_quantity_text() -> String {
+        let digits = signed_maximum().to_string();
+        let split = digits.len() - MAX_DECIMAL_SCALE as usize;
+        let text = format!("{}.{}", &digits[..split], &digits[split..]);
+        assert_eq!(text.len(), MAX_CANONICAL_QUANTITY_TEXT_BYTES);
+        text
+    }
+    struct FixedFormatBuffer {
+        bytes: [u8; MAX_CANONICAL_QUANTITY_TEXT_BYTES],
+        len: usize,
+    }
+    impl FixedFormatBuffer {
+        fn new() -> Self {
+            Self {
+                bytes: [0; MAX_CANONICAL_QUANTITY_TEXT_BYTES],
+                len: 0,
+            }
+        }
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.bytes[..self.len]).expect("formatter emits ASCII")
+        }
+    }
+    impl core::fmt::Write for FixedFormatBuffer {
+        fn write_str(&mut self, value: &str) -> core::fmt::Result {
+            let end = self.len.checked_add(value.len()).ok_or(core::fmt::Error)?;
+            let destination = self.bytes.get_mut(self.len..end).ok_or(core::fmt::Error)?;
+            destination.copy_from_slice(value.as_bytes());
+            self.len = end;
+            Ok(())
+        }
+    }
+    #[test]
+    fn quantity_display_formats_the_maximum_without_decode_heap() {
+        use core::fmt::Write as _;
+
+        let expected = maximum_scaled_quantity_text();
+        let value =
+            Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), MAX_DECIMAL_SCALE))
+                .expect("maximum scaled quantity");
+        let (formatted, usage) =
+            norito::core::with_decode_limits_measured(quantity_json_allocation_limits(0), || {
+                let mut output = FixedFormatBuffer::new();
+                write!(&mut output, "{value}").expect("stack formatting");
+                output
+            });
+        assert_eq!(formatted.as_str(), expected);
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+    #[test]
+    fn borrowed_quantity_json_decode_has_an_exact_allocation_boundary() {
+        let source = maximum_scaled_quantity_text();
+        let value = json::Value::String(source.clone());
+        let expected_allocation = MAX_MANTISSA_BYTES.div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES)
+            * UNBOUNDED_BIGINT_DIGIT_BYTES;
+        let (decoded, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(expected_allocation),
+            || <Quantity as JsonDeserialize>::json_from_value(&value),
+        );
+        assert_eq!(decoded.expect("exact borrowed budget").to_string(), source);
+        assert_eq!(usage.total_allocated_bytes(), expected_allocation);
+
+        let (rejected, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(expected_allocation - 1),
+            || <Quantity as JsonDeserialize>::json_from_value(&value),
+        );
+        assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+    #[test]
+    fn owned_quantity_json_decode_charges_text_and_final_storage_exactly() {
+        let quantity = maximum_scaled_quantity_text();
+        let source = format!(r#""{quantity}""#);
+        let final_allocation = MAX_MANTISSA_BYTES.div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES)
+            * UNBOUNDED_BIGINT_DIGIT_BYTES;
+        let exact = quantity.len() + final_allocation;
+        let (decoded, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(exact),
+            || norito::json::from_str::<Quantity>(&source),
+        );
+        assert_eq!(decoded.expect("exact owned budget").to_string(), quantity);
+        assert_eq!(usage.total_allocated_bytes(), exact);
+
+        let (rejected, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(exact - 1),
+            || norito::json::from_str::<Quantity>(&source),
+        );
+        assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), quantity.len());
+    }
+    #[test]
+    fn quantity_json_rejects_text_and_signed_domain_overflow_before_allocation() {
+        let overlong = json::Value::String("1".repeat(MAX_CANONICAL_QUANTITY_TEXT_BYTES + 1));
+        let signed_overflow =
+            json::Value::String((ReferenceInt::one() << (MAX_MANTISSA_BITS - 1)).to_string());
+        for value in [&overlong, &signed_overflow] {
+            let (decoded, usage) = norito::core::with_decode_limits_measured(
+                quantity_json_allocation_limits(usize::MAX),
+                || <Quantity as JsonDeserialize>::json_from_value(value),
+            );
+            assert!(decoded.is_err());
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
     }
     #[test]
     fn small_domain_arithmetic_matches_integer_reference_exhaustively() {

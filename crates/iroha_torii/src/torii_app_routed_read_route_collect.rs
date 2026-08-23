@@ -105,7 +105,7 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
         Err(error) => return error.into_response(),
     };
     let page_offset = params.offset;
-    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let count_mode_label = routed_read_count_mode_label(params.count_mode.as_deref());
     let routed_by = routed_by_for_routes(app, &routes);
     params.offset = 0;
     params.limit = Some(limits.max_page_limit.max(1));

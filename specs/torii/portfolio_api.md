@@ -190,8 +190,9 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 |-------|-------------|
 | `dataspace` (optional) | Filter results to a specific dataspace ID (u64). |
 | `status` (optional) | `active`, `inactive`, or `all` (default). Inactive captures pending, expired, and revoked manifests. |
-| `limit` (optional) | Maximum number of manifests to return (default unlimited). |
+| `limit` (optional) | Maximum number of manifests to return. Omission uses the configured application-API page size; zero and values above the configured maximum are rejected. |
 | `offset` (optional) | Number of manifests to skip before collecting results (default `0`). |
+| `count_mode` (optional) | `exact` (default) or `bounded`; routed partial fanout responses are reported as bounded. |
 | Address output | Canonical I105 only. |
 
 Sample response:
@@ -200,6 +201,8 @@ Sample response:
 {
   "uaid": "uaid:0f4d…ab11",
   "total": 1,
+  "has_more": false,
+  "count_mode": "exact",
   "manifests": [
     {
       "dataspace_id": 11,
@@ -242,8 +245,19 @@ Sample response:
   published to the Space Directory, making it easy for SDKs to replay the
   entries without bespoke JSON schemas.
 - `total` reports how many manifests matched before pagination; combine it with
-  `limit`/`offset` to page through large UAID histories.
+  `limit`/`offset` to page through large UAID histories. When `count_mode` is
+  `bounded`, `total` is a lower bound; use `has_more` to continue paging.
+- Routed fanout currently requires `offset + limit` to fit within one configured
+  maximum page. Dataspace-specific direct reads may use the larger configured
+  fetch window. The coordinator requests bounded prefix pages from each shard,
+  preserves an exact client count only when every shard is terminal, and
+  rejects unsorted, oversized, filter-violating, or identity/hash-incoherent
+  shard rows. It also rejects unknown page or nested schema fields and
+  noncanonical UAID, hash, account, name, asset, and quantity literals while
+  keeping typed manifest validation inside the admitted transient decode
+  phase.
 - `status` filters help operators focus on active manifests. `inactive` returns
+  pending, expired, and revoked rows.
 
 The endpoint shares the same access controls as `/v1/accounts/{uaid}/portfolio`
 and `/v1/space-directory/uaids/{uaid}`. See `specs/space_directory.md` for the

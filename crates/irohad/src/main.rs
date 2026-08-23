@@ -6,6 +6,9 @@ mod i18n;
 /// Secret-free protocol-effective configuration capture for validator seals.
 #[path = "main/kagemusha_runtime_effective_config_projection.rs"]
 mod kagemusha_runtime_effective_config_projection;
+/// Catalog and runtime-projection gates shared by normal and snapshot startup.
+#[path = "main/kagemusha_startup.rs"]
+mod kagemusha_startup;
 /// Fail-closed local seam for one Kagemusha validator qualification seal.
 #[path = "main/kagemusha_validator_qualification.rs"]
 mod kagemusha_validator_qualification;
@@ -129,6 +132,11 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
+use kagemusha_startup::{
+    install_configured_kagemusha_release_catalog,
+    load_and_build_configured_kagemusha_validator_qualification_capture,
+    load_configured_kagemusha_release_catalog,
+};
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
@@ -8104,6 +8112,14 @@ impl Iroha {
                 authenticated_block_cadence,
             )));
         }
+        kagemusha_startup::install_runtime_effective_config(
+            &config,
+            &state,
+            authenticated_snapshot_bootstrap.as_ref(),
+            authenticated_block_cadence,
+            effective_genesis,
+        )
+        .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         iroha_logger::info!(
             mode=%consensus_caps.mode.tag(),
             proto=%consensus_caps.proto_version,
@@ -13614,70 +13630,6 @@ fn validate_available_genesis_for_check(
         catalog,
     )
     .map(|validated_genesis| (validated_genesis, block_cadence_ms))
-}
-fn load_configured_kagemusha_release_catalog(
-    config: &Config,
-) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
-    let offline = &config.settlement.offline;
-    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
-        offline,
-    )
-    .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
-}
-fn load_and_build_configured_kagemusha_catalog_qualification_seal(
-    config: &Config,
-) -> Result<
-    (
-        iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-        iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
-    ),
-    String,
-> {
-    let capture = load_and_build_configured_kagemusha_validator_qualification_capture(config)?;
-    let seal = capture.catalog_qualification_seal().clone();
-    Ok((capture.into_catalog(), seal))
-}
-
-fn load_and_build_configured_kagemusha_validator_qualification_capture(
-    config: &Config,
-) -> Result<
-    iroha_core::smartcontracts::isi::offline::KagemushaValidatorQualificationCatalogCaptureV1,
-    String,
-> {
-    match (
-        config
-            .settlement
-            .offline
-            .kagemusha_release_policy_path
-            .as_deref(),
-        config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-    ) {
-        (Some(policy_path), Some(artifact_dir)) => {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_and_build_validator_qualification_capture(
-                policy_path,
-                artifact_dir,
-                config.settlement.offline.kagemusha_max_decoded_bytes,
-            )
-            .map_err(|error| {
-                format!("failed to authenticate the complete Kagemusha V4 release catalog: {error}")
-            })
-        }
-        (None, None) => Err(
-            "cannot qualify a Kagemusha V4 catalog without a release policy and artifact directory"
-                .to_owned(),
-        ),
-        _ => Err(
-            "Kagemusha V4 release policy and artifact directory must be configured together"
-                .to_owned(),
-        ),
-    }
-}
-fn install_configured_kagemusha_release_catalog(
-    state: &mut State,
-    config: &Config,
-) -> Result<(), String> {
-    state.set_kagemusha_release_catalog(load_configured_kagemusha_release_catalog(config)?);
-    Ok(())
 }
 struct DisposableValidationRoot {
     path: PathBuf,

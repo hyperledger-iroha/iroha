@@ -168,6 +168,60 @@ fn routed_read_merge_tracks_only_canonical_keys_it_keeps() {
     assert_eq!(budget.retained_canonical_bytes, 0);
 }
 #[test]
+fn routed_read_typed_json_candidate_uses_only_transient_merge_phases() {
+    let phase = 64 * 1024;
+    let mut budget =
+        ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+            .expect("working set admits app routed reads");
+    budget.begin_json_merge();
+    let candidate = Value::String("typed candidate".to_owned());
+    let retained_before = budget.retained_decoded_bytes;
+    let canonical_before = budget.retained_canonical_bytes;
+    let merge_before = budget.merge_allocated_bytes;
+    budget
+        .inspect_typed_json_candidate::<String, _, _>(
+            &candidate,
+            "valid test string expected",
+            |value| <String as norito::json::JsonDeserialize>::json_from_value(value),
+            |decoded| {
+                assert_eq!(decoded, "typed candidate");
+                Ok(())
+            },
+        )
+        .expect("small typed candidate fits its transient phases");
+    assert_eq!(budget.retained_decoded_bytes, retained_before);
+    assert_eq!(budget.retained_canonical_bytes, canonical_before);
+    assert_eq!(budget.merge_allocated_bytes, merge_before);
+
+    budget.envelope.decode_allocated_bytes = 0;
+    assert!(
+        budget
+            .inspect_typed_json_candidate::<String, _, _>(
+                &candidate,
+                "valid test string expected",
+                |value| <String as norito::json::JsonDeserialize>::json_from_value(value),
+                |_| Ok(()),
+            )
+            .is_err(),
+        "candidate decoding must fail before allocating without a decode phase"
+    );
+
+    budget.envelope.decode_allocated_bytes = 1;
+    let response = budget
+        .inspect_typed_json_candidate::<String, _, _>(
+            &candidate,
+            "valid test string expected",
+            |value| <String as norito::json::JsonDeserialize>::json_from_value(value),
+            |_| Ok(()),
+        )
+        .expect_err("candidate allocation must honor the transient decode phase");
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(torii_response_has_reject_code(
+        &response,
+        "route_unavailable"
+    ));
+}
+#[test]
 fn routed_read_canonical_ledger_charges_spare_vector_capacity() {
     let phase = 64 * 1024;
     let mut budget =

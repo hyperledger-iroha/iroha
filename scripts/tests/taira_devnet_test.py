@@ -718,115 +718,28 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
-        workspace = self.inrou_canary_workspace()
         report = module.up(
-            self.up_args(
-                "--full-doctor",
-                "--inrou-canary-dir",
-                str(workspace),
-            ),
+            self.up_args("--full-doctor"),
             run=runtime.run,
             request=runtime.request,
         )
         stages = [command for command in runtime.commands if "inrou-stage" in command]
         canaries = [command for command in runtime.commands if "inrou-canary" in command]
-        ingests = [command for command in runtime.commands if "ingest" in command]
         doctor = [command for command in runtime.commands if "doctor" in command]
-        self.assertTrue(report["inrou_canary"])
-        self.assertIsNotNone(report["inrou_stage"])
-        self.assertEqual(len(stages), 1)
-        self.assertEqual(len(canaries), 1)
-        self.assertEqual(len(ingests), module.PEER_COUNT * 2)
+        self.assertFalse(report["inrou_canary"])
+        self.assertIsNone(report["inrou_stage"])
+        self.assertEqual(stages, [])
+        self.assertEqual(canaries, [])
         self.assertEqual(len(doctor), 1)
-        self.assertTrue(
-            all(
-                f"--max-capacity-bytes={module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}"
-                in command
-                for command in ingests
-            )
-        )
-        self.assertEqual(
-            {
-                next(value for value in command if value.startswith("--data-dir="))
-                for command in ingests
-            },
-            {
-                "--data-dir="
-                + str(
-                    (
-                        self.root
-                        / "state"
-                        / "network"
-                        / "state"
-                        / f"peer{index}"
-                        / "sorafs"
-                    ).resolve()
-                )
-                for index in range(module.PEER_COUNT)
-            },
-        )
-        stage = stages[0]
-        canary = canaries[0]
-        self.assertEqual(
-            stage[stage.index("--container") + 1],
-            str((workspace / module.INROU_CANARY_CONTAINER_FILE).resolve()),
-        )
-        self.assertEqual(
-            stage[stage.index("--service") + 1],
-            str((workspace / module.INROU_CANARY_SERVICE_FILE).resolve()),
-        )
-        self.assertEqual(
-            stage[stage.index("--bundle-file") + 1],
-            str((workspace / module.INROU_CANARY_BUNDLE_FILE).resolve()),
-        )
-        self.assertEqual(
-            canary[canary.index("--stage-dir") + 1],
-            stage[stage.index("--stage-dir") + 1],
-        )
-        self.assertIn("--fee-payer", canary)
         self.assertEqual(doctor[0][doctor[0].index("--public-root") + 1], "http://127.0.0.1:29080/")
-        ping_index = next(
-            index for index, command in enumerate(runtime.commands) if "ping" in command
-        )
-        status_index = next(
-            index for index, command in enumerate(runtime.commands) if "status" in command
-        )
-        stage_index = runtime.commands.index(stage)
-        ingest_indexes = [runtime.commands.index(command) for command in ingests]
-        start_index = next(
-            index
-            for index, command in enumerate(runtime.commands)
-            if command[0] == "/bin/bash" and command[1].endswith("start.sh")
-        )
-        canary_index = runtime.commands.index(canary)
-        doctor_index = runtime.commands.index(doctor[0])
-        self.assertLess(stage_index, min(ingest_indexes))
-        self.assertLess(max(ingest_indexes), start_index)
-        self.assertLess(ping_index, status_index)
-        self.assertLess(status_index, canary_index)
-        self.assertLess(canary_index, doctor_index)
 
-    def test_full_doctor_without_inrou_workspace_fails_before_commands(self) -> None:
-        runtime = FakeRuntime()
-
-        with self.assertRaisesRegex(
-            module.DevnetError, "--full-doctor requires --inrou-canary-dir"
-        ):
-            module.up(
-                self.up_args("--full-doctor"),
-                run=runtime.run,
-                request=runtime.request,
-            )
-
-        self.assertEqual(runtime.commands, [])
-        self.assertFalse((self.root / "state").exists())
-
-    def test_inrou_workspace_requires_all_three_regular_files(self) -> None:
+    def test_retired_inrou_canary_option_fails_before_commands(self) -> None:
         runtime = FakeRuntime()
         workspace = self.inrou_canary_workspace()
-        (workspace / module.INROU_CANARY_BUNDLE_FILE).unlink()
 
-        with self.assertRaisesRegex(module.DevnetError, "missing regular file"):
+        with self.assertRaisesRegex(
+            module.DevnetError, "first-release Inrou hosting is disabled"
+        ):
             module.up(
                 self.up_args("--inrou-canary-dir", str(workspace)),
                 run=runtime.run,
@@ -834,6 +747,7 @@ class TairaDevnetTests(unittest.TestCase):
             )
 
         self.assertEqual(runtime.commands, [])
+        self.assertFalse((self.root / "state").exists())
 
     def test_managed_directory_refuses_foreign_contents(self) -> None:
         foreign = self.root / "foreign"

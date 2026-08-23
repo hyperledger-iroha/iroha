@@ -64,7 +64,7 @@ use tokio::{
     net::TcpListener,
     signal,
     sync::{OwnedSemaphorePermit, RwLock, Semaphore},
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
     time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_rustls::TlsAcceptor;
@@ -516,8 +516,11 @@ impl ResolverDaemon {
             warn!(?error, "failed to install ctrl-c handler");
         }
         info!("shutdown signal received; terminating listeners");
-        for handle in tasks {
+        for handle in &tasks {
             handle.abort();
+        }
+        for handle in tasks {
+            let _ = handle.await;
         }
         Ok(())
     }
@@ -550,25 +553,35 @@ async fn start_dot_server(addr: SocketAddr, tls_config: Arc<ServerConfig>, state
             info!(%addr, "DoT listener bound");
             let acceptor = TlsAcceptor::from(tls_config);
             let session_permits = Arc::new(Semaphore::new(MAX_DOT_CONCURRENT_SESSIONS_V1));
+            let mut sessions = JoinSet::new();
             loop {
-                match listener.accept().await {
-                    Ok((stream, _peer)) => {
-                        let Some(permit) = try_dot_session_permit(&session_permits) else {
-                            warn!("DoT session capacity reached; rejecting connection");
-                            continue;
-                        };
-                        let acceptor = acceptor.clone();
-                        let state = state.clone();
-                        tokio::spawn(async move {
-                            let _permit = permit;
-                            if let Err(error) = handle_dot_stream(stream, acceptor, state).await {
-                                warn!(?error, "DoT session failed");
-                            }
-                        });
+                tokio::select! {
+                    Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                        if let Err(error) = result {
+                            warn!(?error, "DoT session task failed");
+                        }
                     }
-                    Err(error) => {
-                        warn!(%addr, ?error, "DoT accept failed");
-                        break;
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _peer)) => {
+                                let Some(permit) = try_dot_session_permit(&session_permits) else {
+                                    warn!("DoT session capacity reached; rejecting connection");
+                                    continue;
+                                };
+                                let acceptor = acceptor.clone();
+                                let state = state.clone();
+                                sessions.spawn(async move {
+                                    let _permit = permit;
+                                    if let Err(error) = handle_dot_stream(stream, acceptor, state).await {
+                                        warn!(?error, "DoT session failed");
+                                    }
+                                });
+                            }
+                            Err(error) => {
+                                warn!(%addr, ?error, "DoT accept failed");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -731,18 +744,27 @@ async fn doh_post(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    let valid_content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case(DNS_CONTENT_TYPE));
-    if !valid_content_type {
+    if !valid_doh_content_type(&headers) {
         return build_error_response(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "content-type must be application/dns-message",
         );
     }
     ctx.resolve_dns(body.as_ref()).await
+}
+fn valid_doh_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(header::CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case(DNS_CONTENT_TYPE))
 }
 async fn metrics_handler(AxumState(ctx): AxumState<AppContext>) -> Response<Body> {
     let snapshot = ctx.metrics_snapshot().await;
@@ -1072,6 +1094,22 @@ mod tests {
         );
         assert!(parse_doh_get_query(Some("dns=AA&dns=BB")).is_err());
         assert!(parse_doh_get_query(Some("other=AA")).is_err());
+    }
+    #[test]
+    fn doh_post_rejects_duplicate_or_ambiguous_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            DNS_CONTENT_TYPE.parse().expect("content type"),
+        );
+        assert!(valid_doh_content_type(&headers));
+        headers.append(
+            header::CONTENT_TYPE,
+            "application/octet-stream"
+                .parse()
+                .expect("second content type"),
+        );
+        assert!(!valid_doh_content_type(&headers));
     }
     #[test]
     fn dot_session_permits_fail_closed_at_capacity() {

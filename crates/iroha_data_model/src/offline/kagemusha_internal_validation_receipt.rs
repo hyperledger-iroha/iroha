@@ -1514,6 +1514,24 @@ pub(crate) mod tests {
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
+        signed_receipt_with_tracked_lock_for_v4_candidate(
+            candidate,
+            finalized_manifest,
+            finalized_manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_sha256,
+            finalized_manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_size_bytes,
+        )
+    }
+
+    pub(crate) fn signed_receipt_with_tracked_lock_for_v4_candidate(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        tracked_cargo_lock_sha256: [u8; 32],
+        tracked_cargo_lock_size_bytes: u64,
+    ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
         let validation_runner = validation_runner();
         let mut body = valid_body(&validation_runner);
         body.candidate_sha256 = candidate.sha256().expect("valid V4 candidate identity");
@@ -1527,6 +1545,8 @@ pub(crate) mod tests {
             finalized_manifest.reviewed_source_closure_descriptor_sha256;
         body.authenticated_source_seal_projection_sha256 =
             finalized_manifest.authenticated_source_seal_projection_sha256;
+        body.tracked_cargo_lock.sha256 = tracked_cargo_lock_sha256;
+        body.tracked_cargo_lock.size_bytes = tracked_cargo_lock_size_bytes;
         body.reviewed_cargo_binary_sha256 = finalized_manifest.reviewed_cargo_binary_sha256;
         body.reviewed_rustc_binary_sha256 = finalized_manifest.reviewed_rustc_binary_sha256;
         body.generator_binary_sha256 = finalized_manifest.generator_binary_sha256;

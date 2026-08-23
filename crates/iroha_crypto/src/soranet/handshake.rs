@@ -39,7 +39,7 @@ use tempfile::TempDir;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
@@ -125,6 +125,12 @@ const CAPABILITY_ROLE: u16 = 0x0201;
 const CAPABILITY_PADDING: u16 = 0x0202;
 const CAPABILITY_CONSTANT_RATE: u16 = 0x0203;
 const CAPABILITY_REQUIRED_FLAG: u8 = 0x01;
+const FIRST_RELEASE_PQSIG_ID: u8 = 0x01;
+const FIRST_RELEASE_ROLE_MASK: u8 = 0x07;
+const FIRST_RELEASE_CONSTANT_RATE_VERSION: u8 = 0x01;
+const FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES: u16 = 1_024;
+/// Maximum encoded capability-vector size accepted by the first-release handshake.
+pub const MAX_CAPABILITY_VECTOR_LEN: usize = 4_096;
 /// Negotiated handshake suite identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -218,9 +224,17 @@ pub enum HarnessError {
     /// Supplied capability identifier was not recognised.
     #[error("invalid capability type: {0}")]
     CapabilityType(String),
-    /// Duplicate capability TLV encountered for a singleton type.
+    /// Duplicate capability TLV or repeated algorithm identifier encountered.
     #[error("duplicate capability {0}")]
     DuplicateCapability(String),
+    /// Encoded capability vector exceeded the first-release resource bound.
+    #[error("capability vector is {actual} bytes; first-release maximum is {max} bytes")]
+    CapabilityVectorTooLong {
+        /// Observed encoded byte length.
+        actual: usize,
+        /// Maximum accepted encoded byte length.
+        max: usize,
+    },
     /// Timestamp failed to parse according to RFC3339.
     #[error("invalid timestamp {timestamp}: {source}")]
     Timestamp {
@@ -281,6 +295,12 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(HarnessError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
     Ok(())
 }
 fn reject_repeated_random_material(
@@ -304,9 +324,16 @@ fn reject_repeated_random_material(
 /// # Errors
 /// Returns an error when the TLV encoding is truncated or otherwise malformed.
 pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError> {
+    if buf.len() > MAX_CAPABILITY_VECTOR_LEN {
+        return Err(HarnessError::CapabilityVectorTooLong {
+            actual: buf.len(),
+            max: MAX_CAPABILITY_VECTOR_LEN,
+        });
+    }
     let mut offset = 0;
     let mut out = Vec::new();
     let mut seen_singletons = std::collections::BTreeSet::new();
+    let mut seen_algorithms = std::collections::BTreeSet::new();
     while offset < buf.len() {
         let (ty, len) = read_capability_header(buf, &mut offset)?;
         let mut value = read_capability_value(buf, &mut offset, len)?;
@@ -316,7 +343,15 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         }
         if !grease {
             validate_capability_payload(ty, &value)?;
-            if !capability_allows_duplicates(ty) && !seen_singletons.insert(ty) {
+            if capability_allows_duplicates(ty) {
+                let algorithm_id = value[0];
+                if !seen_algorithms.insert((ty, algorithm_id)) {
+                    return Err(HarnessError::DuplicateCapability(format!(
+                        "{} algorithm id 0x{algorithm_id:02x}",
+                        capability_label(ty)
+                    )));
+                }
+            } else if !seen_singletons.insert(ty) {
                 return Err(HarnessError::DuplicateCapability(capability_label(ty)));
             }
         }
@@ -331,6 +366,19 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         return Err(HarnessError::ExtraBytes);
     }
     Ok(out)
+}
+/// Validate a client capability vector, including its canonical type ordering.
+///
+/// Relay vectors intentionally do not use this validator: their wire order is
+/// transcript-bound, while only clients are required to encode capability
+/// types in nondecreasing order.
+///
+/// # Errors
+/// Returns an error when the vector is oversized, malformed, or not in
+/// nondecreasing capability-type order.
+pub fn validate_client_capability_vector(buf: &[u8]) -> Result<(), HarnessError> {
+    let capabilities = parse_capabilities(buf)?;
+    validate_client_capability_order(&capabilities)
 }
 fn read_capability_header(buf: &[u8], offset: &mut usize) -> Result<(u16, usize), HarnessError> {
     let start = *offset;
@@ -440,6 +488,8 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            suite_for_kem_id(value[0])?;
+            validate_capability_flag_bits(ty, value[1])?;
         }
         CAPABILITY_PQSIG => {
             if value.len() != 2 {
@@ -448,6 +498,13 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            if value[0] != FIRST_RELEASE_PQSIG_ID {
+                return Err(HarnessError::Validation(format!(
+                    "unsupported first-release signature identifier {:#04x}",
+                    value[0]
+                )));
+            }
+            validate_capability_flag_bits(ty, value[1])?;
         }
         CAPABILITY_TRANSCRIPT_COMMIT => {
             if value.len() != 32 {
@@ -471,6 +528,12 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     value.len()
                 )));
             }
+            if value[0] == 0 || value[0] & !FIRST_RELEASE_ROLE_MASK != 0 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.role capability uses invalid first-release role bits 0x{:02x}",
+                    value[0]
+                )));
+            }
         }
         CAPABILITY_PADDING => {
             if value.len() != 2 {
@@ -481,14 +544,37 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
             }
         }
         CAPABILITY_CONSTANT_RATE => {
-            if value.len() < 2 {
+            if value.len() != 4 {
                 return Err(HarnessError::Validation(format!(
-                    "snnet.constant_rate capability must be at least 2 bytes, got {}",
+                    "snnet.constant_rate capability must be exactly 4 bytes, got {}",
                     value.len()
+                )));
+            }
+            if value[0] != FIRST_RELEASE_CONSTANT_RATE_VERSION {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.constant_rate capability uses unsupported version 0x{:02x}",
+                    value[0]
+                )));
+            }
+            validate_capability_flag_bits(ty, value[1])?;
+            let cell_bytes = u16::from_le_bytes([value[2], value[3]]);
+            if cell_bytes != FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.constant_rate capability advertises unsupported cell size {cell_bytes}; expected {FIRST_RELEASE_CONSTANT_RATE_CELL_BYTES}"
                 )));
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+fn validate_capability_flag_bits(ty: u16, flags: u8) -> Result<(), HarnessError> {
+    let undefined = flags & !CAPABILITY_REQUIRED_FLAG;
+    if undefined != 0 {
+        return Err(HarnessError::Validation(format!(
+            "{} capability uses undefined flag bits 0x{undefined:02x}",
+            capability_label(ty)
+        )));
     }
     Ok(())
 }
@@ -594,6 +680,16 @@ fn describe_suites(suites: &[HandshakeSuite]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+fn validate_client_capability_order(caps: &[CapabilityTlv]) -> Result<(), HarnessError> {
+    if let Some(pair) = caps.windows(2).find(|pair| pair[0].ty > pair[1].ty) {
+        return Err(HarnessError::Validation(format!(
+            "client capability types must be in nondecreasing order; {} precedes {}",
+            capability_label(pair[0].ty),
+            capability_label(pair[1].ty)
+        )));
+    }
+    Ok(())
+}
 fn handle_both_suite_lists(
     client: &SuiteList,
     relay: &SuiteList,
@@ -638,6 +734,7 @@ fn negotiate_handshake_suite(
     client_caps: &[CapabilityTlv],
     relay_caps: &[CapabilityTlv],
 ) -> Result<HandshakeSuiteNegotiation, HarnessError> {
+    validate_client_capability_order(client_caps)?;
     let client_list = suite_list_capability(client_caps)?;
     let relay_list = suite_list_capability(relay_caps)?;
     match (client_list, relay_list) {
@@ -815,7 +912,6 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
     for cap in entries {
         let mut value = cap.value.clone();
         apply_required_flag(cap.ty, &mut value, cap.required);
-        buf.extend_from_slice(&cap.ty.to_be_bytes());
         let len = u16::try_from(value.len()).map_err(|_| {
             HarnessError::Validation(format!(
                 "capability {} value length {} exceeds u16::MAX",
@@ -823,6 +919,20 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
                 value.len()
             ))
         })?;
+        let encoded_len = buf
+            .len()
+            .checked_add(4)
+            .and_then(|encoded_len| encoded_len.checked_add(value.len()))
+            .ok_or_else(|| {
+                HarnessError::Validation("capability vector length overflowed usize".to_owned())
+            })?;
+        if encoded_len > MAX_CAPABILITY_VECTOR_LEN {
+            return Err(HarnessError::CapabilityVectorTooLong {
+                actual: encoded_len,
+                max: MAX_CAPABILITY_VECTOR_LEN,
+            });
+        }
+        buf.extend_from_slice(&cap.ty.to_be_bytes());
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(&value);
     }
@@ -832,7 +942,8 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
 ///
 /// # Errors
 /// Returns [`HarnessError::Validation`] when `suites` is empty, the capability stream is malformed,
-/// or the encoded suite list would exceed a single capability field.
+/// the encoded suite list would exceed a single capability field, or the
+/// resulting capability vector would exceed the first-release aggregate limit.
 pub fn update_suite_list(
     base: &[u8],
     suites: &[HandshakeSuite],
@@ -888,9 +999,27 @@ impl TranscriptInputs<'_> {
     /// Compute the transcript hash as described in the working draft.
     ///
     /// # Errors
-    /// Returns [`HarnessError::Validation`] when the capability vector length
-    /// cannot be represented in the transcript's fixed `u32` length field.
+    /// Returns [`HarnessError::Validation`] when fixed-width transcript fields
+    /// or suite identifiers are invalid, or when the capability vector length
+    /// cannot be represented in its fixed `u32` length field.
     pub fn compute_hash(&self) -> Result<[u8; 32], HarnessError> {
+        validate_exact_field_len(
+            "descriptor commitment",
+            self.descriptor_commit,
+            TRANSCRIPT_BINDING_LEN,
+        )?;
+        validate_exact_field_len("client nonce", self.client_nonce, TRANSCRIPT_BINDING_LEN)?;
+        validate_exact_field_len("relay nonce", self.relay_nonce, TRANSCRIPT_BINDING_LEN)?;
+        if let Some(resume_hash) = self.resume_hash {
+            validate_exact_field_len("resume hash", resume_hash, TRANSCRIPT_BINDING_LEN)?;
+        }
+        suite_for_kem_id(self.kem_id)?;
+        if self.sig_id != FIRST_RELEASE_PQSIG_ID {
+            return Err(HarnessError::Validation(format!(
+                "unsupported signature identifier {:#04x}",
+                self.sig_id
+            )));
+        }
         let mut hasher = Sha3_256::new();
         Update::update(&mut hasher, TRANSCRIPT_DOMAIN);
         let desc_hash = Sha3_256::digest(self.descriptor_commit);
@@ -1298,7 +1427,6 @@ pub struct SimulationResult {
     pub handshake_steps: Vec<HandshakeStep>,
 }
 /// Input parameters for performing a deterministic handshake simulation.
-#[derive(Debug)]
 pub struct SimulationParams<'a> {
     /// Serialized client capability TLVs.
     pub client_capabilities: &'a [u8],
@@ -1321,6 +1449,23 @@ pub struct SimulationParams<'a> {
     /// Selected signature suite identifier.
     pub sig_id: u8,
 }
+impl fmt::Debug for SimulationParams<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SimulationParams")
+            .field("client_capabilities_len", &self.client_capabilities.len())
+            .field("relay_capabilities_len", &self.relay_capabilities.len())
+            .field("client_static_sk", &"[REDACTED]")
+            .field("relay_static_sk", &"[REDACTED]")
+            .field("resume_hash_present", &self.resume_hash.is_some())
+            .field("descriptor_commit_len", &self.descriptor_commit.len())
+            .field("client_nonce_len", &self.client_nonce.len())
+            .field("relay_nonce_len", &self.relay_nonce.len())
+            .field("kem_id", &self.kem_id)
+            .field("sig_id", &self.sig_id)
+            .finish()
+    }
+}
 /// Execute a deterministic Noise XX handshake simulation.
 ///
 /// # Errors
@@ -1340,6 +1485,11 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
     let client_static = validate_static_key("client", params.client_static_sk)?;
     let relay_static = validate_static_key("relay", params.relay_static_sk)?;
+    if bool::from(client_static.ct_eq(&relay_static)) {
+        return Err(HarnessError::Validation(
+            "client and relay static keys must be distinct".into(),
+        ));
+    }
     let transcript_hash = TranscriptInputs {
         descriptor_commit: params.descriptor_commit,
         client_nonce: params.client_nonce,
@@ -1391,6 +1541,20 @@ struct SimulatedKemArtifacts {
     confirmation: Vec<u8>,
     shared_secret: Vec<u8>,
 }
+impl SimulatedKemArtifacts {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_public.zeroize();
+        self.relay_public.zeroize();
+        self.ciphertext.zeroize();
+        self.confirmation.zeroize();
+        self.shared_secret.zeroize();
+    }
+}
+impl Drop for SimulatedKemArtifacts {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 #[derive(Clone, Copy)]
 enum KemVariant {
     Primary,
@@ -1411,6 +1575,22 @@ struct DeterministicHandshakeMaterial {
     relay_ephemeral_public: [u8; NOISE_SECRET_LEN],
     primary_kem: SimulatedKemArtifacts,
     forward_secure_kem: SimulatedKemArtifacts,
+}
+impl DeterministicHandshakeMaterial {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_static_public.zeroize();
+        self.client_ephemeral_public.zeroize();
+        self.relay_static_bytes.zeroize();
+        self.relay_static_public.zeroize();
+        self.relay_ephemeral_public.zeroize();
+        self.primary_kem.zeroize_sensitive_fields();
+        self.forward_secure_kem.zeroize_sensitive_fields();
+    }
+}
+impl Drop for DeterministicHandshakeMaterial {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
 }
 fn simulation_relay_identity_key(
     material: &DeterministicHandshakeMaterial,
@@ -1787,6 +1967,13 @@ fn validate_static_key(label: &str, key: &[u8]) -> Result<[u8; NOISE_SECRET_LEN]
     }
     let mut out = [0u8; NOISE_SECRET_LEN];
     out.copy_from_slice(key);
+    let repeated = [out[0]; NOISE_SECRET_LEN];
+    if bool::from(out.ct_eq(&repeated)) {
+        out.fill(0);
+        return Err(HarnessError::Validation(format!(
+            "{label} static key must not be an all-zero or repeated-byte degenerate key"
+        )));
+    }
     Ok(out)
 }
 fn suite_for_kem_id(kem_id: u8) -> Result<MlKemSuite, HarnessError> {
@@ -2208,7 +2395,7 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-006-constant-rate",
         description: "Client requires snnet.constant_rate; relay lacking TLV triggers downgrade",
-        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe020300020101",
+        client_hex: "01010002010101020002010101040002840502020002000402030004010100047f100004deadbeef7f110004cafebabe",
         relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
@@ -2216,7 +2403,7 @@ const FIXTURES: &[FixtureSpec] = &[
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "a639850117a5382b48a8f307614be5d05ecdd054b9211eb0e9162bdd5dc71f6c",
+        transcript_hash_hex: "a2ad01866bb231ec5244d7060014fd9c16723e5025f6b1129a8a25f8ec11b1ca",
         warnings: &["relay missing required capability type=0x0203 (snnet.constant_rate)"],
         expected_outcome: "downgrade_abort",
         expected_alarm: None,
@@ -2247,10 +2434,10 @@ const FIXTURES: &[FixtureSpec] = &[
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
         relay_nonce_hex: "cafebabefeedface00112233445566778899aabbccddeeff0011223344556677",
-        resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
+        resume_hash_hex: Some("aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"),
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "84dc1ad92c7bf6c2ee7ec34a6025895b9c4fbf9f0c35befbba6c22696c50d33f",
+        transcript_hash_hex: "656f8dd4c73dca0bcaa3772b3d09e9c278ad514950b5dd119ad6050f66657e0d",
         warnings: &[],
         expected_outcome: "success",
         expected_alarm: None,
@@ -2472,13 +2659,32 @@ struct HandshakeInputs {
     relay_nonce: [u8; NOISE_SECRET_LEN],
     resume_hash: Option<Vec<u8>>,
 }
+impl HandshakeInputs {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.client_static.zeroize();
+        self.relay_static.zeroize();
+        self.client_nonce.zeroize();
+        self.relay_nonce.zeroize();
+        self.resume_hash.zeroize();
+    }
+}
+impl Drop for HandshakeInputs {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
+}
 fn decode_handshake_inputs(spec: &InteropSpec) -> Result<HandshakeInputs, HarnessError> {
     Ok(HandshakeInputs {
         client_static: decode_fixed_hex("client_static_sk_hex", spec.client_static_sk_hex)?,
         relay_static: decode_fixed_hex("relay_static_sk_hex", spec.relay_static_sk_hex)?,
         client_nonce: decode_fixed_hex("client_nonce_hex", spec.client_nonce_hex)?,
         relay_nonce: decode_fixed_hex("relay_nonce_hex", spec.relay_nonce_hex)?,
-        resume_hash: spec.resume_hash_hex.map(decode_hex).transpose()?,
+        resume_hash: spec
+            .resume_hash_hex
+            .map(|hex| {
+                decode_fixed_hex::<TRANSCRIPT_BINDING_LEN>("resume_hash_hex", hex).map(Vec::from)
+            })
+            .transpose()?,
     })
 }
 fn build_simulation_params<'a>(
@@ -2522,6 +2728,20 @@ struct SessionArtifacts {
     primary_shared: Vec<u8>,
     forward_shared: Option<Vec<u8>>,
     dual_mix: Option<Vec<u8>>,
+}
+impl SessionArtifacts {
+    fn zeroize_sensitive_fields(&mut self) {
+        self.session_key.zeroize();
+        self.session_confirmation.zeroize();
+        self.primary_shared.zeroize();
+        self.forward_shared.zeroize();
+        self.dual_mix.zeroize();
+    }
+}
+impl Drop for SessionArtifacts {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
+    }
 }
 fn build_session_artifacts(
     spec: &InteropSpec,

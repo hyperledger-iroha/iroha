@@ -25,7 +25,7 @@ const CIRCUIT_DOMAIN: &[u8] = b"soranet.blinding.circuit.v1";
 /// Errors surfaced while deriving or applying `SoraNet` CID blinding.
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum BlindingError {
-    /// A required entropy-bearing input was all zero.
+    /// A required entropy-bearing input was all zero or otherwise repeated-byte degenerate.
     #[error("soranet blinding input {0} must not be all zero")]
     WeakInput(&'static str),
     /// HKDF expansion failed. This should only occur if the requested output
@@ -119,9 +119,10 @@ impl RequestNonce {
     /// Construct a nonce from raw bytes.
     ///
     /// # Errors
-    /// Returns [`BlindingError::WeakInput`] if the nonce is all zero.
+    /// Returns [`BlindingError::WeakInput`] if the nonce is all zero or all
+    /// identical bytes.
     pub fn from_bytes(bytes: [u8; REQUEST_NONCE_LEN]) -> Result<Self, BlindingError> {
-        if bytes.iter().all(|&byte| byte == 0) {
+        if bytes.iter().all(|&byte| byte == bytes[0]) {
             return Err(BlindingError::WeakInput("request_nonce"));
         }
         Ok(Self(bytes))
@@ -135,7 +136,8 @@ impl RequestNonce {
     ///
     /// # Errors
     /// Returns [`BlindingError::RandomBytes`] if the RNG cannot provide request nonce material, or
-    /// [`BlindingError::WeakInput`] if the RNG returns all-zero nonce material.
+    /// [`BlindingError::WeakInput`] if the RNG returns all-zero or
+    /// all-identical-byte nonce material.
     #[cfg(feature = "rand")]
     pub fn random<R>(rng: &mut R) -> Result<Self, BlindingError>
     where
@@ -147,7 +149,7 @@ impl RequestNonce {
                 operation: "building request blinding nonce",
                 message: err.to_string(),
             })?;
-        if buf.iter().all(|&byte| byte == 0) {
+        if buf.iter().all(|&byte| byte == buf[0]) {
             return Err(BlindingError::WeakInput("request_nonce"));
         }
         Ok(Self(buf))
@@ -246,8 +248,12 @@ mod tests {
         circuit_secret[0] = 0x01;
         let key = CircuitBlindingKey::derive(&salt, &circuit_secret).expect("hkdf");
         let cid = b"popular-content";
-        let nonce_a = RequestNonce::from_bytes([0xAA; REQUEST_NONCE_LEN]).expect("nonce A parses");
-        let nonce_b = RequestNonce::from_bytes([0xBB; REQUEST_NONCE_LEN]).expect("nonce B parses");
+        let mut nonce_a = [0xAA; REQUEST_NONCE_LEN];
+        nonce_a[0] = 0x01;
+        let nonce_a = RequestNonce::from_bytes(nonce_a).expect("nonce A parses");
+        let mut nonce_b = [0xBB; REQUEST_NONCE_LEN];
+        nonce_b[0] = 0x02;
+        let nonce_b = RequestNonce::from_bytes(nonce_b).expect("nonce B parses");
         let blinded_a = key.request_scoped_blinded(cid, &nonce_a);
         let blinded_b = key.request_scoped_blinded(cid, &nonce_b);
         assert_ne!(blinded_a, blinded_b);
@@ -256,9 +262,13 @@ mod tests {
         assert_eq!(blinded_a, blinded_a_again);
     }
     #[test]
-    fn request_nonce_from_bytes_rejects_all_zero_material() {
+    fn request_nonce_from_bytes_rejects_degenerate_material() {
         let err = RequestNonce::from_bytes([0_u8; REQUEST_NONCE_LEN])
             .expect_err("all-zero nonce bytes must fail");
+        assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
+
+        let err = RequestNonce::from_bytes([0xA5_u8; REQUEST_NONCE_LEN])
+            .expect_err("all-identical nonce bytes must fail");
         assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
     }
     #[test]
@@ -279,6 +289,12 @@ mod tests {
             bytes: [0_u8; REQUEST_NONCE_LEN],
         };
         let err = RequestNonce::random(&mut rng).expect_err("all-zero nonce must fail");
+        assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
+
+        let mut rng = FixedTryRng {
+            bytes: [0xA5_u8; REQUEST_NONCE_LEN],
+        };
+        let err = RequestNonce::random(&mut rng).expect_err("stuck nonzero nonce RNG must fail");
         assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
     }
     #[test]

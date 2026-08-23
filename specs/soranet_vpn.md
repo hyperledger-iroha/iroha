@@ -152,9 +152,12 @@ the same deterministic framing.
   Each file contains exactly 64 lowercase hexadecimal characters, with no
   whitespace and no all-zero placeholder.
   Bootstrap frames are Norito envelopes with timestamp, nonce, and keyed MAC;
-  the backend rejects bad MACs, stale timestamps, and replayed nonces, and Unix
-  endpoints additionally check peer credentials against the configured allowed
-  uid/gid; peer identity does not replace the keyed bootstrap authentication.
+  the backend rejects bad MACs, stale timestamps, and replayed nonces. Replay
+  reservations and the accepted-time high-water mark are fsync-backed in the
+  private backend replay directory before admission, preserving that guarantee
+  across restarts and failing closed on clock rollback. Unix endpoints
+  additionally check peer credentials against the configured allowed uid/gid;
+  peer identity does not replace the keyed bootstrap authentication.
 - **Local helper secrecy:** Hidden helper workers read their connect payloads
   from stdin instead of argv, and that stdin payload is a magic-prefixed Norito
   frame rather than JSON. The helper's private state file is also a

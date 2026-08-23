@@ -2335,6 +2335,10 @@ pub mod extractors {
         }
     }
     /// Extractor enforcing JSON payloads decoded with the Norito JSON codec.
+    ///
+    /// A missing `Content-Type` remains accepted for compatibility. When the
+    /// header is present exactly once, its media type is validated before the
+    /// body is read; duplicate declarations fail closed.
     #[derive(Clone, Debug)]
     pub struct JsonOnly<T>(pub T);
     impl<S, T> FromRequest<S> for JsonOnly<T>
@@ -2345,14 +2349,27 @@ pub mod extractors {
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
-            let body = admitted_typed_body(req, state).await?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
-            if let Some(ct) = declared {
+            let mut content_types = req.headers().get_all(CONTENT_TYPE).iter();
+            if let Some(content_type) = content_types.next() {
+                if content_types.next().is_some() {
+                    return Err((
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "Content-Type must appear at most once",
+                    )
+                        .into_response());
+                }
+                let Some(ct) = content_type
+                    .to_str()
+                    .ok()
+                    .map(str::trim)
+                    .filter(|ct| !ct.is_empty())
+                else {
+                    return Err((
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "unsupported Content-Type; expected application/json",
+                    )
+                        .into_response());
+                };
                 if !super::is_json_media_type(ct) {
                     return Err((
                         StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -2361,6 +2378,7 @@ pub mod extractors {
                         .into_response());
                 }
             }
+            let body = admitted_typed_body(req, state).await?;
             decode_as_json::<T>(&body).map(JsonOnly)
         }
     }
@@ -4279,7 +4297,7 @@ pub mod extractors {
             }
         }
         #[tokio::test]
-        async fn json_only_accepts_charset_and_suffix_json() {
+        async fn json_only_accepts_missing_header_charset_and_suffix_json() {
             #[derive(
                 Clone,
                 Debug,
@@ -4293,6 +4311,14 @@ pub mod extractors {
                 value: u32,
             }
             let body_bytes = norito::json::to_vec(&Payload { value: 9 }).expect("json encode");
+            let req = Request::builder()
+                .method("POST")
+                .body(Body::from(body_bytes.clone()))
+                .expect("build request without Content-Type");
+            let extracted = JsonOnly::<Payload>::from_request(req, &())
+                .await
+                .expect("extract headerless compatibility JSON");
+            assert_eq!(extracted.0.value, 9);
             let req = Request::builder()
                 .method("POST")
                 .header(CONTENT_TYPE, "application/json; charset=utf-8")
@@ -4311,6 +4337,57 @@ pub mod extractors {
                 .await
                 .expect("extract json suffix");
             assert_eq!(extracted.0.value, 9);
+        }
+        #[tokio::test]
+        async fn json_only_rejects_unsupported_media_before_body_admission() {
+            #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+            struct Payload {
+                value: u32,
+            }
+            let was_polled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stream_was_polled = std::sync::Arc::clone(&was_polled);
+            let stalled = futures::stream::poll_fn(move |_| {
+                stream_was_polled.store(true, std::sync::atomic::Ordering::SeqCst);
+                std::task::Poll::<
+                    Option<Result<axum::body::Bytes, std::convert::Infallible>>,
+                >::Pending
+            });
+            let request = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Body::from_stream(stalled))
+                .expect("build stalled unsupported-media request");
+            let rejection = tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                JsonOnly::<Payload>::from_request(request, &()),
+            )
+            .await
+            .expect("unsupported media must not wait for the body")
+            .expect_err("unsupported media must fail");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert!(!was_polled.load(std::sync::atomic::Ordering::SeqCst));
+
+            let mut oversized = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from("oversized"))
+                .expect("build oversized unsupported-media request");
+            DefaultBodyLimit::max(1).apply(&mut oversized);
+            let rejection = JsonOnly::<Payload>::from_request(oversized, &())
+                .await
+                .expect_err("unsupported media must precede the body limit");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+            let duplicate = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/json")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{\"value\":9}"))
+                .expect("build duplicate Content-Type request");
+            let rejection = JsonOnly::<Payload>::from_request(duplicate, &())
+                .await
+                .expect_err("duplicate media declarations must fail closed");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
         #[tokio::test]
         async fn canonical_json_only_accepts_exact_json_representations() {

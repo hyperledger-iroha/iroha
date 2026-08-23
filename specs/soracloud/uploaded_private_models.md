@@ -151,19 +151,39 @@ external transaction signing pipeline.
 ## Production Gates
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`.
-The Inrou V1 runtime is part of every `iroha3d` build. An enabled hosting node
-must configure exactly `backends = ["portable_vm"]`, an explicit
-`portable_vm_acceleration`, non-zero
-`max_concurrent_vms`, and exact `max_cpu_millis`, `max_memory_bytes`, and
-`max_storage_bytes` budgets. Production mode also rejects broad runtime egress,
-missing fail-closed egress budgets, and Hugging Face inference-bridge fallback.
-Production profiles should state the runtime fee payer explicitly; `authority`
-is the deterministic development default.
+The first release fails closed whenever Inrou hosting is enabled, in both
+production and non-production configuration. The current QEMU boundary does not yet provide mandatory mount,
+network, IPC, and MAC isolation; QEMU's deny-list seccomp sandbox and uid-based
+IP firewall cannot contain all host capabilities such as AF_UNIX. Production
+nodes, including Taira, therefore advertise no Inrou hosting capability.
+
+The built-in PortableVM implementation is retained only behind private unit
+test fixtures while a mandatory privileged confinement launcher is developed.
+It intrinsically means one Linux KVM VM; the former backend, accelerator,
+concurrency, and supplementary-group selectors are retired. Its defense-in-depth
+checks require dedicated `portable_vm_uid`/`portable_vm_gid` values in
+`65536..524288` and exact resource budgets, with the sole supplementary gid
+derived from the validated `/dev/kvm` device. A future qualified host must use
+exactly `passwd: files` and `group: files` in a
+root-custodied `/etc/nsswitch.conf`. The exact locked local account/group name
+is `iroha-inrou` (uid/gid `70000` is the recommended qualification profile): password fields `x`, home
+`/nonexistent`, trusted nologin/false shell, locked shadow/gshadow entries, and
+no extra membership, administrator entry, duplicate, decimal-name collision,
+or primary-gid reuse. `subid` NSS, when declared, must use only `files`; no
+subordinate range may belong to that identity/numeric spelling or cover a
+configured id. Reused disks require Linux write-lease support. Root-custodied
+`iptables` and `ip6tables` are required. PortableVM V1 accepts only `Isolated`
+networking until kernel-owned traffic counters provide complete egress
+accounting; `Open` and `Allowlist` are rejected.
+Production mode also rejects broad runtime egress, missing fail-closed egress
+budgets, and Hugging Face inference-bridge fallback. Production profiles should
+state the runtime fee payer explicitly; `authority` is the deterministic
+development default.
 
 Production behavior is sourced from configuration, not environment variables.
-An enabled node fails startup if PortableVm or its configured accelerator is unavailable. A node
-with Inrou hosting disabled does not advertise hosting capacity. Runtime
-backend loss withdraws the host advert and reconciles affected placements.
+Shipping configuration rejects enabled Inrou before startup or reconciliation.
+A disabled node does not advertise hosting capacity and actively withdraws a
+pre-existing local advert.
 
 ## Test Expectations
 
@@ -178,8 +198,11 @@ Focused V1 coverage should include:
   `CanManageSoracloud`;
 - receipt recording rejects non-deterministic uploaded-model formats and
   mismatched manifest, bundle-root, or policy bindings;
-- production config rejects missing Inrou enablement, backend allowlist,
-  accelerator, resource budgets, or gas asset;
+- production config and programmatic manager construction reject enabled Inrou
+  hosting; retired backend, accelerator, concurrency, and supplementary-group
+  selectors are configuration errors;
+- non-production config and direct manager construction also reject enabled
+  Inrou; private runtime tests cover the KVM, identity, and custody checks;
 - unavailable PortableVm capability rejects startup, and capability loss withdraws
   the host advert and reconciles affected placements;
 - JavaScript Soracloud helpers expose unsigned drafts and do not accept raw
