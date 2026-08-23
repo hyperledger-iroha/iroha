@@ -24,7 +24,6 @@
 #![deny(unsafe_code)]
 pub mod backend;
 pub mod confidential;
-pub mod envelope;
 mod errors;
 mod field;
 pub mod generalized_bulletproof;
@@ -62,10 +61,6 @@ pub use backend::{
         Group as GroupElem, IpaProof, IpaProver, IpaVerifier, Params, Polynomial,
         Scalar as PrimeField64,
     },
-};
-pub use envelope::{
-    CURVE_PASTA, ENVELOPE_VERSION, EnvelopeError, FLAG_LOOKUPS, Halo2ProofEnvelope,
-    Halo2ProofEnvelopeHeader, PCS_IPA, PUBLIC_INPUT_STRIDE, TRANSCRIPT_BLAKE2B,
 };
 pub use errors::Error;
 pub use ipa::{

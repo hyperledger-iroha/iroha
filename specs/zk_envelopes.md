@@ -352,17 +352,18 @@ Verifier behavior (native STARK)
   profile must version the authority-bound instance schema and deterministic
   key together before enabling joins.
 - `OpenVerifyEnvelope.proof_bytes` for production Halo2 contains exactly one
-  strict ZK1 carrier with `PROF` and optional `I10P` TLVs. The historical binary
-  `Halo2ProofEnvelope` is not accepted by production dispatch because its
+  strict ZK1 carrier ordered as `PROF` and then optional `I10P`. The historical
+  binary `Halo2ProofEnvelope` is not accepted by production dispatch because its
   caller-controlled `n_in`, `n_out`, and lookup flags were not absorbed into the
-  Halo2 transcript. Its standalone parser remains available only for non-ledger
-  compatibility tooling and rejects undefined flag bits.
-- Production Halo2 verifier-key bytes use a strict ZK1 carrier containing
-  exactly one `IPAK`, one `CID1`, and one non-empty `H2VK`. `CID1` is the
-  canonical normalized circuit identifier (for example,
-  `halo2/pasta/ipa/kaigi-roster-v1`), not a caller-selected alias. Kaigi client
-  fixtures hash this complete key carrier under its configured registry backend
-  and place the resulting nonzero commitment in the canonical outer envelope.
+  Halo2 transcript. The retired carrier and its parser are not part of the
+  first-release API.
+- Production Halo2 verifier-key bytes use a strict ZK1 carrier ordered as
+  exactly one `IPAK`, one `CID1`, and one non-empty `H2VK`. `CID1` is the exact
+  portable circuit identifier (for example, `halo2/pasta/ipa/kaigi-roster-v1`);
+  whitespace and alternate spellings are rejected rather than normalized.
+  Kaigi client fixtures hash this complete key carrier under its configured
+  registry backend and place the resulting nonzero commitment in the canonical
+  outer envelope.
 - STARK `OpenVerifyEnvelope` construction, preverification, and guardrails bind
   circuit ids to the selected STARK family as well: the generic `stark/fri`
   entry point rejects circuit ids that advertise another proof family, including

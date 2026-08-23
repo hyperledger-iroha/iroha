@@ -2848,9 +2848,9 @@ shape is not a fallback.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
-`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
-receive an operator-supplied canonical Base58 XOR id through
-`--xor-asset-definition-id`.
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw` with `NumericSpec::fractional(9)`, and Nexus
+deployable genesis generation must receive an operator-supplied canonical
+Base58 XOR id through `--xor-asset-definition-id`.
 
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now

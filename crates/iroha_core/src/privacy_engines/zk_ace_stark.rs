@@ -50,8 +50,8 @@ use iroha_data_model::{
     zk::{
         ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        derive_zk_ace_transfer_digest, zk_ace_pack_bytes_to_field_limbs,
-        zk_ace_poseidon2_domain_hash,
+        derive_zk_ace_transfer_digest, zk_ace_dense_mds_goldilocks_x7_domain_hash_v1,
+        zk_ace_pack_bytes_to_field_limbs,
     },
 };
 use rand::{TryCryptoRng, TryRngCore};
@@ -118,10 +118,9 @@ impl ZkAceAirRelationInputsV1 {
 /// Exact, type-name-independent public transcript schema.
 ///
 /// The schema descriptor is itself the first framed part. Every following part is ordered and
-/// independently length-framed by the legacy-named
-/// [`zk_ace_poseidon2_domain_hash`], whose byte packing is fixed to seven-byte
-/// little-endian Goldilocks limbs and whose permutation is dense-MDS Poseidon
-/// with an `x^7` S-box.
+/// independently length-framed by
+/// [`zk_ace_dense_mds_goldilocks_x7_domain_hash_v1`], whose byte packing is
+/// fixed to seven-byte little-endian Goldilocks limbs.
 pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
 const AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:air-public-digest:v1";
 fn air_public_transcript_parts_v1(
@@ -163,7 +162,7 @@ fn air_public_transcript_parts_v1(
 }
 fn hash_air_public_transcript_parts_v1(parts: &[Vec<u8>]) -> [u8; 32] {
     let parts = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    zk_ace_poseidon2_domain_hash(AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1, &parts)
+    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1, &parts)
 }
 fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -3265,7 +3264,8 @@ mod tests {
     }
 
     fn legacy_poseidon_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-        let words = iroha_data_model::zk::zk_ace_poseidon2_domain_words(domain, parts);
+        let words =
+            iroha_data_model::zk::zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
         let mut state = [F::ZERO; 3];
         let mut rate_index = 0usize;
         let absorb = |word: F, state: &mut [F; 3], rate_index: &mut usize| {
