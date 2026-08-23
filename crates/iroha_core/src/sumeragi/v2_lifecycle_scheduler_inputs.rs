@@ -724,8 +724,6 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
     /// A Ready Apply could not reconcile or reserve its exact executor work.
     LiveApplyReconciliation(EffectExecutorError),
-    /// The Apply executor was closed or retained an active mutation owner.
-    ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
     /// The selected claimed carrier could not project its exact task.

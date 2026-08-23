@@ -66,8 +66,8 @@ fn pending_kura_tip_opens_directly_at_exact_recovered_apply_ordinal() {
     assert_eq!(evidence.stage(), PendingKuraApplyRecoveryStage::Apply);
     assert_eq!(evidence.recovered_apply_ordinal(), recovered_apply_ordinal);
     assert!(evidence.is_exact(&fixture.context));
-    let mut altered_signature = certificate;
-    altered_signature.aggregate_signature.push(0xa5);
+    let mut missing_signature = certificate;
+    missing_signature.aggregate_signature.clear();
     assert!(
         verify_pending_kura_apply_parts(
             &fixture.context,
@@ -77,7 +77,7 @@ fn pending_kura_tip_opens_directly_at_exact_recovered_apply_ordinal() {
             expected,
             tag(0),
             tag(0),
-            altered_signature,
+            missing_signature,
             Some(&fixture.manifest),
             recovered_apply_ordinal,
         )
