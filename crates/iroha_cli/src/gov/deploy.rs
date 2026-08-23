@@ -7,12 +7,19 @@ use crate::{
     json_utils::{json_array, json_object, json_value},
 };
 use eyre::{Result, eyre};
-use iroha::client::Client;
+use iroha::client::{
+    Client, GovernanceAtWindowV1, GovernanceDeployContractDraftRequestV1,
+    GovernanceEnactDraftRequestV1, GovernanceFinalizeDraftRequestV1,
+    validate_governance_deploy_draft_response_v1, validate_governance_enact_draft_response_v1,
+    validate_governance_finalize_draft_response_v1,
+};
 use iroha::data_model::{
-    isi::{InstructionBox, SetParameter},
+    isi::{InstructionBox, SetParameter, governance::VotingMode},
     name::Name,
     parameter::{CustomParameterId, Parameter, custom::CustomParameter},
+    smart_contract::{ContractAddress, ContractAlias, manifest::ManifestProvenance},
 };
+const MANIFEST_PROVENANCE_MAX_BYTES: u64 = 64 * 1024;
 #[derive(clap::Args, Debug)]
 pub struct ProposeDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -23,91 +30,114 @@ pub struct ProposeDeployArgs {
     pub code_hash: String,
     #[arg(long)]
     pub abi_hash: String,
-    #[arg(long, default_value = "v1")]
+    /// Exact first-release governed contract ABI.
+    #[arg(long, default_value = "1", value_parser = ["1"])]
     pub abi_version: String,
-    /// Optional window lower bound (height)
+    /// Inclusive referendum window lower block height.
     #[arg(long)]
-    pub window_lower: Option<u64>,
-    /// Optional window upper bound (height)
+    pub window_lower: u64,
+    /// Inclusive referendum window upper block height.
     #[arg(long)]
-    pub window_upper: Option<u64>,
+    pub window_upper: u64,
     /// Optional voting mode for the referendum: Zk or Plain (defaults to server policy)
     #[arg(long, value_name = "MODE", value_parser = ["Zk", "Plain"])]
     pub mode: Option<String>,
+    /// JSON file containing only the public `signer` and `signature` provenance fields.
+    #[arg(long, visible_alias = "manifest-provenance", value_name = "PATH")]
+    pub manifest_provenance_file: std::path::PathBuf,
+    /// Sign, submit, and wait for this exact server-drafted proposal instruction.
+    #[arg(long)]
+    pub apply: bool,
+}
+fn read_manifest_provenance(path: &std::path::Path) -> Result<ManifestProvenance> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        eyre!(
+            "failed to inspect --manifest-provenance-file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "--manifest-provenance-file `{}` must be a regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() > MANIFEST_PROVENANCE_MAX_BYTES {
+        return Err(eyre!(
+            "--manifest-provenance-file exceeds the {}-byte limit",
+            MANIFEST_PROVENANCE_MAX_BYTES
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|error| {
+        eyre!(
+            "failed to read --manifest-provenance-file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    norito::json::from_slice(&bytes).map_err(|error| {
+        eyre!(
+            "invalid --manifest-provenance-file `{}`: {error}",
+            path.display()
+        )
+    })
 }
 impl Run for ProposeDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        // Normalize and validate mode
-        let mode_norm = if let Some(mode) = self.mode.as_deref() {
-            match mode.to_ascii_lowercase().as_str() {
-                "zk" => Some("Zk".to_string()),
-                "plain" => Some("Plain".to_string()),
-                other => {
-                    return Err(eyre!(
-                        "invalid --mode '{}'; expected 'Zk' or 'Plain'",
-                        other
-                    ));
-                }
-            }
-        } else {
-            None
+        let mode = match self.mode.as_deref() {
+            Some("Zk") => Some(VotingMode::Zk),
+            Some("Plain") => Some(VotingMode::Plain),
+            Some(other) => return Err(eyre!("invalid --mode `{other}`; expected Zk or Plain")),
+            None => None,
         };
-        let window = match (self.window_lower, self.window_upper) {
-            (Some(lower), Some(upper)) => json_object(vec![
-                ("lower", json_value(&lower)?),
-                ("upper", json_value(&upper)?),
-            ])?,
-            _ => norito::json::Value::Null,
-        };
-        let mode_value = json_value(&mode_norm)?;
-        let mut pairs = vec![
-            ("code_hash", json_value(&self.code_hash)?),
-            ("abi_hash", json_value(&self.abi_hash)?),
-            ("abi_version", json_value(&self.abi_version)?),
-            ("window", window),
-            ("mode", mode_value),
-        ];
-        match (
+        let contract_address = self
+            .contract_address
+            .as_deref()
+            .map(str::parse::<ContractAddress>)
+            .transpose()
+            .map_err(|error| eyre!("invalid --contract-address: {error}"))?;
+        let contract_alias = self
+            .contract_alias
+            .as_deref()
+            .map(str::parse::<ContractAlias>)
+            .transpose()
+            .map_err(|error| eyre!("invalid --contract-alias: {error}"))?;
+        let resolved_contract_address = resolve_contract_address_target(
+            &client,
             self.contract_address.as_deref(),
             self.contract_alias.as_deref(),
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(eyre!(
-                    "exactly one of --contract-address or --contract-alias must be provided"
-                ));
-            }
-            (Some(contract_address), None) => {
-                let contract_address: iroha::data_model::smart_contract::ContractAddress =
-                    contract_address
-                        .parse()
-                        .map_err(|err| eyre!("invalid --contract-address: {err}"))?;
-                pairs.push(("contract_address", json_value(&contract_address)?));
-            }
-            (None, Some(contract_alias)) => {
-                let contract_alias: iroha::data_model::smart_contract::ContractAlias =
-                    contract_alias
-                        .parse()
-                        .map_err(|err| eyre!("invalid --contract-alias: {err}"))?;
-                pairs.push(("contract_alias", json_value(&contract_alias)?));
-            }
-            (None, None) => {
-                return Err(eyre!(
-                    "provide exactly one contract target via --contract-address or --contract-alias"
-                ));
-            }
+        )?;
+        let request = GovernanceDeployContractDraftRequestV1 {
+            contract_address,
+            contract_alias,
+            abi_version: self.abi_version,
+            code_hash: self.code_hash,
+            abi_hash: self.abi_hash,
+            window: GovernanceAtWindowV1 {
+                lower: self.window_lower,
+                upper: self.window_upper,
+            },
+            mode,
+            manifest_provenance: read_manifest_provenance(&self.manifest_provenance_file)?,
+        };
+        request
+            .validate()
+            .map_err(|error| eyre!("invalid governed deployment request: {error}"))?;
+        let response =
+            client.post_governance_deploy_draft_v1(&request, &resolved_contract_address)?;
+        let instruction = validate_governance_deploy_draft_response_v1(
+            &response,
+            &request,
+            &resolved_contract_address,
+        )?;
+        if self.apply {
+            return context.submit(vec![instruction]);
         }
-        let body = json_object(pairs)?;
-        let value = client.post_gov_propose_deploy_json(&body)?;
-        let ok = value
-            .get("ok")
-            .and_then(norito::json::Value::as_bool)
-            .unwrap_or(false);
-        let pid = value
-            .get("proposal_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let summary = Some(format!("deploy propose: ok={ok} proposal_id={pid}"));
+        let value = norito::json::to_value(&response)?;
+        let summary = Some(format!(
+            "deploy propose: ok={} proposal_id={}",
+            response.ok, response.proposal_id
+        ));
         print_with_summary(context, summary, &value)
     }
 }
@@ -127,8 +157,11 @@ pub struct FinalizeArgs {
         value_parser = parse_governance_proposal_id_v1
     )]
     pub proposal_id: String,
+    /// Sign, submit, and wait for this exact server-drafted finalization instruction.
+    #[arg(long)]
+    pub apply: bool,
 }
-fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
+fn build_finalize_request(args: &FinalizeArgs) -> Result<GovernanceFinalizeDraftRequestV1> {
     let referendum_id = parse_governance_proposal_id_v1(&args.referendum_id)
         .map_err(|message| eyre!("invalid referendum_id: {message}"))?;
     let proposal_id = parse_governance_proposal_id_v1(&args.proposal_id)
@@ -136,28 +169,26 @@ fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
     if referendum_id != proposal_id {
         return Err(eyre!("referendum_id must equal proposal_id"));
     }
-    json_object(vec![
-        ("referendum_id", json_value(&referendum_id)?),
-        ("proposal_id", json_value(&proposal_id)?),
-    ])
+    Ok(GovernanceFinalizeDraftRequestV1 {
+        referendum_id,
+        proposal_id,
+    })
 }
 impl Run for FinalizeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let body = build_finalize_body(&self)?;
-        let value = client.post_gov_finalize_json(&body)?;
-        let ok = value
-            .get("ok")
-            .and_then(norito::json::Value::as_bool)
-            .unwrap_or(false);
-        let n_instr = value
-            .get("tx_instructions")
-            .and_then(|v| v.as_array())
-            .map_or(0, Vec::len);
+        let request = build_finalize_request(&self)?;
+        let response = client.post_governance_finalize_draft_v1(&request)?;
+        let instruction = validate_governance_finalize_draft_response_v1(&response, &request)?;
+        if self.apply {
+            return context.submit(vec![instruction]);
+        }
+        let n_instr = response.tx_instructions.len();
         let summary = Some(format!(
-            "finalize: referendum_id={} ok={ok} tx_instrs={n_instr}",
-            self.referendum_id
+            "finalize: referendum_id={} ok={} tx_instrs={n_instr}",
+            self.referendum_id, response.ok
         ));
+        let value = norito::json::to_value(&response)?;
         print_with_summary(context, summary, &value)
     }
 }
@@ -174,75 +205,32 @@ pub struct EnactArgs {
     #[arg(long)]
     pub apply: bool,
 }
-fn build_enact_body(args: &EnactArgs) -> Result<norito::json::Value> {
-    json_object(vec![("proposal_id", json_value(&args.proposal_id)?)])
-}
-fn decode_enact_instructions(
-    response: &norito::json::Value,
-    expected_proposal_id: &str,
-) -> Result<Vec<InstructionBox>> {
-    let entries = response
-        .get("tx_instructions")
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("governance enactment draft is missing `tx_instructions`"))?;
-    if entries.len() != 1 {
-        return Err(eyre!(
-            "governance enactment draft must contain exactly one instruction"
-        ));
-    }
-    let entry = &entries[0];
-    let wire_id = entry
-        .get("wire_id")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("governance enactment draft is missing `wire_id`"))?;
-    let payload_hex = entry
-        .get("payload_hex")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("governance enactment draft is missing `payload_hex`"))?;
-    let payload = hex::decode(payload_hex)
-        .map_err(|error| eyre!("invalid governance enactment payload hex: {error}"))?;
-    let instruction = iroha::data_model::isi::decode_instruction_from_pair(wire_id, &payload)
-        .map_err(|error| eyre!("invalid governance enactment instruction: {error}"))?;
-    let enactment = instruction
-        .as_any()
-        .downcast_ref::<iroha::data_model::isi::governance::EnactReferendum>()
-        .ok_or_else(|| eyre!("governance enactment draft returned a different instruction"))?;
-    if hex::encode(enactment.referendum_id) != expected_proposal_id {
-        return Err(eyre!(
-            "governance enactment draft proposal id differs from the request"
-        ));
-    }
-    Ok(vec![instruction])
-}
 fn finish_enact<C: RunContext>(
     context: &mut C,
-    proposal_id: &str,
+    request: &GovernanceEnactDraftRequestV1,
     apply: bool,
-    value: &norito::json::Value,
+    response: &iroha::client::GovernanceEnactDraftResponseV1,
 ) -> Result<()> {
+    let instruction = validate_governance_enact_draft_response_v1(response, request)?;
     if apply {
-        let instructions = decode_enact_instructions(value, proposal_id)?;
-        return context.submit(instructions);
+        return context.submit(vec![instruction]);
     }
-    let ok = value
-        .get("ok")
-        .and_then(norito::json::Value::as_bool)
-        .unwrap_or(false);
-    let n_instr = value
-        .get("tx_instructions")
-        .and_then(|v| v.as_array())
-        .map_or(0, Vec::len);
+    let n_instr = response.tx_instructions.len();
     let summary = Some(format!(
-        "enact: proposal_id={proposal_id} ok={ok} tx_instrs={n_instr}"
+        "enact: proposal_id={} ok={} tx_instrs={n_instr}",
+        request.proposal_id, response.ok
     ));
-    print_with_summary(context, summary, value)
+    let value = norito::json::to_value(response)?;
+    print_with_summary(context, summary, &value)
 }
 impl Run for EnactArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let body = build_enact_body(&self)?;
-        let value = client.post_gov_enact_json(&body)?;
-        finish_enact(context, &self.proposal_id, self.apply, &value)
+        let request = GovernanceEnactDraftRequestV1 {
+            proposal_id: self.proposal_id,
+        };
+        let response = client.post_governance_enact_draft_v1(&request)?;
+        finish_enact(context, &request, self.apply, &response)
     }
 }
 #[derive(clap::Args, Debug)]
@@ -582,8 +570,9 @@ mod tests {
         let args = FinalizeArgs {
             referendum_id: proposal_id.clone(),
             proposal_id: proposal_id.clone(),
+            apply: false,
         };
-        let body = build_finalize_body(&args).expect("build finalize body");
+        let body = build_finalize_request(&args).expect("build finalize body");
         let s = norito::json::to_json(&body).expect("serialize body");
         let v: norito::json::Value = norito::json::from_str(&s).expect("roundtrip");
         assert_eq!(v["referendum_id"].as_str(), Some(proposal_id.as_str()));
@@ -595,14 +584,16 @@ mod tests {
             FinalizeArgs {
                 referendum_id: "ref-123".to_owned(),
                 proposal_id: "aa".repeat(32),
+                apply: false,
             },
             FinalizeArgs {
                 referendum_id: "aa".repeat(32),
                 proposal_id: "bb".repeat(32),
+                apply: false,
             },
         ] {
-            let _error =
-                build_finalize_body(&args).expect_err("invalid finalization ids must fail locally");
+            let _error = build_finalize_request(&args)
+                .expect_err("invalid finalization ids must fail locally");
         }
     }
     #[test]
@@ -611,8 +602,11 @@ mod tests {
             proposal_id: "ab".repeat(32),
             apply: false,
         };
-        let body = build_enact_body(&args).expect("build enact body");
-        let object = body.as_object().expect("enact body object");
+        let body = GovernanceEnactDraftRequestV1 {
+            proposal_id: args.proposal_id.clone(),
+        };
+        let value = norito::json::to_value(&body).expect("encode enact request");
+        let object = value.as_object().expect("enact body object");
         assert_eq!(object.len(), 1);
         assert_eq!(
             object.get("proposal_id").and_then(|value| value.as_str()),
@@ -621,53 +615,63 @@ mod tests {
         assert!(object.get("preimage_hash").is_none());
         assert!(object.get("window").is_none());
     }
-    fn enact_draft_response(proposal_id: [u8; 32]) -> norito::json::Value {
-        use iroha::data_model::isi::{Instruction, frame_instruction_payload};
+    fn enact_draft_response() -> (
+        GovernanceEnactDraftRequestV1,
+        iroha::client::GovernanceEnactDraftResponseV1,
+    ) {
+        use iroha::data_model::governance::types::{
+            AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            ProposalKind,
+        };
+        let proposal_kind = ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address"),
+            code_hash_hex: ContractCodeHash::new([0x11; 32]),
+            abi_hash_hex: ContractAbiHash::new([0x22; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        });
+        let proposal_id = proposal_kind.fingerprint();
+        let referendum_window = AtWindow {
+            lower: 10,
+            upper: 20,
+        };
         let instruction: InstructionBox = iroha::data_model::isi::governance::EnactReferendum {
             referendum_id: proposal_id,
             preimage_hash: proposal_id,
-            at_window: iroha::data_model::governance::types::AtWindow {
-                lower: 10,
-                upper: 20,
-            },
+            at_window: referendum_window,
         }
         .into();
-        let wire_id = Instruction::id(&*instruction);
-        let payload = Instruction::dyn_encode(&*instruction);
-        let framed = frame_instruction_payload(wire_id, &payload).expect("frame enact instruction");
-        let tx_instruction = json_object(vec![
-            ("wire_id", json_value(&wire_id).expect("encode wire id")),
-            (
-                "payload_hex",
-                json_value(&hex::encode(framed)).expect("encode framed payload"),
-            ),
-        ])
-        .expect("build enact draft instruction");
-        let tx_instructions =
-            json_array(vec![tx_instruction]).expect("build enact draft instruction list");
-        json_object(vec![
-            ("ok", json_value(&true).expect("encode draft status")),
-            ("tx_instructions", tx_instructions),
-        ])
-        .expect("build enact draft response")
+        let draft = iroha::client::GovernanceInstructionDraftV1::from_instruction(&instruction)
+            .expect("build enact draft instruction");
+        let request = GovernanceEnactDraftRequestV1 {
+            proposal_id: hex::encode(proposal_id),
+        };
+        let response = iroha::client::GovernanceEnactDraftResponseV1 {
+            ok: true,
+            proposal_id: request.proposal_id.clone(),
+            proposal_kind,
+            referendum_window,
+            tx_instructions: vec![draft],
+        };
+        (request, response)
     }
     #[test]
     fn enact_defaults_to_draft_only() {
-        let proposal_id = [0xAB; 32];
-        let response = enact_draft_response(proposal_id);
+        let (request, response) = enact_draft_response();
         let mut context = TestContext::new();
-        finish_enact(&mut context, &hex::encode(proposal_id), false, &response)
-            .expect("render enact draft");
+        finish_enact(&mut context, &request, false, &response).expect("render enact draft");
         assert!(context.submitted.is_none());
         assert_eq!(context.printed.len(), 1);
     }
     #[test]
     fn enact_apply_decodes_and_submits_the_exact_native_instruction() {
-        let proposal_id = [0xAC; 32];
-        let response = enact_draft_response(proposal_id);
+        let (request, response) = enact_draft_response();
+        let proposal_id = hex::decode(&request.proposal_id).expect("proposal id");
+        let proposal_id: [u8; 32] = proposal_id.try_into().expect("32-byte proposal id");
         let mut context = TestContext::new();
-        finish_enact(&mut context, &hex::encode(proposal_id), true, &response)
-            .expect("apply exact enact draft");
+        finish_enact(&mut context, &request, true, &response).expect("apply exact enact draft");
         let submitted = context.submitted.expect("submitted instructions");
         assert_eq!(submitted.len(), 1);
         let enactment = submitted[0]

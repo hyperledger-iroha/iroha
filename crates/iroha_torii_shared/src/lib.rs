@@ -10,6 +10,8 @@ use iroha_data_model::{
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Typed DTOs for locally signed governance deployment workflows.
+pub mod governance_api;
 /// Public Torii DTOs for the offline cash lifecycle.
 pub mod offline_api;
 /// Shared QR Code encoder used by Torii and CLI offline flows.

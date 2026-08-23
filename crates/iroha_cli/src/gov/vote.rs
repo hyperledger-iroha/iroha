@@ -1,22 +1,24 @@
 //! Governance voting and query helpers.
-use crate::{
-    Run, RunContext,
-    json_utils::{json_object, json_value},
-};
-use clap::ValueEnum;
-use eyre::{Result, eyre};
-use iroha::client::Client;
-use iroha::data_model::account::AccountId;
-use iroha::data_model::isi::{
-    InstructionBox,
-    governance::{CastPlainBallot, CastZkBallot},
-};
-use iroha_crypto::Hash as CryptoHash;
-use norito::{decode_from_bytes, json};
 use super::shared::{
     canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
     print_with_summary,
 };
+use crate::{Run, RunContext, json_utils::json_value};
+use clap::ValueEnum;
+use eyre::{Result, eyre};
+use iroha::client::{
+    Client, GovernanceInstructionDraftV1, GovernancePlainBallotDraftRequestV1,
+    GovernanceZkBallotDraftRequestV1, decode_governance_instruction_draft_v1,
+    validate_governance_plain_ballot_draft_response_v1,
+    validate_governance_zk_ballot_draft_response_v1,
+};
+use iroha::data_model::account::AccountId;
+#[cfg(test)]
+use iroha::data_model::isi::InstructionBox;
+use iroha::data_model::isi::governance::{CastPlainBallot, CastZkBallot};
+use iroha_crypto::Hash as CryptoHash;
+use iroha_primitives::numeric::Quantity;
+use norito::json;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
 pub enum VoteMode {
@@ -189,6 +191,9 @@ pub struct VoteArgs {
     /// Optional 32-byte nullifier hint for ZK ballots (hex).
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
+    /// Sign, submit, and wait for this exact server-drafted ballot instruction.
+    #[arg(long)]
+    pub apply: bool,
 }
 impl Run for VoteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -203,6 +208,7 @@ impl Run for VoteArgs {
             duration_blocks,
             direction,
             nullifier,
+            apply,
         } = self;
         let client: Client = context.client_from_config();
         let resolved = resolve_vote_mode(&client, &referendum_id, mode)?;
@@ -226,6 +232,7 @@ impl Run for VoteArgs {
                     duration_blocks,
                     direction,
                     nullifier,
+                    apply,
                 };
                 args.run(context)
             }
@@ -265,6 +272,7 @@ impl Run for VoteArgs {
                     amount,
                     duration_blocks,
                     direction,
+                    apply,
                 };
                 args.run(context)
             }
@@ -297,6 +305,9 @@ pub struct VoteZkArgs {
     /// Optional 32-byte nullifier hint derived from the proof commitment.
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
+    /// Sign, submit, and wait for this exact server-drafted ballot instruction.
+    #[arg(long)]
+    pub apply: bool,
 }
 impl Run for VoteZkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -334,14 +345,18 @@ impl Run for VoteZkArgs {
             "authority".to_owned(),
             json_value(&client.account.to_string())?,
         );
-        public_obj.insert(
-            "chain_id".to_owned(),
-            json_value(&client.chain.to_string())?,
-        );
+        public_obj.insert("network_id".to_owned(), json_value(&client.network_id)?);
         public_obj.insert("election_id".to_owned(), json_value(&self.election_id)?);
         public_obj.insert("backend".to_owned(), json_value(&self.backend)?);
         public_obj.insert("envelope_b64".to_owned(), json_value(&self.envelope_b64)?);
-        let mut value = client.post_gov_ballot_zk_v1_json(&public)?;
+        let request: GovernanceZkBallotDraftRequestV1 = norito::json::from_value(public)
+            .map_err(|error| eyre!("invalid typed ZK ballot request: {error}"))?;
+        let response = client.post_governance_zk_ballot_draft_v1(&request)?;
+        let instruction = validate_governance_zk_ballot_draft_response_v1(&response, &request)?;
+        if self.apply {
+            return context.submit(vec![instruction]);
+        }
+        let mut value = norito::json::to_value(&response)?;
         let annotation = annotate_vote_instructions(&mut value)?;
         let ok = value
             .get("ok")
@@ -381,19 +396,33 @@ pub struct VotePlainArgs {
     pub duration_blocks: u64,
     #[arg(long)]
     pub direction: String,
+    /// Sign, submit, and wait for this exact server-drafted ballot instruction.
+    #[arg(long)]
+    pub apply: bool,
 }
 impl Run for VotePlainArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let owner = canonicalize_account_literal(&self.owner, "--owner")?;
-        let body = json_object(vec![
-            ("referendum_id", json_value(&self.referendum_id)?),
-            ("owner", json_value(&owner)?),
-            ("amount", json_value(&self.amount)?),
-            ("duration_blocks", json_value(&self.duration_blocks)?),
-            ("direction", json_value(&self.direction)?),
-        ])?;
-        let mut value = client.post_gov_ballot_plain_json(&body)?;
+        let amount = self
+            .amount
+            .parse::<Quantity>()
+            .map_err(|error| eyre!("invalid --amount: {error}"))?;
+        let request = GovernancePlainBallotDraftRequestV1 {
+            authority: client.account.to_string(),
+            network_id: client.network_id,
+            referendum_id: self.referendum_id.clone(),
+            owner,
+            amount,
+            duration_blocks: self.duration_blocks.to_string(),
+            direction: self.direction.clone(),
+        };
+        let response = client.post_governance_plain_ballot_draft_v1(&request)?;
+        let instruction = validate_governance_plain_ballot_draft_response_v1(&response, &request)?;
+        if self.apply {
+            return context.submit(vec![instruction]);
+        }
+        let mut value = norito::json::to_value(&response)?;
         let annotation = annotate_vote_instructions(&mut value)?;
         let ok = value
             .get("ok")
@@ -489,14 +518,14 @@ mod tests {
             direction: 0,
         };
         let instruction: InstructionBox = InstructionBox::from(ballot);
-        let bytes = norito::to_bytes::<InstructionBox>(&instruction).expect("encode instruction");
-        let payload_hex = hex::encode(bytes);
+        let draft = GovernanceInstructionDraftV1::from_instruction(&instruction)
+            .expect("encode instruction draft");
         let mut value = norito::json!({
             "ok": true,
             "accepted": true,
             "tx_instructions": [{
-                "wire_id": "CastPlainBallot",
-                "payload_hex": payload_hex,
+                "wire_id": (draft.wire_id),
+                "payload_hex": (draft.payload_hex),
             }]
         });
         let summary = annotate_vote_instructions(&mut value)
@@ -553,14 +582,14 @@ mod tests {
             ),
         };
         let instruction: InstructionBox = InstructionBox::from(ballot);
-        let bytes = norito::to_bytes::<InstructionBox>(&instruction).expect("encode instruction");
-        let payload_hex = hex::encode(bytes);
+        let draft = GovernanceInstructionDraftV1::from_instruction(&instruction)
+            .expect("encode instruction draft");
         let mut value = norito::json!({
             "ok": true,
             "accepted": false,
             "tx_instructions": [{
-                "wire_id": "CastZkBallot",
-                "payload_hex": payload_hex,
+                "wire_id": (draft.wire_id),
+                "payload_hex": (draft.payload_hex),
             }]
         });
         let summary = annotate_vote_instructions(&mut value)
@@ -827,10 +856,19 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
         let Some(map) = entry.as_object_mut() else {
             continue;
         };
-        let Some(payload_hex) = map.get("payload_hex").and_then(json::Value::as_str) else {
+        let Some(payload_hex) = map
+            .get("payload_hex")
+            .and_then(json::Value::as_str)
+            .map(ToOwned::to_owned)
+        else {
             continue;
         };
-        let payload_bytes = decode_payload_hex(payload_hex)?;
+        let wire_id = map
+            .get("wire_id")
+            .and_then(json::Value::as_str)
+            .ok_or_else(|| eyre!("governance ballot draft is missing `wire_id`"))?
+            .to_owned();
+        let payload_bytes = decode_payload_hex(&payload_hex)?;
         let fingerprint = CryptoHash::new(&payload_bytes).to_string();
         map.insert(
             "payload_fingerprint_hex".to_owned(),
@@ -839,8 +877,10 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
         if summary.fingerprint_hex.is_none() {
             summary.fingerprint_hex = Some(fingerprint);
         }
-        let instruction: InstructionBox = decode_from_bytes(&payload_bytes)
-            .map_err(|err| eyre!("failed to decode instruction skeleton: {err}"))?;
+        let instruction = decode_governance_instruction_draft_v1(&GovernanceInstructionDraftV1 {
+            wire_id,
+            payload_hex,
+        })?;
         if let Some(plain) = instruction.as_any().downcast_ref::<CastPlainBallot>() {
             saw_relevant = true;
             let owner_str = plain.owner.to_string();

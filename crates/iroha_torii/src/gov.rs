@@ -33,6 +33,17 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::numeric::Quantity;
+pub use iroha_torii_shared::governance_api::{
+    GovernanceAtWindowV1 as AtWindowDto, GovernanceBallotDraftResponseV1 as BallotSubmitResponse,
+    GovernanceDeployContractDraftRequestV1 as ProposeDeployContractDto,
+    GovernanceDeployContractDraftResponseV1 as ProposeDeployContractResponse,
+    GovernanceEnactDraftRequestV1 as EnactDto, GovernanceEnactDraftResponseV1 as EnactResponse,
+    GovernanceFinalizeDraftRequestV1 as FinalizeDto,
+    GovernanceFinalizeDraftResponseV1 as FinalizeResponse, GovernanceInstructionDraftV1 as TxInstr,
+    GovernancePlainBallotDraftRequestV1 as PlainBallotDto,
+    GovernanceZkBallotDraftRequestV1 as ZkBallotV1Dto,
+    GovernanceZkBallotProofDraftRequestV1 as ZkBallotV1BallotProofDto,
+};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::Encode as _,
@@ -49,103 +60,6 @@ const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
     "/v1/ministry/agenda/proposals/draft#authority";
 const CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY: &str = "/v1/gov/parliament/ballots#authority";
 use std::{collections::BTreeSet, sync::Arc};
-#[derive(Debug, JsonDeserialize, JsonSerialize, Clone, Copy)]
-#[norito(deny_unknown_fields)]
-/// Inclusive height window used for governance scheduling.
-///
-/// Both bounds are block heights; handlers treat missing windows as
-/// implementation-defined defaults appropriate for the action.
-pub struct AtWindowDto {
-    /// Lower bound (inclusive) in blocks.
-    pub lower: u64,
-    /// Upper bound (inclusive) in blocks.
-    pub upper: u64,
-}
-impl norito::core::NoritoSerialize for AtWindowDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let tuple = (self.lower, self.upper);
-        <(u64, u64) as norito::core::NoritoSerialize>::serialize(&tuple, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for AtWindowDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<AtWindowDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_tuple: &norito::core::Archived<(u64, u64)> = archived.cast();
-        let (lower, upper) =
-            <(u64, u64) as norito::core::NoritoDeserialize>::try_deserialize(archived_tuple)?;
-        Ok(Self { lower, upper })
-    }
-    fn deserialize(archived: &'de norito::core::Archived<AtWindowDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("AtWindowDto should deserialize from (lower, upper) tuple")
-    }
-}
-impl norito::core::DecodeFromSlice<'_> for AtWindowDto {
-    fn decode_from_slice(bytes: &[u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((lower, upper), used) =
-            <(u64, u64) as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok((Self { lower, upper }, used))
-    }
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for proposing deployment of IVM bytecode via governance.
-///
-/// All hashes are 32-byte hex, with or without `0x` prefix.
-pub struct ProposeDeployContractDto {
-    /// Optional canonical contract address targeted by the proposal.
-    #[norito(default)]
-    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Optional on-chain contract alias resolved to the canonical contract address.
-    #[norito(default)]
-    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// Exact first-release ABI version (`"1"`).
-    pub abi_version: String,
-    /// Deterministic code hash (blake2b-32; prefixed or raw hex)
-    pub code_hash: String,
-    /// Deterministic ABI hash (blake2b-32; prefixed or raw hex)
-    pub abi_hash: String,
-    /// Optional enactment window override (inclusive)
-    pub window: Option<AtWindowDto>,
-    /// Optional exact voting mode (`Zk` or `Plain`; defaults to `Zk`).
-    #[norito(default)]
-    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
-    /// Optional manifest provenance (public key + signature over the manifest payload).
-    #[norito(default)]
-    pub manifest_provenance: Option<ManifestProvenance>,
-}
-impl norito::core::NoritoSerialize for ProposeDeployContractDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for ProposeDeployContractDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<ProposeDeployContractDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-    fn deserialize(archived: &'de norito::core::Archived<ProposeDeployContractDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("ProposeDeployContractDto should deserialize from JSON string")
-    }
-}
-/// Response body for a deploy-contract proposal
-#[derive(Debug, JsonSerialize)]
-pub struct ProposeDeployContractResponse {
-    pub ok: bool,
-    /// Deterministic 32-byte BLAKE2b proposal id, encoded as lowercase hex.
-    pub proposal_id: String,
-    /// Optional transaction skeleton for clients to sign and submit
-    pub tx_instructions: Vec<TxInstr>,
-}
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for proposing one closed SCCP registry action via governance.
@@ -230,24 +144,6 @@ pub enum MinistryAgendaProposalDraftOutcome {
 }
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-/// Request body for submitting a plain (non-ZK) quadratic ballot.
-pub struct PlainBallotDto {
-    /// Authority as canonical I105 or on-chain account alias.
-    pub authority: String,
-    /// Exact genesis-derived network to build the transaction skeleton for.
-    pub network_id: iroha_data_model::NetworkId,
-    pub referendum_id: String,
-    /// Owner as canonical I105 or on-chain account alias.
-    pub owner: String,
-    /// Exact non-negative token quantity.
-    pub amount: Quantity,
-    /// Canonical unsigned decimal block duration.
-    pub duration_blocks: String,
-    /// One of: "Aye" | "Nay" | "Abstain"
-    pub direction: String,
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
 /// Request body for drafting an equal signed Parliament body ballot.
 pub struct ParliamentBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
@@ -282,36 +178,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ParliamentBallotDto {
         Self::try_deserialize(archived)
             .expect("ParliamentBallotDto should deserialize from JSON string")
     }
-}
-impl norito::core::NoritoSerialize for PlainBallotDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for PlainBallotDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<PlainBallotDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-    fn deserialize(archived: &'de norito::core::Archived<PlainBallotDto>) -> Self {
-        Self::try_deserialize(archived).expect("PlainBallotDto should deserialize from JSON string")
-    }
-}
-/// Response to ballot submission (both zk/plain)
-#[derive(Debug, JsonSerialize)]
-pub struct BallotSubmitResponse {
-    pub ok: bool,
-    pub accepted: bool,
-    pub reason: Option<String>,
-    /// Optional transaction skeleton for clients to sign and submit
-    pub tx_instructions: Vec<TxInstr>,
 }
 fn ballot_rejection(reason: &str) -> JsonBody<BallotSubmitResponse> {
     JsonBody(BallotSubmitResponse {
@@ -466,48 +332,6 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
         .map_err(|_| format!("{field} is outside the unsigned 64-bit integer range"))
 }
 // -------- ZK Ballot V1 DTO --------
-#[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for submitting a ZK ballot using BallotProof-style fields.
-pub struct ZkBallotV1Dto {
-    /// Authority submitting the ballot (AccountId string)
-    pub authority: String,
-    /// Exact genesis-derived network to build the transaction skeleton for.
-    pub network_id: iroha_data_model::NetworkId,
-    pub election_id: String,
-    /// Backend tag for the proof (e.g., halo2/ipa)
-    pub backend: String,
-    /// Base64-encoded envelope bytes (ZK1 or H2* container)
-    pub envelope_b64: String,
-    /// Optional eligibility root hint (hex-32, 0x allowed)
-    #[norito(default)]
-    pub root_hint: Option<String>,
-    /// Optional owner account id (for lock hints when the circuit commits owner)
-    #[norito(default)]
-    pub owner: Option<String>,
-    /// Optional exact lock amount hint.
-    #[norito(default)]
-    pub amount: Option<Quantity>,
-    /// Optional lock duration hint in blocks.
-    #[norito(default)]
-    pub duration_blocks: Option<u64>,
-    /// Optional direction hint ("Aye" | "Nay" | "Abstain").
-    #[norito(default)]
-    pub direction: Option<String>,
-    /// Optional nullifier hint (hex-32, 0x allowed)
-    #[norito(default)]
-    pub nullifier: Option<String>,
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body that carries a BallotProof directly along with transaction context.
-pub struct ZkBallotV1BallotProofDto {
-    pub authority: String,
-    /// Exact genesis-derived network to build the transaction skeleton for.
-    pub network_id: iroha_data_model::NetworkId,
-    pub election_id: String,
-    pub ballot: iroha_data_model::isi::governance::BallotProof,
-}
 /// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
 /// The request schema excludes private signing material; callers submit locally signed transactions.
@@ -1087,26 +911,9 @@ pub async fn handle_gov_unlock_stats(
         last_sweep_height,
     }))
 }
-#[derive(Debug, JsonSerialize)]
-/// Instruction skeleton item for client-side signing.
-///
-/// `wire_id` identifies the instruction on the wire; `payload_hex` carries
-/// the Norito-encoded payload as lowercase hex without `0x`.
-pub struct TxInstr {
-    pub wire_id: String,
-    pub payload_hex: String,
-}
 fn tx_instr_from_box(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
-    use iroha_data_model::isi::Instruction;
-    let type_name = Instruction::id(&*boxed);
-    let wire_id = type_name.to_string();
-    let payload = Instruction::dyn_encode(&*boxed);
-    let framed = iroha_data_model::isi::frame_instruction_payload(type_name, &payload)
-        .expect("instruction payload must use canonical Norito framing");
-    TxInstr {
-        wire_id,
-        payload_hex: hex::encode(framed),
-    }
+    TxInstr::from_instruction(&boxed)
+        .expect("instruction payload must use canonical Norito framing")
 }
 fn ensure_network_id_matches(
     state: &iroha_core::state::State,
@@ -1594,23 +1401,6 @@ fn integer_sqrt_u128(n: u128) -> u128 {
     }
     x0
 }
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for finalizing a referendum
-pub struct FinalizeDto {
-    /// Referendum identifier
-    pub referendum_id: String,
-    /// Proposal id (hex 64)
-    pub proposal_id: String,
-}
-#[derive(Debug, JsonSerialize)]
-/// Response for finalize referendum draft transaction
-pub struct FinalizeResponse {
-    /// Whether the operation succeeded.
-    pub ok: bool,
-    /// Suggested transaction instructions for clients to sign.
-    pub tx_instructions: Vec<TxInstr>,
-}
 /// Handler for finalizing a referendum (draft transaction).
 ///
 /// The request schema excludes private signing material; callers submit locally signed transactions.
@@ -1637,25 +1427,6 @@ pub async fn handle_gov_finalize(
         ok: true,
         tx_instructions,
     }))
-}
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for enacting an approved referendum.
-pub struct EnactDto {
-    /// Proposal id as exactly 64 lowercase hexadecimal digits.
-    pub proposal_id: String,
-}
-#[derive(Debug, JsonSerialize)]
-/// Response for enactment draft transaction.
-pub struct EnactResponse {
-    pub ok: bool,
-    /// Exact lowercase proposal fingerprint.
-    pub proposal_id: String,
-    /// Exact stored proposal kind whose fingerprint is bound into the instruction.
-    pub proposal_kind: iroha_data_model::governance::types::ProposalKind,
-    /// Exact retained referendum window.
-    pub referendum_window: iroha_data_model::governance::types::AtWindow,
-    pub tx_instructions: Vec<TxInstr>,
 }
 fn validate_validation_fee_policy_enactment_draft_height(
     effective_from_height: u64,
@@ -2101,6 +1872,8 @@ pub async fn handle_gov_propose_deploy(
     NoritoJson(body): NoritoJson<ProposeDeployContractDto>,
 ) -> Result<JsonBody<ProposeDeployContractResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
+    body.validate()
+        .map_err(|error| crate::routing::conversion_error(error.into()))?;
     let contract_address = resolve_governance_contract_target(
         &state,
         body.contract_address.as_ref(),
@@ -2130,30 +1903,14 @@ pub async fn handle_gov_propose_deploy(
             ),
         ));
     }
-    let mode = body.mode;
-    let window = body.window.map(|w| AtWindow {
-        lower: w.lower,
-        upper: w.upper,
-    });
-    if let Some(ref win) = window {
-        if win.upper < win.lower {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "window.upper must be >= window.lower".into(),
-                    ),
-                ),
-            ));
-        }
-    }
     let instr = gov::ProposeDeployContract {
         contract_address: contract_address.clone(),
         code_hash_hex,
         abi_hash_hex,
         abi_version: body.abi_version,
-        window,
-        mode,
-        manifest_provenance: body.manifest_provenance.clone(),
+        window: Some(body.window.into()),
+        mode: body.mode,
+        manifest_provenance: Some(body.manifest_provenance),
     };
     let proposal_id_bytes =
         compute_proposal_id(&instr.contract_address, &code_hash_bytes, &abi_hash_bytes);
@@ -2797,6 +2554,10 @@ mod tests {
             .provenance
             .expect("signed manifest should carry provenance")
     }
+    fn sample_manifest_provenance(code_hash: [u8; 32], abi_hash: [u8; 32]) -> ManifestProvenance {
+        let keypair = checked_governance_ed25519_keypair(0xD7);
+        mk_manifest_provenance(&keypair, code_hash, abi_hash)
+    }
     fn sample_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
@@ -3114,11 +2875,11 @@ seiyaku GovernedReadFixture {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: "1".to_string(),
-            code_hash: "0x".to_string() + &"aa".repeat(32),
-            abi_hash: format!("0x{}", hex::encode(canonical_abi)),
-            window: Some(AtWindowDto { lower: 1, upper: 2 }),
+            code_hash: "aa".repeat(32),
+            abi_hash: hex::encode(canonical_abi),
+            window: AtWindowDto { lower: 1, upper: 2 },
             mode: None,
-            manifest_provenance: None,
+            manifest_provenance: sample_manifest_provenance([0xAA; 32], canonical_abi),
         };
         let s = norito::json::to_json(&req).unwrap();
         let _: ProposeDeployContractDto = norito::json::from_str(&s).unwrap();
@@ -3278,21 +3039,21 @@ seiyaku GovernedReadFixture {
     #[tokio::test]
     async fn propose_deploy_builds_instruction_skeleton() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let code_hash_input = format!("blake2b32:0X{}", "11".repeat(32));
+        let code_hash_input = "11".repeat(32);
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let abi_hash_input = format!("0x{}", hex::encode(canonical_abi));
+        let abi_hash_input = hex::encode(canonical_abi);
         let dto = ProposeDeployContractDto {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: code_hash_input.clone(),
             abi_hash: abi_hash_input.clone(),
-            window: Some(AtWindowDto {
+            window: AtWindowDto {
                 lower: 10,
                 upper: 20,
-            }),
+            },
             mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-            manifest_provenance: None,
+            manifest_provenance: sample_manifest_provenance([0x11; 32], canonical_abi),
         };
         let (code_hex, code_bytes) = super::canonical_hex32(&code_hash_input, "code_hash").unwrap();
         let (abi_hex, abi_bytes) = super::canonical_hex32(&abi_hash_input, "abi_hash").unwrap();
@@ -3551,9 +3312,9 @@ seiyaku GovernedReadFixture {
             abi_version: "1".to_string(),
             code_hash: format!("{}", "11".repeat(32)),
             abi_hash: format!("{}", hex::encode(canonical_abi)),
-            window: None,
+            window: AtWindowDto { lower: 1, upper: 2 },
             mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-            manifest_provenance: None,
+            manifest_provenance: sample_manifest_provenance([0x11; 32], canonical_abi),
         };
         let canonical = norito::json::to_json(&dto).expect("canonical deploy request");
         assert!(canonical.contains("\"mode\":\"Zk\""));
@@ -3580,15 +3341,15 @@ seiyaku GovernedReadFixture {
                 abi_version: abi_version.to_owned(),
                 code_hash: "11".repeat(32),
                 abi_hash: hex::encode(canonical_abi),
-                window: None,
+                window: AtWindowDto { lower: 1, upper: 2 },
                 mode: None,
-                manifest_provenance: None,
+                manifest_provenance: sample_manifest_provenance([0x11; 32], canonical_abi),
             };
             let error = handle_gov_propose_deploy(state.clone(), NoritoJson(dto))
                 .await
                 .expect_err("only the exact first-release ABI label is accepted");
             assert!(
-                format!("{error:?}").contains("unsupported abi_version"),
+                format!("{error:?}").contains("abi_version must be the exact string"),
                 "{abi_version:?}: {error:?}"
             );
         }
@@ -3602,9 +3363,9 @@ seiyaku GovernedReadFixture {
             abi_version: "1".to_string(),
             code_hash: format!("{}", "11".repeat(32)),
             abi_hash: format!("{}", "22".repeat(32)),
-            window: None,
+            window: AtWindowDto { lower: 1, upper: 2 },
             mode: None,
-            manifest_provenance: None,
+            manifest_provenance: sample_manifest_provenance([0x11; 32], [0x22; 32]),
         };
         let err = handle_gov_propose_deploy(state, NoritoJson(dto))
             .await
@@ -4665,11 +4426,14 @@ seiyaku GovernanceFlowFixture {
             contract_address: Some(contract_address.clone()),
             contract_alias: None,
             abi_version: "1".to_string(),
-            code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
-            abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
-            window: None,
+            code_hash: hex::encode(code_hash_bytes),
+            abi_hash: hex::encode(abi_hash_bytes),
+            window: AtWindowDto {
+                lower: 1,
+                upper: 11,
+            },
             mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance),
+            manifest_provenance,
         };
         let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
             .await
@@ -4851,11 +4615,14 @@ seiyaku GovernanceFlowFixture {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
             abi_version: "1".to_string(),
-            code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
-            abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
-            window: None,
+            code_hash: hex::encode(code_hash_bytes),
+            abi_hash: hex::encode(abi_hash_bytes),
+            window: AtWindowDto {
+                lower: 1,
+                upper: 11,
+            },
             mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance),
+            manifest_provenance,
         };
         let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
             .await

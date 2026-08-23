@@ -4,24 +4,24 @@ mod council;
 mod deploy;
 mod shared;
 mod vote;
-pub(crate) use shared::parse_governance_selector_v1;
 use self::council::CouncilArgs;
 use crate::{Run, RunContext};
-use eyre::Result;
 pub use audit::AuditDeployArgs;
 pub use deploy::{
     DeployMetaArgs, EnactArgs, FinalizeArgs, ProposeDeployArgs, ProtectedApplyArgs,
     ProtectedGetArgs, ProtectedSetArgs,
 };
+use eyre::Result;
+pub(crate) use shared::parse_governance_selector_v1;
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
 };
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode.
+    /// Deployment helpers (propose/meta/audit) for governed IVM bytecode.
     #[command(subcommand)]
     Deploy(DeployCommand),
-    /// Submit a governance ballot; auto-detects referendum mode unless overridden
+    /// Draft or apply a governance ballot; auto-detects its mode unless overridden.
     Vote(VoteArgs),
     /// Proposal helpers
     #[command(subcommand)]
@@ -40,9 +40,9 @@ pub enum Command {
     /// Tally helpers
     #[command(subcommand)]
     Tally(TallyCommand),
-    /// Build a finalize transaction for a referendum (server returns instruction skeleton)
+    /// Draft or apply a referendum-finalization transaction.
     Finalize(FinalizeArgs),
-    /// Build an enactment transaction for an approved proposal
+    /// Draft or apply an approved proposal's enactment transaction.
     Enact(EnactArgs),
     /// Protected namespace helpers
     #[command(subcommand)]
@@ -67,7 +67,7 @@ impl Run for Command {
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum DeployCommand {
-    /// Propose deployment of IVM bytecode by code/abi hash via governance (build-only; server returns instruction skeleton)
+    /// Draft or apply an ABI-1 governed IVM deployment proposal.
     Propose(ProposeDeployArgs),
     /// Build deploy metadata JSON for protected namespace admission
     Meta(DeployMetaArgs),

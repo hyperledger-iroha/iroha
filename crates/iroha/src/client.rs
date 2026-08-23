@@ -85,6 +85,14 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+pub use iroha_torii_shared::governance_api::{
+    GovernanceAtWindowV1, GovernanceBallotDraftResponseV1, GovernanceDeployContractDraftRequestV1,
+    GovernanceDeployContractDraftResponseV1, GovernanceEnactDraftRequestV1,
+    GovernanceEnactDraftResponseV1, GovernanceFinalizeDraftRequestV1,
+    GovernanceFinalizeDraftResponseV1, GovernanceInstructionDraftV1,
+    GovernancePlainBallotDraftRequestV1, GovernanceZkBallotDraftRequestV1,
+    GovernanceZkBallotProofDraftRequestV1,
+};
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
@@ -159,6 +167,7 @@ const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES: usize =
     iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
 const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -2764,6 +2773,338 @@ fn canonical_validation_fee_draft_instruction(
     };
     Ok((proposal_kind, instruction))
 }
+/// Decode one bounded, canonical governance instruction draft.
+///
+/// # Errors
+///
+/// Returns an error when the wire identifier or framed payload is malformed,
+/// oversized, noncanonical, or not registered by this data model.
+pub fn decode_governance_instruction_draft_v1(
+    draft: &GovernanceInstructionDraftV1,
+) -> Result<InstructionBox> {
+    draft.decode_instruction().map_err(|error| eyre!(error))
+}
+
+fn decode_single_governance_instruction_draft_v1(
+    drafts: &[GovernanceInstructionDraftV1],
+    context: &str,
+) -> Result<InstructionBox> {
+    let [draft] = drafts else {
+        return Err(eyre!("{context} must contain exactly one instruction"));
+    };
+    decode_governance_instruction_draft_v1(draft)
+        .wrap_err_with(|| format!("failed to decode {context}"))
+}
+
+fn ensure_exact_governance_instruction_v1(
+    actual: &InstructionBox,
+    expected: &InstructionBox,
+    context: &str,
+) -> Result<()> {
+    if iroha_data_model::isi::Instruction::id(&**actual)
+        != iroha_data_model::isi::Instruction::id(&**expected)
+        || iroha_data_model::isi::Instruction::dyn_encode(&**actual)
+            != iroha_data_model::isi::Instruction::dyn_encode(&**expected)
+    {
+        return Err(eyre!(
+            "{context} differs from the exact requested instruction"
+        ));
+    }
+    Ok(())
+}
+
+/// Decode and bind one deploy-contract draft to its exact typed request.
+///
+/// `resolved_contract_address` must be the address carried directly by the
+/// request or the address obtained from the request's alias immediately before
+/// drafting.
+///
+/// # Errors
+///
+/// Returns an error for an invalid request, a mismatched proposal identifier,
+/// a noncanonical draft, or any instruction field that differs from the request.
+pub fn validate_governance_deploy_draft_response_v1(
+    response: &GovernanceDeployContractDraftResponseV1,
+    request: &GovernanceDeployContractDraftRequestV1,
+    resolved_contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> Result<InstructionBox> {
+    request
+        .validate()
+        .map_err(|error| eyre!("invalid governance deploy draft request: {error}"))?;
+    if let Some(contract_address) = request.contract_address.as_ref()
+        && contract_address != resolved_contract_address
+    {
+        return Err(eyre!(
+            "resolved contract address differs from the deploy draft request"
+        ));
+    }
+    if !response.ok
+        || response.proposal_id
+            != request
+                .proposal_id_for(resolved_contract_address)
+                .map_err(|error| eyre!(error))?
+    {
+        return Err(eyre!(
+            "governance deploy draft response has a mismatched proposal id"
+        ));
+    }
+    let instruction = decode_single_governance_instruction_draft_v1(
+        &response.tx_instructions,
+        "governance deploy draft",
+    )?;
+    let expected: InstructionBox = iroha_data_model::isi::governance::ProposeDeployContract {
+        contract_address: resolved_contract_address.clone(),
+        code_hash_hex: request.code_hash.clone(),
+        abi_hash_hex: request.abi_hash.clone(),
+        abi_version: request.abi_version.clone(),
+        window: Some(request.window.into()),
+        mode: request.mode,
+        manifest_provenance: Some(request.manifest_provenance.clone()),
+    }
+    .into();
+    ensure_exact_governance_instruction_v1(&instruction, &expected, "governance deploy draft")?;
+    Ok(instruction)
+}
+
+fn parse_canonical_governance_u64(value: &str, field: &str) -> Result<u64> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(eyre!(
+            "{field} must be a canonical unsigned decimal integer"
+        ));
+    }
+    value
+        .parse::<u64>()
+        .wrap_err_with(|| format!("{field} is outside the unsigned 64-bit range"))
+}
+
+fn governance_plain_direction_code(direction: &str) -> Result<u8> {
+    match direction {
+        "Aye" => Ok(0),
+        "Nay" => Ok(1),
+        "Abstain" => Ok(2),
+        _ => Err(eyre!("direction must be exactly Aye, Nay, or Abstain")),
+    }
+}
+
+fn canonical_governance_zk_instruction(
+    request: &GovernanceZkBallotDraftRequestV1,
+) -> Result<InstructionBox> {
+    SelflessClientValidation::governance_selector(&request.election_id, "election_id")?;
+    if request.backend.is_empty() || request.backend.trim() != request.backend {
+        return Err(eyre!("backend must be an exact non-empty token"));
+    }
+    let envelope = base64::engine::general_purpose::STANDARD
+        .decode(request.envelope_b64.as_bytes())
+        .wrap_err("envelope_b64 must use standard base64")?;
+    if envelope.is_empty() {
+        return Err(eyre!("envelope_b64 must decode to a non-empty proof"));
+    }
+    let lock_hints = (
+        request.owner.is_some(),
+        request.amount.is_some(),
+        request.duration_blocks.is_some(),
+    );
+    if lock_hints.0 || lock_hints.1 || lock_hints.2 {
+        if !(lock_hints.0 && lock_hints.1 && lock_hints.2) {
+            return Err(eyre!(
+                "lock hints must include owner, amount, and duration_blocks"
+            ));
+        }
+    }
+    let mut public_inputs = JsonMap::new();
+    if let Some(root_hint) = request.root_hint.as_deref() {
+        iroha_torii_shared::governance_api::exact_lower_hex_32("root_hint", root_hint)
+            .map_err(|error| eyre!(error))?;
+        public_inputs.insert("root_hint".to_owned(), root_hint.into());
+    }
+    if let Some(owner) = request.owner.as_deref() {
+        let canonical = parse_canonical_i105_account_id(owner, "owner")?;
+        if canonical.to_string() != owner || owner != request.authority {
+            return Err(eyre!("ZK ballot owner must equal its canonical authority"));
+        }
+        public_inputs.insert("owner".to_owned(), owner.into());
+    }
+    if let Some(amount) = request.amount.as_ref() {
+        public_inputs.insert("amount".to_owned(), amount.to_string().into());
+    }
+    if let Some(duration_blocks) = request.duration_blocks {
+        public_inputs.insert("duration_blocks".to_owned(), duration_blocks.into());
+    }
+    if let Some(direction) = request.direction.as_deref() {
+        let _ = governance_plain_direction_code(direction)?;
+        public_inputs.insert("direction".to_owned(), direction.into());
+    }
+    if let Some(nullifier) = request.nullifier.as_deref() {
+        iroha_torii_shared::governance_api::exact_lower_hex_32("nullifier", nullifier)
+            .map_err(|error| eyre!(error))?;
+        public_inputs.insert("nullifier".to_owned(), nullifier.into());
+    }
+    let public_inputs_json = norito::json::to_json(&JsonValue::Object(public_inputs))
+        .wrap_err("failed to encode canonical ZK ballot public inputs")?;
+    Ok(iroha_data_model::isi::governance::CastZkBallot {
+        election_id: request.election_id.clone(),
+        proof_b64: request.envelope_b64.clone(),
+        public_inputs_json,
+    }
+    .into())
+}
+
+struct SelflessClientValidation;
+
+impl SelflessClientValidation {
+    fn governance_selector(value: &str, field: &str) -> Result<()> {
+        if iroha_data_model::governance::is_valid_governance_selector_v1(value) {
+            Ok(())
+        } else {
+            Err(eyre!(
+                "{field} must match canonical governance selector V1 `{}`",
+                iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+            ))
+        }
+    }
+}
+
+/// Decode and bind one typed plain-ballot draft to its request.
+///
+/// # Errors
+///
+/// Returns an error for malformed inputs, a rejected response, a noncanonical
+/// instruction, or any ballot field that differs from the request.
+pub fn validate_governance_plain_ballot_draft_response_v1(
+    response: &GovernanceBallotDraftResponseV1,
+    request: &GovernancePlainBallotDraftRequestV1,
+) -> Result<InstructionBox> {
+    SelflessClientValidation::governance_selector(&request.referendum_id, "referendum_id")?;
+    let owner = parse_canonical_i105_account_id(&request.owner, "owner")?;
+    if owner.to_string() != request.owner || request.owner != request.authority {
+        return Err(eyre!(
+            "plain ballot owner must equal its canonical authority"
+        ));
+    }
+    let expected: InstructionBox = iroha_data_model::isi::governance::CastPlainBallot {
+        referendum_id: request.referendum_id.clone(),
+        owner,
+        amount: request.amount.clone(),
+        duration_blocks: parse_canonical_governance_u64(
+            &request.duration_blocks,
+            "duration_blocks",
+        )?,
+        direction: governance_plain_direction_code(&request.direction)?,
+    }
+    .into();
+    if !response.ok || !response.accepted {
+        return Err(eyre!(
+            "governance plain ballot draft was rejected: {}",
+            response.reason.as_deref().unwrap_or("no reason")
+        ));
+    }
+    let instruction = decode_single_governance_instruction_draft_v1(
+        &response.tx_instructions,
+        "governance plain ballot draft",
+    )?;
+    ensure_exact_governance_instruction_v1(
+        &instruction,
+        &expected,
+        "governance plain ballot draft",
+    )?;
+    Ok(instruction)
+}
+
+/// Decode and bind one typed ZK-ballot draft to its exact request.
+///
+/// # Errors
+///
+/// Returns an error for malformed hints or proof encoding, a rejected response,
+/// a noncanonical instruction, or any draft field that differs from the request.
+pub fn validate_governance_zk_ballot_draft_response_v1(
+    response: &GovernanceBallotDraftResponseV1,
+    request: &GovernanceZkBallotDraftRequestV1,
+) -> Result<InstructionBox> {
+    let expected = canonical_governance_zk_instruction(request)?;
+    if !response.ok || !response.accepted {
+        return Err(eyre!(
+            "governance ZK ballot draft was rejected: {}",
+            response.reason.as_deref().unwrap_or("no reason")
+        ));
+    }
+    let instruction = decode_single_governance_instruction_draft_v1(
+        &response.tx_instructions,
+        "governance ZK ballot draft",
+    )?;
+    ensure_exact_governance_instruction_v1(&instruction, &expected, "governance ZK ballot draft")?;
+    Ok(instruction)
+}
+
+/// Decode and bind one referendum-finalization draft to its exact request.
+///
+/// # Errors
+///
+/// Returns an error for malformed or unequal identifiers, a failed response,
+/// a noncanonical instruction, or any mismatched finalization field.
+pub fn validate_governance_finalize_draft_response_v1(
+    response: &GovernanceFinalizeDraftResponseV1,
+    request: &GovernanceFinalizeDraftRequestV1,
+) -> Result<InstructionBox> {
+    let proposal_id = iroha_torii_shared::governance_api::validate_finalize_request(request)
+        .map_err(|error| eyre!(error))?;
+    if !response.ok {
+        return Err(eyre!("governance finalization draft failed"));
+    }
+    let expected: InstructionBox = iroha_data_model::isi::governance::FinalizeReferendum {
+        referendum_id: request.referendum_id.clone(),
+        proposal_id,
+    }
+    .into();
+    let instruction = decode_single_governance_instruction_draft_v1(
+        &response.tx_instructions,
+        "governance finalization draft",
+    )?;
+    ensure_exact_governance_instruction_v1(
+        &instruction,
+        &expected,
+        "governance finalization draft",
+    )?;
+    Ok(instruction)
+}
+
+/// Decode and bind one referendum-enactment draft to retained proposal state.
+///
+/// # Errors
+///
+/// Returns an error for a malformed identifier, failed response, mismatched
+/// proposal preimage/window, or noncanonical instruction.
+pub fn validate_governance_enact_draft_response_v1(
+    response: &GovernanceEnactDraftResponseV1,
+    request: &GovernanceEnactDraftRequestV1,
+) -> Result<InstructionBox> {
+    let referendum_id =
+        iroha_torii_shared::governance_api::exact_lower_hex_32("proposal_id", &request.proposal_id)
+            .map_err(|error| eyre!(error))?;
+    if !response.ok
+        || response.proposal_id != request.proposal_id
+        || response.proposal_kind.fingerprint() != referendum_id
+    {
+        return Err(eyre!(
+            "governance enactment response differs from the requested proposal"
+        ));
+    }
+    let expected: InstructionBox = iroha_data_model::isi::governance::EnactReferendum {
+        referendum_id,
+        preimage_hash: response.proposal_kind.fingerprint(),
+        at_window: response.referendum_window,
+    }
+    .into();
+    let instruction = decode_single_governance_instruction_draft_v1(
+        &response.tx_instructions,
+        "governance enactment draft",
+    )?;
+    ensure_exact_governance_instruction_v1(&instruction, &expected, "governance enactment draft")?;
+    Ok(instruction)
+}
+
 fn validate_validation_fee_draft_response(
     response: &ValidationFeeProposalDraftResponseV1,
     request: &ValidationFeeProposalDraftRequestV1,
@@ -16426,6 +16767,48 @@ impl Client {
             .send()?;
         Self::decode_json_ok(resp, "Failed to propose-deploy")
     }
+    /// Draft and validate one exact governed contract-deployment instruction.
+    ///
+    /// `resolved_contract_address` is either the request's direct address or
+    /// the address resolved from its alias immediately before this call.
+    /// Signing keys remain local; only public manifest provenance is sent.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid request, transport/HTTP failure, a
+    /// malformed response, or a response that differs from the exact request.
+    pub fn post_governance_deploy_draft_v1(
+        &self,
+        request: &GovernanceDeployContractDraftRequestV1,
+        resolved_contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Result<GovernanceDeployContractDraftResponseV1> {
+        request
+            .validate()
+            .map_err(|error| eyre!("invalid governance deploy draft request: {error}"))?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/proposals/deploy-contract");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode governance deploy draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft governed contract deployment",
+            " ",
+        )?;
+        let result: GovernanceDeployContractDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode governance deploy draft response")?;
+        let _ = validate_governance_deploy_draft_response_v1(
+            &result,
+            request,
+            resolved_contract_address,
+        )?;
+        Ok(result)
+    }
     /// POST `/v1/gov/proposals/sccp-route-governance` with one typed action.
     ///
     /// The endpoint returns only an instruction draft. Signing material is
@@ -16843,6 +17226,42 @@ impl Client {
         )?;
         Self::decode_json_ok(resp, "Failed to draft ZK V1 ballot")
     }
+    /// Draft and validate one exact ZK governance ballot instruction.
+    ///
+    /// # Errors
+    /// Returns an error for mismatched client identity, malformed proof hints,
+    /// transport/HTTP failure, or a response that differs from the request.
+    pub fn post_governance_zk_ballot_draft_v1(
+        &self,
+        request: &GovernanceZkBallotDraftRequestV1,
+    ) -> Result<GovernanceBallotDraftResponseV1> {
+        iroha_torii_shared::governance_api::validate_ballot_identity(
+            self.network_id,
+            &self.account,
+            request.network_id,
+            &request.authority,
+        )
+        .map_err(|error| eyre!(error))?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk-v1");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode governance ZK ballot draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft ZK V1 ballot",
+            " ",
+        )?;
+        let result: GovernanceBallotDraftResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode governance ZK ballot draft response")?;
+        let _ = validate_governance_zk_ballot_draft_response_v1(&result, request)?;
+        Ok(result)
+    }
     /// Draft a PLAIN ballot instruction via `/v1/gov/ballots/plain`.
     ///
     /// The body must carry this client's exact [`NetworkId`] and canonical account authority. The
@@ -16869,6 +17288,42 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to draft plain ballot")
+    }
+    /// Draft and validate one exact plain governance ballot instruction.
+    ///
+    /// # Errors
+    /// Returns an error for mismatched client identity, malformed lock fields,
+    /// transport/HTTP failure, or a response that differs from the request.
+    pub fn post_governance_plain_ballot_draft_v1(
+        &self,
+        request: &GovernancePlainBallotDraftRequestV1,
+    ) -> Result<GovernanceBallotDraftResponseV1> {
+        iroha_torii_shared::governance_api::validate_ballot_identity(
+            self.network_id,
+            &self.account,
+            request.network_id,
+            &request.authority,
+        )
+        .map_err(|error| eyre!(error))?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/plain");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode governance plain ballot draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft plain ballot",
+            " ",
+        )?;
+        let result: GovernanceBallotDraftResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode governance plain ballot draft response")?;
+        let _ = validate_governance_plain_ballot_draft_response_v1(&result, request)?;
+        Ok(result)
     }
     /// POST `/v1/gov/protected-namespaces` with a JSON body `{ namespaces: [..] }` to apply directly.
     /// # Errors
@@ -16921,6 +17376,39 @@ impl Client {
             .send()?;
         Self::decode_json_ok(resp, "Failed to build finalize tx")
     }
+    /// Draft and validate one exact referendum-finalization instruction.
+    ///
+    /// # Errors
+    /// Returns an error for malformed or unequal identifiers, transport/HTTP
+    /// failure, or a response that differs from the request.
+    pub fn post_governance_finalize_draft_v1(
+        &self,
+        request: &GovernanceFinalizeDraftRequestV1,
+    ) -> Result<GovernanceFinalizeDraftResponseV1> {
+        iroha_torii_shared::governance_api::validate_finalize_request(request)
+            .map_err(|error| eyre!(error))?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/finalize");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode governance finalization draft request")?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft referendum finalization",
+            " ",
+        )?;
+        let result: GovernanceFinalizeDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode governance finalization draft response")?;
+        let _ = validate_governance_finalize_draft_response_v1(&result, request)?;
+        Ok(result)
+    }
     /// POST `/v1/gov/enact` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -16934,6 +17422,37 @@ impl Client {
             .build()?
             .send()?;
         Self::decode_json_ok(resp, "Failed to build enact tx")
+    }
+    /// Draft and validate one exact approved-referendum enactment instruction.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed identifier, transport/HTTP failure, or
+    /// a response whose retained proposal state differs from the request.
+    pub fn post_governance_enact_draft_v1(
+        &self,
+        request: &GovernanceEnactDraftRequestV1,
+    ) -> Result<GovernanceEnactDraftResponseV1> {
+        iroha_torii_shared::governance_api::exact_lower_hex_32("proposal_id", &request.proposal_id)
+            .map_err(|error| eyre!(error))?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/enact");
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode governance enactment draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_DRAFT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft referendum enactment",
+            " ",
+        )?;
+        let result: GovernanceEnactDraftResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode governance enactment draft response")?;
+        let _ = validate_governance_enact_draft_response_v1(&result, request)?;
+        Ok(result)
     }
     /// GET `/v1/gov/proposals/{id}`
     /// # Errors

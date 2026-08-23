@@ -174,32 +174,37 @@ Endpoints
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
     {
-      "contract_alias": "router::universal"?,
-      "contract_address": "irohac1..."?,
-      "code_hash": "blake2b32:0x…" | "0x…" | "…64hex",
-      "abi_hash": "blake2b32:0x…" | "0x…" | "…64hex",
+      "contract_alias": "router::universal", // exactly one target field
+      "code_hash": "…64-lowercase-hex",
+      "abi_hash": "…64-lowercase-hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "mode": "Zk" | "Plain",
-      "manifest_provenance": { "signer": "ed0120…", "signature": "…" }?
+      "mode": "Zk", // optional; `Plain` is the other exact label
+      "manifest_provenance": {
+        "signer": "ed0120…canonical-multihash-public-key",
+        "signature": "…uppercase-signature-hex"
+      }
     }
+    `contract_address` may replace `contract_alias`; no other request fields
+    are accepted.
   - Response (JSON):
     { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
   - Validation:
     - exactly one of `contract_address` or `contract_alias` must be provided;
     - aliases resolve to the current active canonical contract address before the proposal id is derived;
-    - `code_hash` and `abi_hash` accept only a 64-digit hexadecimal body,
-      optionally preceded by the case-insensitive `blake2b32:` scheme and/or
-      `0x` prefix, and are canonicalised to unprefixed lowercase hex;
+    - `code_hash` and `abi_hash` must each be exactly 64 unprefixed lowercase
+      hexadecimal digits;
     - only the exact string `abi_version = "1"` is accepted, and `abi_hash`
       must equal the canonical ABI hash for that version
       (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
+    - both window bounds and public signed-manifest provenance are mandatory;
     - `window.upper` must be `>= window.lower`; and
     - `mode`, when supplied, must be the exact canonical label `Zk` or `Plain`.
-  - Submission model: this endpoint is draft-only. Its strict request schema
-    contains neither authority nor private-key material; clients consume
-    `tx_instructions`, sign locally, and submit via
-    `/v1/pipeline/transactions`.
+  - Submission model: the endpoint remains draft-only. Its strict request
+    schema contains neither authority nor private-key material. The typed SDK
+    compares the canonical framed instruction to the exact request before the
+    CLI's optional `--apply` path signs locally and submits through the normal
+    transaction pipeline.
 
 Contracts API (locally signed deployment)
 - Torii does not expose a server-side deployment endpoint and never accepts a
