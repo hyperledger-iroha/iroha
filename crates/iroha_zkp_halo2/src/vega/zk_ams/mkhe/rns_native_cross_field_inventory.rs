@@ -983,9 +983,11 @@ impl<'proof> RnsNativePreQpcsQMaskInventoryPreflightV1<'proof> {
         RnsNativeCrossFieldInventoryErrorV1,
     > {
         let Self { lease, view } = self;
+        #[cfg(not(test))]
+        let RnsNativePreQpcsCrossProofLeaseOriginV1::SealedEnvelope(permit) = lease.origin;
+        #[cfg(test)]
         let permit = match lease.origin {
             RnsNativePreQpcsCrossProofLeaseOriginV1::SealedEnvelope(permit) => permit,
-            #[cfg(test)]
             RnsNativePreQpcsCrossProofLeaseOriginV1::RawFixture => {
                 return Err(RnsNativeCrossFieldInventoryErrorV1::InvalidContext);
             }

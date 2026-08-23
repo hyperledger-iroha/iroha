@@ -25,7 +25,7 @@ fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path))
 }
 
-pub(crate) fn runtime_from_handshake(
+pub fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeConfig>, Error> {
     let ActualSoranetHandshake {

@@ -23,7 +23,7 @@ use crate::{
         store::LiveQueryStore,
     },
     queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
-    state::{World, WorldReadOnly},
+    state::World,
     sumeragi::{
         v2_body_store::{
             BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,

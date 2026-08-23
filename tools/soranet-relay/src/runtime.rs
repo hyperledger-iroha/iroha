@@ -2975,16 +2975,16 @@ impl RelayRuntime {
                     .await
                     {
                         let (stream_name, channel, reason) = error.compliance_context();
-                        if let Some(logger) = resources.compliance.as_ref() {
-                            if let Err(err) = logger.log_exit_route_reject(
+                        if let Some(logger) = resources.compliance.as_ref()
+                            && let Err(err) = logger.log_exit_route_reject(
                                 remote,
                                 resources.mode,
                                 stream_name,
                                 channel,
                                 reason,
-                            ) {
-                                warn!(%err, "failed to write compliance log entry");
-                            }
+                            )
+                        {
+                            warn!(%err, "failed to write compliance log entry");
                         }
                         warn!(
                             stream = stream_name.unwrap_or("unknown"),

@@ -2529,6 +2529,38 @@ mod tests {
         );
     }
     #[test]
+    fn inspect_client_hello_accepts_current_nk2_and_nk3_frames() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let resume_hash = [0x44; TRANSCRIPT_BINDING_LEN];
+        for (seed, suite) in [
+            (7_u64, HandshakeSuite::Nk2Hybrid),
+            (8_u64, HandshakeSuite::Nk3PqForwardSecure),
+        ] {
+            let capabilities =
+                capabilities_with_suites(defaults.client_capabilities, &[suite], false);
+            let params = RuntimeParams {
+                descriptor_commit: defaults.descriptor_commit,
+                client_capabilities: capabilities.as_slice(),
+                relay_capabilities: capabilities.as_slice(),
+                kem_id: defaults.kem_id,
+                sig_id: defaults.sig_id,
+                transport_alpn: defaults.transport_alpn,
+                tls_server_name: defaults.tls_server_name,
+                resume_hash: Some(&resume_hash),
+            };
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (frame, _state) = build_client_hello(&params, &mut rng)
+                .expect("crypto engine must build its current ClientHello");
+            let metadata = inspect_client_hello(&frame)
+                .expect("canonical preflight parser must accept its own ClientHello");
+            assert_eq!(metadata.handshake_suite(), suite);
+            assert_eq!(metadata.kem_id(), params.kem_id);
+            assert_eq!(metadata.sig_id(), params.sig_id);
+            assert_eq!(metadata.client_capabilities(), capabilities);
+            assert_eq!(metadata.resume_hash(), Some(resume_hash.as_slice()));
+        }
+    }
+    #[test]
     fn build_client_hello_supports_nk2_preference() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(

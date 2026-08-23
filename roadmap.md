@@ -5,6 +5,16 @@ Last updated: 2026-08-23
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Merged-candidate compile recovery
+
+- Type the two large Halo2 tail-publication ledger equations explicitly so the
+  normal lint policy accepts their values without wrapping or lint overrides.
+- Complete the partially landed Sumeragi refactor represented by the 59
+  diagnostics in `MERGE_HEAD`-exact files. Reconcile the missing authorities,
+  carriers, executor fields, and result types as one canonical first-release
+  design; do not restore removed aliases or parallel compatibility surfaces just
+  to satisfy stale call sites.
+
 ## ZK algorithm release qualification
 
 - Once the in-progress Halo2 tree compiles, run the focused native-STARK and

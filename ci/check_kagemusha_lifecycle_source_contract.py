@@ -64,7 +64,22 @@ CORE_EXECUTOR = "crates/iroha_core/src/executor.rs"
 CORE_WORLD = "crates/iroha_core/src/smartcontracts/isi/world.rs"
 CORE_IVM_HOST = "crates/iroha_core/src/smartcontracts/ivm/host.rs"
 CORE_SUMERAGI_APPLY = "crates/iroha_core/src/sumeragi/v2_apply.rs"
+CORE_SUMERAGI_APPLY_TESTS = "crates/iroha_core/src/sumeragi/v2_apply_tests.rs"
+CORE_SUMERAGI_APPLY_TESTS_MODULE = '#[path = "v2_apply_tests.rs"]\nmod tests;'
+CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS = (
+    "crates/iroha_core/src/sumeragi/tests/v2_apply_kagemusha_runtime_gate.rs"
+)
+CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS_INCLUDE = (
+    'include!("tests/v2_apply_kagemusha_runtime_gate.rs");'
+)
 CORE_SUMERAGI_WORKER = "crates/iroha_core/src/sumeragi/v2_worker_completion.rs"
+CORE_SUMERAGI_WORKER_ROOT = "crates/iroha_core/src/sumeragi/v2_worker.rs"
+CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS = (
+    "crates/iroha_core/src/sumeragi/tests/v2_worker_kagemusha_runtime_gate.rs"
+)
+CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS_INCLUDE = (
+    'include!("tests/v2_worker_kagemusha_runtime_gate.rs");'
+)
 CORE_SUMERAGI_RUNNER = "crates/iroha_core/src/sumeragi/v2_runner.rs"
 CORE_SUMERAGI_PENDING_KURA = (
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
@@ -72,6 +87,12 @@ CORE_SUMERAGI_PENDING_KURA = (
 IROHAD = "crates/irohad/src/main.rs"
 IROHAD_STARTUP = "crates/irohad/src/main/kagemusha_startup.rs"
 IROHAD_STARTUP_MODULE = '#[path = "main/kagemusha_startup.rs"]\nmod kagemusha_startup;'
+IROHAD_STARTUP_TESTS = (
+    "crates/irohad/src/main/kagemusha_runtime_effective_config_projection_tests.rs"
+)
+IROHAD_STARTUP_TESTS_INCLUDE = (
+    'include!("main/kagemusha_runtime_effective_config_projection_tests.rs");'
+)
 IROHAD_VALIDATOR_SEAL_READER = (
     "crates/irohad/src/main/kagemusha_validator_qualification_command.rs"
 )
@@ -103,11 +124,16 @@ LIFECYCLE_SOURCE_PATHS = (
     CORE_WORLD,
     CORE_IVM_HOST,
     CORE_SUMERAGI_APPLY,
+    CORE_SUMERAGI_APPLY_TESTS,
+    CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS,
     CORE_SUMERAGI_WORKER,
+    CORE_SUMERAGI_WORKER_ROOT,
+    CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS,
     CORE_SUMERAGI_RUNNER,
     CORE_SUMERAGI_PENDING_KURA,
     IROHAD,
     IROHAD_STARTUP,
+    IROHAD_STARTUP_TESTS,
     IROHAD_VALIDATOR_SEAL_READER,
 )
 
@@ -243,6 +269,30 @@ def _topology(texts: dict[str, str], errors: list[str]) -> None:
             CORE_STATE_RUNTIME_CONFIG_TESTS,
         ),
         (texts[IROHAD], IROHAD, IROHAD_STARTUP_MODULE, IROHAD_STARTUP),
+        (
+            texts[IROHAD],
+            IROHAD,
+            IROHAD_STARTUP_TESTS_INCLUDE,
+            IROHAD_STARTUP_TESTS,
+        ),
+        (
+            texts[CORE_SUMERAGI_APPLY],
+            CORE_SUMERAGI_APPLY,
+            CORE_SUMERAGI_APPLY_TESTS_MODULE,
+            CORE_SUMERAGI_APPLY_TESTS,
+        ),
+        (
+            texts[CORE_SUMERAGI_APPLY_TESTS],
+            CORE_SUMERAGI_APPLY_TESTS,
+            CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS_INCLUDE,
+            CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS,
+        ),
+        (
+            texts[CORE_SUMERAGI_WORKER_ROOT],
+            CORE_SUMERAGI_WORKER_ROOT,
+            CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS_INCLUDE,
+            CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS,
+        ),
     ):
         _count(
             parent,
@@ -1057,6 +1107,39 @@ def _runtime_projection_contracts(texts: dict[str, str], errors: list[str]) -> N
         "startup runtime projection installer call",
         "kagemusha_startup::install_runtime_effective_config(",
     )
+    _require(
+        node,
+        IROHAD_STARTUP,
+        errors,
+        "injectable exact validator-seal reader seam",
+        "pub(super) fn install_runtime_effective_config_with_validator_seal_reader(",
+        "read_configured_kagemusha_validator_qualification_seal: impl FnOnce(",
+        "kagemusha_validator_qualification_command::read_configured_kagemusha_validator_qualification_seal,",
+        "let seal = read_configured_kagemusha_validator_qualification_seal(config)?;",
+    )
+    startup_tests = texts[IROHAD_STARTUP_TESTS]
+    _require(
+        startup_tests,
+        IROHAD_STARTUP_TESTS,
+        errors,
+        "authenticated snapshot startup install and fail-closed regressions",
+        "fn authenticated_snapshot_with_valid_local_seal_installs_runtime_digest()",
+        "fn authenticated_snapshot_rejects_wrong_local_peer_without_installing()",
+        "fn authenticated_snapshot_rejects_projection_mismatch_without_installing()",
+        "fn authenticated_snapshot_without_configured_seal_does_not_install()",
+        "install_runtime_effective_config_with_validator_seal_reader(",
+        'assert!(error.contains("different local peer"));',
+        'assert!(error.contains("effective snapshot runtime differs"));',
+        'panic!("an absent configured seal must not invoke the reader")',
+        "assert_runtime_digest_absent(&state, 0xa3);",
+    )
+    _forbid(
+        startup_tests,
+        IROHAD_STARTUP_TESTS,
+        errors,
+        "disabled authenticated snapshot startup regression",
+        "#[ignore]",
+    )
     lifecycle = texts[CORE_LIFECYCLE]
     _require(
         lifecycle,
@@ -1099,6 +1182,28 @@ def _runtime_projection_contracts(texts: dict[str, str], errors: list[str]) -> N
             "let witness = state_block",
             ".take_exec_witness()",
         )
+    apply_tests = texts[CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS]
+    _require(
+        apply_tests,
+        CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS,
+        errors,
+        "production proposal and Commit runtime-projection regressions",
+        "fn production_proposal_validation_enforces_kagemusha_runtime_projection()",
+        "fn production_commit_apply_enforces_kagemusha_runtime_projection()",
+        '[(None, "missing"), (Some([0x56; 32]), "mismatched")]',
+        ".validate_candidate(&fixture.context, &fixture.body)",
+        ".execute(&fixture.context, &mut store, &fixture.task)",
+        "assert_eq!(state.committed_height(), 0);",
+        "assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);",
+        'expect("the exact startup projection must permit Commit apply")',
+    )
+    _forbid(
+        apply_tests,
+        CORE_SUMERAGI_APPLY_RUNTIME_GATE_TESTS,
+        errors,
+        "disabled production apply runtime-projection regression",
+        "#[ignore]",
+    )
     worker = texts[CORE_SUMERAGI_WORKER]
     _count(
         worker,
@@ -1119,6 +1224,27 @@ def _runtime_projection_contracts(texts: dict[str, str], errors: list[str]) -> N
         "V2IoCommand::RecoveredLifecycleSign(task)",
         ".require_committed_kagemusha_runtime_effective_config(",
         "sign_recovered_lifecycle_task(",
+    )
+    worker_tests = texts[CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS]
+    _require(
+        worker_tests,
+        CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS,
+        errors,
+        "production Prepare and Commit signing runtime-projection regressions",
+        "fn production_vote_worker_rejects_missing_and_mismatched_kagemusha_projection()",
+        "fn production_vote_worker_signs_prepare_and_commit_for_exact_kagemusha_projection()",
+        "for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit]",
+        '[(None, "missing"), (Some([0x56; 32]), "mismatched")]',
+        "V2IoCompletion::RecoveryRequired(reason)",
+        "run_kagemusha_runtime_gated_vote(Some([0x55; 32]), phase)",
+        "V2IoCompletion::Signature { signature, .. }",
+    )
+    _forbid(
+        worker_tests,
+        CORE_SUMERAGI_WORKER_RUNTIME_GATE_TESTS,
+        errors,
+        "disabled production signing runtime-projection regression",
+        "#[ignore]",
     )
     _ordered(
         texts[CORE_SUMERAGI_RUNNER],
@@ -1208,6 +1334,39 @@ def _signature_floor_contracts(texts: dict[str, str], errors: list[str]) -> None
         "the generic weighted threshold accepts member A alone",
         "Kagemusha lifecycle admission requires two distinct signers",
         "requires at least 2 verified distinct governance signers",
+    )
+    direct_fixture = _section(
+        lifecycle,
+        CORE_LIFECYCLE,
+        errors,
+        "fn lifecycle_transaction(",
+        "fn lifecycle_state(",
+    )
+    _ordered(
+        direct_fixture,
+        CORE_LIFECYCLE,
+        errors,
+        "direct ordinary multisig lifecycle execution fixture",
+        "TransactionBuilder::new(",
+        ".with_instructions([instruction])",
+        ".with_admission_intent(TransactionAdmissionIntent::Ordinary)",
+        ".sign_multisig(keys.iter().map(KeyPair::private_key))",
+    )
+    _require(
+        lifecycle,
+        CORE_LIFECYCLE,
+        errors,
+        "direct signed ordinary Cancel and Deactivate transition regressions",
+        "fn direct_ordinary_multisig_cancel_executes_exact_staged_transition()",
+        "fn direct_ordinary_multisig_deactivate_executes_exact_enabled_transition()",
+        "signed_lifecycle_entrypoint_context(&signed)",
+        '.expect("execute exact cancellation transition")',
+        "KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled)",
+        "assert_eq!(cancelled.cancellation_transaction_intent, signed.hash());",
+        '.expect("execute exact deactivation transition")',
+        "KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated)",
+        "assert_eq!(deactivated.deactivation_transaction_intent, signed.hash());",
+        "assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());",
     )
 
 

@@ -452,7 +452,7 @@ fn token_frame_emitted_when_configured() {
         .expect("canonical admission token");
     let config_debug = format!("{config:?}");
     assert!(config_debug.contains("[REDACTED]"));
-    assert!(!config_debug.contains(&format!("{:?}", encoded)));
+    assert!(!config_debug.contains(&format!("{encoded:?}")));
     let mut rng = StdRng::from_seed([0x99; 32]);
     let transcript = test_admission_transcript();
     let minted = config
@@ -464,7 +464,7 @@ fn token_frame_emitted_when_configured() {
     assert_eq!(minted.frames[0], encoded);
     let minted_debug = format!("{minted:?}");
     assert!(minted_debug.contains("[REDACTED]"));
-    assert!(!minted_debug.contains(&format!("{:?}", encoded)));
+    assert!(!minted_debug.contains(&format!("{encoded:?}")));
 }
 #[test]
 fn admission_token_configuration_rejects_malformed_frames() {

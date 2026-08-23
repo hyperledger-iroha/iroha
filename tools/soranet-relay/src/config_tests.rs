@@ -639,7 +639,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
-    assert_vpn_config_error(&entry, "relay mode Exit");
+    assert_vpn_config_error(entry, "relay mode Exit");
     let missing_tls = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
@@ -649,23 +649,21 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
-    assert_vpn_config_error(&missing_tls, "persistent tls.certificate_path");
-    let missing_certificate = format!(
-        r#"{{
+    assert_vpn_config_error(missing_tls, "persistent tls.certificate_path");
+    let missing_certificate = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
-                "tls": {{
+                "tls": {
                     "certificate_path": "/run/secrets/relay-cert.pem",
                     "private_key_path": "/run/secrets/relay-key.pem"
-                }},
-                "vpn": {{
+                },
+                "vpn": {
                     "enabled": true,
                     "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
-                }}
-            }}"#
-    );
-    assert_vpn_config_error(&missing_certificate, "verified handshake.certificate");
+                }
+            }"#;
+    assert_vpn_config_error(missing_certificate, "verified handshake.certificate");
 }
 #[test]
 fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {

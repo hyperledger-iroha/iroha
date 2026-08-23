@@ -678,14 +678,6 @@ pub(super) struct DirectQMaskScheduleBoundV1 {
 }
 
 impl DirectQMaskScheduleBoundV1 {
-    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.q_mask_s_root
-    }
-
-    pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.binding_digest
-    }
-
     const fn qpcs_schedule_v1(&self) -> &RnsNativeQpcsRelationScheduleV1 {
         self.completed_qpcs.relation_schedule_v1()
     }
@@ -857,34 +849,6 @@ impl RnsNativeCrossFieldNumericCursorV1 for RnsNativeCrossFieldRlweNumericSideca
     }
 }
 
-impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1>
-    RnsNativeCrossFieldRlweClaimedInventoryNumericV2<'_, '_, S>
-{
-    pub(super) fn numeric_tail_v1(
-        &self,
-        limb: usize,
-        repetition: usize,
-    ) -> Option<RnsNativeQpcsAuthenticatedNumericTailV1> {
-        if limb >= LIMBS_V1 || repetition >= REPETITIONS_V1 {
-            return None;
-        }
-        self.numeric_tails
-            .get(limb * REPETITIONS_V1 + repetition)
-            .copied()
-    }
-
-    pub(super) fn authoritative_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.claimed_relation
-            .terminal_chronology
-            .final_challenge_seeds_v1()
-            .source_binding_digest()
-    }
-
-    pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.source_binding_digest
-    }
-}
-
 impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     RnsNativeCrossFieldRlweClaimedInventoryNumericV2<'source, 'proof, S>
 {
@@ -1042,18 +1006,6 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 }
 
 impl RelationScheduleV1 {
-    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.bound.q_mask_s_root
-    }
-
-    pub(super) const fn direct_schedule_binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.bound.binding_digest
-    }
-
-    pub(super) const fn relation_seed(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.relation_seed
-    }
-
     /// Consume this schedule and all three tagged terminal roots atomically.
     /// The claimed-root equality obligation, exact pre-global chronology, and
     /// final non-authorizing challenges cannot be split by a production
@@ -1735,32 +1687,6 @@ fn derive_relation_schedule_v1(
         relation_seed,
         cross_field_root_equality_obligation: None,
     })
-}
-
-/// Direct-kernel chronology entry after qPCS and sealed pre-direct inventory
-/// candidate axes are available.
-///
-/// Rehash the actual `S` commitments against only the pre-qPCS-safe axes,
-/// require the transcript-bound root, then combine the same move-only qPCS
-/// owner with the candidate post-qPCS axes and derive the aggregation schedule.
-/// The current inventory prior-context digest and canonical root are forbidden
-/// inputs because both inherit successor-dependent state.
-/// Rebuilding qPCS relation points inside this kernel is forbidden.
-#[cfg(test)]
-pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1<
-    P: RnsNativeCrossFieldAuthoritativeSourceV1,
->(
-    axes: RnsNativeCrossFieldRlweFixedAxesV1,
-    source: &P,
-    completed_qpcs: RnsNativeQpcsCompletedLineageV1,
-) -> Result<RelationScheduleV1, RnsNativeCrossFieldRlweDirectErrorV1> {
-    let qpcs_schedule = completed_qpcs.relation_schedule_v1();
-    let q_mask_s_root = q_mask_s_root_v1(axes.pre_qpcs_safe_axes_v1(), source)?;
-    if q_mask_s_root != qpcs_schedule.q_mask_s_root() {
-        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
-    }
-    let bound = bind_direct_q_mask_schedule_v1(axes, completed_qpcs)?;
-    derive_relation_schedule_v1(bound)
 }
 
 /// Atomically convert the opaque authenticated claimed-qPCS input and the
@@ -2838,7 +2764,6 @@ where
 #[derive(Clone, Copy)]
 struct SuccessorPreflightV1 {
     successor_len: usize,
-    total_len: usize,
 }
 
 impl SuccessorPreflightV1 {
@@ -2859,20 +2784,7 @@ impl SuccessorPreflightV1 {
         }
         Ok(Self {
             successor_len: successor.len(),
-            total_len,
         })
-    }
-
-    fn validate_v1(self, successor: &[u8]) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
-        if self.successor_len != successor.len()
-            || self.total_len
-                != OWNED_WIRE_BYTES_V1
-                    .checked_add(successor.len())
-                    .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?
-        {
-            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
-        }
-        Ok(())
     }
 }
 
@@ -2918,7 +2830,7 @@ fn proof_set_digest_v1(
         hash.update(&[EVALUATIONS_PER_CORE_V1 as u8]);
         hash.update(&(CORE_PROOF_BYTES_V1 as u16).to_be_bytes());
         hash.update(&transcript_digests[core]);
-        hash.update(&proofs[core]);
+        hash.update(proofs[core]);
     }
     let digest = hash.finalize();
     if digest == [0; DIGEST_BYTES_V1] {
@@ -3107,6 +3019,7 @@ fn encode_wire_v1(
     )
 }
 
+#[cfg(test)]
 fn encode_wire_preflighted_v1(
     inputs: &PreparedInputsV1,
     proofs: &[[u8; CORE_PROOF_BYTES_V1]; CORES_V1],
@@ -3115,7 +3028,12 @@ fn encode_wire_preflighted_v1(
     successor: &[u8],
     successor_preflight: SuccessorPreflightV1,
 ) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1> {
-    successor_preflight.validate_v1(successor)?;
+    if successor_preflight.successor_len != successor.len() {
+        return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
+    }
+    let total_len = OWNED_WIRE_BYTES_V1
+        .checked_add(successor_preflight.successor_len)
+        .ok_or(RnsNativeCrossFieldRlweDirectErrorV1::ArithmeticOverflow)?;
     let proof_refs = core::array::from_fn(|core| proofs[core].as_slice());
     if proof_set_digest_v1(inputs, &proof_refs, transcript_digests)? != proof_set_digest {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidIntegrity);
@@ -3126,7 +3044,7 @@ fn encode_wire_preflighted_v1(
         successor,
     )?;
     let mut wire = Vec::new();
-    wire.try_reserve_exact(successor_preflight.total_len)
+    wire.try_reserve_exact(total_len)
         .map_err(|_| RnsNativeCrossFieldRlweDirectErrorV1::ResourceExhausted)?;
     wire.extend_from_slice(&MAGIC_V1);
     wire.push(VERSION_V1);
@@ -3162,12 +3080,12 @@ fn encode_wire_preflighted_v1(
     if wire.len() != HEADER_BYTES_V1 {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
     }
-    for core in 0..CORES_V1 {
+    for (core, proof) in proofs.iter().enumerate() {
         wire.push(core as u8);
         wire.extend_from_slice(&((core * EVALUATIONS_PER_CORE_V1) as u16).to_be_bytes());
         wire.push(EVALUATIONS_PER_CORE_V1 as u8);
         wire.extend_from_slice(&(CORE_PROOF_BYTES_V1 as u16).to_be_bytes());
-        wire.extend_from_slice(&proofs[core]);
+        wire.extend_from_slice(proof);
     }
     let codec_digest = codec_digest_v1(&wire);
     wire.extend_from_slice(&codec_digest);
@@ -3175,7 +3093,7 @@ fn encode_wire_preflighted_v1(
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
     }
     wire.extend_from_slice(successor);
-    if wire.len() != successor_preflight.total_len {
+    if wire.len() != total_len {
         return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
     }
     Ok(wire)
@@ -3372,7 +3290,7 @@ impl<'a> FramePreflightV1<'a> {
             return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidHeader);
         }
         let mut core_proofs = [&[][..]; CORES_V1];
-        for core in 0..CORES_V1 {
+        for (core, proof) in core_proofs.iter_mut().enumerate() {
             if usize::from(decoder.u8_v1()?) != core
                 || usize::from(decoder.u16_v1()?) != core * EVALUATIONS_PER_CORE_V1
                 || usize::from(decoder.u8_v1()?) != EVALUATIONS_PER_CORE_V1
@@ -3380,7 +3298,7 @@ impl<'a> FramePreflightV1<'a> {
             {
                 return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidGeometry);
             }
-            core_proofs[core] = decoder.take_v1(CORE_PROOF_BYTES_V1)?;
+            *proof = decoder.take_v1(CORE_PROOF_BYTES_V1)?;
         }
         let codec_offset = decoder.cursor;
         let codec_digest = decoder.array_v1()?;
@@ -3897,7 +3815,6 @@ impl RnsNativeCrossFieldRlweFourCorePendingSealV1 {
         successor: &[u8],
         successor_preflight: SuccessorPreflightV1,
     ) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1> {
-        successor_preflight.validate_v1(successor)?;
         self.validate_v1()?;
         encode_wire_preflighted_v1(
             &self.inputs,
@@ -3928,6 +3845,7 @@ pub(super) struct RnsNativeCrossFieldRlweTerminalBoundPendingSealV1 {
 impl RnsNativeCrossFieldRlweTerminalBoundPendingSealV1 {
     /// Consume the terminal-bound owner and seal a non-empty successor built
     /// from the challenge carried by the returned cross-field transcript stage.
+    #[cfg(test)]
     pub(super) fn seal_v1(
         self,
         successor: &[u8],
@@ -4007,9 +3925,6 @@ pub(super) fn bind_to_terminal_transcript_v1(
 pub(super) struct RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
     successor: &'a [u8],
     binding_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    numeric_root: [u8; DIGEST_BYTES_V1],
-    commitment_root: [u8; DIGEST_BYTES_V1],
     safe_core_projection: RnsNativeCrossFieldRlweSafeCoreProjectionV1,
     cross_field_root_equality_obligation: ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1,
     verified_cross_field_core_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1,
@@ -4027,9 +3942,6 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
         let Self {
             successor,
             binding_digest,
-            q_mask_s_root,
-            numeric_root,
-            commitment_root,
             safe_core_projection,
             cross_field_root_equality_obligation,
             verified_cross_field_core_root,
@@ -4040,9 +3952,6 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
         Ok(RnsNativeCrossFieldRlweTerminalBoundVerifiedV1 {
             successor,
             binding_digest,
-            q_mask_s_root,
-            numeric_root,
-            commitment_root,
             safe_core_projection,
         })
     }
@@ -4051,20 +3960,9 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
         self.successor
     }
 
-    pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    #[cfg(test)]
+    const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
-    }
-
-    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.q_mask_s_root
-    }
-
-    pub(super) const fn numeric_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.numeric_root
-    }
-
-    pub(super) const fn commitment_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.commitment_root
     }
 }
 
@@ -4082,9 +3980,6 @@ impl<'a> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
 pub(super) struct RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'a> {
     successor: &'a [u8],
     binding_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    numeric_root: [u8; DIGEST_BYTES_V1],
-    commitment_root: [u8; DIGEST_BYTES_V1],
     safe_core_projection: RnsNativeCrossFieldRlweSafeCoreProjectionV1,
 }
 
@@ -4095,18 +3990,6 @@ impl<'a> RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'a> {
 
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
-    }
-
-    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.q_mask_s_root
-    }
-
-    pub(super) const fn numeric_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.numeric_root
-    }
-
-    pub(super) const fn commitment_root(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.commitment_root
     }
 
     pub(super) const fn safe_core_projection_v1(
@@ -4203,11 +4086,11 @@ where
     drop(source);
     let view = preflight.bind_inputs_v1(&inputs)?;
     let mut transcript_digests = [[0_u8; DIGEST_BYTES_V1]; CORES_V1];
-    for core in 0..CORES_V1 {
+    for (core, transcript_digest) in transcript_digests.iter_mut().enumerate() {
         let state = initial_core_transcript_state_v1(&inputs, core)?;
         let mut transcript = CoreVerifierTranscriptV1::<S>::new_v1(state, view.core_proofs[core])?;
         build_core_statement_v1::<S>(&inputs, core)?.verify(&mut transcript)?;
-        transcript_digests[core] = transcript.finish_v1()?;
+        *transcript_digest = transcript.finish_v1()?;
     }
     if proof_set_digest_v1(&inputs, &view.core_proofs, &transcript_digests)?
         != view.proof_set_digest
@@ -4252,9 +4135,6 @@ where
     Ok(RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1 {
         successor: view.successor,
         binding_digest,
-        q_mask_s_root: inputs.schedule.bound.q_mask_s_root,
-        numeric_root: inputs.numeric_root,
-        commitment_root: inputs.commitment_root,
         safe_core_projection,
         cross_field_root_equality_obligation,
         verified_cross_field_core_root,
@@ -4278,23 +4158,6 @@ where
     R: ProofRandomSource,
 {
     prove_pending_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, P, R>(schedule, source, rng)
-}
-
-/// Test-only compatibility wrapper for source-preflight regression coverage.
-/// It cannot exist in a production build; production must use the typed staged
-/// pending API above.
-#[cfg(test)]
-pub(super) fn prove_rns_native_cross_field_rlwe_direct_v1<P, R>(
-    schedule: RelationScheduleV1,
-    source: P,
-    successor: &[u8],
-    rng: &mut R,
-) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1>
-where
-    P: RnsNativeCrossFieldQuotientOpeningSourceV1,
-    R: ProofRandomSource,
-{
-    prove_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, P, R>(schedule, source, successor, rng)
 }
 
 /// Private verification kernel returning only a non-authorizing,

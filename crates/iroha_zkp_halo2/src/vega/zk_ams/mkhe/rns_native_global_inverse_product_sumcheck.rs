@@ -23,6 +23,7 @@
 //!    challenge;
 //! 5. the verifier-derived folded `A`/`U` commitments and the canonical T256
 //!    generalized-Bulletproof endpoint proof.
+//!
 //! The enclosing post-`z` token hashes this proof as its residual, so that
 //! token's binding is intentionally excluded from every challenge preimage.
 //! It enters only the successor token's hashes after proof verification.
@@ -937,16 +938,27 @@ fn apply_round_mask_v1(
 // the transmitted (constant,quadratic,cubic) coefficients, giving perfect
 // message hiding before the computationally-ZK endpoint argument.
 
-fn coordinate_round_evaluations_v1<P: RnsNativeGlobalInverseProductOpeningSourceV1>(
+struct CoordinateRoundContextV1<'a> {
     geometry: KernelGeometryV1,
-    source: &mut P,
     z: Scalar,
     rho: Scalar,
-    prefix: &[Scalar],
+    prefix: &'a [Scalar],
+    rho_coordinates: &'a [Scalar],
+}
+
+fn coordinate_round_evaluations_v1<P: RnsNativeGlobalInverseProductOpeningSourceV1>(
+    context: CoordinateRoundContextV1<'_>,
+    source: &mut P,
     a_buffer: &mut SecretScalarsV1,
     u_buffer: &mut SecretScalarsV1,
-    rho_coordinates: &[Scalar],
 ) -> Result<[Scalar; 4], RnsNativeGlobalInverseProductErrorV1> {
+    let CoordinateRoundContextV1 {
+        geometry,
+        z,
+        rho,
+        prefix,
+        rho_coordinates,
+    } = context;
     if prefix.len() >= geometry.coordinate_bits
         || a_buffer.as_slice_v1().len() != geometry.coordinates
         || u_buffer.as_slice_v1().len() != geometry.coordinates
@@ -1122,7 +1134,7 @@ fn folded_endpoint_commitments_v1<S: ProofSuite<Scalar = Scalar, Point = Point>>
         .fold(Scalar::zero(), |sum, weight| sum + weight);
     if !padding_weight.is_zero() {
         let padding = public_constant_vector_commitment_v1::<S>(geometry.coordinates, z_inverse)?;
-        u = u + padding.mul_scalar(padding_weight);
+        u += padding.mul_scalar(padding_weight);
         if u.is_identity() {
             return Err(RnsNativeGlobalInverseProductErrorV1::InvalidPoint);
         }
@@ -1136,17 +1148,28 @@ fn folded_endpoint_commitments_v1<S: ProofSuite<Scalar = Scalar, Point = Point>>
 /// `aL + A_r - z = 0`, `aR - U_r = 0`, and
 /// `R_r*aO + H_r - R_r - final_claim = 0`; the generalized-Bulletproof
 /// circuit itself enforces `aO = aL*aR`.
-fn build_endpoint_statement_v1<S: ProofSuite<Scalar = Scalar, Point = Point>>(
+struct EndpointStatementContextV1<'a> {
     geometry: KernelGeometryV1,
-    a_commitment: Point,
-    u_commitment: Point,
-    inverse_product_mask_commitment: Point,
-    coordinate_point: &[Scalar],
-    sumcheck_challenges: &[Scalar],
+    commitments: [Point; ENDPOINT_VECTOR_COMMITMENTS_V1],
+    coordinate_point: &'a [Scalar],
+    sumcheck_challenges: &'a [Scalar],
     rho_evaluation: Scalar,
     final_claim: Scalar,
     z: Scalar,
+}
+
+fn build_endpoint_statement_v1<S: ProofSuite<Scalar = Scalar, Point = Point>>(
+    context: EndpointStatementContextV1<'_>,
 ) -> Result<ArithmeticCircuitStatement<'static, S>, RnsNativeGlobalInverseProductErrorV1> {
+    let EndpointStatementContextV1 {
+        geometry,
+        commitments,
+        coordinate_point,
+        sumcheck_challenges,
+        rho_evaluation,
+        final_claim,
+        z,
+    } = context;
     let coordinate_weights = eq_weights_v1(coordinate_point)?;
     let mask_weights = mask_terminal_weights_v1(sumcheck_challenges)?;
     if coordinate_weights.len() != geometry.coordinates
@@ -1189,7 +1212,7 @@ fn build_endpoint_statement_v1<S: ProofSuite<Scalar = Scalar, Point = Point>>(
     Ok(ArithmeticCircuitStatement::new(
         S::generators().reduce(geometry.coordinates)?,
         vec![bind_a, bind_u, endpoint],
-        vec![a_commitment, u_commitment, inverse_product_mask_commitment],
+        commitments.into(),
         Vec::new(),
     )?)
 }
@@ -1418,14 +1441,16 @@ where
     let mut mask_carry = Scalar::zero();
     for round in 0..geometry.coordinate_bits {
         let evaluations = coordinate_round_evaluations_v1(
-            geometry,
+            CoordinateRoundContextV1 {
+                geometry,
+                z: context.z,
+                rho,
+                prefix: &challenges,
+                rho_coordinates: &rho_coordinates,
+            },
             &mut source,
-            context.z,
-            rho,
-            &challenges,
             &mut a_buffer,
             &mut u_buffer,
-            &rho_coordinates,
         )?;
         if evaluations[0] + evaluations[1] != raw_claim {
             return Err(RnsNativeGlobalInverseProductErrorV1::InvalidSumcheck);
@@ -1534,7 +1559,12 @@ where
     let mut folded_u_mask = SecretScalarV1::zero_v1();
     let mut u_sum_values = SecretScalarsV1::try_zeroed_v1(geometry.coordinates)?;
     let mut u_sum_mask = SecretScalarV1::zero_v1();
-    for plane in 0..geometry.active_planes {
+    for (plane, weight) in plane_weights
+        .iter()
+        .copied()
+        .take(geometry.active_planes)
+        .enumerate()
+    {
         a_buffer.as_mut_slice_v1().fill(Scalar::zero());
         u_buffer.as_mut_slice_v1().fill(Scalar::zero());
         let mut a_mask = SecretScalarV1::zero_v1();
@@ -1546,7 +1576,6 @@ where
             a_mask.as_mut_v1(),
             u_mask.as_mut_v1(),
         )?;
-        let weight = plane_weights[plane];
         for index in 0..geometry.coordinates {
             folded_a.as_mut_slice_v1()[index] += weight * a_buffer.as_slice_v1()[index];
             folded_u.as_mut_slice_v1()[index] += weight * u_buffer.as_slice_v1()[index];
@@ -1604,17 +1633,15 @@ where
             ),
         ],
     )?;
-    build_endpoint_statement_v1::<S>(
+    build_endpoint_statement_v1::<S>(EndpointStatementContextV1 {
         geometry,
-        a_commitment,
-        u_commitment,
-        commitments.inverse_product_mask,
-        &coordinate_point,
-        &challenges,
+        commitments: [a_commitment, u_commitment, commitments.inverse_product_mask],
+        coordinate_point: &coordinate_point,
+        sumcheck_challenges: &challenges,
         rho_evaluation,
-        masked_claim,
-        context.z,
-    )?
+        final_claim: masked_claim,
+        z: context.z,
+    })?
     .prove(rng, &mut endpoint_transcript, witness)?;
     let (endpoint_core, endpoint_transcript_digest) = endpoint_transcript.finish_v1()?;
     Ok(PendingInverseKernelV1 {
@@ -1955,17 +1982,15 @@ where
         view.endpoint_core,
         endpoint_core_bytes_v1(geometry)?,
     )?;
-    build_endpoint_statement_v1::<S>(
+    build_endpoint_statement_v1::<S>(EndpointStatementContextV1 {
         geometry,
-        a_commitment,
-        u_commitment,
-        commitments.inverse_product_mask,
+        commitments: [a_commitment, u_commitment, commitments.inverse_product_mask],
         coordinate_point,
-        &challenges,
+        sumcheck_challenges: &challenges,
         rho_evaluation,
-        claim,
-        context.z,
-    )?
+        final_claim: claim,
+        z: context.z,
+    })?
     .verify(&mut endpoint_transcript)?;
     let endpoint_transcript_digest = endpoint_transcript.finish_v1()?;
     let sumcheck_transcript_digest = hash_v1(&sumcheck_state);

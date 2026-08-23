@@ -507,16 +507,8 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), ControllerError> {
     match cli.command {
         Command::InstallCheck => {
-            let mut state = current_state()?;
-            state.message = if state.repair_required {
-                "repair required".to_owned()
-            } else if state.active {
-                "connected".to_owned()
-            } else {
-                "ready".to_owned()
-            };
-            persist_state(&state)?;
-            print_state(&state)?;
+            let state = current_state()?;
+            print_state(&install_check_display_state(&state))?;
             Ok(())
         }
         Command::Status => {
@@ -548,6 +540,17 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
             runtime.block_on(run_tunnel_command(payload, caller))
         }
     }
+}
+fn install_check_display_state(state: &State) -> State {
+    let mut display = state.clone();
+    display.message = if state.repair_required {
+        "repair required".to_owned()
+    } else if state.active {
+        "connected".to_owned()
+    } else {
+        "ready".to_owned()
+    };
+    display
 }
 fn connect_payload_network_policy_hash(payload: &ConnectPayload) -> [u8; 32] {
     vpn_helper_network_policy_hash_v1(
@@ -631,17 +634,13 @@ fn connect_command(caller: PrivilegedCaller) -> Result<(), ControllerError> {
     let current_exe = env::current_exe()?;
     let payload_frame = WipeBytes(encode_connect_payload_frame(&payload)?);
     payload.wipe_credentials();
-    let child_result = ProcessCommand::new(current_exe)
+    let mut child = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
-    let mut child = match child_result {
-        Ok(child) => child,
-        Err(error) => return Err(error.into()),
-    };
+        .spawn()?;
     // The worker is still blocked on its empty stdin here, so the PID cannot have exited and
     // been reused before the pidfd-backed identity capture.
     let child_pid = child.id();
@@ -1743,6 +1742,7 @@ const fn linux_tun_creation_flag_bits() -> u16 {
     // an existing interface that it would subsequently reconfigure.
     LINUX_IFF_TUN_BITS | LINUX_IFF_NO_PI_BITS | LINUX_IFF_TUN_EXCL_BITS
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_exact_tun_interface_name(
     requested_name: &str,
     kernel_name: &str,
@@ -1822,10 +1822,10 @@ fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
 }
 fn cleanup_network(applied: &AppliedNetworkState) -> Result<(), ControllerError> {
     let mut failures = Vec::new();
-    if let Some(dns_backend) = &applied.dns_backend {
-        if let Err(error) = cleanup_dns(dns_backend) {
-            failures.push(format!("DNS cleanup failed: {error}"));
-        }
+    if let Some(dns_backend) = &applied.dns_backend
+        && let Err(error) = cleanup_dns(dns_backend)
+    {
+        failures.push(format!("DNS cleanup failed: {error}"));
     }
     for snapshot in applied.excluded_route_snapshots.iter().rev() {
         if let Err(error) = restore_excluded_route(snapshot) {
@@ -4706,6 +4706,31 @@ mod tests {
         assert!(matches!(cli.command, Command::Connect));
     }
     #[test]
+    fn install_check_derives_display_state_without_mutating_persisted_state() {
+        let original = State {
+            active: true,
+            message: "persisted message".to_owned(),
+            ..State::default()
+        };
+        let display = install_check_display_state(&original);
+        assert_eq!(display.message, "connected");
+        assert_eq!(original.message, "persisted message");
+
+        let repair = State {
+            active: true,
+            repair_required: true,
+            ..State::default()
+        };
+        assert_eq!(
+            install_check_display_state(&repair).message,
+            "repair required"
+        );
+        assert_eq!(
+            install_check_display_state(&State::default()).message,
+            "ready"
+        );
+    }
+    #[test]
     fn privileged_commands_require_an_explicit_session_id() {
         for command in ["disconnect", "repair"] {
             Cli::try_parse_from(["sora-vpn-controller", command])
@@ -4788,8 +4813,10 @@ mod tests {
     fn state_persistence_is_private_atomic_and_round_trips() {
         let root = private_test_state_root("roundtrip");
         let path = root.join(STATE_FILE_NAME);
-        let mut state = State::default();
-        state.message = "first".to_owned();
+        let mut state = State {
+            message: "first".to_owned(),
+            ..State::default()
+        };
         persist_state_at(&path, &state).expect("persist first state");
         state.message = "second".to_owned();
         persist_state_at(&path, &state).expect("replace state");

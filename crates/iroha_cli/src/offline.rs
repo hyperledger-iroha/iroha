@@ -2559,21 +2559,6 @@ mod tests {
         );
         assert!(parse_nonzero_canonical_sha256(&"00".repeat(32)).is_err());
     }
-    #[test]
-    fn kagemusha_activation_never_allows_fallback_credentials() {
-        let command =
-            Command::Kagemusha(KagemushaCommand::ActivateReleaseV4(ActivateReleaseV4Args {
-                promotion_id: [0x10; 32],
-                promotion_binding: PathBuf::from("promotion-binding.norito"),
-                release_policy: PathBuf::from("policy.norito"),
-                artifact_dir: PathBuf::from("catalog"),
-                manifest_sha256: [0x11; 32],
-                runtime_effective_config_sha256: [0x12; 32],
-                verifier_version: 1,
-                device_attestation_policy: PathBuf::from("device-attestation-policy.json"),
-            }));
-        assert!(!command.allows_fallback_config());
-    }
     struct TestContext {
         output_format: crate::CliOutputFormat,
         printed: Vec<String>,

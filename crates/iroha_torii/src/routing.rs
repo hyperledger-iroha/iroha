@@ -4433,10 +4433,12 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let app_pk_b64 = B64.encode(app_pk);
     let nonce_b64 = B64.encode(nonce);
     let node = req.node.unwrap_or_default();
+    let network_id_literal =
+        norito::literal::format("hash", &hex::encode_upper(network_id.as_bytes()));
     let wallet_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id.to_string()),
+        urlencoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
         urlencoding::encode(&node),
@@ -4446,7 +4448,7 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let app_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=app&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id.to_string()),
+        urlencoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
         urlencoding::encode(&node),
@@ -4565,7 +4567,12 @@ mod connect_session_tests {
         assert!(resp.0.app_uri.contains(&sid_str));
         assert!(resp.0.wallet_uri.contains("&relay="));
         assert!(resp.0.app_uri.contains("&relay="));
-        assert!(resp.0.wallet_uri.contains("network_id="));
+        let encoded_network_id = urlencoding::encode(
+            "hash:445E0F6E4B393BFB5FA7688DA17D509A9B4F8DFC9032DE25C65C83DD7C7FBF7D#6120",
+        );
+        let expected_query = format!("network_id={encoded_network_id}&");
+        assert!(resp.0.wallet_uri.contains(&expected_query));
+        assert!(resp.0.app_uri.contains(&expected_query));
         assert!(!resp.0.wallet_uri.contains("chain_id="));
     }
     routing_test! { async connect_session_rejects_hex_sid

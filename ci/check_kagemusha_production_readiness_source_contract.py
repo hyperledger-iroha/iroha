@@ -880,6 +880,71 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "args.runtime_effective_config_sha256",
         r'instruction_count\":1',
     )
+    require(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        '#[command(name = "prepare-enable-issuance-v4")]',
+        '#[command(name = "prepare-cancel-release-v4")]',
+        '#[command(name = "prepare-deactivate-issuance-v4")]',
+        "fn lifecycle_terminal_commands_publish_exact_typed_instructions_and_reports()",
+        "fn lifecycle_commands_reject_tampered_noncanonical_oversized_and_malformed_inputs()",
+        "fn lifecycle_command_refuses_to_replace_existing_output()",
+        "assert_eq!(\n            report_lines.len(),",
+        '"durability record and preparation report"',
+        'let error = outcome.expect_err("existing lifecycle output must never be replaced");',
+        'b"operator-reviewed sentinel"',
+    )
+    for command, source, maximum, model, constructor in (
+        (
+            "PrepareEnableIssuanceV4",
+            "enable_witness",
+            "KAGEMUSHA_V4_ISSUANCE_ENABLE_WITNESS_MAX_BYTES_V1",
+            "KagemushaV4IssuanceEnableWitnessV1",
+            "EnableKagemushaRecursiveIssuanceV4",
+        ),
+        (
+            "PrepareCancelReleaseV4",
+            "cancellation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseCancellationV1",
+            "CancelKagemushaRecursiveReleaseV4",
+        ),
+        (
+            "PrepareDeactivateIssuanceV4",
+            "deactivation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseDeactivationV1",
+            "DeactivateKagemushaRecursiveIssuanceV4",
+        ),
+    ):
+        require_pattern(
+            texts[KAGAMI],
+            KAGAMI,
+            errors,
+            (
+                rf"Command::{command}\(args\)\s*=>\s*\{{.*?"
+                rf"read_external_bounded\(\s*&args\.{source},\s*{maximum},.*?"
+                rf"{model}::decode_canonical\(&bytes\).*?"
+                rf"prepare_lifecycle_instruction_v4\(.*?"
+                rf"InstructionBox::from\({constructor}::new\("
+            ),
+            f"bounded canonical {command} lifecycle preparation",
+        )
+    require_pattern(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        (
+            r"fn prepare_lifecycle_instruction_v4<.*?"
+            r"let instructions = vec!\[instruction\];.*?"
+            r"let instructions_hash = HashOf::new\(&instructions\);.*?"
+            r"norito::json::to_string\(&instructions\).*?"
+            r"publish_new_durable_file\(writer, output, instruction_json\.as_bytes\(\)\)\?;.*?"
+            r'instruction_count\\":1.*?input_sha256'
+        ),
+        "one-instruction no-replace lifecycle publication",
+    )
     require_pattern(
         texts[KAGAMI],
         KAGAMI,

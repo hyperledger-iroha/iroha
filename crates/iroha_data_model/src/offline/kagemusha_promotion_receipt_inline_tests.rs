@@ -1839,9 +1839,11 @@ fn canary_query_rejects_reversed_node_status_observation_times() {
     let receipt_bytes =
         norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
     let mut body = fixture.evidence.body.clone();
-    let before_observed_at_ms = body.query.node_status_before_observed_at_ms;
-    body.query.node_status_before_observed_at_ms = body.query.node_status_after_observed_at_ms;
-    body.query.node_status_after_observed_at_ms = before_observed_at_ms;
+    let query = &mut body.query;
+    core::mem::swap(
+        &mut query.node_status_before_observed_at_ms,
+        &mut query.node_status_after_observed_at_ms,
+    );
 
     assert_eq!(
         KagemushaV4TairaCanaryEvidenceV1::try_sign(
@@ -1934,6 +1936,51 @@ fn production_canary_evidence_rejects_a_sealed_reveal_entrypoint() {
 }
 
 #[cfg(feature = "transparent_api")]
+fn assert_liveness_anchor_digest_splices_rejected(
+    fixture: &CompleteCanaryFixture,
+    verified: &KagemushaV4VerifiedTairaCanaryEvidenceV1,
+    canary_proof: &BridgeFinalityProof,
+    challenge_body: &KagemushaV4PostCanaryValidatorLivenessChallengeBodyV1,
+) {
+    for (case, tampered_digest) in [
+        (
+            "activation receipt",
+            exact_receipt_bytes(b"spliced receipt"),
+        ),
+        (
+            "canary transaction wire",
+            exact_receipt_bytes(b"spliced transaction wire"),
+        ),
+    ] {
+        let mut tampered = challenge_body.clone();
+        match case {
+            "activation receipt" => {
+                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
+            }
+            "canary transaction wire" => {
+                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
+            }
+            _ => unreachable!("closed hostile anchor table"),
+        }
+        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+            tampered.clone(),
+            &fixture.receipt.issuer,
+        )
+        .expect("issuer can sign hostile anchor fixture");
+        assert_eq!(
+            challenge.verify_bound(
+                &fixture.receipt.expectations,
+                verified,
+                &tampered.canary_anchor,
+                canary_proof,
+            ),
+            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
+            "{case} splice must fail against the verified canary capability",
+        );
+    }
+}
+
+#[cfg(feature = "transparent_api")]
 #[test]
 fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
     let fixture = complete_canary_fixture();
@@ -2018,42 +2065,12 @@ fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
         "a canary capability cannot move across exact expectations artifacts",
     );
 
-    for (case, tampered_digest) in [
-        (
-            "activation receipt",
-            exact_receipt_bytes(b"spliced receipt"),
-        ),
-        (
-            "canary transaction wire",
-            exact_receipt_bytes(b"spliced transaction wire"),
-        ),
-    ] {
-        let mut tampered = challenge_body.clone();
-        match case {
-            "activation receipt" => {
-                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
-            }
-            "canary transaction wire" => {
-                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
-            }
-            _ => unreachable!("closed hostile anchor table"),
-        }
-        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
-            tampered.clone(),
-            &fixture.receipt.issuer,
-        )
-        .expect("issuer can sign hostile anchor fixture");
-        assert_eq!(
-            challenge.verify_bound(
-                &fixture.receipt.expectations,
-                &verified,
-                &tampered.canary_anchor,
-                canary_proof,
-            ),
-            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
-            "{case} splice must fail against the verified canary capability",
-        );
-    }
+    assert_liveness_anchor_digest_splices_rejected(
+        &fixture,
+        &verified,
+        canary_proof,
+        &challenge_body,
+    );
 }
 
 #[cfg(feature = "transparent_api")]

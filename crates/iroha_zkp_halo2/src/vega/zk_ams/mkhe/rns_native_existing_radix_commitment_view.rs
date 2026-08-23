@@ -705,8 +705,6 @@ impl RnsNativeExistingRadixCandidateAxisV1 {
                     ..
                 },
             ) => root == authenticated_root,
-            #[cfg(test)]
-            _ => false,
         }
     }
 
@@ -1050,14 +1048,6 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
-    }
-
-    /// Consume the authenticated existing-radix view and recover its exact
-    /// q-mask predecessor.
-    pub(super) fn into_previous_v1(
-        self,
-    ) -> RnsNativeQMaskLinearRelationsPrerequisiteV1<'source, 'proof, S> {
-        self.previous
     }
 
     /// Consume the authenticated stage and its recursively owned claimed

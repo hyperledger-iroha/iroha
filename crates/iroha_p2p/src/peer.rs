@@ -446,7 +446,7 @@ impl SoranetHandshakeConfig {
     ///
     /// # Errors
     /// Returns [`AdmissionTokenDecodeError`] when `token` is not a canonical
-    /// SoraNet admission-token frame.
+    /// `SoraNet` admission-token frame.
     pub fn set_admission_token(
         &mut self,
         mut token: Vec<u8>,

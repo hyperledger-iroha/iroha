@@ -176,6 +176,8 @@ the same deterministic framing.
   State persists that real UID, exact session id, and authenticated network
   policy hash. Connect cannot replace another UID's state, while disconnect and
   repair require both the same UID and an explicit matching `--session-id`.
+  `install-check` and `status` are observational and never persist caller-triggered
+  state changes.
 - **End-to-end metrics harness:** The adapter suite now includes a paced
   bridge→adapter round-trip that pumps data and cover cells over a duplex link
   and asserts ingress/egress counters for cover/data frames and bytes on both

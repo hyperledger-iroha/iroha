@@ -807,6 +807,8 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(block_write_failure_never_advances_wsv_and_retry_is_exact, {
+    use crate::state::WorldReadOnly as _;
+
     let fixture = ApplyFixture::new();
     let baseline_state_hash =
         crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
