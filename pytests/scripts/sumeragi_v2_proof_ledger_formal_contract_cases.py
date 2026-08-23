@@ -287,6 +287,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_verified_height_context_recovered_output_auth.rs'),
         Path('v2_adapter_equivocation_evidence.rs'),
         Path('v2_ready_durable_validate_adapter_preview.rs'),
+        Path('v2_recovered_lifecycle_sign_completion.rs'),
         Path('v2_wire_registry_and_authentication.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
@@ -295,6 +296,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_adapter_main_04.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs'): (
+        Path('v2_lifecycle_coordinator_state_helpers.rs'),
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (
@@ -325,11 +327,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_replay_authority_fixtures.rs'),
         Path('tests/v2_lifecycle_replay_authority_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_recovery.rs'): (
+        Path('v2_recovery_tests.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs'): (
         Path('v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'): (
+        Path('v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_completion_impl.rs'),
         Path('v2_lifecycle_work_registry_access_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_execution_impl.rs'),
@@ -577,10 +583,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 58
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 59
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 12
 assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 12
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 47
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )

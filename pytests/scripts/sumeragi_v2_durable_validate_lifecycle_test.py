@@ -47,6 +47,8 @@ def copy_durable_validate_lifecycle_fixture(
         "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
         "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",
+        "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_work_registry_pre_admission.rs",
         "crates/iroha_core/src/sumeragi/"
         "v2_lifecycle_replay_authority_live_wal.rs",
@@ -167,6 +169,41 @@ def test_durable_validate_lifecycle_source_seal_rejects_unreserved_dispatch(
     )
     assert any(
         "Ready Validate must reserve the worker slot" in error
+        for error in errors
+    ), errors
+
+
+def test_durable_validate_lifecycle_source_seal_rejects_sixth_prepared_owner(
+    tmp_path: Path,
+) -> None:
+    """Certificate ingress cannot widen the exact five adapter-origin owners."""
+
+    module = load_checker()
+    repo_root, _ = copy_durable_validate_lifecycle_fixture(tmp_path, module)
+    registry = (
+        repo_root
+        / "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_pre_admission.rs"
+    )
+    source = registry.read_text(encoding="utf-8")
+    registry.write_text(
+        source.replace(
+            "    DirectSigned(BoundAdapterEffectV1),\n}",
+            "    DirectSigned(BoundAdapterEffectV1),\n"
+            "    CertifiedFetch(BoundAdapterEffectV1),\n}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = (
+        module._durable_validate_lifecycle_production_source_fidelity_errors(
+            repo_root
+        )
+    )
+    assert any(
+        "all five replay-authorized origins must share one closed prepared admission owner"
+        in error
         for error in errors
     ), errors
 

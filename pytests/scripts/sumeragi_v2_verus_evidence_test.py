@@ -387,13 +387,17 @@ def test_repository_verus_evidence_binds_lexically_included_proof_tail() -> None
 
 
 def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
-    """Extracted adapter and runtime implementations remain independently sealed."""
+    """Extracted adapter, effects, replay, and runtime providers remain sealed."""
 
     module = load_module()
     providers = {
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
         "crates/iroha_core/src/sumeragi/v2_wire_registry_and_authentication.rs",
         "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs",
+        "crates/iroha_core/src/sumeragi/v2_recovered_lifecycle_sign_completion.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority_certified_body.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime_ready_validate_publication.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_core_impl.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime_effect_ownership_rebind_impl.rs",
     }
@@ -401,6 +405,12 @@ def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
     adapter = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2.rs").read_text(
         encoding="utf-8"
     )
+    effects = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2_effects.rs").read_text(
+        encoding="utf-8"
+    )
+    replay_authority = ROOT.joinpath(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"
+    ).read_text(encoding="utf-8")
     runtime = ROOT.joinpath("crates/iroha_core/src/sumeragi/v2_runtime.rs").read_text(
         encoding="utf-8"
     )
@@ -409,6 +419,18 @@ def test_repository_verus_evidence_binds_extracted_runtime_providers() -> None:
     ) == 1
     assert adapter.count('include!("v2_wire_registry_and_authentication.rs");') == 1
     assert adapter.count('include!("v2_ready_durable_validate_adapter_preview.rs");') == 1
+    assert adapter.count('include!("v2_recovered_lifecycle_sign_completion.rs");') == 1
+    assert (
+        effects.count('include!("v2_effects_lifecycle_admission_settlement.rs");')
+        == 1
+    )
+    assert (
+        replay_authority.count(
+            'include!("v2_lifecycle_replay_authority_certified_body.rs");'
+        )
+        == 1
+    )
+    assert runtime.count('include!("v2_runtime_ready_validate_publication.rs");') == 1
     assert runtime.count('include!("v2_runtime_effect_ownership_core_impl.rs");') == 1
     assert runtime.count(
         'include!("v2_runtime_effect_ownership_rebind_impl.rs");'

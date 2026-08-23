@@ -3,7 +3,23 @@ use crate::sumeragi::v2_lifecycle_coordinator::ProductionSchedulerInputsError;
 #[derive(Clone, Copy)]
 enum StandaloneValidateOriginFixture {
     LocalBody,
-    RemoteProposal { valid_signature: bool },
+    RemoteProposal {
+        valid_signature: bool,
+    },
+    RefinedRemoteProposal {
+        phase: wire::GlobalPhase,
+        corrupt_qc: bool,
+    },
+}
+
+fn run_durable_recovery_test_on_stack(body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .name("sumeragi-v2-durable-recovery-test".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(body)
+        .expect("spawn durable-recovery test thread")
+        .join()
+        .expect("durable-recovery test thread completes");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -119,7 +135,15 @@ fn standalone_validate_record(
             .prepare_lifecycle_admission(fixture.lifecycle_context(), &fixture.verified)
             .unwrap_or_else(|_| panic!("prepare standalone local Validate admission"))
         }
-        StandaloneValidateOriginFixture::RemoteProposal { valid_signature } => {
+        StandaloneValidateOriginFixture::RemoteProposal { .. }
+        | StandaloneValidateOriginFixture::RefinedRemoteProposal { .. } => {
+            let valid_signature = match origin {
+                StandaloneValidateOriginFixture::RemoteProposal { valid_signature } => {
+                    valid_signature
+                }
+                StandaloneValidateOriginFixture::RefinedRemoteProposal { .. } => true,
+                StandaloneValidateOriginFixture::LocalBody => unreachable!(),
+            };
             let mut proposal = wire::Proposal {
                 round,
                 proposer: leader,
@@ -143,7 +167,7 @@ fn standalone_validate_record(
                 tag,
                 round,
                 subject,
-                manifest: Some(manifest),
+                manifest: Some(manifest.clone()),
                 certified_sources: Vec::new(),
                 certificate: None,
             };
@@ -157,14 +181,14 @@ fn standalone_validate_record(
             let store_ownership = fetch_ownership
                 .rebind_as_inherited_adapter_effect(&store_effect)
                 .expect("project standalone remote Store owner");
-            let validate_ownership = store_ownership
+            let ordinary_validate_ownership = store_ownership
                 .rebind_as_inherited_adapter_effect(&validate_effect)
                 .expect("project standalone remote Validate owner");
             assert!(
                 fetch_ownership
                     .bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect,)
             );
-            PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+            let stored = PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
                 fetch_effect,
                 fetch_ownership,
             )
@@ -172,11 +196,106 @@ fn standalone_validate_record(
             .project_store(store_effect, store_ownership)
             .unwrap_or_else(|_| panic!("project standalone remote Store pre-admission"))
             .bind_durable_body(durable_receipt)
-            .unwrap_or_else(|_| panic!("bind standalone remote durable body"))
-            .project_validate(validate_effect, validate_ownership)
-            .unwrap_or_else(|_| panic!("project standalone remote Validate pre-admission"))
-            .prepare_lifecycle_admission(fixture.lifecycle_context(), &fixture.verified)
-            .unwrap_or_else(|_| panic!("prepare standalone remote Validate admission"))
+            .unwrap_or_else(|_| panic!("bind standalone remote durable body"));
+            let validate = match origin {
+                StandaloneValidateOriginFixture::RemoteProposal { .. } => stored
+                    .project_validate(validate_effect.clone(), ordinary_validate_ownership, None)
+                    .unwrap_or_else(|_| panic!("project standalone remote Validate pre-admission")),
+                StandaloneValidateOriginFixture::RefinedRemoteProposal { phase, corrupt_qc } => {
+                    let execution_commitment =
+                        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                            Hash::new([marker, 0xA1]),
+                            Hash::new([marker, 0xA2]),
+                            Hash::new([marker, 0xA3]),
+                            1,
+                            Hash::new([marker, 0xA4]),
+                        );
+                    let preimage = wire::Vote {
+                        round,
+                        proposal_round: round,
+                        phase,
+                        subject,
+                        execution_commitment,
+                        signer: 0,
+                        signature: Vec::new(),
+                    }
+                    .signature_preimage();
+                    let shares = fixture.keys[..3]
+                        .iter()
+                        .map(|key| {
+                            Signature::new(key.private_key(), &preimage)
+                                .payload()
+                                .to_vec()
+                        })
+                        .collect::<Vec<_>>();
+                    let mut certificate = wire::QuorumCertificate {
+                        round,
+                        proposal_round: round,
+                        phase,
+                        subject,
+                        execution_commitment,
+                        signers: vec![0, 1, 2],
+                        aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                            &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                        )
+                        .expect("aggregate refined standalone Proposal QC"),
+                    };
+                    if corrupt_qc {
+                        certificate.aggregate_signature[0] ^= 1;
+                    }
+                    let certified_fetch = AdapterEffect::FetchBody {
+                        tag,
+                        round,
+                        subject,
+                        manifest: Some(manifest.clone()),
+                        certified_sources: context
+                            .roster
+                            .iter()
+                            .map(|entry| entry.validator.clone())
+                            .collect(),
+                        certificate: Some(certificate.clone()),
+                    };
+                    let certified_validate_ownership = bind_adapter_effect_batch_ownership(
+                        core::slice::from_ref(&certified_fetch),
+                        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal + 1)],
+                    )
+                    .expect("bind refined standalone remote Fetch authority")
+                    .pop()
+                    .expect("one refined standalone remote Fetch owner")
+                    .rebind_as_inherited_adapter_effect(&validate_effect)
+                    .expect("carry refined standalone authority into Validate");
+                    let validate_ownership = ordinary_validate_ownership
+                        .adopt_incumbent_body_stage_for_retry_or_authority(
+                            &certified_validate_ownership,
+                            &validate_effect,
+                        )
+                        .expect("retain standalone Proposal owner under refined authority");
+                    match phase {
+                        wire::GlobalPhase::Prepare => stored
+                            .project_validate(
+                                validate_effect.clone(),
+                                validate_ownership,
+                                Some(&certificate),
+                            )
+                            .unwrap_or_else(|_| {
+                                panic!("project Prepare-refined standalone Proposal Validate")
+                            }),
+                        wire::GlobalPhase::Commit => stored
+                            .project_validate_after_durable_decision(
+                                validate_effect.clone(),
+                                validate_ownership,
+                                &certificate,
+                            )
+                            .unwrap_or_else(|_| {
+                                panic!("project Commit-refined standalone Proposal Validate")
+                            }),
+                    }
+                }
+                StandaloneValidateOriginFixture::LocalBody => unreachable!(),
+            };
+            validate
+                .prepare_lifecycle_admission(fixture.lifecycle_context(), &fixture.verified)
+                .unwrap_or_else(|_| panic!("prepare standalone remote Validate admission"))
         }
     };
     let candidate = prepared.candidate().clone();
@@ -818,6 +937,55 @@ fn production_owner_cold_opens_exact_standalone_remote_proposal_validate() {
 }
 
 #[test]
+fn production_owner_cold_opens_refined_standalone_remote_proposal_validate() {
+    for (phase, marker, ordinal) in [
+        (wire::GlobalPhase::Prepare, 0x66, 10),
+        (wire::GlobalPhase::Commit, 0x67, 11),
+    ] {
+        let fixture = RecoveryFixture::new("standalone-refined-remote-validate-cold-open", 0x56);
+        let body_directory =
+            TempDir::new().expect("temporary refined standalone remote Validate body store");
+        let mut body_store = fixture.open_store(&body_directory);
+        let record = standalone_validate_record(
+            &fixture,
+            &mut body_store,
+            0,
+            marker,
+            ordinal,
+            StandaloneValidateOriginFixture::RefinedRemoteProposal {
+                phase,
+                corrupt_qc: false,
+            },
+        );
+        assert_cold_opens_standalone_validate(&fixture, body_store, record);
+    }
+}
+
+#[test]
+fn refined_standalone_remote_proposal_validate_rejects_an_invalid_qc() {
+    let fixture = RecoveryFixture::new("standalone-refined-remote-invalid-qc", 0x57);
+    let body_directory =
+        TempDir::new().expect("temporary invalid refined remote Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x68,
+        12,
+        StandaloneValidateOriginFixture::RefinedRemoteProposal {
+            phase: wire::GlobalPhase::Commit,
+            corrupt_qc: true,
+        },
+    );
+    let ledger = fixture.ledger(vec![record]);
+    assert!(matches!(
+        ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
+        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)
+    ));
+}
+
+#[test]
 fn standalone_validate_cold_census_rejects_a_foreign_body_store() {
     let fixture = RecoveryFixture::new("standalone-validate-foreign-body", 0x59);
     let canonical_directory = TempDir::new().expect("temporary canonical Validate body store");
@@ -1050,7 +1218,8 @@ fn production_owner_keeps_terminal_validate_and_live_serve_together() {
 
 #[test]
 fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
-    let fixture = RecoveryFixture::new("fresh-serve-owner", 0x81);
+    run_durable_recovery_test_on_stack(|| {
+        let fixture = RecoveryFixture::new("fresh-serve-owner", 0x81);
     let body_directory = TempDir::new().expect("temporary fresh Serve body store");
     let mut body_store = fixture.open_store(&body_directory);
     let fetch = fixture.fetch_record(&mut body_store, 0, 0x82, 1, None, false);
@@ -1204,12 +1373,13 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
         Some(super::super::super::AdmissionDecision::Retry { ordinal: 3, .. })
     ));
     assert!(retry.into_safe_continuation().is_ok());
-    assert_eq!(owner.live_fetch_count_for_test(), 1);
-    assert_eq!(
-        owner.certified_serve_and_producer_carrier_counts_for_test(),
-        (1, 1),
-        "idempotent retry must preserve the unrelated Fetch and exact shared pair"
-    );
+        assert_eq!(owner.live_fetch_count_for_test(), 1);
+        assert_eq!(
+            owner.certified_serve_and_producer_carrier_counts_for_test(),
+            (1, 1),
+            "idempotent retry must preserve the unrelated Fetch and exact shared pair"
+        );
+    });
 }
 
 #[test]

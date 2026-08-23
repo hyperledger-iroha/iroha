@@ -77,6 +77,7 @@ impl Queue {
         anchored_carrier_bound: usize,
     ) -> Result<usize, LaneQueueReservationError> {
         if carrier_reservation_counts.is_empty()
+            || carrier_reservation_counts.iter().any(|count| *count == 0)
             || anchored_carrier_bound == 0
             || anchored_carrier_bound > self.capacity.get()
             || carrier_reservation_counts.len() > anchored_carrier_bound
@@ -88,7 +89,7 @@ impl Queue {
         }
         let mut aggregate = 0_usize;
         for count in carrier_reservation_counts {
-            if *count == 0 || *count > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS {
+            if *count > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS {
                 return Err(LaneQueueReservationError::InvalidIdentity(format!(
                     "canonical Queue cleanup carrier reservation count exceeds hard limit {}",
                     iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS,
@@ -139,11 +140,40 @@ impl Queue {
                     "canonical Queue cleanup group count overflowed".to_owned(),
                 )
             })?;
+        let mut terminal_evidence = Vec::new();
+        terminal_evidence
+            .try_reserve_exact(group_count)
+            .map_err(|_| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "canonical Queue cleanup evidence allocation exceeds platform bounds"
+                        .to_owned(),
+                )
+            })?;
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
+        let cleanup_hashes = carriers
+            .iter()
+            .flatten()
+            .flat_map(|group| group.ordered_keys.iter())
+            .map(|key| key.entrypoint_hash)
+            .collect::<Vec<_>>();
         let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
-        let queue_guard = self.push_remove_lock.lock();
+        // A producer can finish its QueuePlan/reservation durability boundary
+        // concurrently with carrier application. That boundary is temporary,
+        // not conflicting ownership. Wait without holding the Queue mutation
+        // lock, then close the check/publication race exactly as committed hash
+        // removal does.
+        self.wait_for_durability_transitions(&cleanup_hashes);
+        let mut queue_guard = self.push_remove_lock.lock();
+        while cleanup_hashes
+            .iter()
+            .any(|hash| self.durability_transition_active(hash))
+        {
+            drop(queue_guard);
+            self.wait_for_durability_transitions(&cleanup_hashes);
+            queue_guard = self.push_remove_lock.lock();
+        }
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -151,10 +181,13 @@ impl Queue {
         let global_selection_owners = self.global_selection_owners.lock();
         let active_durability_transitions = self.durability_transitions.lock();
         let fee_admission_reservations = self.fee_admission_reservations.lock();
-        let fifo_hashes = self
-            .fifo_snapshot_locked()
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let fifo_snapshot = self.fifo_snapshot_locked();
+        let fifo_hashes = fifo_snapshot.iter().copied().collect::<HashSet<_>>();
+        if fifo_hashes.len() != fifo_snapshot.len() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "canonical Queue cleanup found a duplicate physical FIFO owner".to_owned(),
+            ));
+        }
         let mut fifo_ordinal_owners = BTreeMap::new();
         for entry in &self.fifo_order_by_hash {
             let hash = *entry.key();
@@ -224,6 +257,7 @@ impl Queue {
                 &ownership,
                 &fifo_ordinal_owners,
                 &mut journal_preflight,
+                true,
             )?;
         }
         drop(ownership);
@@ -242,16 +276,17 @@ impl Queue {
         drop(store);
         drop(queue_guard);
         self.preflight_lane_reservation_plan_journal(&journal_preflight)?;
+        // Replica validators retain ordinary FIFO/QueuePlan ownership because only the
+        // deterministic producer publishes a durable lane reservation. The exact replica set
+        // was classified during the all-group read-only preflight above. Tombstone the complete
+        // QueuePlan batch atomically as the first irreversible mutation, then remove its
+        // in-memory projection while the same lane and per-hash transition fences remain held.
+        self.tombstone_committed_replica_plan_journal(&journal_preflight.replica_keys)?;
+        self.remove_preflighted_committed_replica_owners(
+            &journal_preflight.replica_keys,
+            &durability_transition,
+        )?;
         let mut finalized = 0usize;
-        let mut terminal_evidence = Vec::new();
-        terminal_evidence
-            .try_reserve_exact(group_count)
-            .map_err(|_| {
-                LaneQueueReservationError::InvalidIdentity(
-                    "canonical Queue cleanup evidence allocation exceeds platform bounds"
-                        .to_owned(),
-                )
-            })?;
         for group in carriers.into_iter().flatten() {
             let PreparedLaneQueueCarrierCleanupGroup {
                 ordered_keys,

@@ -395,7 +395,7 @@ fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
         subject: commit.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &commit),
-        certificate: Some(commit),
+        certificate: Some(commit.clone()),
     };
     assert_eq!(
         executor
@@ -1244,7 +1244,7 @@ fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate
         subject: commit.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &commit),
-        certificate: Some(commit),
+        certificate: Some(commit.clone()),
     };
     let commit_validate_ownership = bound_test_effect_ownership(&commit_fetch, tag, 9_016)
         .rebind_as_inherited_adapter_effect(&validate_effect)
@@ -1254,6 +1254,7 @@ fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate
             .binds_durable_decision_authority(decision.0, decision.1, decision.2, decision.3,)
     );
     executor.runtime.decided_body = Some(decision);
+    executor.runtime.durable_body_authority_certificate = Some(commit);
     executor.runtime.exact_effect_ownership =
         Some((validate_effect.clone(), commit_validate_ownership));
 
@@ -1316,11 +1317,12 @@ fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
         subject: prepare.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &prepare),
-        certificate: Some(prepare),
+        certificate: Some(prepare.clone()),
     };
     let prepare_validate_ownership = bound_test_effect_ownership(&prepare_fetch, next_tag, 9_018)
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("carry Prepare authority into the protected Validate");
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
     executor
         .retain_effect_batch(vec![validate_effect], vec![prepare_validate_ownership])
         .expect("adopt the Stored Proposal root under Prepare authority");
@@ -1428,6 +1430,172 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
+}
+
+#[test]
+fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(
+                key,
+                (fixture.manifest.clone(), durable.clone()),
+            )
+            .is_none()
+    );
+    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let initial_validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_validate_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_022)
+        .rebind_as_inherited_adapter_effect(&initial_validate)
+        .expect("project the lifecycle-published Prepare Validate owner");
+    let initial_pending = initial_validate_ownership
+        .exact_pending_adapter_effect_binding(&initial_validate)
+        .expect("seal the lifecycle-published Validate binding");
+    let prepared = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the direct lifecycle marker catalog")
+        .bind_validate_successor(&initial_validate, &initial_pending)
+        .expect("bind the exact lifecycle-published Validate successor");
+    executor.commit_published_lifecycle_validate_retry_marker(prepared);
+
+    let next_tag = tag(1);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let timer_validate = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_023)
+        .rebind_as_inherited_adapter_effect(&timer_validate)
+        .expect("carry Commit authority into the periodic Validate retry");
+    executor
+        .retain_effect_batch(vec![timer_validate.clone()], vec![timer_ownership])
+        .expect("the periodic Validate stutters at its direct lifecycle marker");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
+    assert_eq!(marker.effect, timer_validate);
+    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(
+                key,
+                (fixture.manifest.clone(), durable.clone()),
+            )
+            .is_none()
+    );
+    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let initial_validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_validate_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_024)
+        .rebind_as_inherited_adapter_effect(&initial_validate)
+        .expect("project the cold-opened Prepare Validate owner");
+    let initial_pending = initial_validate_ownership
+        .exact_pending_adapter_effect_binding(&initial_validate)
+        .expect("seal the cold-opened Validate binding");
+    executor
+        .install_recovered_published_lifecycle_validate_retry_marker(
+            &initial_validate,
+            &initial_pending,
+            &durable,
+        )
+        .expect("restore the cold-opened Validate retry marker before clock activation");
+
+    let next_tag = tag(1);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let timer_validate = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_025)
+        .rebind_as_inherited_adapter_effect(&timer_validate)
+        .expect("carry Commit authority into the recovered periodic Validate retry");
+    executor
+        .retain_effect_batch(vec![timer_validate.clone()], vec![timer_ownership])
+        .expect("the periodic Validate stutters at its cold-recovered marker");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    assert_eq!(executor.published_lifecycle_validate_retry_markers.len(), 1);
+    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
+    assert_eq!(marker.effect, timer_validate);
+    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
 }
 
 #[test]

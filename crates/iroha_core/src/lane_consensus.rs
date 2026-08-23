@@ -6222,6 +6222,18 @@ mod tests {
             .expect("canonical autonomous anchor decodes");
         assert_eq!(decoded, payload);
         assert_eq!(decoded.reservation_keys.encode(), reservation_bytes);
+        let finalized_bundle = iroha_data_model::block::BlockExecutionContextBundle::default()
+            .with_autonomous_lane_payloads(vec![envelope.clone()]);
+        assert_eq!(
+            crate::state::authenticated_committee_in_finalized_bundle(
+                &finalized_bundle,
+                &payload.origin_proposal.descriptor,
+                network_id,
+                epoch,
+            ),
+            Ok(payload.origin_proposal.descriptor.validator_set.clone()),
+            "a finalized autonomous anchor must preserve its immutable historical committee",
+        );
         let payload_hash = payload
             .computed_payload_hash()
             .expect("compute canonical payload identity");

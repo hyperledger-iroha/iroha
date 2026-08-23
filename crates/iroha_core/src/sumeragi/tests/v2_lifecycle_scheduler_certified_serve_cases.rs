@@ -28,6 +28,7 @@ struct ServeSchedulerFixture {
     _directory: tempfile::TempDir,
     payload_store: CertifiedServePayloadStoreV1,
     coordinator: LifecycleCoordinator,
+    ordinal_authority: authority::RuntimeLifecycleOrdinalAuthority,
     registry: ConcreteLifecycleWorkRegistry,
 }
 impl ServeSchedulerFixture {
@@ -82,7 +83,10 @@ impl ServeSchedulerFixture {
             .expect("verified Certified-Serve scheduler context");
         let authority = authority::lifecycle_storage_owner_test_authority(&verified, 1, 4)
             .expect("bounded Certified-Serve scheduler authority");
-        let coordinator = LifecycleCoordinator::new_with_authority(authority, 0);
+        let mut coordinator = LifecycleCoordinator::new_with_authority(authority, 0);
+        let (ordinal_authority, coordinator_ordinal_authority) =
+            authority::lifecycle_ordinal_authorities_after_high_watermark(0);
+        coordinator.lifecycle_ordinal_authority = Some(coordinator_ordinal_authority);
         let directory =
             tempfile::TempDir::new().expect("temporary Certified-Serve scheduler payload store");
         let (payload_store, recovery) =
@@ -95,6 +99,7 @@ impl ServeSchedulerFixture {
             _directory: directory,
             payload_store,
             coordinator,
+            ordinal_authority,
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
     }
@@ -193,13 +198,17 @@ impl ServeSchedulerFixture {
         let (candidate, replay) = prepared.into_candidate_and_replay();
         let serve_key = candidate.key;
         let mut staged = self.coordinator.clone();
+        let (decision, ordinal_reservation) =
+            staged.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate));
         assert!(matches!(
-            staged.reduce_admit(AdmissionRequest::Candidate(candidate)),
+            decision,
             AdmissionDecision::Admitted {
                 producer_turn_ordinal: Some(_),
                 ..
             }
         ));
+        let ordinal_reservation =
+            ordinal_reservation.expect("fresh Certified-Serve pair reserves shared ordinals");
         let batch = PreparedCertifiedServeRegistryBatchV1::from_fresh_admitted_pair(
             &staged, serve_key, replay,
         )
@@ -211,7 +220,10 @@ impl ServeSchedulerFixture {
                 &self.verified,
                 &self.coordinator,
                 &staged,
-                || Ok::<(), ()>(()),
+                || {
+                    ordinal_reservation.mark_publication_started()?;
+                    ordinal_reservation.commit_after_durable_publication()
+                },
             );
         assert!(installed.is_ok(), "install exact Certified-Serve pair");
         self.coordinator = staged;
@@ -222,6 +234,33 @@ impl ServeSchedulerFixture {
         LifecycleLedgerV1::from_coordinator(&self.coordinator)
             .expect("project exact Certified-Serve scheduler LedgerV1")
     }
+}
+
+#[test]
+fn certified_serve_registry_accepts_adjacent_pair_after_runtime_ordinal_gap() {
+    let mut fixture = ServeSchedulerFixture::new(0x11);
+    assert_eq!(
+        fixture
+            .ordinal_authority
+            .reserve_range(3)
+            .expect("reserve runtime ordinal prefix"),
+        (Some(1), Some(4))
+    );
+    let request = fixture.admit(0, 0x12);
+    let serve = fixture
+        .coordinator
+        .records
+        .values()
+        .find(|record| {
+            fixture.coordinator.durable_records[&record.ordinal]
+                .replay_authority
+                .exactly_matches_certified_serve_request(&request)
+        })
+        .expect("find gapped Certified-Serve row");
+    let producer = fixture.coordinator.producer_debts[&serve.ordinal];
+    assert_eq!(serve.ordinal, 4);
+    assert_eq!(producer, 5);
+    assert_eq!(serve.ordinal.checked_add(1), Some(producer));
 }
 
 #[test]

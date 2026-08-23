@@ -817,6 +817,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_verified_height_context_recovered_output_auth.rs',
         'v2_adapter_equivocation_evidence.rs',
         'v2_ready_durable_validate_adapter_preview.rs',
+        'v2_recovered_lifecycle_sign_completion.rs',
         'v2_wire_registry_and_authentication.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
@@ -825,6 +826,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_adapter_main_04.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs': (
+        'v2_lifecycle_coordinator_state_helpers.rs',
         'tests/v2_lifecycle_coordinator_explorer_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs': (
@@ -855,11 +857,15 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lifecycle_replay_authority_fixtures.rs',
         'tests/v2_lifecycle_replay_authority_cases.rs',
     ),
+    'crates/iroha_core/src/sumeragi/v2_recovery.rs': (
+        'v2_recovery_tests.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs': (
         'v2_lifecycle_work_registry_validate_recovery_registry_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_parent.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs': (
+        'v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs',
         'v2_lifecycle_work_registry_validate_completion_impl.rs',
         'v2_lifecycle_work_registry_access_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_execution_impl.rs',
@@ -2402,7 +2408,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "c222912bd0fbfbb589269108834fa62252c4b61bed3ef4231b293b0b8b787719"
+        "902be400390561abf765799c869da64adb9ed53909fce4329734cfb60e04842b"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
@@ -3229,7 +3235,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
     ),
     "autonomous_lane_output_has_durable_reconstruction_source": (
-        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b"
+        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82"
     ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
@@ -3675,7 +3681,7 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
     "pending_loop": "520469f9f7c3a23d8915e5aa63e32c459bc8e7b069e796f527540b082741ba38",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "ordinary_active": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
     "pending_active": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "32e0bf9fb84c2f4ef83672eb6ee22ee14c0d89052cfcbb391cc10226730bb210"
@@ -3716,12 +3722,12 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "8a93a2ae69c84618d44942bcbf9013c47d219630e56d8e5288af9336354d29b2",
+    "ordinary:run_lifecycle_active_height": "3e029cae04b3604f15e565bc9945d43d01dcb6e0eba0a8bd9099dd59e3542b24",
     "pending:run_pending_active_height": "2c6ba74ed2d7a1893c41305aae5dd50a4722216320f5c403a70c2200ac407fb9",
     "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "c408b2d4fd7585818f327d89bc39f8c56f77119405ef9a357bb99017def17e3a",
+    "launch:ProductionLifecycleOwnerV1::launch": "1f889bb50a6c0fac71ef8ab4d5b76940d2932ea708422aba6d6343595ea2f980",
 }
 
 # Completion provenance remains separately sealed because the direct runtime
@@ -4320,7 +4326,7 @@ _PRODUCTION_RECOVERY_EAGER_BLOCK_SYNC_ITEM_SHA256 = {
 def _transport_geometry_refresh_resistant_errors(
     paths: dict[str, Path], sources: dict[str, str]
 ) -> list[str]:
-    """Check reviewed P2P/Taira semantics without formatting-sensitive seals."""
+    """Check reviewed P2P and production-Taira semantics without token seals."""
 
     errors: list[str] = []
     for role, item_name, required, description in (
@@ -4410,87 +4416,7 @@ self.validator_dial_scheduler.note_session_established(
                 paths[role], items[0], required, description, errors
             )
 
-    kagami_path = paths["kagami_profiles"]
-    kagami_source = sources["kagami_profiles"]
-    for declaration, description in (
-        (
-            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;",
-            "Kagami Taira encrypted-frame ceiling",
-        ),
-        (
-            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;",
-            "Kagami Taira block-sync frame ceiling",
-        ),
-        (
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;",
-            "Kagami Taira transaction-gossip frame ceiling",
-        ),
-    ):
-        _require_rust_source_token_sequence(
-            kagami_path, kagami_source, declaration, description, errors
-        )
-    render_items = rust_items(kagami_source, "render_peer_config_with_private_keys")
-    if len(render_items) != 1:
-        errors.append(
-            f"{kagami_path}: require exactly one Kagami "
-            "render_peer_config_with_private_keys item; "
-            f"found {len(render_items)}"
-        )
-    if len(render_items) == 1:
-        render_source = render_items[0].source
-        expected_branch = '''let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {
-        format!(
-            "\\nmax_frame_bytes = {TAIRA_MAX_FRAME_BYTES}\\n\\
-             max_frame_bytes_block_sync = {TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC}\\n\\
-             max_frame_bytes_tx_gossip = {TAIRA_MAX_FRAME_BYTES_TX_GOSSIP}"
-        )
-    } else {
-        String::new()
-    };'''
-        expected_installation = '''[network]
-address = "{network_address}"
-public_address = "{network_public_address}"{taira_network_frame_overrides}
-
-[torii]'''
-        if render_source.count(expected_branch) != 1:
-            errors.append(
-                f"{kagami_path}:{render_items[0].line}: Taira-only Kagami frame "
-                "override branch must render all three reviewed constants"
-            )
-        if (
-            render_source.count(expected_installation) != 1
-            or render_source.count(
-                "taira_network_frame_overrides = taira_network_frame_overrides,"
-            )
-            != 1
-        ):
-            errors.append(
-                f"{kagami_path}:{render_items[0].line}: Kagami peer config must "
-                "install the Taira frame overrides in the network table"
-            )
-
     config_contracts = (
-        (
-            "taira_default",
-            ("sumeragi", "block"),
-            (("max_transactions", 96), ("max_payload_bytes", 16_777_216),
-             ("proposal_queue_scan_multiplier", 4)),
-            "default Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
-        ),
-        (
-            "taira_default",
-            ("sumeragi", "queues"),
-            (("authenticated_non_validator_sources", 2), ("body_bytes", 311_427_072),
-             ("body_source_bytes", 34_603_008)),
-            "default seven-validator Taira profile pins H=2 and nine source partitions",
-        ),
-        (
-            "taira_default",
-            ("network",),
-            (("max_frame_bytes", 23_068_700), ("max_frame_bytes_block_sync", 23_068_672),
-             ("max_frame_bytes_tx_gossip", 13_631_488)),
-            "default Taira profile carries maximum privacy transaction and block-sync frames",
-        ),
         (
             "taira_config",
             ("sumeragi", "block"),
@@ -4514,7 +4440,7 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
         ),
     )
     parsed_configs: dict[str, dict[tuple[str, ...], list[int]]] = {}
-    for role in ("taira_default", "taira_config"):
+    for role in ("taira_config",):
         table: tuple[str, ...] = ()
         values: dict[tuple[str, ...], list[int]] = {}
         for line in sources[role].splitlines():
@@ -4544,7 +4470,6 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
 
     for role, description in (
         ("taira_genesis", "production Taira genesis DA pins the revision-4 protocol ceiling"),
-        ("taira_default_genesis", "default Taira genesis DA pins the revision-4 protocol ceiling"),
     ):
         try:
             genesis = json.loads(sources[role])

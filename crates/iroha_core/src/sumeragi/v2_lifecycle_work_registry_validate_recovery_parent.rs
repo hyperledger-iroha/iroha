@@ -841,7 +841,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             .project_store_validate_successor(&store_effect, &effect)
             .expect("remote-Proposal Store projects exact Validate binding");
         let replay_evidence = stored_replay
-            .project_exact_validate(&store_effect, &durable_receipt, &effect, &pending)
+            .project_exact_validate(&store_effect, &durable_receipt, &effect, &pending, None)
             .expect("remote-Proposal Store projects exact Validate replay evidence");
         let replay_evidence = DurableValidateReplayEvidenceV1::remote_proposal(replay_evidence);
         let projected = replay_evidence

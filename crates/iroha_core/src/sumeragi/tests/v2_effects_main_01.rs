@@ -736,19 +736,8 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     )
     .payload()
     .to_vec();
-    let ingress =
-        crate::sumeragi::FairV2Ingress::new(32, 5 * 512 * 1024, 512 * 1024, 0, 512 * 1024);
-    ingress
-        .configure_roster(
-            fixture
-                .context
-                .roster
-                .iter()
-                .map(|power| power.validator.clone()),
-        )
-        .expect("fixture roster fits the response ingress");
-    ingress.state.lock().leader_wire_context = Some((fixture.context.id(), fixture.context.height));
-    ingress.open().expect("open response ingress");
+    let (ingress, _leader_wire_directory) =
+        fixture.productive_response_ingress("capacity-response-lifecycle.wal");
     let response_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a),
     ));
@@ -764,11 +753,10 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, response_ordinal)
         .expect("the exact A response crosses authenticated selector capture");
-    let effect_a = task_a.adapter_effect();
-    let pending_a = task_a
-        .ownership()
-        .exact_pending_adapter_effect_binding(&effect_a)
-        .expect("A retains its exact ordinal-free Fetch binding");
+    let lifecycle_source = prepared
+        .certified_fetch_ready_authority_for_test()
+        .expect("A derives its exact Fetch wait source")
+        .6;
     let proofs = fixture
         .validator_keys
         .iter()
@@ -780,15 +768,13 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     let verified = VerifiedHeightContext::genesis(fixture.context.clone(), proofs)
         .expect("verified lifecycle owner context");
     let owner_directory = TempDir::new().expect("temporary lifecycle owner storage");
-    let (mut owner, lifecycle_ordinal, lifecycle_source) =
-        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::waiting_fetch_for_ingress_test(
+    let mut owner =
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::empty_ingress_owner_for_test(
             verified,
-            &prepared,
-            effect_a,
-            pending_a,
             &fixture.validator_keys[0],
             owner_directory.path(),
         );
+    let lifecycle_ordinal = 1;
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
@@ -855,17 +841,33 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
         });
     assert!(matches!(
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
-        (Some(LifecycleState::Ready), Some(1), None, false)
+        (Some(LifecycleState::Ready), Some(2), None, false)
     ));
     assert!(fixture.executor.pending_fetches.is_empty());
     assert!(fixture.executor.certified_work.is_empty());
     assert!(fixture.executor.outstanding_requests.is_empty());
     assert_eq!(ingress.len(), 0);
     let post_completion_status = fixture.executor.status();
-    assert_eq!(
-        post_completion_status.runtime_queues,
-        saturated_runtime_queues
-    );
+    for (after, before) in [
+        (
+            post_completion_status.runtime_queues.normal,
+            saturated_runtime_queues.normal,
+        ),
+        (
+            post_completion_status.runtime_queues.progress,
+            saturated_runtime_queues.progress,
+        ),
+        (
+            post_completion_status.runtime_queues.completion,
+            saturated_runtime_queues.completion,
+        ),
+    ] {
+        assert_eq!(
+            (after.depth, after.capacity, after.max_service_debt),
+            (before.depth, before.capacity, before.max_service_debt),
+        );
+        assert!(after.oldest_age >= before.oldest_age);
+    }
     assert_eq!(
         post_completion_status.queued_runtime_completions,
         saturated_queued_commands,

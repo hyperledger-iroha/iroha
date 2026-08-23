@@ -2,8 +2,8 @@
 """Stage and compare the complete checked-in Kagami Iroha 3 profile bundles.
 
 This proposed owner wrapper is intentionally narrower than ``cargo xtask
-kagami-profiles``.  It admits only the complete ``iroha3-dev`` and
-``iroha3-taira`` bundles, builds the exact current tools into a caller-owned
+kagami-profiles``.  It admits only the complete ``iroha3-dev`` bundle, builds
+the exact current tools into a caller-owned
 external Cargo target, always supplies the resulting Kagami binary explicitly,
 and publishes only by an atomic no-replace rename to an absent external root.
 
@@ -51,30 +51,6 @@ PROFILE_FILES: Mapping[str, tuple[str, ...]] = {
         "peer1.toml",
         "peer2.toml",
         "peer3.toml",
-        "verify.txt",
-    ),
-    "iroha3-taira": (
-        "README.md",
-        "config-peer-1.toml",
-        "config-peer-2.toml",
-        "config-peer-3.toml",
-        "config-peer-4.toml",
-        "config-peer-5.toml",
-        "config-peer-6.toml",
-        "config.toml",
-        "docker-compose.yml",
-        "genesis.expected_hash",
-        "genesis.json",
-        "genesis.public_key",
-        "genesis.signed.nrt",
-        "peer0.toml",
-        "peer1.toml",
-        "peer2.toml",
-        "peer3.toml",
-        "peer4.toml",
-        "peer5.toml",
-        "peer6.toml",
-        "sorafs_sites.json",
         "verify.txt",
     ),
 }

@@ -753,7 +753,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
         runtime.ready_validate_runtime_gate_is_open(true),
         "stable queued ingress is not an active Ready Validate mutation owner"
     );
-    let ready_identity = runtime
+    let ready_admission = runtime
         .enqueue_local_proposal_with_lifecycle_pending(
             tag,
             manifest.clone(),
@@ -763,6 +763,11 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
             ready_lifecycle_ordinal,
         )
         .expect("publish LocalProposalReady behind the unrelated FIFO incumbent");
+    assert!(matches!(
+        ready_admission,
+        LocalProposalReadyCommandAdmission::Admitted(_)
+    ));
+    let ready_identity = ready_admission.command_identity();
     assert!(ready_identity.exactly_matches_handoff(
         tag,
         &manifest,
@@ -855,6 +860,36 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
         *validate_pending.causal_lifecycle_key(),
     );
 
+    let retry_command = AdapterCommand::LocalProposalReady {
+        manifest: manifest.clone(),
+        durable_receipt: durable.clone(),
+        validated_receipt: validated.clone(),
+    };
+    assert_eq!(
+        runtime
+            .driver
+            .preflight_runtime_command_admission(tag, &retry_command),
+        RuntimeCommandAdmissionPreflight::CoalesceOwned {
+            causal_lifecycle_key: *validate_pending.causal_lifecycle_key(),
+            admission_ordinal: ready_lifecycle_ordinal,
+        },
+        "the completed producer retains an owned semantic-coalescence marker",
+    );
+    let retry = runtime
+        .enqueue_local_proposal_with_lifecycle_pending(
+            tag,
+            manifest.clone(),
+            durable.clone(),
+            validated.clone(),
+            &validate_pending,
+            ready_lifecycle_ordinal,
+        )
+        .expect("the exact completed LocalProposalReady owner coalesces");
+    assert_eq!(
+        retry,
+        LocalProposalReadyCommandAdmission::Coalesced(ready_identity),
+    );
+
     assert_eq!(runtime.ingress.commands.len(), 1);
     let incumbent_after_turn = runtime
         .ingress
@@ -885,6 +920,31 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
     assert_eq!(
         incumbent_after_turn.ingress_ownership.as_ref(),
         Some(&incumbent_ingress),
+    );
+    assert!(!runtime.fail_closed);
+    let foreign_ordinal = ready_lifecycle_ordinal
+        .checked_add(1)
+        .expect("test lifecycle ordinal has one foreign successor");
+    let foreign_retry = runtime
+        .enqueue_local_proposal_with_lifecycle_pending(
+            tag,
+            manifest,
+            durable,
+            validated,
+            &validate_pending,
+            foreign_ordinal,
+        )
+        .expect("a redundant completion never installs the foreign coordinator owner");
+    assert_eq!(
+        foreign_retry,
+        LocalProposalReadyCommandAdmission::Coalesced(ready_identity),
+    );
+    assert_eq!(runtime.ingress.commands.len(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0]
+            .lifecycle_owner()
+            .expect("unrelated incumbent remains owned"),
+        incumbent_owner,
     );
     assert!(!runtime.fail_closed);
 }

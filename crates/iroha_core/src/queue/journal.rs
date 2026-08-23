@@ -1285,7 +1285,6 @@ impl QueuePlanJournal {
     /// Returns malformed-key, duplicate, absent, mismatched, ABA, snapshot, capacity, compaction,
     /// append, or synchronization errors. Any ambiguous append or synchronization boundary
     /// poisons this open journal.
-    #[cfg(test)]
     pub fn remove_exact_global_admission_bindings_strict_durable(
         &mut self,
         keys: &[LaneQueueReservationKeyV2],

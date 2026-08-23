@@ -1,4 +1,13 @@
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Snapshot inert runtime ingress around lifecycle completion tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn runtime_queue_snapshot_for_test(
+        &self,
+        now: Instant,
+    ) -> RuntimeQueueSnapshot {
+        self.runtime.queue_snapshot(now)
+    }
+
     /// Execute one authenticated cold-open output without inventing runtime ownership.
     ///
     /// Proposal fanout is excluded because its active-view producer owner is

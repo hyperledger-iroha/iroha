@@ -962,7 +962,7 @@ fn resolve_deploy_chain_discriminant(
 }
 fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
     match chain.trim() {
-        "iroha3-taira" | "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
+        "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
         "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
         "00000000-0000-0000-0000-000000000000" => {
             Some(iroha_config::parameters::defaults::common::chain_discriminant())

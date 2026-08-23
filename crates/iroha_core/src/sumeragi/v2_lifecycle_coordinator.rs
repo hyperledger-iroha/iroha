@@ -40,6 +40,7 @@ mod ledger;
 mod open;
 #[path = "v2_lifecycle_projection.rs"]
 mod projection;
+pub(in crate::sumeragi) use coordinator_support::RecoveredPendingKuraApplyCarrierPermitV1;
 pub(in crate::sumeragi) use projection::reducer_fence_wait_source;
 /// Closed codec prerequisite for restart-authenticated lifecycle replay.
 #[path = "v2_lifecycle_replay_authority.rs"]
@@ -122,7 +123,7 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredLifecycleSignCompletionSelectionV1,
     ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
-    settle_one_recovered_lifecycle_output,
+    settle_applied_decision_apply_completion, settle_one_recovered_lifecycle_output,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
 pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
@@ -260,8 +261,6 @@ use schema::{
 use schema::{DurableContinuation, MAX_LIFECYCLE_RECORDS_PER_HEIGHT};
 #[cfg(test)]
 pub(crate) use schema::{NonCandidateEffect, RetryAction};
-#[cfg(test)]
-pub(crate) use selector::CertifiedFetchReadyPublicationError;
 #[allow(unused_imports, reason = "reviewed persistence selector namespace")]
 pub(crate) use selector::{
     CertifiedFetchBodyPersistenceCompletion, CertifiedFetchBodyPersistenceCompletionError,
@@ -275,6 +274,10 @@ pub(in crate::sumeragi) use selector::{
     RecoveredDecisionFetchBodyPersistenceCompletionV1, RecoveredDecisionFetchBodyPersistenceIdV1,
     RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
     RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
+};
+#[cfg(test)]
+pub(crate) use selector::{
+    CertifiedFetchReadyPublicationError, SelectedCertifiedBodyResponseOwnerV1,
 };
 pub(in crate::sumeragi) use validate_sidecar::{
     LifecycleValidateSidecarDriveV1, LifecycleValidateSidecarRegistrationIdentityV1,
@@ -296,7 +299,7 @@ pub(in crate::sumeragi) use wal_recovery::{
     RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::ClaimedCertifiedServeDispatchV1;
-pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
+pub(in crate::sumeragi) use work_registry::PreparedCertifiedFetchAdmissionV1;
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
 pub(in crate::sumeragi) use work_registry::{
@@ -304,9 +307,9 @@ pub(in crate::sumeragi) use work_registry::{
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
     RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
-    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionApplyRegistryProjectionPermit,
+    RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
+    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
@@ -373,8 +376,7 @@ pub(crate) struct LifecycleCoordinator {
 /// privately selects its storage-only or recovered-WAL repair branch. Before
 /// live planning, a second consuming launch transition must move the exact
 /// body store into the I/O worker and leave its instance seal in this owner.
-/// None of the adapter, coordinator, registry, or payload store can be
-/// detached, cloned, or separately installed through this API.
+/// No retained owner can be detached, cloned, or separately installed.
 #[must_use = "the production lifecycle owner must remain alive for its height"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ProductionLifecycleOwnerV1 {
@@ -569,17 +571,17 @@ impl LifecycleCoordinator {
         AdmissionDecision,
         Option<DurableLifecycleOrdinalReservation>,
     ) {
-        let Some(authority) = self.lifecycle_ordinal_authority.clone() else {
-            self.fault = Some(CoordinatorFault::DurabilityFailure);
-            return (
-                AdmissionDecision::FailClosed(CoordinatorFault::DurabilityFailure),
-                None,
-            );
-        };
         let mut reservation = None;
+        let authority = self.lifecycle_ordinal_authority.clone();
+        #[cfg(test)]
+        let authority = authority.or_else(|| {
+            Some(authority::lifecycle_ordinal_authorities_after_high_watermark(self.high_water).1)
+        });
         let decision =
             self.reduce_admit_with_ordinal_allocator(request, |high_water, count| match authority
-                .begin_durable_range(high_water, count)
+                .as_ref()
+                .ok_or(DurableLifecycleOrdinalReservationError::Invariant)
+                .and_then(|authority| authority.begin_durable_range(high_water, count))
             {
                 Ok(pending) => {
                     let range = (pending.first(), pending.last());
@@ -597,6 +599,49 @@ impl LifecycleCoordinator {
             self.fault = Some(fault);
         }
         (decision, reservation)
+    }
+
+    /// Reserve one unpublished coordinator range without reducing a candidate.
+    fn begin_durable_ordinal_range(
+        &self,
+        count: usize,
+    ) -> Result<DurableLifecycleOrdinalReservation, DurableLifecycleOrdinalReservationError> {
+        if let Some(authority) = self.lifecycle_ordinal_authority.as_ref() {
+            return authority.begin_durable_range(self.high_water, count);
+        }
+        #[cfg(test)]
+        {
+            return authority::lifecycle_ordinal_authorities_after_high_watermark(self.high_water)
+                .1
+                .begin_durable_range(self.high_water, count);
+        }
+        #[cfg(not(test))]
+        Err(DurableLifecycleOrdinalReservationError::Invariant)
+    }
+
+    /// Reduce one candidate into an already fenced exact subrange.
+    fn reduce_admit_with_reserved_durable_ordinals(
+        &mut self,
+        request: AdmissionRequest,
+        first: u128,
+        last: u128,
+    ) -> AdmissionDecision {
+        let decision = self.reduce_admit_with_ordinal_allocator(request, |high_water, count| {
+            let span = last
+                .checked_sub(first)
+                .and_then(|distance| distance.checked_add(1))
+                .and_then(|span| usize::try_from(span).ok());
+            if first <= high_water || span != Some(count) {
+                return Err(AdmissionDecision::FailClosed(
+                    CoordinatorFault::DurabilityFailure,
+                ));
+            }
+            Ok((first, last))
+        });
+        if let AdmissionDecision::FailClosed(fault) = decision {
+            self.fault = Some(fault);
+        }
+        decision
     }
     fn reduce_admit_with_ordinal_allocator(
         &mut self,
@@ -1445,182 +1490,8 @@ impl LifecycleCoordinator {
         self.make_ready(ordinal);
         Ok(())
     }
-    fn advance_observed_generation(&mut self, source: WaitSource, generation: u64) {
-        debug_assert!(matches!(
-            source,
-            WaitSource::External(_) | WaitSource::Recovery(_)
-        ));
-        let known = self.observed_generation.entry(source).or_default();
-        *known = (*known).max(generation);
-        let known = *known;
-        let stale: Vec<_> = self
-            .records
-            .iter()
-            .filter_map(|(ordinal, record)| match record.state {
-                LifecycleState::Waiting(wait)
-                    if wait.source == source && wait.observed_generation < known =>
-                {
-                    Some(*ordinal)
-                }
-                LifecycleState::Waiting(_)
-                | LifecycleState::Ready
-                | LifecycleState::Claimed(_)
-                | LifecycleState::Terminal(_) => None,
-            })
-            .collect();
-        for ordinal in stale {
-            self.make_ready(ordinal);
-        }
-    }
-    fn first_capacity_wait(&self, delta: &BTreeMap<CapacityClass, usize>) -> Option<WaitToken> {
-        let mut effective_used = self.capacity_used.clone();
-        if let Some(reservation) = self
-            .active_lease
-            .as_ref()
-            .and_then(TurnLease::output_reservation)
-        {
-            let used = effective_used.entry(reservation.class()).or_default();
-            *used = used.checked_add(1).unwrap_or(usize::MAX);
-        }
-        first_capacity_wait(
-            &effective_used,
-            &self.capacity_geometry,
-            &self.capacity_generation,
-            delta,
-        )
-    }
-    fn apply_capacity_delta(&mut self, delta: &BTreeMap<CapacityClass, usize>) {
-        for (class, added) in delta {
-            *self.capacity_used.entry(*class).or_default() += added;
-        }
-    }
-    fn release_capacity(&mut self, class: CapacityClass) -> Result<(), CoordinatorFault> {
-        let used = self.capacity_used.entry(class).or_default();
-        *used = used
-            .checked_sub(1)
-            .ok_or(CoordinatorFault::CapacityAccounting)?;
-        let generation = self.capacity_generation.entry(class).or_default();
-        *generation = generation
-            .checked_add(1)
-            .ok_or(CoordinatorFault::CapacityAccounting)?;
-        Ok(())
-    }
-    fn insert_record(&mut self, record: LifecycleRecord) {
-        let ordinal = record.ordinal;
-        let key = record.key;
-        if record.state == LifecycleState::Ready {
-            self.ready_index.insert(ordinal);
-        }
-        self.key_index.insert(key, ordinal);
-        self.records.insert(ordinal, record);
-    }
-    fn make_ready(&mut self, ordinal: u128) {
-        let record = self
-            .records
-            .get_mut(&ordinal)
-            .expect("readiness publication names an existing record");
-        if !matches!(record.state, LifecycleState::Terminal(_)) {
-            record.state = LifecycleState::Ready;
-            self.ready_index.insert(ordinal);
-        }
-    }
-    fn replace_physical(
-        &mut self,
-        ordinal: u128,
-        replacement: PhysicalReplacement,
-    ) -> Result<(), CoordinatorFault> {
-        if replacement.existing_slot != replacement.replacement.id {
-            return Err(CoordinatorFault::InvalidPhysicalTransition);
-        }
-        let record = self
-            .records
-            .get_mut(&ordinal)
-            .ok_or(CoordinatorFault::InvalidPhysicalTransition)?;
-        if !record
-            .physical_slots
-            .contains_key(&replacement.existing_slot)
-        {
-            return Err(CoordinatorFault::InvalidPhysicalTransition);
-        }
-        if record.physical_slots.iter().any(|(slot, digest)| {
-            *slot != replacement.existing_slot && *digest == replacement.replacement.digest
-        }) {
-            record.physical_slots.remove(&replacement.existing_slot);
-        } else {
-            record
-                .physical_slots
-                .insert(replacement.existing_slot, replacement.replacement.digest);
-        }
-        Ok(())
-    }
-    fn frozen_predecessors(&self, scope: PredecessorScope, ordinal: u128) -> BTreeSet<u128> {
-        frozen_predecessors(&self.records, scope, ordinal)
-    }
-    fn ready_entry_is_eligible(&self, ordinal: u128, selectable_ready: &BTreeSet<u128>) -> bool {
-        let record = self
-            .records
-            .get(&ordinal)
-            .expect("ready index is bijective with lifecycle records");
-        if record
-            .episode
-            .frozen_predecessors
-            .iter()
-            .any(|predecessor| selectable_ready.contains(predecessor))
-        {
-            return false;
-        }
-        !selectable_ready.iter().any(|candidate| {
-            *candidate < ordinal
-                && self.records.get(candidate).is_some_and(|record| {
-                    record.stage.predecessor_scope == PredecessorScope::ProducerHandoffBarrier
-                })
-        })
-    }
-    fn finish_replenishment(
-        &mut self,
-        ordinal: u128,
-        slot: PhysicalSlot,
-    ) -> Result<(), CoordinatorFault> {
-        let record = self
-            .records
-            .get_mut(&ordinal)
-            .ok_or(CoordinatorFault::InvalidPhysicalTransition)?;
-        if !record.episode.slot_universe.contains(&slot.id)
-            || !record.episode.consumed_slots.insert(slot.id)
-        {
-            return Err(CoordinatorFault::InvalidPhysicalTransition);
-        }
-        if !record
-            .physical_slots
-            .values()
-            .any(|digest| *digest == slot.digest)
-        {
-            record.physical_slots.insert(slot.id, slot.digest);
-        }
-        record.state = LifecycleState::Ready;
-        self.ready_index.insert(ordinal);
-        Ok(())
-    }
-    fn supersede_lower_enter_views(
-        &mut self,
-        installed: LifecycleKey,
-    ) -> Result<(), CoordinatorFault> {
-        for ordinal in lower_enter_view_ordinals(&self.records, installed) {
-            self.finish_terminal(ordinal, TerminalOutcome::Cancelled)?;
-        }
-        self.retire_lower_enter_view_admission_waits(installed);
-        Ok(())
-    }
-    fn retire_lower_enter_view_admission_waits(&mut self, installed: LifecycleKey) {
-        self.admission_waits.retain(|_, waiting| {
-            let candidate = &waiting.candidate;
-            candidate.work_class != LifecycleWorkClass::EnterView
-                || candidate.key.context != installed.context
-                || candidate.key.round.height != installed.round.height
-                || candidate.key.round.view >= installed.round.view
-        });
-    }
 }
+include!("v2_lifecycle_coordinator_state_helpers.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2281,6 +2152,28 @@ mod tests {
             .state = LifecycleState::Waiting(wait);
         coordinator.advance_observed_generation(wait.source, wait.observed_generation);
         admitted
+    }
+
+    #[test]
+    fn replay_exactness_accepts_only_initial_external_generation_zero_fetch_wait() {
+        let source = WaitSource::External(digest(0xE0));
+        let mut fetch = candidate(
+            0xE1,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Waiting(WaitToken::new(source, 0)),
+            PredecessorScope::Independent,
+        );
+        assert!(fetch.replay_authority_is_exact(context()));
+
+        fetch.initial_state = InitialLifecycleState::Waiting(WaitToken::new(source, 1));
+        assert!(!fetch.replay_authority_is_exact(context()));
+        fetch.initial_state =
+            InitialLifecycleState::Waiting(WaitToken::new(WaitSource::Recovery(digest(0xE2)), 0));
+        assert!(!fetch.replay_authority_is_exact(context()));
+        fetch.initial_state =
+            InitialLifecycleState::Waiting(WaitToken::new(WaitSource::External(digest(0xE3)), 0));
+        assert!(fetch.replay_authority_is_exact(context()));
     }
     fn execute(plan: TurnPlan) -> TurnLease {
         let TurnPlan::Execute(lease) = plan else {

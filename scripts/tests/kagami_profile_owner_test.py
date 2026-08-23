@@ -59,21 +59,6 @@ DEV_FILES = {
     "peer3.toml",
     "verify.txt",
 }
-TAIRA_FILES = {
-    "README.md",
-    *(f"config-peer-{index}.toml" for index in range(1, 7)),
-    "config.toml",
-    "docker-compose.yml",
-    "genesis.expected_hash",
-    "genesis.json",
-    "genesis.public_key",
-    "genesis.signed.nrt",
-    *(f"peer{index}.toml" for index in range(7)),
-    "sorafs_sites.json",
-    "verify.txt",
-}
-
-
 def _write_dummy_stage(root: Path, profile: str) -> None:
     for relative in MODULE._expected_paths(profile):
         path = root / relative
@@ -100,18 +85,15 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
 
 
 def test_profile_allowlist_and_closed_inventories_match_present_bundles() -> None:
-    assert set(MODULE.PROFILE_FILES) == {"iroha3-dev", "iroha3-taira"}
+    assert set(MODULE.PROFILE_FILES) == {"iroha3-dev"}
     assert set(MODULE.PROFILE_FILES["iroha3-dev"]) == DEV_FILES
-    assert set(MODULE.PROFILE_FILES["iroha3-taira"]) == TAIRA_FILES
     assert len(DEV_FILES) == 15
-    assert len(TAIRA_FILES) == 22
-    for profile, expected in (("iroha3-dev", DEV_FILES), ("iroha3-taira", TAIRA_FILES)):
-        present = {
-            path.name
-            for path in (REPO_ROOT / "defaults" / "kagami" / profile).iterdir()
-            if path.is_file()
-        }
-        assert present == expected
+    present = {
+        path.name
+        for path in (REPO_ROOT / "defaults" / "kagami" / "iroha3-dev").iterdir()
+        if path.is_file()
+    }
+    assert present == DEV_FILES
 
 
 def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
@@ -227,9 +209,9 @@ def test_atomic_directory_publish_never_replaces_existing_destination(tmp_path: 
     assert (destination / "sentinel").read_bytes() == b"first"
 
 
-def test_cli_rejects_nexus_all_and_ambiguous_modes(tmp_path: Path) -> None:
+def test_cli_rejects_public_profiles_all_and_ambiguous_modes(tmp_path: Path) -> None:
     tail = _valid_cli_tail(tmp_path)
-    for profile in ("iroha3-nexus", "all"):
+    for profile in ("iroha3-taira", "iroha3-nexus", "all"):
         with pytest.raises(SystemExit):
             MODULE._parse_args(["--write", "--profile", profile, "--output-root", str(tmp_path / "out"), *tail])
     with pytest.raises(SystemExit):
@@ -246,7 +228,7 @@ def test_cli_rejects_nexus_all_and_ambiguous_modes(tmp_path: Path) -> None:
         )
 
 
-def test_post_manifest_has_two_disjoint_owners_and_no_nexus_registration() -> None:
+def test_post_manifest_has_only_the_dev_profile_owner() -> None:
     if POST_MANIFEST.exists():
         manifest_text = POST_MANIFEST.read_text(encoding="utf-8")
     else:
@@ -256,21 +238,12 @@ def test_post_manifest_has_two_disjoint_owners_and_no_nexus_registration() -> No
     owners = {
         entry["name"]: entry
         for entry in manifest["generated"]
-        if entry["name"] in {
-            "kagami-iroha3-dev-profile-bundle",
-            "kagami-iroha3-taira-profile-bundle",
-        }
+        if entry["name"] == "kagami-iroha3-dev-profile-bundle"
     }
-    assert set(owners) == {
-        "kagami-iroha3-dev-profile-bundle",
-        "kagami-iroha3-taira-profile-bundle",
-    }
+    assert set(owners) == {"kagami-iroha3-dev-profile-bundle"}
     dev = set(owners["kagami-iroha3-dev-profile-bundle"]["outputs"])
-    taira = set(owners["kagami-iroha3-taira-profile-bundle"]["outputs"])
     assert len(dev) == 15
-    assert len(taira) == 22
-    assert dev.isdisjoint(taira)
-    assert all("iroha3-nexus" not in output for output in dev | taira)
+    assert all("iroha3-taira" not in output and "iroha3-nexus" not in output for output in dev)
     for owner in owners.values():
         assert "Cargo.lock" in owner["inputs"]
         assert "kagami_profile_owner.py" in owner["generator"]

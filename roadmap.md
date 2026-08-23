@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -242,10 +242,11 @@ profiles are not operator release receipts.
 
 Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
-not add release gates. Guarded formatting, explicit production `iroha_core`
-library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
-regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
-profile-config admission, and public consensus wire roundtrips are complete.
+not add release gates. Previously recorded guarded formatting, production
+`iroha_core` library compilation, profile-tool compilation, Swarm/Kagami
+prepared-bundle regressions and regeneration, exact profile-config admission,
+and public consensus wire roundtrips are implementation checkpoints, not fresh
+receipts for the current source candidate.
 The five checked-in OpenAPI artifacts remain stale and require deterministic
 regeneration from a clean exact candidate; the dirty development checkout
 without the required release-authorized SSH signature is not release
@@ -255,22 +256,36 @@ The production Validate/replay cut itself is no longer outstanding. One
 mandatory binding carries exactly the five `LiveWal`, `LocalBody`,
 `RemoteProposal`, `InvalidBodyReport`, and `DirectSigned` origins through all
 nine Ready outcomes. Same-row sidecar wait/wake and cold reopen, standalone
-local/remote Validate reopen, and cold Broadcast/equivocation/invalid-report
-output recovery are wired. Those three non-WAL output classes contribute an
-authenticated owner-held Ready-ordinal set to the exact registry census at open
-and launch; every carrier, private map key, ordinal, owner, and Ready row must
-match, and recovered-WAL carriers may not overlap that set. Their closed
-`Empty`/`Deferred`/`SourceRetained`/`Completed` settlement keeps
-`SourceRetained` distinct from ordering or lease deferral: it preserves the
-same row and carrier, returns before terminal staging, bypasses generic
-Completion classification, and schedules a timed retry before Producer
-planning. Only service acceptance may terminalize the row. The dormant generic
-WAL and legacy storage-recovery surfaces are removed. The source-contract
-harness covers all 46 named cases, with exactly four sealed and three pending
-live-WAL mint sites plus one active storage factory and one call site. Fresh
-focused, Core, static, formal, and workspace receipts plus the strict network
-evidence below remain release gates, not implementation joins. `Cargo.lock` is
-unchanged.
+local/remote Validate reopen, cold Broadcast/equivocation/invalid-report output
+recovery, and closed `Empty`/`Deferred`/`SourceRetained`/`Completed` settlement
+are wired. Runtime ingress and every durable LedgerV1 successor now share one
+actor-global ordinal authority: a durable range is reserved before staging,
+committed only after exact fsync, recyclable only before I/O, and fail-closed
+after an ambiguous publication-started failure. Explicit Serve/Producer and
+Broadcast/next-Sign pairs remain locally adjacent without assuming global
+`high_water + 1`. Ordinary certified-Fetch completion obtains its leader-wire
+runtime receipt only from the exact checked dequeue and terminalizes that body
+after every registry, coordinator, executor, service, and worker
+acknowledgement. Superseded generic WAL, storage-recovery, dedicated parked-
+completion, and coordinator-to-runtime ordinal adoption surfaces are absent.
+
+Focused mutable-tree evidence is recorded in `status.md`: the dedicated
+durable-Validate suite is 5/5, the Verus inventory is 29/29, and the exact
+final-source enlarged-stack coordinator aggregate is 462/462. The production
+nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
+corridors, exact `iroha_core` test-target compile, reviewed include closure,
+and legacy-codec guard are green. The source-budget scan has no Sumeragi
+overage and retains 19 unrelated or pre-existing workspace findings; all five
+split roots were ratcheted down without allowance increases. The include
+manifest is green at 59 parents, 376 entries, zero canonical errors, and zero
+validation errors. The exact proof-ledger checker has only the separately
+recorded task-start Cargo.lock mismatch outstanding. Still outstanding are
+strict four-validator, current-source release, and broader workspace/Clippy
+evidence. `Cargo.lock` changed concurrently
+from task-start SHA-256 `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`
+to `c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b`;
+the Sumeragi task did not edit it, but no byte-identity or old-lock validation
+claim applies to the current candidate.
 
 The outstanding revision-4 work includes:
 
@@ -279,8 +294,9 @@ The outstanding revision-4 work includes:
   preflight that rehydrates late canonical ownership, services historical
   dependencies, and requires every winning certificate plus its application
   witness to be durable before rollover authority or successor activation.
-  There is no incomplete-session successor branch. Run the focused Rust and
-  four-validator loss/hold/heal corridors against this exact source seal.
+  There is no incomplete-session successor branch. Run the remaining focused
+  Rust and four-validator loss/hold/heal corridors against this exact source
+  seal.
 - Run a fresh strict source-bound TLAPS wave over the exact-cardinality change
   closure. The TLA model now preserves `DualQuorum` as mathematical
   `>= 2f + 1` count-and-power sufficiency, separately validates exact wire
@@ -621,10 +637,10 @@ The outstanding revision-4 work includes:
   retries on their immutable owner, reject owner replacement before refinement,
   and retain only the separately typed monotone Fetch/Store/Validate authority
   lineage.
-- Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
-  and daemon test-harness compilation failures, and extend the host guard
-  allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
-  run the remaining focused and workspace tests, strict Clippy, codec checks,
+- Preserve the clean final-source 462/462 enlarged-stack coordinator and exact
+  `iroha_core` compile receipts while closing release evidence. Resolve or
+  explicitly scope the 19 unrelated/pre-existing source-budget findings before
+  release evidence is sealed. Run the remaining workspace tests, strict Clippy,
   and the revision-4 formal syntax, invariant, and mutation corridor. Focused
   consensus validation must include pre-Decision cache rejection,
   disjoint-roster historical lane signing/recovery, exact-predecessor sidecar
@@ -1053,14 +1069,14 @@ fresh-read contract; their focused Python and production-readiness contract
 tests pass.
 The validator-only, prepared-bundle Compose redesign passes its focused
 `iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
-regressions. The zero-chain genesis, three generated Compose manifests, and
-dev/Taira profile bundles are refreshed and deterministic. Taira generation
-now pins all three reviewed network frame caps, chain discriminant `369`, and
-the canonical fee, stake, slash, and gas protocol accounts; all 18 tracked
-Taira bundle outputs were regenerated together. Exact generated profile
-configs also pass runtime admission. This development-tree regeneration is not
-a live Taira rollout or release receipt. Daemon config-digest execution remains
-blocked by the unrelated Bootle-Lantern lib-test compile error.
+regressions. The zero-chain genesis, two generated Compose manifests, and
+dev/Nexus profile bundles are refreshed and deterministic. Taira has no
+checked-in generated bundle: disposable four-validator output is created only
+under the marked `dist/taira-devnet/` directory by `scripts/taira_devnet.py`.
+Exact generated profile configs also pass runtime admission. This
+development-tree regeneration is not a live Taira rollout or release receipt.
+Daemon config-digest execution remains blocked by the unrelated Bootle-Lantern
+lib-test compile error.
 
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
@@ -1243,9 +1259,9 @@ accounting, crash-window, Native-retention, and B/A/B recreation tests. Earlier
 same-day isolated slices passed 18 Kura replica tests and four configuration
 tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
-green at that checkpoint. No Cargo result against the current split source is
-claimed, and this historical focused evidence does not replace the complete
-release gates.
+green at that checkpoint. That historical checkpoint did not include a Cargo
+result against its split source; newer receipts above supersede it, without
+replacing the complete release gates.
 
 The static release inventory contract now enumerates `864/864` production tests
 across 43 modules and `522/522` focused `G-UNIT` entries. Its canonical 523-line
@@ -1281,13 +1297,17 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 58 parents and 372
-direct entries; its canonical payload SHA-256 is
-`2473d6bdd7ace178461e9997a36168396e8034238d054b81955d9639c4872cb8`.
+source check. The current reviewed Rust include manifest expects 59 parents and
+376 direct entries with canonical payload SHA-256
+`06dffacf4bc23172c71a76fa7e4a21bd0c953a8a7cfe9b5d0345013a33037c32`;
+its fresh current-tree rerun has `canonical_errors=0` and
+`validation_errors=0`.
 The release-inventory contract is statically reconciled at 84/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
-checker and static Apalache-runner contract remain under current-source
-validation. The fixed QueuePlan admission-registry TLC run currently exhausts
+checker discharges its current Rust/model/mutation/source obligations except
+for the separately recorded task-start `Cargo.lock` mismatch; the static
+Apalache-runner contract remains under current-source validation. The fixed
+QueuePlan admission-registry TLC run currently exhausts
 15,525 generated / 1,520 distinct states at depth 16, and each of its ten
 dedicated mutants reaches the exact named counterexample. No current Apalache
 or broader TLC-suite engine run is claimed. The newly bound non-retireable lane transport
@@ -5040,8 +5060,7 @@ excluded from the first release.
 		  Python and shell operator/support scripts under `scripts/` by content,
 		  explicitly sweeps SoraFS-adjacent CI gates for the Norito bridge header,
 		  docs portal, AGENTS dependency/privacy guardrails, and SoraNet/SoraFS
-		  auth guard, explicitly covers the Taira SoraFS rollout smoke and mock
-		  test shell entry points, self-audits that configured scan roots/files still exist,
+		  auth guard, self-audits that configured scan roots/files still exist,
 		  and now inventories tracked active-marker lines that explicitly mention
 		  SoraFS so only the contract test's negative controls may retain those
 		  literals. The tracked `todo_list.txt` inventory now has stale closed

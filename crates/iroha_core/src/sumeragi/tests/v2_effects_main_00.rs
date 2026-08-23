@@ -1,6 +1,6 @@
 use super::*;
 use crate::sumeragi::{
-    InboundBlockMessage,
+    FairV2Ingress, InboundBlockMessage,
     message::BlockMessage,
     v2::{
         AdapterEquivocationEvidence, AdapterError, AdapterFingerprints,
@@ -117,6 +117,7 @@ struct FakeRuntime {
     completions: Vec<RuntimeCompletion>,
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
+    durable_body_authority_certificate: Option<wire::QuorumCertificate>,
     decision_on_next_step: Option<DurableDecision>,
     round_tag: Option<EventTag>,
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
@@ -465,6 +466,11 @@ impl EffectRuntime for FakeRuntime {
     }
     fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
         Ok(self.decided_body)
+    }
+    fn durable_body_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(self.durable_body_authority_certificate.clone())
     }
     fn reserve_body_available(
         &mut self,
@@ -1527,6 +1533,76 @@ impl ProductionTransportFixture {
             _lifecycle_ordinals: lifecycle_ordinals,
             executor,
         }
+    }
+    fn productive_response_ingress(&self, filename: &str) -> (FairV2Ingress, TempDir) {
+        let roster = self
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        );
+        ingress
+            .configure_roster_for_context(
+                roster.clone(),
+                &self.context.network_id,
+                self.context.da_layout,
+            )
+            .expect("configure productive certified-response ingress");
+        ingress.require_leader_wire_lifecycle_gate();
+        let directory = TempDir::new().expect("temporary certified-response leader-wire store");
+        let owner = [0xE8; 32];
+        let capacity = crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            self.context.da_layout.max_chunk_count,
+        )
+        .expect("derive certified-response leader-wire capacity");
+        let recovery_authority = crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            self.context.id(),
+            self.context.height,
+            owner,
+            0,
+            false,
+        );
+        let (gate, restore) =
+            crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &directory.path().join(filename),
+                self.context.id(),
+                self.context.height,
+                owner,
+                roster.into_iter().collect(),
+                capacity,
+                self.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open certified-response leader-wire gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                gate,
+                restore,
+                self._lifecycle_ordinals.clone(),
+                self.context.id(),
+                self.context.height,
+            )
+            .expect("bind certified-response leader-wire gate");
+        ingress
+            .open()
+            .expect("open productive certified-response ingress");
+        (ingress, directory)
     }
     fn quorum_certificate(
         &self,

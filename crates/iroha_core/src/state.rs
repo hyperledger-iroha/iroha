@@ -342,6 +342,8 @@ mod tiered;
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
 pub(crate) use da_hydration::DaIndexHydrationError;
+#[cfg(test)]
+pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {

@@ -48,7 +48,7 @@ use super::{
         DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
         EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
         PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
-        V2EffectExecutor, V2EffectServices,
+        PreparedRecoveredDecisionApplyExecutorDispatchV1, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
         DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
@@ -2009,6 +2009,7 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
     pub(in crate::sumeragi) fn commit(
         mut self,
         prepared: PreparedRecoveredDecisionApplyDispatch<'_>,
+        executor_dispatch: PreparedRecoveredDecisionApplyExecutorDispatchV1<'_>,
     ) {
         assert!(
             self.preflight(&prepared),
@@ -2043,6 +2044,7 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
         state
             .commands
             .push_back(V2IoCommand::RecoveredDecisionApply(task));
+        executor_dispatch.commit_after_worker_dispatch();
         drop(state);
         self.queue.ready.notify_all();
         operation.complete();
@@ -2190,6 +2192,8 @@ pub(in crate::sumeragi) enum RecoveredCompletionCapacityProbeV1 {
         ordinal: u128,
         /// Closed worker dispatch key retained by the registry attestation.
         key: RecoveredDecisionApplyDispatchKeyV1,
+        /// Exact executor quiescence observed before the service queue is frozen.
+        executor_available: bool,
     },
     /// One recovered lifecycle Sign bound to its dedicated worker key.
     Sign {

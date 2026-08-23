@@ -354,7 +354,7 @@ Generate a genesis configuration and standard-output in JSON format
     Sora Nexus main network
 
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id (overrides profile default)
-* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus` when NPoS is selected; ignored for permissioned manifests
+* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for the public `iroha3-taira`/`iroha3-nexus` profiles
 * `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries

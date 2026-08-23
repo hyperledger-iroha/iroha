@@ -443,11 +443,15 @@ request-fenced physical occurrence independently of claimed-family authority.
 Every response which passes exact read-only authentication first remains in the
 physical-ordinal census; candidates are grouped by exact signed-request hash,
 and only the unique lowest physical ordinal in each family receives the
-claimed-family verdict. Non-winning retransmissions remain census members and
-may still own request-fence priority. An occurrence holding both authorities is
-counted once because selector debt is the checked cardinality of their concrete
-ordinal set union; an empty complete set is exactly zero. Remote-invalid
-response carriers may retain request-fenced physical priority; inconsistent
+claimed-family verdict. Request-fence authority belongs only to occurrences
+which can drain through the ordinary, Serve, or leader-wire gate. A later
+same-family retransmission fenced by the productive leader-wire token remains a
+census member but is non-drainable and therefore owns no request-fence
+priority. The family winner is the sole physical owner; when that occurrence
+holds both authorities it is counted once because selector debt is the checked
+cardinality of their concrete ordinal set union. An empty complete set is
+exactly zero. Remote-invalid response carriers may retain request-fenced
+physical priority only while their gate makes them drainable; inconsistent
 local indexes fail closed.
 
 The returned `PreparedLifecycleIngressSelector` is opaque, move-only, and
@@ -582,6 +586,14 @@ and execution commitment; an ordinary Fetch without explicit certificate
 commitment authority cannot use this path. The binding's authenticated causal
 lifecycle hash supplies the only causal root.
 
+A certificate-backed Fetch may accept generic authenticated payload chunks only
+while the exact `RemoteProposal` replay stage still owns that same Fetch work
+identifier. A certificate-only Fetch has no signed-Proposal replay owner, so
+its chunk path returns `WrongFetchKind` without consuming the request or
+changing body ownership; only the authenticated `CertifiedBodyResponse` path
+may mint its body-frame replay authority. Any conflicting retained Proposal
+stage fails closed before chunk service mutation.
+
 The exact signed-request hash also feeds one shared
 `iroha:sumeragi:v2:lifecycle:certified-fetch-wait-source:v1` derivation. A
 response authenticates that external source, not a caller-selected generation:
@@ -650,11 +662,18 @@ persistence call itself is the status cut: any error from it is restart-only,
 because atomic replacement may already have crossed rename or fsync. A
 successful return is followed by the fresh witness's checked queue CAS. A CAS
 error retains that exact witness and completion in a restart-only result. Exact
-success enters an assertion-only tail: install the closed durable completion at
-the same registry address, publish the staged coordinator, commit the executor
-response claim and retire its Fetch/body-pipeline owners, remove the exact
-service owner under the held output permit, release the indexed command
-descriptor, and disarm the fail-stop operation. There is no runtime
+success must return a dequeued owner carrying the exact leader-wire runtime
+receipt installed by that CAS; before dequeue the selected queued owner must
+instead carry its productive leader-wire token and no runtime receipt. The
+assertion-only tail installs the closed durable completion at the same registry
+address, publishes the staged coordinator, commits the executor response claim
+and retires its Fetch/body-pipeline owners, removes the exact service owner
+under the held output permit, and releases the indexed command descriptor.
+Only after those registry, coordinator, executor, service, and work
+acknowledgements does it terminalize the leader-wire durable body with the exact
+dequeue receipt and disarm the fail-stop operation. The receipt is neither
+fabricated nor omitted; any post-durability or post-dequeue failure is
+restart-only. There is no runtime
 `BodyAvailable` reservation, compatibility ordinal, raw-parts API, or
 post-dequeue retry path.
 
@@ -809,6 +828,17 @@ open authenticates the terminal Fetch and live Store rows against the exact
 body frame, replays `BodyAvailable` into the adapter, and requires the emitted
 Store effect to equal the ledger child before exposing it. The direct path is
 therefore live without weakening the power-loss contract.
+
+Lifecycle ordinals come from one actor-global authority shared by runtime
+ingress and LedgerV1. A durable transition reserves its exact ordinal range
+before staging, binds every concrete child to the staged ordinal, and marks the
+reservation publication-started before the first potentially durable write.
+Only the exact successful fsync commits that authority. A pre-I/O abort may
+recycle the reservation; an ambiguous failure after publication starts faults
+the coordinator and requires restart. Adjacency is therefore a local invariant
+of explicitly paired children, such as fresh Serve-to-Producer or recovered
+Broadcast-to-next-Sign. It never means global `high_water + 1`, because runtime
+owners may occupy intervening ordinals.
 
 The next direct seam advances that durable Store row to `ValidateBody` without
 reviving a parallel completion scheduler. Its sealed pending binding projects
