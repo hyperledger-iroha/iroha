@@ -252,12 +252,12 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
     assert.notEqual(lockChanged.sourceTreeSha256, base.sourceTreeSha256);
     writeFileSync(lockPath, "version = 4\n");
 
-    chmodSync(trackedPath, 0o755);
-    const modeChanged = readNativeBuildSourceState(repoRoot);
-    assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
-    chmodSync(trackedPath, 0o644);
-
     if (process.platform !== "win32") {
+      chmodSync(trackedPath, 0o755);
+      const modeChanged = readNativeBuildSourceState(repoRoot);
+      assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
+      chmodSync(trackedPath, 0o644);
+
       symlinkSync("tracked.txt", linkPath);
       const linkA = readNativeBuildSourceState(repoRoot);
       unlinkSync(linkPath);
