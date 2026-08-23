@@ -2279,6 +2279,7 @@ mod exact12_fixture {
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
         let envelope = try_envelope(statement)?;
+        let network_id = envelope.statement.context().network_id;
         let signing_key = exact12_signing_key_pair_v1();
         let authority = AccountId::new(signing_key.public_key().clone());
         let row_offset = u64::try_from(row_index).map_err(|_| {
@@ -2291,9 +2292,9 @@ mod exact12_fixture {
                 PrivacyExact12FixtureErrorV1::Transaction(
                     "row nonce does not fit NonZeroU32".to_owned(),
                 )
-            })?;
+        })?;
         let mut payload = TransactionPayload {
-            domain: TransactionDomain::Network(network_id(0xA5)),
+            domain: TransactionDomain::Network(network_id),
             authority,
             creation_time_ms: 1_700_000_000_000_u64
                 .checked_add(row_offset)

@@ -5,9 +5,9 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
-        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, ExecutionCommitment,
-        GlobalPhase, HeightContextId, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-        ValidatorPower,
+        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+        ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+        QuorumCertificate, SnapshotBootstrapAnchor, ValidatorPower,
     },
     offline::{
         KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
@@ -262,6 +262,7 @@ fn finality_evidence(
     asset: &AssetDefinitionId,
     amount: KagemushaScaledAmountV2,
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
+    validator_set: &[ValidatorPower],
     seed: u8,
 ) -> KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
     let payer_key =
@@ -294,7 +295,37 @@ fn finality_evidence(
     }
     .finalize_digest()
     .expect("fixture top-up anchor must be canonical");
-    let context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new([seed, 8])));
+    let complete_context = HeightContext {
+        network_id,
+        protocol_version: PROTOCOL_VERSION,
+        height: anchor.finalized_height,
+        epoch: 0,
+        epoch_end_height: 100,
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        snapshot_bootstrap: Some(SnapshotBootstrapAnchor {
+            snapshot_height: anchor.finalized_height - 1,
+            snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new([seed, 8])),
+            snapshot_block_creation_time_ms: 1_700_000_000_000,
+            snapshot_state_hash: Hash::new([seed, 9]),
+        }),
+        roster: validator_set.to_vec(),
+        quorum: DualQuorum::from_roster(validator_set).expect("fixture roster quorum"),
+        nexus_amx_context_hash: Hash::new([seed, 11]),
+        execution_policy_hash: Hash::new([seed, 12]),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        leader_seed: [seed.wrapping_add(12); 32],
+    };
+    complete_context.validate().expect("fixture height context");
+    let context_id = complete_context.id();
     let round = ConsensusRound {
         context_id,
         height: anchor.finalized_height,
@@ -310,7 +341,7 @@ fn finality_evidence(
             payload_hash: Hash::new([seed, 10]),
         },
         execution_commitment: execution_commitment(seed),
-        signers: vec![0],
+        signers: vec![0, 1, 2],
         aggregate_signature: vec![seed; 96],
     };
     let proof = KagemushaTopUpFinalityProofV2 {
@@ -327,7 +358,7 @@ fn finality_evidence(
                 next_epoch_snapshot: None,
                 mode: ConsensusMode::Permissioned,
                 parent_commit_qc: None,
-                snapshot_bootstrap: None,
+                snapshot_bootstrap: complete_context.snapshot_bootstrap,
                 nexus_amx_context_hash: Hash::new([seed, 11]),
                 execution_policy_hash: Hash::new([seed, 12]),
                 da_layout: DataAvailabilityLayout {
@@ -379,8 +410,29 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
         generation: "swift-kagemusha-abi21-fixture".to_owned(),
         manifest_sha256: [0x51; 32],
     };
-    let validator_key =
-        KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal).expect("fixture validator");
+    let mut validator_keys = (0_u8..4)
+        .map(|offset| {
+            KeyPair::try_from_seed(vec![0x61 + offset; 32], Algorithm::BlsNormal)
+                .expect("fixture validator")
+        })
+        .collect::<Vec<_>>();
+    validator_keys.sort_unstable_by_key(|key| PeerId::new(key.public_key().clone()));
+    let validator_set = validator_keys
+        .iter()
+        .map(|key| ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let validator_set_pops = validator_keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("fixture validator PoP")
+                .try_into()
+                .expect("BLS normal PoP is 96 bytes")
+        })
+        .collect();
     let roster = KagemushaTopUpFinalityRosterArtifactV2 {
         version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
         network_id,
@@ -389,14 +441,18 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
             activates_at_height: 1,
             withdraws_at_height: 100,
             consensus_mode: ConsensusMode::Permissioned,
-            validator_set: vec![ValidatorPower {
-                validator: PeerId::new(validator_key.public_key().clone()),
-                power: 1,
-            }],
-            validator_set_pops: vec![[0x62; 96]],
+            validator_set: validator_set.clone(),
+            validator_set_pops,
         }],
     };
-    let evidence = finality_evidence(network_id, &asset, request.amount(), &binding, 0x31);
+    let evidence = finality_evidence(
+        network_id,
+        &asset,
+        request.amount(),
+        &binding,
+        &validator_set,
+        0x31,
+    );
     let anchor_ref = evidence
         .topup_anchor
         .compact_ref()
@@ -627,6 +683,35 @@ mod tests {
             rendered,
             render_fixture_hex(&(0_u8..33).collect::<Vec<_>>())
         );
+    }
+    #[test]
+    fn peer_payment_fixture_uses_canonical_finality_quorum() {
+        let request_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../crates/connect_norito_bridge/tests/fixtures/\
+             offline_recipient_payment_request_v2.hex",
+        );
+        let (_, request) = read_recipient_request(&request_path);
+        let payment = fixture(&request);
+        let roster = &payment
+            .topup_provenance
+            .topup_finality_roster_artifact
+            .windows[0];
+        roster.validate().expect("fixture roster");
+        assert_eq!(roster.validator_set.len(), 4);
+        assert_eq!(roster.validator_set_pops.len(), 4);
+
+        let compact_qc = &payment.topup_provenance.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc;
+        let context = compact_qc
+            .height_context
+            .reconstruct_for_roster_window(roster)
+            .expect("fixture height context");
+        assert_eq!(compact_qc.certificate.signers, [0, 1, 2]);
+        compact_qc
+            .certificate
+            .validate(&context)
+            .expect("fixture quorum certificate");
     }
     #[test]
     fn output_is_exactly_checkable_and_unchanged_writes_are_noops() {

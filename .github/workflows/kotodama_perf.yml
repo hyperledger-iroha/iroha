@@ -103,6 +103,8 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Build the JavaScript SDK distribution
+        run: npm run build:dist --prefix javascript/iroha_js
       - name: Build the Rust native binding and run the zero-skip hermetic JavaScript suite
         # setup-rust-toolchain injects CARGO_PROFILE_DEV_DEBUG=0 and
         # RUSTFLAGS=-D warnings. The native builder rejects profile overrides,

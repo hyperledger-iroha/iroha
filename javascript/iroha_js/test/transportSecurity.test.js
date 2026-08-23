@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ToriiClient } from "../src/toriiClient.js";
+import { NetworkId } from "../src/networkId.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 import { NoritoRpcClient } from "../src/noritoRpcClient.js";
+
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
+  NetworkId.fromBytes(Buffer.alloc(32, 0x11)),
+);
 
 test("ToriiClient rejects cross-host absolute URLs when credentials are attached", async () => {
   const client = new ToriiClient("https://torii.primary.example", {
@@ -56,6 +61,7 @@ test("ToriiClient rejects cross-host absolute URLs when body contains private_ke
 
 test("ToriiClient rejects insecure transport when canonicalAuth is present", async () => {
   const client = new ToriiClient("http://torii.primary.example", {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     fetchImpl: async () => ({ status: 200 }),
   });
   await assert.rejects(
@@ -133,6 +139,7 @@ test("ToriiClient emits telemetry when allowInsecure is used with private_key re
 test("ToriiClient never retries a nonce-bearing canonical request status", async () => {
   let attempts = 0;
   const client = new ToriiClient("https://torii.primary.example", {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     maxRetries: 9,
     backoffInitialMs: 0,
     retryMethods: ["POST"],
@@ -159,6 +166,7 @@ test("ToriiClient never retries a nonce-bearing canonical request network failur
   let attempts = 0;
   const networkError = new TypeError("socket closed after dispatch");
   const client = new ToriiClient("https://torii.primary.example", {
+    localSigningContext: LOCAL_SIGNING_CONTEXT,
     maxRetries: 9,
     backoffInitialMs: 0,
     retryMethods: ["POST"],

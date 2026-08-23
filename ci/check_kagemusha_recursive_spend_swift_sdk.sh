@@ -140,7 +140,7 @@ fi
 
 (
   cd IrohaSwift
-  run_swift_test --filter 'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64'
+  run_swift_test --filter 'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailPreservesExactNoritoRecord|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64'
 )
 
 (

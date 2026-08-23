@@ -19,10 +19,11 @@ fi
     --artifacts-path "${ARTIFACTS}" \
     -p:ProduceReferenceAssembly=false \
     -- \
-    --filter-class Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
-    --filter-class Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
-    --filter-class Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
-    --filter-class Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
+    --filter-class \
+      Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
+      Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
+      Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
+      Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
 )
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"

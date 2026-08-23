@@ -99,8 +99,8 @@ run_python312_clean() {
 #   embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
-# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
-#   externally selected Cargo target/rustc/rustdoc build envelope.
+# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, libtool, nm, and
+#   the exact externally selected Cargo target/rustc/rustdoc build envelope.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
 # - MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical regular rustup
@@ -854,6 +854,8 @@ IPHONEOS_SDK_VERSION="$(xcrun_value --sdk iphoneos --show-sdk-version)"
 IPHONESIMULATOR_SDK_VERSION="$(xcrun_value --sdk iphonesimulator --show-sdk-version)"
 MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
+LIBTOOL_BINARY="$(xcrun_value --find libtool)"
+NM_BINARY="$(xcrun_value --find nm)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
   printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
@@ -866,13 +868,15 @@ for sdkroot in "$IPHONEOS_SDKROOT" "$IPHONESIMULATOR_SDKROOT" "$MACOSX_SDKROOT";
     exit 1
   }
 done
-LIPO_BINARY="$(run_python312_clean -c \
-  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-  "$LIPO_BINARY")"
-[[ -x "$LIPO_BINARY" ]] || {
-  echo "[-] Xcode lipo executable is unavailable" >&2
-  exit 1
-}
+for apple_archive_tool in LIPO_BINARY LIBTOOL_BINARY NM_BINARY; do
+  printf -v "$apple_archive_tool" '%s' "$(run_python312_clean -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "${!apple_archive_tool}")"
+  [[ -x "${!apple_archive_tool}" ]] || {
+    echo "[-] Xcode ${apple_archive_tool%_BINARY} executable is unavailable" >&2
+    exit 1
+  }
+done
 XCODE_VERSION_OUTPUT="$(
   env -i \
     HOME="$USER_HOME_DIR" \
@@ -921,12 +925,75 @@ stage_cargo_library() {
   local label="$2"
   local source_library="$CARGO_TARGET_DIR/$target_triple/release/lib${LIB_CRATE_NAME}.a"
   local staged_library="$STAGE_DIR/cargo-libraries/$target_triple/lib${LIB_CRATE_NAME}.a"
+  local native_build_root="$CARGO_TARGET_DIR/$target_triple/release/build"
+  local pqclean_candidates=()
+  local keccak_candidates=()
   if [[ ! -f "$source_library" ]]; then
     echo "[-] Missing $label static library after Cargo build: $source_library" >&2
     exit 1
   fi
+  shopt -s nullglob
+  pqclean_candidates=(
+    "$native_build_root"/pqcrypto-internals-*/out/libpqclean_common.a
+  )
+  keccak_candidates=(
+    "$native_build_root"/pqcrypto-internals-*/out/libkeccak*x.a
+  )
+  shopt -u nullglob
+  if [[ "${#pqclean_candidates[@]}" != "1" \
+      || "${#keccak_candidates[@]}" != "1" \
+      || "${pqclean_candidates[0]%/*}" != "${keccak_candidates[0]%/*}" \
+      || ! -f "${pqclean_candidates[0]}" || ! -f "${keccak_candidates[0]}" \
+      || -L "${pqclean_candidates[0]}" || -L "${keccak_candidates[0]}" ]]; then
+    echo "[-] $label Cargo output does not contain one exact pqcrypto-internals native archive pair" >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$staged_library")"
-  cp "$source_library" "$staged_library"
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIBTOOL_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    ZERO_AR_DATE=1 \
+    "$LIBTOOL_BINARY" -static -no_warning_for_no_symbols \
+    -o "$staged_library" \
+    "$source_library" "${pqclean_candidates[0]}" "${keccak_candidates[0]}" \
+    || exit 1
+  run_isolated_python - \
+    "$NM_BINARY" "$staged_library" \
+    "${pqclean_candidates[0]}" "${keccak_candidates[0]}" <<'PY' || exit 1
+from pathlib import Path
+import subprocess
+import sys
+
+
+nm, staged, *dependencies = (Path(value) for value in sys.argv[1:])
+
+
+def defined_symbols(archive: Path) -> set[str]:
+    try:
+        result = subprocess.run(
+            [str(nm), "-gUj", str(archive)],
+            executable=str(nm),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"unable to inspect staged Apple archive: {error}") from None
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+expected = set().union(*(defined_symbols(archive) for archive in dependencies))
+actual = defined_symbols(staged)
+missing = sorted(expected - actual)
+if not expected or missing:
+    detail = ", ".join(missing) if missing else "empty native dependency inventory"
+    raise SystemExit(f"staged Apple archive omitted pqcrypto native symbols: {detail}")
+PY
   printf '%s\n' "$staged_library"
 }
 

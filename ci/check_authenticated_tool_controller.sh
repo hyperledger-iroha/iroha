@@ -20,6 +20,8 @@ cleanup() {
 trap cleanup EXIT
 
 BUILD_MESSAGES="$QUALIFICATION_ROOT/cargo-build.jsonl"
+python3 -m pytest -q \
+  "$ROOT_DIR/scripts/tests/authenticated_tool_controller_source_contract_test.py"
 cargo rustc \
   --locked \
   --manifest-path "$ROOT_DIR/Cargo.toml" \

@@ -651,7 +651,7 @@ final class NexusAppClientTests: XCTestCase {
             submittedHash = envelope.hashHex
             return ToriiSubmitTransactionResponse(
                 payload: ToriiSubmitTransactionResponse.Payload(
-                    txHash: responseHash ?? envelope.hashHex,
+                    entrypointHash: responseHash ?? envelope.hashHex,
                     submittedAtMs: 1_700_000_000_500,
                     submittedAtHeight: 7,
                     signer: NexusAppClientTests.accountID

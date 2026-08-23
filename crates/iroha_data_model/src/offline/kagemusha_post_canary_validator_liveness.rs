@@ -1669,38 +1669,54 @@ mod tests {
 
     #[test]
     fn exact_four_validator_evidence_roundtrips_and_verifies() {
-        let fixture = Fixture::new();
-        let trust = fixture.trust();
-        let body = fixture.evidence_body();
-        let challenge_bytes =
-            norito::encode_canonical(&body.challenge).expect("canonical signed fixture challenge");
-        let decoded_challenge =
-            KagemushaV4PostCanaryValidatorLivenessChallengeV1::decode_canonical(&challenge_bytes)
-                .expect("decode exact signed challenge");
-        assert_eq!(
-            decoded_challenge
-                .endpoint_challenge()
-                .expect("derive decoded challenge"),
-            body.endpoint_challenge
-        );
+        // Debug Norito decoders retain several large nested return slots while materializing the
+        // four attestations. Keep this production-format roundtrip independent of libtest's
+        // platform-specific worker-stack default.
+        std::thread::Builder::new()
+            .name("post-canary-liveness-roundtrip".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let fixture = Fixture::new();
+                let trust = fixture.trust();
+                let body = fixture.evidence_body();
+                let challenge_bytes = norito::encode_canonical(&body.challenge)
+                    .expect("canonical signed fixture challenge");
+                let decoded_challenge =
+                    KagemushaV4PostCanaryValidatorLivenessChallengeV1::decode_canonical(
+                        &challenge_bytes,
+                    )
+                    .expect("decode exact signed challenge");
+                assert_eq!(
+                    decoded_challenge
+                        .endpoint_challenge()
+                        .expect("derive decoded challenge"),
+                    body.endpoint_challenge
+                );
 
-        let evidence = KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
-            body,
-            &fixture.issuer,
-            &trust,
-        )
-        .expect("sign valid four-validator evidence");
-        let bytes = norito::encode_canonical(&evidence).expect("canonical liveness evidence");
-        let decoded = KagemushaV4PostCanaryValidatorLivenessEvidenceV1::decode_canonical(&bytes)
-            .expect("decode exact liveness evidence");
-        let verified = decoded
-            .verify_exact_with_trust(&bytes, &trust)
-            .expect("verify exact four-validator evidence");
-        assert_eq!(verified.promotion_id(), fixture.binding.promotion_id);
-        assert_eq!(verified.canary_finalized_height(), 2);
-        assert_eq!(verified.highest_observed_tip_height(), 3);
-        assert_eq!(verified.observed_tip_heights(), &[2, 2, 3, 3]);
-        assert_eq!(verified.validator_ids().len(), 4);
+                let evidence =
+                    KagemushaV4PostCanaryValidatorLivenessEvidenceV1::try_sign_with_trust(
+                        body,
+                        &fixture.issuer,
+                        &trust,
+                    )
+                    .expect("sign valid four-validator evidence");
+                let bytes =
+                    norito::encode_canonical(&evidence).expect("canonical liveness evidence");
+                let decoded =
+                    KagemushaV4PostCanaryValidatorLivenessEvidenceV1::decode_canonical(&bytes)
+                        .expect("decode exact liveness evidence");
+                let verified = decoded
+                    .verify_exact_with_trust(&bytes, &trust)
+                    .expect("verify exact four-validator evidence");
+                assert_eq!(verified.promotion_id(), fixture.binding.promotion_id);
+                assert_eq!(verified.canary_finalized_height(), 2);
+                assert_eq!(verified.highest_observed_tip_height(), 3);
+                assert_eq!(verified.observed_tip_heights(), &[2, 2, 3, 3]);
+                assert_eq!(verified.validator_ids().len(), 4);
+            })
+            .expect("spawn post-canary liveness roundtrip thread")
+            .join()
+            .expect("post-canary liveness roundtrip thread");
     }
 
     #[test]
