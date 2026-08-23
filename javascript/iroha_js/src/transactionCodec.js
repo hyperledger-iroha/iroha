@@ -54,7 +54,12 @@ const SIGNABLE_ALGORITHM_MESSAGE = "signable.signatureAlgorithm must be ed25519"
 const NETWORK_SELECTOR_CONFLICT_MESSAGE = "provide only one of networkPrefix or chainDiscriminant";
 const SIGNABLE_NETWORK_ID_CONTEXT = "signable.networkId";
 const SIGNABLE_PUBLIC_KEY_CONTEXT = "signable.signingPublicKey";
-const PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE = "transaction payload proof attachments are not supported by the browser codec";
+function transactionPayloadContext(suffix = "") {
+  return `transaction payload${suffix}`;
+}
+const PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE = transactionPayloadContext(
+  " proof attachments are not supported by the browser codec",
+);
 const APPROVED_SIGNER_MISMATCH_MESSAGE = "signable.signingPublicKey does not match the expected approved signing key";
 const SIGNABLE_PAYLOAD_HASH_CONTEXT = "signable.payloadHashHex";
 const SIGNABLE_PAYLOAD_BYTES_CONTEXT = "signable.payloadBytes";
@@ -102,12 +107,7 @@ const MAX_BROWSER_INSTRUCTIONS = 64;
 const MAX_CONTRACT_ARGUMENT_RECORD_BYTES = 1024 * 1024;
 const MAX_CONTRACT_ENTRYPOINT_BYTES = 1024;
 const DEFAULT_TRANSACTION_TIME_TO_LIVE_MS = 100_000n;
-const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
-const HASHABLE_TRANSACTION_ADMISSION_TAGS = Object.freeze([
-  TRANSACTION_ADMISSION_ORDINARY_TAG,
-  TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
-]);
 const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
   "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
@@ -491,7 +491,7 @@ function normalizeUnsigned(value, maximum, context) {
   return result;
 }
 
-function normalizeOptionalUnsigned(value, maximum, context, { nonZero = false } = {}) {
+function normalizeOptionalUnsigned(value, maximum, context, nonZero = false) {
   if (value === undefined || value === null) {
     return null;
   }
@@ -626,7 +626,7 @@ function normalizeFeePayment(value, authority) {
     value.gasLimit,
     UINT64_MAX,
     "feePayment.gasLimit",
-    { nonZero: true },
+    true,
   );
   if (payer === "authority") {
     if (value.programId !== undefined || value.programRevision !== undefined) {
@@ -903,12 +903,6 @@ function rustPlainJsonString(value) {
       case "\\":
         output += "\\\\";
         break;
-      case "\b":
-        output += "\\b";
-        break;
-      case "\f":
-        output += "\\f";
-        break;
       case "\n":
         output += "\\n";
         break;
@@ -920,7 +914,12 @@ function rustPlainJsonString(value) {
         break;
       default:
         if (codePoint < 0x20) {
-          output += `\\u00${codePoint.toString(16).padStart(2, "0")}`;
+          output +=
+            codePoint === 8
+              ? "\\b"
+              : codePoint === 12
+                ? "\\f"
+                : `\\u00${codePoint.toString(16).padStart(2, "0")}`;
         } else {
           output += character;
         }
@@ -1187,12 +1186,9 @@ function normalizeTransactionInputTail(
     "creationTimeMs",
   );
   const ttlMs =
-    normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs", {
-      nonZero: true,
-    }) ?? DEFAULT_TRANSACTION_TIME_TO_LIVE_MS;
-  const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
-    nonZero: true,
-  });
+    normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs", true) ??
+    DEFAULT_TRANSACTION_TIME_TO_LIVE_MS;
+  const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", true);
   return { feePayment, metadata, creationTimeMs, ttlMs, nonce };
 }
 
@@ -1284,7 +1280,10 @@ function encodeTransactionPayload(normalized, executable) {
     Buffer.of(0),
   ]);
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
-    fail(BOUNDS_EXCEEDED, `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
+    fail(
+      BOUNDS_EXCEEDED,
+      transactionPayloadContext(` exceeds ${MAX_PAYLOAD_BYTES} bytes`),
+    );
   }
   return payload;
 }
@@ -1786,25 +1785,33 @@ function validateFeePaymentArchive(payload, context) {
     body.readField("chargeLimits"),
     `${context}.chargeLimits`,
   );
-  const gasLimit = validateOption(body.readField("gasLimit"), 8, `${context}.gasLimit`, {
-    nonZero: true,
-  });
+  const gasLimit = validateOption(
+    body.readField("gasLimit"),
+    8,
+    `${context}.gasLimit`,
+    true,
+  );
   body.assertEof();
   return { gasLimit };
 }
 
-function validateTransactionAdmissionIntentArchive(payload, expectedTags, context) {
+function validateTransactionAdmissionIntentArchive(
+  payload,
+  context,
+  allowOrdinary,
+) {
   const reader = new Reader(payload, context);
   const tag = reader.readU32("intent");
   reader.assertEof();
-  const allowedTags = Array.isArray(expectedTags) ? expectedTags : [expectedTags];
-  if (!allowedTags.includes(tag)) {
+  if (
+    tag !== TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG &&
+    !(allowOrdinary && tag === 0)
+  ) {
     fail(
       UNSUPPORTED_PAYLOAD,
-      allowedTags.length === 1 &&
-        allowedTags[0] === TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
-        ? `${context} must be TransactionAdmissionIntent::QueuePlanSynced`
-        : `${context} uses unsupported TransactionAdmissionIntent tag ${tag}`,
+      allowOrdinary
+        ? `${context} uses unsupported TransactionAdmissionIntent tag ${tag}`
+        : `${context} must be TransactionAdmissionIntent::QueuePlanSynced`,
     );
   }
 }
@@ -2085,7 +2092,7 @@ function validateExecutableBatch(payload, context) {
   return { containsContractCall };
 }
 
-function validateOption(payload, expectedLength, context, { nonZero = false } = {}) {
+function validateOption(payload, expectedLength, context, nonZero = false) {
   const reader = new Reader(payload, context);
   const tag = reader.readU8("tag");
   if (tag === 0) {
@@ -2176,7 +2183,7 @@ function validateTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
-  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+  allowOrdinary = false,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2185,7 +2192,7 @@ function validateTransactionPayload(
     (executable, authorityPublicKey) => {
       const sourceOwner = validateTransferExecutable(
         executable,
-        "transaction payload.executable",
+        transactionPayloadContext(".executable"),
       );
       if (!sourceOwner.equals(authorityPublicKey)) {
         fail(
@@ -2195,7 +2202,7 @@ function validateTransactionPayload(
       }
     },
     undefined,
-    expectedAdmissionIntentTags,
+    allowOrdinary,
   );
 }
 
@@ -2203,7 +2210,7 @@ function validateInstructionTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
-  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+  allowOrdinary = false,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2211,17 +2218,20 @@ function validateInstructionTransactionPayload(
     expectedNetworkId,
     (executable) => {
       if (executable.length < 4) {
-        fail(MALFORMED_PAYLOAD, "transaction payload.executable is truncated");
+        fail(
+          MALFORMED_PAYLOAD,
+          transactionPayloadContext(".executable is truncated"),
+        );
       }
       if (executable.readUInt32LE(0) === 4) {
         return validateExecutableBatch(
           executable,
-          "transaction payload.executable",
+          transactionPayloadContext(".executable"),
         );
       }
       validateSmartContractDeploymentExecutable(
         executable,
-        "transaction payload.executable",
+        transactionPayloadContext(".executable"),
       );
       return { containsContractCall: false };
     },
@@ -2229,11 +2239,13 @@ function validateInstructionTransactionPayload(
       if (batchValidation.containsContractCall && feePayment.gasLimit === null) {
         fail(
           INVALID_FEE_PAYMENT,
-          "transaction payload feePayment.gasLimit is required for contract calls",
+          transactionPayloadContext(
+            " feePayment.gasLimit is required for contract calls",
+          ),
         );
       }
     },
-    expectedAdmissionIntentTags,
+    allowOrdinary,
   );
 }
 
@@ -2243,7 +2255,7 @@ function validateTransactionPayloadEnvelope(
   expectedNetworkId,
   validateExecutable,
   validateFeePayment,
-  expectedAdmissionIntentTags = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+  allowOrdinary,
 ) {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail(BOUNDS_EXCEEDED, `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
@@ -2252,22 +2264,22 @@ function validateTransactionPayloadEnvelope(
     authorityLiteral === null
       ? null
       : accountInfo(authorityLiteral, "signable.authority");
-  const reader = new Reader(payload, "transaction payload");
+  const reader = new Reader(payload, transactionPayloadContext());
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
-    "transaction payload.domain",
+    transactionPayloadContext(".domain"),
   );
   if (expectedNetworkId !== null) {
     requireExpectedNetworkId(
       networkId,
       expectedNetworkId,
-      "transaction payload NetworkId",
+      transactionPayloadContext(" NetworkId"),
     );
   }
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
-    "transaction payload.authority",
+    transactionPayloadContext(".authority"),
   );
   if (
     assertedAuthority !== null &&
@@ -2277,32 +2289,41 @@ function validateTransactionPayloadEnvelope(
   }
   const creationTime = reader.readField("creationTimeMs");
   if (creationTime.length !== 8) {
-    fail(MALFORMED_PAYLOAD, "transaction payload.creationTimeMs must be a u64");
+    fail(
+      MALFORMED_PAYLOAD,
+      transactionPayloadContext(".creationTimeMs must be a u64"),
+    );
   }
   const executableValidation = validateExecutable(
     reader.readField("executable"),
     authorityPublicKey,
   );
-  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
-    nonZero: true,
-  });
-  validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
-    nonZero: true,
-  });
+  validateOption(
+    reader.readField("ttlMs"),
+    8,
+    transactionPayloadContext(".ttlMs"),
+    true,
+  );
+  validateOption(
+    reader.readField("nonce"),
+    4,
+    transactionPayloadContext(".nonce"),
+    true,
+  );
   const feePayment = validateFeePaymentArchive(
     reader.readField("feePayment"),
-    "transaction payload.feePayment",
+    transactionPayloadContext(".feePayment"),
   );
   validateFeePayment?.(executableValidation, feePayment);
   validateTransactionAdmissionIntentArchive(
     reader.readField("admissionIntent"),
-    expectedAdmissionIntentTags,
-    "transaction payload.admissionIntent",
+    transactionPayloadContext(".admissionIntent"),
+    allowOrdinary,
   );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
       reader.readField("metadata"),
-      "transaction payload.metadata",
+      transactionPayloadContext(".metadata"),
     ),
   );
   if (!reader.readField("attachments").equals(Buffer.of(0))) {
@@ -2445,13 +2466,13 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
     reader.readField("ttlMs"),
     8,
     "verifying-key transaction payload.ttlMs",
-    { nonZero: true },
+    true,
   );
   validateOption(
     reader.readField("nonce"),
     4,
     "verifying-key transaction payload.nonce",
-    { nonZero: true },
+    true,
   );
   validateFeePaymentArchive(
     reader.readField("feePayment"),
@@ -2459,7 +2480,6 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   );
   validateTransactionAdmissionIntentArchive(
     reader.readField("admissionIntent"),
-    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
     "verifying-key transaction payload.admissionIntent",
   );
   rejectLegacyFeeMetadata(
@@ -2969,21 +2989,11 @@ export function browserSignedTransactionHashHex(signedTransaction) {
   }
   let transferError;
   try {
-    validateTransactionPayload(
-      payload,
-      null,
-      null,
-      HASHABLE_TRANSACTION_ADMISSION_TAGS,
-    );
+    validateTransactionPayload(payload, null, null, true);
   } catch (error) {
     transferError = error;
     try {
-      validateInstructionTransactionPayload(
-        payload,
-        null,
-        null,
-        HASHABLE_TRANSACTION_ADMISSION_TAGS,
-      );
+      validateInstructionTransactionPayload(payload, null, null, true);
     } catch (instructionError) {
       const boundsError = [transferError, instructionError].find(
         (error) =>

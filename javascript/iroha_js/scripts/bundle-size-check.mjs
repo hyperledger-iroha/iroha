@@ -104,13 +104,13 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 480,192 bytes
-    // (+4.83%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 64 bytes. The typed Sumeragi parser and deployment
+    // same pinned runner. Its reviewed eager code-split closure is 480,165 bytes
+    // (+4.82%) after shared validation paths are interned. The unchanged 469 KiB
+    // eager ceiling leaves 91 bytes. The typed Sumeragi parser and deployment
     // submit continuation are audited below as non-overlapping lazy closures.
     limitKb: 469,
-    reviewedEagerBytes: 480_192,
-    reviewedCombinedBytes: 563_061,
+    reviewedEagerBytes: 480_165,
+    reviewedCombinedBytes: 563_034,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
