@@ -6,17 +6,23 @@ use norito::{
     codec::{Decode, Encode},
 };
 #[cfg(unix)]
+use std::os::fd::AsRawFd as _;
+#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt as _;
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt,
+};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::{
     collections::{HashSet, VecDeque},
     ffi::OsStr,
-    fs::{self, OpenOptions},
-    io::{self, Read as _},
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Seek as _, SeekFrom, Write as _},
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    process::{Command as ProcessCommand, ExitCode, Stdio},
+    process::{Child, Command as ProcessCommand, ExitCode, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -36,6 +42,7 @@ use tokio::{
     time::timeout,
 };
 const DEFAULT_BACKEND_ENDPOINT: &str = "unix:/run/sora-vpn-backend.sock";
+const DEFAULT_BOOTSTRAP_REPLAY_DIRECTORY: &str = "/run/sora-vpn-backend-replay";
 const DEFAULT_INTERFACE_PREFIX: &str = "svpn";
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
@@ -48,6 +55,9 @@ const VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS: u64 = 60_000;
 const VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION: Duration =
     Duration::from_millis(VPN_BACKEND_BOOTSTRAP_MAX_SKEW_MS * 2);
 const VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1: usize = 65_536;
+const VPN_BACKEND_REPLAY_LOCK_FILE: &str = ".lock";
+const VPN_BACKEND_REPLAY_HIGH_WATER_FILE: &str = ".time-high-water";
+const VPN_BACKEND_REPLAY_ENTRY_SUFFIX: &str = ".nonce";
 const VPN_BACKEND_BOOTSTRAP_SECRET_FILE_MAX_BYTES_V1: usize = 66;
 const VPN_BACKEND_MAX_CONCURRENT_SESSIONS_V1: usize = 128;
 const VPN_BACKEND_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -78,6 +88,12 @@ struct Cli {
     endpoint: String,
     #[arg(long, env = "SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH")]
     bootstrap_secret_path: Option<PathBuf>,
+    #[arg(
+        long,
+        env = "SORANET_VPN_BACKEND_REPLAY_DIRECTORY",
+        default_value = DEFAULT_BOOTSTRAP_REPLAY_DIRECTORY
+    )]
+    replay_directory: PathBuf,
     #[arg(long, env = "SORANET_VPN_BACKEND_ALLOWED_UID")]
     allowed_uid: Option<u32>,
     #[arg(long, env = "SORANET_VPN_BACKEND_ALLOWED_GID")]
@@ -110,7 +126,7 @@ struct BackendConfig {
     bootstrap_secret: [u8; 32],
     allowed_uid: Option<u32>,
     allowed_gid: Option<u32>,
-    seen_bootstrap_nonces: Mutex<SeenBootstrapNonces>,
+    bootstrap_replay: Mutex<DurableBootstrapReplay>,
     interface_prefix: String,
     default_mtu: u16,
     ipv4_forward: bool,
@@ -123,7 +139,15 @@ struct BackendConfig {
 #[derive(Debug, Default)]
 struct SeenBootstrapNonces {
     nonces: HashSet<[u8; 16]>,
-    receipts: VecDeque<(Instant, [u8; 16])>,
+    receipts: VecDeque<(Instant, [u8; 16], u64)>,
+}
+struct DurableBootstrapReplay {
+    seen: SeenBootstrapNonces,
+    directory: PathBuf,
+    _lock: File,
+    high_water_file: File,
+    high_water_ms: u64,
+    durability_failed: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BackendEndpoint {
@@ -139,6 +163,8 @@ impl BackendConfig {
             )
         })?;
         let bootstrap_secret = read_bootstrap_secret(bootstrap_secret_path)?;
+        let bootstrap_replay =
+            DurableBootstrapReplay::open(&cli.replay_directory, unix_time_ms()?, Instant::now())?;
         let interface_prefix =
             validate_linux_interface_name(&cli.interface_prefix, "interface_prefix")?;
         let default_mtu = normalize_mtu(cli.mtu)?;
@@ -171,7 +197,7 @@ impl BackendConfig {
             bootstrap_secret,
             allowed_uid: cli.allowed_uid.or_else(default_allowed_uid),
             allowed_gid: cli.allowed_gid.or_else(default_allowed_gid),
-            seen_bootstrap_nonces: Mutex::new(SeenBootstrapNonces::default()),
+            bootstrap_replay: Mutex::new(bootstrap_replay),
             interface_prefix,
             default_mtu,
             ipv4_forward: cli.ipv4_forward,
@@ -758,12 +784,12 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
                         report_session_task_result(result);
                     }
                     accept = listener.accept() => {
-                        let (stream, remote) = match accept {
+                        let (stream, _remote) = match accept {
                             Ok(accepted) => accepted,
                             Err(error) => break Err(error.into()),
                         };
                         let Some(permit) = try_session_permit(&session_permits) else {
-                            eprintln!("vpn backend rejected {remote}: session capacity reached");
+                            eprintln!("vpn backend rejected TCP peer: session capacity reached");
                             continue;
                         };
                         let session_config = Arc::clone(&config);
@@ -774,13 +800,12 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
                             let _permit = permit;
                             if let Err(error) = serve_connection(
                                 stream,
-                                remote.to_string(),
                                 session_config,
                                 &session_shared,
                                 session_shutdown,
                                 session_shutdown_requested,
                             ).await {
-                                eprintln!("vpn backend session from {remote} failed: {error}");
+                                eprintln!("vpn backend TCP session failed: {error}");
                             }
                         });
                     }
@@ -820,7 +845,6 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
                             let _permit = permit;
                             if let Err(error) = serve_connection(
                                 stream,
-                                "unix-peer".to_owned(),
                                 session_config,
                                 &session_shared,
                                 session_shutdown,
@@ -954,7 +978,6 @@ fn validate_unix_socket_path(path: &std::path::Path) -> Result<(), BackendError>
 }
 async fn serve_connection<S>(
     mut stream: S,
-    remote: String,
     config: Arc<BackendConfig>,
     shared_network: &Arc<Mutex<SharedNetworkState>>,
     mut shutdown: watch::Receiver<bool>,
@@ -1024,7 +1047,7 @@ where
     .await?;
     let prepared = prepared.expect("successful ready write preserves the prepared tunnel");
     eprintln!(
-        "vpn backend accepted {remote} on interface {}",
+        "vpn backend accepted authenticated session on interface {}",
         prepared.applied_network.interface_name
     );
     let session_result = backend_packet_loop(
@@ -1305,10 +1328,10 @@ fn admit_bootstrap_nonce(
     received_at: Instant,
 ) -> Result<(), BackendError> {
     let retention = VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION;
-    while seen.receipts.front().is_some_and(|(prior_receipt, _)| {
+    while seen.receipts.front().is_some_and(|(prior_receipt, _, _)| {
         received_at.saturating_duration_since(*prior_receipt) > retention
     }) {
-        let (_, expired_nonce) = seen
+        let (_, expired_nonce, _) = seen
             .receipts
             .pop_front()
             .expect("front entry checked above");
@@ -1335,7 +1358,433 @@ fn admit_bootstrap_nonce(
         ))
     })?;
     seen.nonces.insert(nonce);
-    seen.receipts.push_back((received_at, nonce));
+    seen.receipts.push_back((received_at, nonce, 0));
+    Ok(())
+}
+impl DurableBootstrapReplay {
+    fn open(directory: &std::path::Path, now_ms: u64, now: Instant) -> Result<Self, BackendError> {
+        let directory = prepare_private_replay_directory(directory)?;
+        let lock_path = directory.join(VPN_BACKEND_REPLAY_LOCK_FILE);
+        let lock = open_private_replay_file(&lock_path, true, "bootstrap replay lock")?;
+        let lock_result =
+            unsafe { nix::libc::flock(lock.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
+        if lock_result != 0 {
+            return Err(BackendError::State(format!(
+                "failed to lock bootstrap replay directory {}: {}",
+                directory.display(),
+                io::Error::last_os_error()
+            )));
+        }
+        let high_water_path = directory.join(VPN_BACKEND_REPLAY_HIGH_WATER_FILE);
+        let mut high_water_file = open_private_replay_file(
+            &high_water_path,
+            true,
+            "bootstrap replay time high-water file",
+        )?;
+        let high_water_ms = load_or_initialize_replay_high_water(&mut high_water_file, now_ms)?;
+        if now_ms < high_water_ms {
+            return Err(BackendError::State(format!(
+                "system clock {now_ms}ms is behind the durable bootstrap replay high-water mark {high_water_ms}ms"
+            )));
+        }
+        if now_ms > high_water_ms {
+            write_replay_high_water(&mut high_water_file, now_ms)?;
+        }
+
+        let mut active = Vec::new();
+        let mut expired = Vec::new();
+        let mut scanned = 0usize;
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                return Err(BackendError::State(
+                    "bootstrap replay directory contains a non-UTF-8 entry".to_owned(),
+                ));
+            };
+            if matches!(
+                name,
+                VPN_BACKEND_REPLAY_LOCK_FILE | VPN_BACKEND_REPLAY_HIGH_WATER_FILE
+            ) {
+                continue;
+            }
+            scanned = scanned.checked_add(1).ok_or_else(|| {
+                BackendError::State("bootstrap replay entry count overflow".to_owned())
+            })?;
+            if scanned > VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1 {
+                return Err(BackendError::State(format!(
+                    "bootstrap replay directory exceeds its first-release capacity of {VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1} entries"
+                )));
+            }
+            let (nonce, expires_at_ms) = parse_replay_entry_name(name)?;
+            let metadata = fs::symlink_metadata(entry.path())?;
+            validate_replay_entry_metadata(&metadata, "bootstrap replay entry")?;
+            if metadata.len() != 0 {
+                return Err(BackendError::State(format!(
+                    "bootstrap replay entry {} must be empty",
+                    entry.path().display()
+                )));
+            }
+            // The timestamp corridor is inclusive at both skew edges. A frame
+            // first accepted at the future edge remains valid for replay at
+            // exactly `2 * MAX_SKEW`, so retain its nonce through the exact
+            // expiry millisecond and remove it only after that boundary.
+            if expires_at_ms < now_ms {
+                expired.push(entry.path());
+            } else {
+                let maximum_expiry = now_ms
+                    .checked_add(
+                        u64::try_from(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION.as_millis()).map_err(
+                            |_| {
+                                BackendError::State(
+                                    "bootstrap replay retention exceeds u64 milliseconds"
+                                        .to_owned(),
+                                )
+                            },
+                        )?,
+                    )
+                    .ok_or_else(|| {
+                        BackendError::State("bootstrap replay expiry overflow".to_owned())
+                    })?;
+                if expires_at_ms > maximum_expiry {
+                    return Err(BackendError::State(format!(
+                        "bootstrap replay entry {name:?} exceeds the retention window"
+                    )));
+                }
+                active.push((expires_at_ms, nonce));
+            }
+        }
+        for path in &expired {
+            fs::remove_file(path)?;
+        }
+        if !expired.is_empty() {
+            sync_replay_directory(&directory)?;
+        }
+        active.sort_unstable_by_key(|(expires_at_ms, nonce)| (*expires_at_ms, *nonce));
+        let mut seen = SeenBootstrapNonces::default();
+        seen.nonces.try_reserve(active.len()).map_err(|error| {
+            BackendError::State(format!("failed to reserve bootstrap replay cache: {error}"))
+        })?;
+        seen.receipts.try_reserve(active.len()).map_err(|error| {
+            BackendError::State(format!("failed to reserve bootstrap replay queue: {error}"))
+        })?;
+        for (expires_at_ms, nonce) in active {
+            if !seen.nonces.insert(nonce) {
+                return Err(BackendError::State(format!(
+                    "bootstrap replay directory contains duplicate nonce {}",
+                    hex::encode(nonce)
+                )));
+            }
+            let remaining = Duration::from_millis(expires_at_ms.saturating_sub(now_ms))
+                .min(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION);
+            let age = VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION.saturating_sub(remaining);
+            let received_at = now.checked_sub(age).unwrap_or(now);
+            seen.receipts.push_back((received_at, nonce, expires_at_ms));
+        }
+        Ok(Self {
+            seen,
+            directory,
+            _lock: lock,
+            high_water_file,
+            high_water_ms: now_ms,
+            durability_failed: false,
+        })
+    }
+
+    fn admit(
+        &mut self,
+        nonce: [u8; 16],
+        received_at: Instant,
+        now_ms: u64,
+    ) -> Result<(), BackendError> {
+        if self.durability_failed {
+            return Err(BackendError::State(
+                "bootstrap replay persistence previously failed; refusing further sessions"
+                    .to_owned(),
+            ));
+        }
+        let result = self.admit_inner(nonce, received_at, now_ms);
+        if result.is_err() {
+            // Authentication errors do not poison storage, but every I/O or time-custody failure
+            // must fail all later admissions rather than risk a replay after restart.
+            if matches!(&result, Err(BackendError::Io(_) | BackendError::State(_))) {
+                self.durability_failed = true;
+            }
+        }
+        result
+    }
+
+    fn admit_inner(
+        &mut self,
+        nonce: [u8; 16],
+        received_at: Instant,
+        now_ms: u64,
+    ) -> Result<(), BackendError> {
+        if now_ms < self.high_water_ms {
+            return Err(BackendError::State(format!(
+                "system clock {now_ms}ms moved behind the bootstrap replay high-water mark {}ms",
+                self.high_water_ms
+            )));
+        }
+        if now_ms > self.high_water_ms {
+            write_replay_high_water(&mut self.high_water_file, now_ms)?;
+            self.high_water_ms = now_ms;
+        }
+        let retention = VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION;
+        let mut removed = false;
+        while self
+            .seen
+            .receipts
+            .front()
+            .is_some_and(|(prior_receipt, _, _)| {
+                received_at.saturating_duration_since(*prior_receipt) > retention
+            })
+        {
+            let (_, expired_nonce, expires_at_ms) = self
+                .seen
+                .receipts
+                .front()
+                .copied()
+                .expect("front entry checked above");
+            let path = replay_entry_path(&self.directory, expired_nonce, expires_at_ms);
+            validate_and_remove_replay_entry(&path)?;
+            self.seen.receipts.pop_front();
+            self.seen.nonces.remove(&expired_nonce);
+            removed = true;
+        }
+        if removed {
+            sync_replay_directory(&self.directory)?;
+        }
+        if self.seen.nonces.contains(&nonce) {
+            return Err(BackendError::InvalidConfig(
+                "vpn backend bootstrap nonce was replayed".to_owned(),
+            ));
+        }
+        if self.seen.nonces.len() >= VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1 {
+            return Err(BackendError::State(format!(
+                "vpn backend bootstrap nonce cache reached its first-release capacity of {VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1}"
+            )));
+        }
+        self.seen.nonces.try_reserve(1).map_err(|error| {
+            BackendError::State(format!(
+                "failed to reserve bounded bootstrap nonce cache storage: {error}"
+            ))
+        })?;
+        self.seen.receipts.try_reserve(1).map_err(|error| {
+            BackendError::State(format!(
+                "failed to reserve bounded bootstrap nonce expiry storage: {error}"
+            ))
+        })?;
+        let retention_ms = u64::try_from(retention.as_millis()).map_err(|_| {
+            BackendError::State(
+                "bootstrap replay retention does not fit u64 milliseconds".to_owned(),
+            )
+        })?;
+        let expires_at_ms = now_ms
+            .checked_add(retention_ms)
+            .ok_or_else(|| BackendError::State("bootstrap replay expiry overflow".to_owned()))?;
+        let path = replay_entry_path(&self.directory, nonce, expires_at_ms);
+        let entry = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+            .open(&path)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    BackendError::InvalidConfig(
+                        "vpn backend bootstrap nonce was already durably recorded".to_owned(),
+                    )
+                } else {
+                    error.into()
+                }
+            })?;
+        validate_replay_entry_metadata(&entry.metadata()?, "bootstrap replay entry")?;
+        entry.sync_all()?;
+        sync_replay_directory(&self.directory)?;
+        self.seen.nonces.insert(nonce);
+        self.seen
+            .receipts
+            .push_back((received_at, nonce, expires_at_ms));
+        Ok(())
+    }
+}
+
+fn prepare_private_replay_directory(path: &std::path::Path) -> Result<PathBuf, BackendError> {
+    if !path.is_absolute() {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap replay directory must be absolute".to_owned(),
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        BackendError::InvalidConfig("bootstrap replay directory has no parent".to_owned())
+    })?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    if canonical_parent != parent {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap replay directory parent must not contain symlinks or traversal".to_owned(),
+        ));
+    }
+    validate_trusted_directory_chain(&canonical_parent, "bootstrap replay directory")?;
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder.create(path)?;
+            sync_replay_directory(&canonical_parent)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    let effective_uid = unsafe { nix::libc::geteuid() };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(BackendError::InvalidConfig(format!(
+            "bootstrap replay directory {} must be a direct, effective-user-owned directory with mode 0700",
+            path.display()
+        )));
+    }
+    let canonical = fs::canonicalize(path)?;
+    if canonical != path {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap replay directory must not be reached through a symlink".to_owned(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn open_private_replay_file(
+    path: &std::path::Path,
+    create: bool,
+    label: &str,
+) -> Result<File, BackendError> {
+    let before = fs::symlink_metadata(path).ok();
+    if let Some(metadata) = &before {
+        validate_replay_entry_metadata(metadata, label)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+        .open(path)?;
+    let opened = file.metadata()?;
+    validate_replay_entry_metadata(&opened, label)?;
+    if let Some(before) = before
+        && (before.dev() != opened.dev() || before.ino() != opened.ino())
+    {
+        return Err(BackendError::State(format!(
+            "{label} changed identity while opening"
+        )));
+    }
+    Ok(file)
+}
+
+fn validate_replay_entry_metadata(
+    metadata: &fs::Metadata,
+    label: &str,
+) -> Result<(), BackendError> {
+    let effective_uid = unsafe { nix::libc::geteuid() };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != effective_uid
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o7777 != 0o600
+    {
+        return Err(BackendError::InvalidConfig(format!(
+            "{label} must be a direct, single-link, effective-user-owned regular file with mode 0600"
+        )));
+    }
+    Ok(())
+}
+
+fn load_or_initialize_replay_high_water(file: &mut File, now_ms: u64) -> Result<u64, BackendError> {
+    let length = file.metadata()?.len();
+    if length == 0 {
+        write_replay_high_water(file, now_ms)?;
+        return Ok(now_ms);
+    }
+    if length != 8 {
+        return Err(BackendError::State(
+            "bootstrap replay time high-water file has an invalid length".to_owned(),
+        ));
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut bytes = [0_u8; 8];
+    file.read_exact(&mut bytes)?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn write_replay_high_water(file: &mut File, now_ms: u64) -> Result<(), BackendError> {
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&now_ms.to_be_bytes())?;
+    file.set_len(8)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn replay_entry_path(directory: &std::path::Path, nonce: [u8; 16], expiry_ms: u64) -> PathBuf {
+    directory.join(format!(
+        "{}.{expiry_ms}{VPN_BACKEND_REPLAY_ENTRY_SUFFIX}",
+        hex::encode(nonce)
+    ))
+}
+
+fn parse_replay_entry_name(name: &str) -> Result<([u8; 16], u64), BackendError> {
+    let body = name
+        .strip_suffix(VPN_BACKEND_REPLAY_ENTRY_SUFFIX)
+        .ok_or_else(|| BackendError::State(format!("unknown bootstrap replay entry {name:?}")))?;
+    let (nonce_hex, expiry) = body
+        .rsplit_once('.')
+        .ok_or_else(|| BackendError::State(format!("malformed bootstrap replay entry {name:?}")))?;
+    if nonce_hex.len() != 32
+        || !nonce_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(BackendError::State(format!(
+            "malformed bootstrap replay nonce in {name:?}"
+        )));
+    }
+    let nonce: [u8; 16] = hex::decode(nonce_hex)
+        .map_err(|error| BackendError::State(format!("invalid replay nonce: {error}")))?
+        .try_into()
+        .map_err(|_| BackendError::State("invalid bootstrap replay nonce length".to_owned()))?;
+    let expires_at_ms = expiry.parse::<u64>().map_err(|_| {
+        BackendError::State(format!("malformed bootstrap replay expiry in {name:?}"))
+    })?;
+    if expiry != expires_at_ms.to_string() {
+        return Err(BackendError::State(format!(
+            "non-canonical bootstrap replay expiry in {name:?}"
+        )));
+    }
+    Ok((nonce, expires_at_ms))
+}
+
+fn validate_and_remove_replay_entry(path: &std::path::Path) -> Result<(), BackendError> {
+    let metadata = fs::symlink_metadata(path)?;
+    validate_replay_entry_metadata(&metadata, "bootstrap replay entry")?;
+    if metadata.len() != 0 {
+        return Err(BackendError::State(format!(
+            "bootstrap replay entry {} must be empty",
+            path.display()
+        )));
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+fn sync_replay_directory(directory: &std::path::Path) -> Result<(), BackendError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC)
+        .open(directory)?;
+    file.sync_all()?;
     Ok(())
 }
 async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
@@ -1378,11 +1827,11 @@ async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
             "vpn backend bootstrap MAC is invalid".to_owned(),
         ));
     }
-    let mut seen = config
-        .seen_bootstrap_nonces
+    let mut replay = config
+        .bootstrap_replay
         .lock()
         .map_err(|_| BackendError::State("bootstrap nonce cache poisoned".to_owned()))?;
-    admit_bootstrap_nonce(&mut seen, envelope.nonce, Instant::now())?;
+    replay.admit(envelope.nonce, Instant::now(), now_ms)?;
     Ok(envelope.bootstrap)
 }
 async fn read_vpn_backend_bootstrap_with_deadline<R: AsyncRead + Unpin>(
@@ -1990,17 +2439,52 @@ struct BoundedCommandOutput {
     bytes: Vec<u8>,
     exceeded_limit: bool,
 }
-fn read_bounded_command_output<R: io::Read>(mut reader: R) -> io::Result<BoundedCommandOutput> {
+fn read_bounded_command_output<R: io::Read>(reader: R) -> io::Result<BoundedCommandOutput> {
+    read_bounded_command_output_until(reader, &AtomicBool::new(false))
+}
+fn read_bounded_command_output_until<R: io::Read>(
+    mut reader: R,
+    cancelled: &AtomicBool,
+) -> io::Result<BoundedCommandOutput> {
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1)
         .map_err(|error| io::Error::other(format!("failed to reserve command output: {error}")))?;
     let mut exceeded_limit = false;
     let mut buffer = [0_u8; 4096];
+    // Cancellation must not discard bytes a short-lived command already
+    // placed in its pipe: callers rely on outputs such as `sysctl -n` to
+    // restore privileged state safely. At the same time, an escaped
+    // descendant may keep writing forever, so post-cancellation draining has
+    // a strict byte budget and also stops as soon as the nonblocking pipe is
+    // empty.
+    let mut cancelled_drain_remaining =
+        TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1.saturating_add(buffer.len());
     loop {
-        let read = reader.read(&mut buffer)?;
+        let cancellation_requested = cancelled.load(Ordering::Acquire);
+        if cancellation_requested && cancelled_drain_remaining == 0 {
+            break;
+        }
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted && !cancellation_requested => {
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => break,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if cancellation_requested || cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if read == 0 {
             break;
+        }
+        if cancellation_requested {
+            cancelled_drain_remaining = cancelled_drain_remaining.saturating_sub(read);
         }
         let remaining = TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1.saturating_sub(bytes.len());
         let retained = read.min(remaining);
@@ -2011,6 +2495,27 @@ fn read_bounded_command_output<R: io::Read>(mut reader: R) -> io::Result<Bounded
         bytes,
         exceeded_limit,
     })
+}
+fn set_nonblocking(descriptor: i32) -> io::Result<()> {
+    // SAFETY: `descriptor` is an open child-pipe descriptor, and both fcntl
+    // operations only query/update its status flags.
+    let flags = unsafe { nix::libc::fcntl(descriptor, nix::libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor remains owned by the corresponding `ChildStdout`
+    // or `ChildStderr`; setting O_NONBLOCK does not transfer ownership.
+    if unsafe {
+        nix::libc::fcntl(
+            descriptor,
+            nix::libc::F_SETFL,
+            flags | nix::libc::O_NONBLOCK,
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
@@ -2082,58 +2587,93 @@ fn execute_trusted_command(
     arguments: &[String],
     deadline: Duration,
 ) -> Result<String, BackendError> {
-    let mut child = ProcessCommand::new(program_path)
+    let mut command = ProcessCommand::new(program_path);
+    command
         .env_clear()
         .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| BackendError::State("trusted command stdout pipe is missing".to_owned()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| BackendError::State("trusted command stderr pipe is missing".to_owned()))?;
-    let stdout_reader = thread::Builder::new()
+        .stderr(Stdio::piped());
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = kill_trusted_command_process_group(child.id());
+            let _ = child.wait();
+            return Err(BackendError::State(
+                "trusted command stdout pipe is missing".to_owned(),
+            ));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = kill_trusted_command_process_group(child.id());
+            let _ = child.wait();
+            return Err(BackendError::State(
+                "trusted command stderr pipe is missing".to_owned(),
+            ));
+        }
+    };
+    if let Err(error) =
+        set_nonblocking(stdout.as_raw_fd()).and_then(|()| set_nonblocking(stderr.as_raw_fd()))
+    {
+        let _ = terminate_trusted_command(&mut child);
+        return Err(error.into());
+    }
+    let reader_cancelled = Arc::new(AtomicBool::new(false));
+    let stdout_cancelled = Arc::clone(&reader_cancelled);
+    let stdout_reader = match thread::Builder::new()
         .name("sora-vpn-command-stdout".to_owned())
-        .spawn(move || read_bounded_command_output(stdout))?;
-    let stderr_reader = match thread::Builder::new()
-        .name("sora-vpn-command-stderr".to_owned())
-        .spawn(move || read_bounded_command_output(stderr))
+        .spawn(move || read_bounded_command_output_until(stdout, &stdout_cancelled))
     {
         Ok(reader) => reader,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = terminate_trusted_command(&mut child);
+            return Err(error.into());
+        }
+    };
+    let stderr_cancelled = Arc::clone(&reader_cancelled);
+    let stderr_reader = match thread::Builder::new()
+        .name("sora-vpn-command-stderr".to_owned())
+        .spawn(move || read_bounded_command_output_until(stderr, &stderr_cancelled))
+    {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = terminate_trusted_command(&mut child);
+            reader_cancelled.store(true, Ordering::Release);
             let _ = stdout_reader.join();
             return Err(error.into());
         }
     };
     let started = Instant::now();
     let (status, timed_out) = loop {
-        if let Some(status) = child.try_wait()? {
-            break (status, false);
+        match trusted_command_leader_exited(child.id()) {
+            Ok(true) => break (terminate_trusted_command(&mut child), false),
+            Ok(false) => {}
+            Err(error) => {
+                let status = terminate_trusted_command(&mut child).and(Err(error));
+                break (status, false);
+            }
         }
         if started.elapsed() >= deadline {
-            match child.kill() {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
-                Err(error) => return Err(error.into()),
-            }
-            break (child.wait()?, true);
+            break (terminate_trusted_command(&mut child), true);
         }
         thread::sleep(Duration::from_millis(10));
     };
+    // A descendant may have deliberately changed process groups while
+    // retaining an inherited pipe. Nonblocking readers honor this flag, so
+    // their joins cannot hold the privileged daemon indefinitely.
+    reader_cancelled.store(true, Ordering::Release);
     let stdout = stdout_reader
         .join()
         .map_err(|_| BackendError::State("trusted command stdout reader panicked".to_owned()))??;
     let stderr = stderr_reader
         .join()
         .map_err(|_| BackendError::State("trusted command stderr reader panicked".to_owned()))??;
+    let status = status?;
     if timed_out {
         return Err(BackendError::State(format!(
             "{program} timed out after {} seconds",
@@ -2161,6 +2701,53 @@ fn execute_trusted_command(
         exit_code: status.code(),
         detail,
     })
+}
+fn trusted_command_leader_exited(child_pid: u32) -> io::Result<bool> {
+    let mut information = std::mem::MaybeUninit::<nix::libc::siginfo_t>::zeroed();
+    // SAFETY: `information` points to writable storage for one siginfo_t.
+    // WNOWAIT observes only this direct child and deliberately leaves it
+    // unreaped, pinning the numeric PID/process-group ID until killpg runs.
+    let result = unsafe {
+        nix::libc::waitid(
+            nix::libc::P_PID,
+            child_pid,
+            information.as_mut_ptr(),
+            nix::libc::WEXITED | nix::libc::WNOHANG | nix::libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful waitid initializes siginfo_t; with WNOHANG libc
+    // reports si_pid == 0 when the child has not exited.
+    let information = unsafe { information.assume_init() };
+    // SAFETY: waitid(WEXITED) populates the SIGCHLD variant of siginfo_t.
+    let observed_pid = unsafe { information.si_pid() };
+    Ok(observed_pid > 0 && u32::try_from(observed_pid).ok() == Some(child_pid))
+}
+fn terminate_trusted_command(child: &mut Child) -> io::Result<ExitStatus> {
+    let group_result = kill_trusted_command_process_group(child.id());
+    if group_result.is_err() {
+        // If group signalling failed, still prevent a live leader from making
+        // `wait` unbounded. The original group error is returned after reap.
+        let _ = child.kill();
+    }
+    let wait_result = child.wait();
+    match (group_result, wait_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), result) => result,
+    }
+}
+fn kill_trusted_command_process_group(child_pid: u32) -> io::Result<()> {
+    let process_group = i32::try_from(child_pid)
+        .map_err(|_| io::Error::other("child PID does not fit a Unix process-group identifier"))?;
+    match nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(process_group),
+        nix::sys::signal::Signal::SIGKILL,
+    ) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -2455,6 +3042,75 @@ mod tests {
         assert!(oversized.exceeded_limit);
     }
     #[test]
+    fn cancelled_nonblocking_command_reader_does_not_wait_for_inherited_writer() {
+        let (reader, _writer) = std::os::unix::net::UnixStream::pair().expect("pipe fixture");
+        set_nonblocking(reader.as_raw_fd()).expect("make reader nonblocking");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let reader_cancelled = Arc::clone(&cancelled);
+        let handle = thread::spawn(move || {
+            read_bounded_command_output_until(reader, &reader_cancelled)
+                .expect("cancelled read must finish")
+        });
+        thread::sleep(Duration::from_millis(10));
+        cancelled.store(true, Ordering::Release);
+        let started = Instant::now();
+        let output = handle.join().expect("reader thread");
+        assert!(output.bytes.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+    #[test]
+    fn cancelled_nonblocking_command_reader_drains_already_buffered_output() {
+        let (reader, mut writer) = std::os::unix::net::UnixStream::pair().expect("pipe fixture");
+        writer
+            .write_all(b"required-state\n")
+            .expect("buffer command output");
+        set_nonblocking(reader.as_raw_fd()).expect("make reader nonblocking");
+        let cancelled = AtomicBool::new(true);
+        let output = read_bounded_command_output_until(reader, &cancelled)
+            .expect("cancelled reader must drain buffered output");
+        assert_eq!(output.bytes, b"required-state\n");
+        assert!(!output.exceeded_limit);
+    }
+    #[test]
+    fn cancelled_command_reader_has_bounded_drain_when_writer_never_blocks() {
+        struct EndlessReader;
+
+        impl io::Read for EndlessReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                buffer.fill(0xA5);
+                Ok(buffer.len())
+            }
+        }
+
+        let cancelled = AtomicBool::new(true);
+        let output = read_bounded_command_output_until(EndlessReader, &cancelled)
+            .expect("pre-cancelled endless reader must finish");
+        assert_eq!(output.bytes.len(), TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1);
+        assert!(output.exceeded_limit);
+    }
+    #[test]
+    fn waitid_observes_child_exit_without_reaping_it() {
+        let Some(program) = resolve_trusted_command("true") else {
+            return;
+        };
+        let mut child = ProcessCommand::new(program).spawn().expect("spawn true");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if trusted_command_leader_exited(child.id()).expect("observe child") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "child did not exit in time");
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            child
+                .wait()
+                .expect("wait after non-reaping observation")
+                .success(),
+            "waitid(WNOWAIT) must leave the child available for the owning Child handle"
+        );
+    }
+    #[test]
     fn trusted_command_deadline_terminates_stalled_process() {
         let Some(sleep) = resolve_trusted_command("sleep") else {
             return;
@@ -2467,6 +3123,45 @@ mod tests {
         )
         .expect_err("stalled command must be terminated");
         assert!(error.to_string().contains("timed out"));
+    }
+    #[test]
+    fn trusted_command_deadline_terminates_descendants_holding_pipes() {
+        let shell = std::path::Path::new("/bin/sh");
+        if !shell.exists() {
+            return;
+        }
+        let started = Instant::now();
+        let error = execute_trusted_command(
+            "sh",
+            shell,
+            &["-c".to_owned(), "sleep 30 & wait".to_owned()],
+            Duration::from_millis(25),
+        )
+        .expect_err("the complete stalled command group must be terminated");
+        assert!(error.to_string().contains("timed out"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a descendant retained the command output pipes"
+        );
+    }
+    #[test]
+    fn trusted_command_normal_exit_sweeps_descendants_before_reaping_leader() {
+        let shell = std::path::Path::new("/bin/sh");
+        if !shell.exists() {
+            return;
+        }
+        let started = Instant::now();
+        execute_trusted_command(
+            "sh",
+            shell,
+            &["-c".to_owned(), "sleep 30 & exit 0".to_owned()],
+            Duration::from_secs(2),
+        )
+        .expect("successful leader exit should still sweep descendants");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a descendant retained the command output pipes"
+        );
     }
     #[test]
     fn trusted_command_arguments_are_bounded() {
@@ -2576,6 +3271,7 @@ mod tests {
         Cli {
             endpoint: DEFAULT_BACKEND_ENDPOINT.to_owned(),
             bootstrap_secret_path: None,
+            replay_directory: PathBuf::from("/test-only-replay-directory-must-be-overridden"),
             allowed_uid: None,
             allowed_gid: None,
             interface_prefix: DEFAULT_INTERFACE_PREFIX.to_owned(),
@@ -2589,8 +3285,10 @@ mod tests {
     }
     fn test_backend_config() -> (TestDirectory, BackendConfig) {
         let (secret_directory, secret_path) = write_test_secret(0xA5);
+        let replay_directory = secret_directory.path().join("replay");
         let config = BackendConfig::from_cli(Cli {
             bootstrap_secret_path: Some(secret_path),
+            replay_directory,
             ..test_cli()
         })
         .expect("test backend config");
@@ -2659,7 +3357,7 @@ mod tests {
     #[tokio::test]
     async fn tcp_bootstrap_rejects_bad_mac_and_replay() {
         let secret = [0xA5; 32];
-        let (_secret_directory, secret_path) = write_test_secret(0xA5);
+        let (secret_directory, secret_path) = write_test_secret(0xA5);
         let bootstrap = VpnBackendBootstrap {
             session_id_hex: "aabbccddaabbccddaabbccddaabbccdd".to_owned(),
             server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
@@ -2678,6 +3376,7 @@ mod tests {
         let config = BackendConfig::from_cli(Cli {
             endpoint: "tcp://127.0.0.1:19090".to_owned(),
             bootstrap_secret_path: Some(secret_path),
+            replay_directory: secret_directory.path().join("replay"),
             ..test_cli()
         })
         .expect("config");
@@ -2842,7 +3541,7 @@ mod tests {
             .expect("test instant supports nonce-retention subtraction");
         let mut seen = SeenBootstrapNonces {
             nonces: HashSet::from([expired_nonce, fresh_nonce]),
-            receipts: VecDeque::from([(expired_at, expired_nonce), (now, fresh_nonce)]),
+            receipts: VecDeque::from([(expired_at, expired_nonce, 0), (now, fresh_nonce, 0)]),
         };
         admit_bootstrap_nonce(&mut seen, [0x33; 16], now)
             .expect("fresh nonce should be admitted after pruning");
@@ -2862,7 +3561,7 @@ mod tests {
             let mut nonce = [0u8; 16];
             nonce[..8].copy_from_slice(&(index as u64).to_be_bytes());
             seen.nonces.insert(nonce);
-            seen.receipts.push_back((now, nonce));
+            seen.receipts.push_back((now, nonce, 0));
         }
         let full = admit_bootstrap_nonce(&mut seen, [0xFF; 16], now)
             .expect_err("full nonce cache must fail closed");
@@ -2881,6 +3580,94 @@ mod tests {
         let replay = admit_bootstrap_nonce(&mut seen, nonce, latest_valid_replay)
             .expect_err("future-dated frame must remain blocked across both skew edges");
         assert!(replay.to_string().contains("replayed"));
+    }
+    #[test]
+    fn bootstrap_nonce_replay_survives_restart_and_clock_rollback_fails_closed() {
+        let parent = TestDirectory::new("durable-replay");
+        let replay_directory = parent.path().join("replay");
+        let receipt = Instant::now();
+        let now_ms = 1_000_000;
+        let nonce = [0x71; 16];
+        let mut replay = DurableBootstrapReplay::open(&replay_directory, now_ms, receipt)
+            .expect("open replay state");
+        replay
+            .admit(nonce, receipt, now_ms)
+            .expect("durably admit nonce");
+        drop(replay);
+
+        let mut reopened = DurableBootstrapReplay::open(
+            &replay_directory,
+            now_ms + 1,
+            receipt + Duration::from_millis(1),
+        )
+        .expect("reopen replay state");
+        let error = reopened
+            .admit(nonce, receipt + Duration::from_millis(1), now_ms + 1)
+            .expect_err("restart must not erase nonce replay state");
+        assert!(error.to_string().contains("replayed"));
+        drop(reopened);
+
+        let error = match DurableBootstrapReplay::open(&replay_directory, now_ms, receipt) {
+            Ok(_) => panic!("wall-clock rollback behind durable high-water must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("high-water"));
+    }
+    #[test]
+    fn expired_durable_nonce_is_removed_and_can_be_reused() {
+        let parent = TestDirectory::new("durable-replay-expiry");
+        let replay_directory = parent.path().join("replay");
+        let receipt = Instant::now();
+        let now_ms = 2_000_000;
+        let retention_ms = u64::try_from(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION.as_millis())
+            .expect("retention milliseconds");
+        let nonce = [0x72; 16];
+        let mut replay = DurableBootstrapReplay::open(&replay_directory, now_ms, receipt)
+            .expect("open replay state");
+        replay
+            .admit(nonce, receipt, now_ms)
+            .expect("durably admit nonce");
+        drop(replay);
+
+        let at_expiry_ms = now_ms + retention_ms;
+        let at_expiry = receipt + VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION;
+        let mut at_boundary =
+            DurableBootstrapReplay::open(&replay_directory, at_expiry_ms, at_expiry)
+                .expect("exact inclusive replay boundary must retain the nonce");
+        let replay_error = at_boundary
+            .admit(nonce, at_expiry, at_expiry_ms)
+            .expect_err("nonce must remain blocked at the inclusive replay boundary");
+        assert!(replay_error.to_string().contains("replayed"));
+        drop(at_boundary);
+
+        let after_expiry_ms = now_ms + retention_ms + 1;
+        let after_expiry =
+            receipt + VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION + Duration::from_millis(1);
+        let mut reopened =
+            DurableBootstrapReplay::open(&replay_directory, after_expiry_ms, after_expiry)
+                .expect("expired replay entry should be pruned");
+        reopened
+            .admit(nonce, after_expiry, after_expiry_ms)
+            .expect("expired nonce may be used again only after both skew edges");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_replay_directory_rejects_symlinks_and_permissive_custody() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TestDirectory::new("durable-replay-custody");
+        let target = parent.path().join("target");
+        fs::create_dir(&target).expect("create target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).expect("protect target");
+        let link = parent.path().join("link");
+        symlink(&target, &link).expect("create replay directory symlink");
+        assert!(prepare_private_replay_directory(&link).is_err());
+
+        let permissive = parent.path().join("permissive");
+        fs::create_dir(&permissive).expect("create permissive directory");
+        fs::set_permissions(&permissive, fs::Permissions::from_mode(0o750))
+            .expect("set permissive mode");
+        assert!(prepare_private_replay_directory(&permissive).is_err());
     }
     #[cfg(unix)]
     #[tokio::test]

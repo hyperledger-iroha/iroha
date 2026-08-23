@@ -3516,4 +3516,5 @@ pub(super) mod tests {
     include!("tests/v2_worker_main_02.rs");
     include!("tests/v2_worker_main_04.rs");
     include!("tests/v2_worker_main_05.rs");
+    include!("tests/v2_worker_kagemusha_runtime_gate.rs");
 }

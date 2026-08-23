@@ -590,9 +590,11 @@ READINESS_SOURCE_SUPPORT = (
     "ci/check_kagemusha_production_readiness_source_support.py"
 )
 READINESS_RECURSION_SOURCE_CONTRACT = "ci/check_kagemusha_recursion_source_contract.py"
+READINESS_LIFECYCLE_SOURCE_CONTRACT = "ci/check_kagemusha_lifecycle_source_contract.py"
 READINESS_SOURCE_PROVIDERS = (
     READINESS_SOURCE_SUPPORT,
     READINESS_RECURSION_SOURCE_CONTRACT,
+    READINESS_LIFECYCLE_SOURCE_CONTRACT,
     READINESS_SOURCE_CONTRACT,
 )
 READINESS_SELF_TEST = "ci/check_kagemusha_production_readiness_self_test.py"
@@ -4886,11 +4888,30 @@ else:
         )
 if not callable(recursion_source_contract_evaluator):
     source_contract_errors.append("recursion source-contract provider evaluator is unavailable")
+lifecycle_source_contract_evaluator: Callable[..., list[str]] | None = None
+lifecycle_bytes = source_contract_bytes.get(READINESS_LIFECYCLE_SOURCE_CONTRACT)
+lifecycle_context: dict[str, object] = {}
+if lifecycle_bytes is None:
+    source_contract_errors.append("lifecycle source-contract provider bytes are unavailable")
+else:
+    try:
+        lifecycle_source = lifecycle_bytes.decode("utf-8")
+        lifecycle_context = {"__name__": "kagemusha_lifecycle_source_contract", "_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_CONTEXT_V1": True, "_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1": lifecycle_source}
+        exec(compile(lifecycle_bytes, READINESS_LIFECYCLE_SOURCE_CONTRACT, "exec"), lifecycle_context)
+        candidate_evaluator = lifecycle_context.get("lifecycle_source_contract_errors")
+        if not callable(candidate_evaluator):
+            raise ValueError("lifecycle source provider did not define its evaluator")
+        lifecycle_source_contract_evaluator = candidate_evaluator
+    except Exception as error:
+        source_contract_errors.append(f"lifecycle source-contract provider failed unexpectedly: {error}")
+if not callable(lifecycle_source_contract_evaluator):
+    source_contract_errors.append("lifecycle source-contract provider evaluator is unavailable")
 primary_bytes = source_contract_bytes.get(READINESS_SOURCE_CONTRACT)
 source_contract_context = dict(support_context)
-source_contract_context["_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1"] = (
-    recursion_source_contract_evaluator
-)
+source_contract_context.update(lifecycle_context)
+source_contract_context["__name__"] = "kagemusha_readiness_source_contract"
+source_contract_context["_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1"] = recursion_source_contract_evaluator
+source_contract_context["_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1"] = lifecycle_source_contract_evaluator
 source_contract_evaluator: Callable[..., list[str]] | None = None
 if primary_bytes is None:
     source_contract_errors.append("readiness source-contract provider bytes are unavailable")

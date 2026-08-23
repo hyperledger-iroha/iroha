@@ -833,6 +833,13 @@ impl KagemushaV4ActivationReceiptExpectationsBodyV1 {
         }
         let activation = direct_activation_instruction(&self.activation_transaction)?;
         validate_activation_binding(activation, &self.binding)?;
+        if activation.runtime_effective_config_sha256()
+            != &validator_bodies[0]
+                .runtime_effective_config
+                .consensus_sha256()?
+        {
+            return Err(KagemushaPromotionReceiptValidationError::ActivationPayload);
+        }
 
         verify_bridge_finality_proof(&self.trusted_finality_anchor, &self.binding.network_id)
             .map_err(|_| KagemushaPromotionReceiptValidationError::Finality)?;
@@ -2106,12 +2113,22 @@ fn validate_governance_multisig_policy(
     let Some(policy) = authority.controller().multisig_policy() else {
         return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
     };
-    if usize::from(policy.threshold()) < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-        || policy.members().len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-    {
+    if !kagemusha_v4_governance_policy_requires_distinct_signers(policy) {
         return Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority);
     }
     Ok(policy)
+}
+
+/// Return whether a governance policy necessarily requires the documented distinct-signer floor.
+pub(super) fn kagemusha_v4_governance_policy_requires_distinct_signers(
+    policy: &MultisigPolicy,
+) -> bool {
+    usize::from(policy.threshold()) >= KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+        && policy.members().len() >= KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
+        && policy
+            .members()
+            .iter()
+            .all(|member| member.weight() < policy.threshold())
 }
 
 fn validate_receipt_issuer_role_separation(
@@ -2832,6 +2849,70 @@ mod tests {
             .try_into()
             .expect("exactly four qualification seals");
         (binding, bodies, seals, keys)
+    }
+
+    #[test]
+    fn runtime_effective_config_consensus_digest_is_domain_separated_and_complete() {
+        let (_, bodies, _, _) = qualification_fixture();
+        let projection = &bodies[0].runtime_effective_config;
+        let digest = projection
+            .consensus_sha256()
+            .expect("valid runtime projection digest");
+        let undomained_digest: [u8; 32] =
+            Sha256::digest(norito::encode_canonical(projection).expect("canonical projection"))
+                .into();
+        assert_ne!(digest, [0; 32]);
+        assert_ne!(
+            digest, undomained_digest,
+            "the consensus identity must include its explicit domain",
+        );
+        let mut changed = projection.clone();
+        changed.kagemusha_max_decoded_bytes += 1;
+        assert_ne!(
+            changed
+                .consensus_sha256()
+                .expect("changed projection remains valid"),
+            digest,
+        );
+    }
+
+    #[test]
+    fn governance_policy_requires_two_distinct_signers_not_only_threshold_weight() {
+        let keys =
+            [0x2a_u8, 0x2b].map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519));
+        let weighted_policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(keys[0].public_key().clone(), 2)
+                    .expect("valid weight-two governance member"),
+                MultisigMember::new(keys[1].public_key().clone(), 1)
+                    .expect("valid weight-one governance member"),
+            ],
+        )
+        .expect("structurally valid weighted governance policy");
+        assert!(
+            !kagemusha_v4_governance_policy_requires_distinct_signers(&weighted_policy),
+            "one threshold-weight member cannot satisfy the distinct-governor contract"
+        );
+        let weighted_authority = AccountId::new_multisig(weighted_policy);
+        assert_eq!(
+            validate_governance_multisig_policy(&weighted_authority),
+            Err(KagemushaPromotionReceiptValidationError::GovernanceAuthority),
+        );
+
+        let distinct_policy = MultisigPolicy::new(
+            2,
+            keys.iter()
+                .map(|key| {
+                    MultisigMember::new(key.public_key().clone(), 1)
+                        .expect("valid unit-weight governance member")
+                })
+                .collect(),
+        )
+        .expect("valid two-distinct-signer governance policy");
+        assert!(kagemusha_v4_governance_policy_requires_distinct_signers(
+            &distinct_policy
+        ));
     }
 
     #[test]

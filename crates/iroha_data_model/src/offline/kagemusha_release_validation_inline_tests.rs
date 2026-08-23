@@ -144,6 +144,7 @@ fn v4_internal_validation_receipt_rejects_tracked_cargo_lock_substitution() {
             &manifest,
             &candidate,
             &substituted_receipt_bytes,
+            None,
         );
         assert_eq!(
             validation,
@@ -458,6 +459,7 @@ fn release_policy_rejects_threshold_sum_above_attestation_cap() {
         schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
         policy_id: "threshold-cap-test".to_owned(),
+        internal_validation_runner_identity_sha256: [0x91; 32],
         roles: role_policies,
     };
     assert_eq!(

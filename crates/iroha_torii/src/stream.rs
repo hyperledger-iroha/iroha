@@ -35,6 +35,48 @@ pub const CLOSE_POLICY_VIOLATION: u16 = 1008;
 pub const CLOSE_INTERNAL_ERROR: u16 = 1011;
 /// RFC 6455 close code asking the client to retry later.
 pub const CLOSE_TRY_AGAIN_LATER: u16 = 1013;
+
+async fn close_sink_with_timeout<S>(sink: &mut S, timeout: Duration) -> Result<(), Error>
+where
+    S: futures::Sink<Message, Error = axum::Error> + Unpin,
+{
+    let result = tokio::time::timeout(timeout, <_ as SinkExt<_>>::close(sink))
+        .await
+        .map_err(|_elapsed| Error::SendTimeout)?
+        .map_err(extract_ws_closed);
+    match result {
+        Err(Error::Closed) | Ok(()) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+async fn close_sink_with_frame<S>(
+    sink: &mut S,
+    timeout: Duration,
+    frame: CloseFrame,
+) -> Result<(), Error>
+where
+    S: futures::Sink<Message, Error = axum::Error> + Unpin,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    match tokio::time::timeout_at(deadline, sink.send(Message::Close(Some(frame)))).await {
+        Err(_elapsed) => return Err(Error::SendTimeout),
+        Ok(Err(error)) => match extract_ws_closed(error) {
+            Error::Closed => return Ok(()),
+            error => return Err(error),
+        },
+        Ok(Ok(())) => {}
+    }
+    let result = tokio::time::timeout_at(deadline, <_ as SinkExt<_>>::close(sink))
+        .await
+        .map_err(|_elapsed| Error::SendTimeout)?
+        .map_err(extract_ws_closed);
+    match result {
+        Err(Error::Closed) | Ok(()) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn decode_subscription_request<M>(bytes: &[u8]) -> Result<M, norito::Error>
 where
     M: NoritoSerialize,
@@ -189,13 +231,7 @@ impl WebSocketNorito {
     /// Close websocket
     pub async fn close(mut self) -> Result<(), Error> {
         // NOTE: use `SinkExt::close` because it's not trying to write to closed socket
-        match <_ as SinkExt<_>>::close(&mut self.ws)
-            .await
-            .map_err(extract_ws_closed)
-        {
-            Err(Error::Closed) | Ok(()) => Ok(()),
-            Err(error) => Err(error),
-        }
+        close_sink_with_timeout(&mut self.ws, self.timeout).await
     }
     /// Close the WebSocket with a stable protocol status and reason.
     pub async fn close_with(self, code: u16, reason: impl Into<String>) -> Result<(), Error> {
@@ -205,21 +241,7 @@ impl WebSocketNorito {
             code,
             reason: Utf8Bytes::from(reason),
         };
-        match tokio::time::timeout(this.timeout, this.ws.send(Message::Close(Some(frame)))).await {
-            Err(_elapsed) => return Err(Error::SendTimeout),
-            Ok(Err(error)) => match extract_ws_closed(error) {
-                Error::Closed => return Ok(()),
-                error => return Err(error),
-            },
-            Ok(Ok(())) => {}
-        }
-        match <_ as SinkExt<_>>::close(&mut this.ws)
-            .await
-            .map_err(extract_ws_closed)
-        {
-            Err(Error::Closed) | Ok(()) => Ok(()),
-            Err(error) => Err(error),
-        }
+        close_sink_with_frame(&mut this.ws, this.timeout, frame).await
     }
 }
 #[cfg(test)]
@@ -342,6 +364,90 @@ mod subscription_decode_tests {
         assert_eq!(decoded.0, request.0);
     }
 }
+
+#[cfg(test)]
+mod close_timeout_tests {
+    use super::*;
+    use core::{pin::Pin, task::Poll};
+    use futures::Sink;
+
+    const CLOSE_TIMEOUT: Duration = Duration::from_millis(10);
+    const TEST_GUARD: Duration = Duration::from_secs(1);
+
+    #[derive(Default)]
+    struct PendingCloseSink {
+        sent: Vec<Message>,
+    }
+
+    impl Sink<Message> for PendingCloseSink {
+        type Error = axum::Error;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut core::task::Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            self.sent.push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut core::task::Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut core::task::Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn close_sink_maps_elapsed_deadline_to_send_timeout() {
+        let mut sink = PendingCloseSink::default();
+        let result = tokio::time::timeout(
+            TEST_GUARD,
+            close_sink_with_timeout(&mut sink, CLOSE_TIMEOUT),
+        )
+        .await
+        .expect("close helper must enforce its own deadline");
+
+        assert!(matches!(result, Err(Error::SendTimeout)));
+    }
+
+    #[tokio::test]
+    async fn close_with_frame_times_out_while_finishing_sink_close() {
+        let mut sink = PendingCloseSink::default();
+        let result = tokio::time::timeout(
+            TEST_GUARD,
+            close_sink_with_frame(
+                &mut sink,
+                CLOSE_TIMEOUT,
+                CloseFrame {
+                    code: CLOSE_POLICY_VIOLATION,
+                    reason: Utf8Bytes::from_static("invalid subscription"),
+                },
+            ),
+        )
+        .await
+        .expect("framed close helper must enforce its own deadline");
+
+        assert!(matches!(result, Err(Error::SendTimeout)));
+        let [Message::Close(Some(frame))] = sink.sent.as_slice() else {
+            panic!("close helper must send exactly one close frame");
+        };
+        assert_eq!(frame.code, CLOSE_POLICY_VIOLATION);
+        assert_eq!(frame.reason, "invalid subscription");
+    }
+}
+
 /// Check if websocket was closed normally
 pub fn extract_ws_closed(error: axum::Error) -> Error {
     let error = error.into_inner();

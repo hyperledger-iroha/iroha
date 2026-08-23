@@ -499,6 +499,14 @@ fn run() -> Result<(), String> {
         Command::ListRevocations(args) => command_list(args),
     }
 }
+fn whole_unix_second(time: SystemTime) -> Result<SystemTime, String> {
+    let elapsed = time
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before the Unix epoch: {err}"))?;
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(elapsed.as_secs()))
+        .ok_or_else(|| "whole-second token timestamp overflowed SystemTime".to_owned())
+}
 fn command_mint(args: MintArgs) -> Result<(), String> {
     let issuer_public =
         load_public_hex_source(args.issuer_public_hex, args.issuer_public_file.as_deref())?;
@@ -508,7 +516,7 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
     let issued_at = match args.issued_at {
         Some(ref value) => parse_rfc3339(value, "issued_at").map_err(|err| err.to_string())?,
-        None => SystemTime::now(),
+        None => whole_unix_second(SystemTime::now())?,
     };
     let expires_at = if let Some(ref value) = args.expires_at {
         parse_rfc3339(value, "expires_at").map_err(|err| err.to_string())?
@@ -557,13 +565,19 @@ fn command_revoke(args: RevokeArgs) -> Result<(), String> {
         let bundle = inspect_token(bytes.as_slice()).map_err(|err| err.to_string())?;
         bundle.metadata.token_id
     };
-    let mut list = RevocationList::load_or_default(&args.list)
-        .map_err(|err| format!("failed to load {}: {err}", args.list.display()))?;
-    let inserted = list.insert(token_id);
-    if !args.dry_run && inserted {
-        list.write(&args.list)
-            .map_err(|err| format!("failed to write {}: {err}", args.list.display()))?;
-    }
+    let inserted = if args.dry_run {
+        let mut list = RevocationList::load_or_default(&args.list)
+            .map_err(|err| format!("failed to load {}: {err}", args.list.display()))?;
+        list.insert(token_id)
+            .map_err(|err| format!("failed to preview revocation: {err}"))?
+    } else {
+        RevocationList::insert_durable(&args.list, token_id).map_err(|err| {
+            format!(
+                "failed to persist revocation to {}: {err}",
+                args.list.display()
+            )
+        })?
+    };
     let mut payload = json::Map::new();
     payload.insert("token_id_hex".into(), Value::from(hex::encode(token_id)));
     payload.insert("inserted".into(), Value::from(inserted));
@@ -889,8 +903,9 @@ fn decode_secret_hex_key_text(
         .map_err(|error| format!("failed to decode {field} as hexadecimal: {error}"))?;
     if decoded.len() >= 32
         && decoded
+            .as_slice()
             .first()
-            .is_some_and(|first| decoded.iter().all(|byte| byte == first))
+            .is_some_and(|first| decoded.as_slice().iter().all(|byte| byte == first))
     {
         return Err(format!(
             "{field} must not be an all-zero or repeated-byte degenerate key"
@@ -1015,15 +1030,14 @@ mod tests {
         #[cfg(unix)]
         {
             let secret_path = dir.path().join("issuer-secret.hex");
-            fs::write(&secret_path, "cd".repeat(ML_DSA_MAX_SECRET_KEY_BYTES_V1))
+            let mut expected_secret = vec![0xcd; ML_DSA_MAX_SECRET_KEY_BYTES_V1];
+            expected_secret[0] = 0xce;
+            fs::write(&secret_path, hex::encode(&expected_secret))
                 .expect("write exact secret key file");
             make_owner_private(&secret_path);
             let secret =
                 load_secret_hex_source(&secret_path).expect("exact secret key file must load");
-            assert_eq!(
-                secret.as_slice(),
-                vec![0xcd; ML_DSA_MAX_SECRET_KEY_BYTES_V1]
-            );
+            assert_eq!(secret.as_slice(), expected_secret);
         }
     }
     #[test]
@@ -1161,6 +1175,15 @@ mod tests {
         )
         .expect_err("token input limit + 1 must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn generated_token_time_is_canonical_whole_second() {
+        let source = UNIX_EPOCH + Duration::from_secs(1_700_000_000) + Duration::from_nanos(999);
+        let canonical = whole_unix_second(source).expect("canonical time");
+        assert_eq!(
+            canonical.duration_since(UNIX_EPOCH).expect("Unix time"),
+            Duration::from_secs(1_700_000_000)
+        );
     }
     #[test]
     fn inspect_metadata_omits_bearer_token_encodings() {

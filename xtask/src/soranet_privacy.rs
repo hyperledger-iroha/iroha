@@ -1,9 +1,7 @@
 use crate::{JsonTarget, write_json_output};
 use iroha_data_model::soranet::privacy_metrics::{
-    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventHandshakeFailureV1,
-    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
-    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    SoranetPrivacySuppressionReasonV1,
+    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventV1, SoranetPrivacyModeV1,
+    SoranetPrivacyPrioShareV1, SoranetPrivacySuppressionReasonV1,
 };
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator};
 use norito::json::{self, Value};
@@ -482,20 +480,6 @@ fn ingest_path(
                     totals.seen_bucket(bucket_start_unix, bucket_secs);
                 }
                 Err(share_error) => {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
-                        && let Some(event) = parse_fallback_event(&value)
-                    {
-                        aggregator.record_historical_event(&event).map_err(|err| {
-                            format!(
-                                "failed to ingest fallback privacy event from {} line {}: {err}",
-                                path.display(),
-                                idx + 1
-                            )
-                        })?;
-                        totals.events = totals.events.saturating_add(1);
-                        totals.seen_bucket(event.timestamp_unix, bucket_secs);
-                        continue;
-                    }
                     return Err(format!(
                         "failed to parse privacy payload in {} line {}: {event_error}; {share_error}",
                         path.display(),
@@ -507,56 +491,6 @@ fn ingest_path(
         }
     }
     Ok(())
-}
-fn parse_fallback_event(value: &serde_json::Value) -> Option<SoranetPrivacyEventV1> {
-    let timestamp_unix = value.get("timestamp_unix")?.as_u64()?;
-    let mode = match value.get("mode")?.as_str()? {
-        "entry" => SoranetPrivacyModeV1::Entry,
-        "middle" => SoranetPrivacyModeV1::Middle,
-        "exit" => SoranetPrivacyModeV1::Exit,
-        _ => return None,
-    };
-    let payload = value.get("payload").cloned().unwrap_or_default();
-    let kind = match value.get("kind")?.as_str()? {
-        "HandshakeSuccess" => {
-            let rtt_ms = payload.get("rtt_ms").and_then(|v| v.as_u64());
-            let active = payload
-                .get("active_circuits_after")
-                .and_then(|v| v.as_u64());
-            SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
-                rtt_ms,
-                active_circuits_after: active,
-            })
-        }
-        "HandshakeFailure" => {
-            let reason_slug = payload
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("other");
-            let reason = match reason_slug {
-                "pow" => SoranetPrivacyHandshakeFailureV1::Pow,
-                "timeout" => SoranetPrivacyHandshakeFailureV1::Timeout,
-                "downgrade" => SoranetPrivacyHandshakeFailureV1::Downgrade,
-                _ => SoranetPrivacyHandshakeFailureV1::Other,
-            };
-            let detail = payload
-                .get("detail")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let rtt_ms = payload.get("rtt_ms").and_then(|v| v.as_u64());
-            SoranetPrivacyEventKindV1::HandshakeFailure(SoranetPrivacyEventHandshakeFailureV1 {
-                reason,
-                detail,
-                rtt_ms,
-            })
-        }
-        _ => return None,
-    };
-    Some(SoranetPrivacyEventV1 {
-        timestamp_unix,
-        mode,
-        kind,
-    })
 }
 fn determine_drain_index(
     totals: &IngestTotals,

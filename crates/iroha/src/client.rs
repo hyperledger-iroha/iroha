@@ -14291,6 +14291,108 @@ impl Client {
         norito::json::from_slice(response.body())
             .wrap_err("failed to decode typed fee quote response")
     }
+    /// Quote fees for an exact multisig-authority payload using its detached app-auth witness.
+    ///
+    /// The supplied signatures must be in canonical public-key order and include at least two
+    /// distinct members. This deliberately mirrors the stricter direct Kagemusha lifecycle
+    /// authorization floor instead of accepting a one-member weighted-threshold witness.
+    ///
+    /// # Errors
+    /// Returns an error if the payload, witness, multisig policy, request binding, signatures,
+    /// Torii response, or typed response decoding fails validation.
+    pub fn quote_fees_with_multisig_witness(
+        &self,
+        payload: &TransactionPayload,
+        witness: &CanonicalRequestWitnessV1,
+    ) -> Result<FeeQuoteResponse> {
+        if payload.network_id() != Some(&self.network_id) {
+            return Err(eyre!("fee-quote payload network differs from the client network"));
+        }
+        if witness.subject_account != payload.authority {
+            return Err(eyre!(
+                "fee-quote witness subject differs from the payload authority"
+            ));
+        }
+        let AccountController::Multisig(policy) = payload.authority.controller() else {
+            return Err(eyre!(
+                "multisig-witness fee quoting requires a multisig payload authority"
+            ));
+        };
+        if witness.signatures.len() < 2 || witness.signatures.len() > policy.members().len() {
+            return Err(eyre!(
+                "fee-quote witness must contain at least two and no more than the policy member count"
+            ));
+        }
+        if witness.signatures.windows(2).any(|pair| {
+            pair[0].signer >= pair[1].signer
+        }) {
+            return Err(eyre!(
+                "fee-quote witness signers must be distinct and in canonical public-key order"
+            ));
+        }
+        let message = canonical_request_witness_message(witness)?;
+        let mut total_weight = 0_u32;
+        for entry in &witness.signatures {
+            let member = policy
+                .members()
+                .iter()
+                .find(|member| member.public_key() == &entry.signer)
+                .ok_or_else(|| eyre!("fee-quote witness includes a nonmember signer"))?;
+            iroha_crypto::verify_signature_for_admission(
+                &entry.signature,
+                &entry.signer,
+                &message,
+            )
+                .wrap_err("fee-quote witness signature failed verification")?;
+            total_weight = total_weight
+                .checked_add(u32::from(member.weight()))
+                .ok_or_else(|| eyre!("fee-quote witness weight overflow"))?;
+        }
+        if total_weight < u32::from(policy.threshold()) {
+            return Err(eyre!(
+                "fee-quote witness signatures do not satisfy the multisig threshold"
+            ));
+        }
+
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_uri::FEES_QUOTE.trim_start_matches('/'),
+        );
+        let body = norito::json::to_vec(&FeeQuoteRequest {
+            payload: payload.clone(),
+        })?;
+        let expected_hash =
+            canonical_network_request_hash(&self.network_id, &HttpMethod::POST, &url, &body)?;
+        if witness.canonical_request_hash != expected_hash {
+            return Err(eyre!(
+                "fee-quote witness does not bind the exact canonical request"
+            ));
+        }
+        let witness_header = canonical_request_witness_header_value(witness)?;
+        let response = self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::POST, url)
+                .header(HEADER_WITNESS, &witness_header)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(body)
+                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
+        )?;
+        if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "fee quote response exceeds the {} byte limit",
+                FEE_QUOTE_RESPONSE_MAX_BYTES
+            ));
+        }
+        if response.status() != StatusCode::OK {
+            return Err(
+                ResponseReport::with_msg("failed to quote transaction fees", &response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
+        }
+        norito::json::from_slice(response.body())
+            .wrap_err("failed to decode typed fee quote response")
+    }
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
     ///
     /// # Errors

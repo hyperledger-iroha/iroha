@@ -979,6 +979,9 @@ pub enum ParseError {
     /// SoraNet handshake configuration selected an unsupported cryptographic suite.
     #[error("Invalid SoraNet handshake configuration")]
     InvalidSoranetHandshakeConfig,
+    /// SoraNet privacy telemetry configuration violated a bounded runtime invariant.
+    #[error("Invalid SoraNet privacy telemetry configuration")]
+    InvalidSoranetPrivacyConfig,
     /// Compute lane configuration contained invalid or inconsistent values.
     #[error("Invalid compute configuration")]
     InvalidComputeConfig,
@@ -6503,7 +6506,7 @@ pub struct SoranetPrivacy {
     /// Buckets after which pending data is force-flushed.
     #[config(default = "actual::SoranetPrivacy::DEFAULT_FORCE_FLUSH_BUCKETS")]
     pub force_flush_buckets: u64,
-    /// Maximum number of completed buckets retained in memory.
+    /// Per-queue cap for completed, open-event, and incomplete-share buckets.
     #[config(default = "actual::SoranetPrivacy::DEFAULT_MAX_COMPLETED_BUCKETS")]
     pub max_completed_buckets: usize,
     /// Maximum bucket lag tolerated for collector shares before suppression.
@@ -6531,57 +6534,165 @@ impl Default for SoranetPrivacy {
     }
 }
 impl SoranetPrivacy {
-    fn parse(self) -> actual::SoranetPrivacy {
-        let bucket_secs = if self.bucket_secs == 0 {
-            actual::SoranetPrivacy::DEFAULT_BUCKET_SECS
-        } else {
-            self.bucket_secs
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoranetPrivacy {
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidSoranetPrivacyConfig).attach(message));
         };
-        let min_handshakes = if self.min_handshakes == 0 {
-            actual::SoranetPrivacy::DEFAULT_MIN_HANDSHAKES
-        } else {
-            self.min_handshakes
-        };
-        let flush_delay_buckets = if self.flush_delay_buckets == 0 {
-            actual::SoranetPrivacy::DEFAULT_FLUSH_DELAY_BUCKETS
-        } else {
-            self.flush_delay_buckets
-        };
-        let force_flush_buckets = if self.force_flush_buckets == 0 {
-            actual::SoranetPrivacy::DEFAULT_FORCE_FLUSH_BUCKETS
-        } else {
-            self.force_flush_buckets
-        };
-        let max_share_lag_buckets = if self.max_share_lag_buckets == 0 {
-            actual::SoranetPrivacy::DEFAULT_MAX_SHARE_LAG_BUCKETS
-        } else {
-            self.max_share_lag_buckets
-        };
-        let max_completed_buckets = if self.max_completed_buckets == 0 {
-            actual::SoranetPrivacy::DEFAULT_MAX_COMPLETED_BUCKETS
-        } else {
-            self.max_completed_buckets
-        };
-        let expected_shares = if self.expected_shares == 0 {
-            actual::SoranetPrivacy::DEFAULT_EXPECTED_SHARES
-        } else {
-            self.expected_shares
-        };
-        let event_buffer_capacity = if self.event_buffer_capacity == 0 {
-            actual::SoranetPrivacy::DEFAULT_EVENT_BUFFER_CAPACITY
-        } else {
-            self.event_buffer_capacity
-        };
-        actual::SoranetPrivacy {
-            bucket_secs,
-            min_handshakes,
-            flush_delay_buckets,
-            force_flush_buckets: force_flush_buckets.max(flush_delay_buckets),
-            max_completed_buckets,
-            max_share_lag_buckets,
-            expected_shares,
-            event_buffer_capacity,
+        if self.bucket_secs == 0 || self.bucket_secs > u64::from(u32::MAX) {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.bucket_secs must be in 1..={}, got {}",
+                    u32::MAX,
+                    self.bucket_secs
+                ),
+            );
         }
+        if self.min_handshakes == 0 {
+            emit(
+                emitter,
+                "network.soranet_privacy.min_handshakes must be greater than zero".to_owned(),
+            );
+        }
+        if self.flush_delay_buckets > actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1 {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.flush_delay_buckets must not exceed {}, got {}",
+                    actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1,
+                    self.flush_delay_buckets
+                ),
+            );
+        }
+        if self.force_flush_buckets == 0
+            || self.force_flush_buckets < self.flush_delay_buckets
+            || self.force_flush_buckets > actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1
+        {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.force_flush_buckets must be in {}..={}, got {}",
+                    self.flush_delay_buckets.max(1),
+                    actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1,
+                    self.force_flush_buckets
+                ),
+            );
+        }
+        if self.max_completed_buckets == 0
+            || self.max_completed_buckets > actual::SoranetPrivacy::MAX_BUCKET_BACKLOG_V1
+        {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.max_completed_buckets must be in 1..={}, got {}",
+                    actual::SoranetPrivacy::MAX_BUCKET_BACKLOG_V1,
+                    self.max_completed_buckets
+                ),
+            );
+        }
+        if self.max_share_lag_buckets == 0
+            || self.max_share_lag_buckets > actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1
+        {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.max_share_lag_buckets must be in 1..={}, got {}",
+                    actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1,
+                    self.max_share_lag_buckets
+                ),
+            );
+        }
+        if self.expected_shares == 0
+            || self.expected_shares > actual::SoranetPrivacy::MAX_EXPECTED_SHARES_V1
+        {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.expected_shares must be in 1..={}, got {}",
+                    actual::SoranetPrivacy::MAX_EXPECTED_SHARES_V1,
+                    self.expected_shares
+                ),
+            );
+        }
+        if self.event_buffer_capacity == 0
+            || self.event_buffer_capacity > actual::SoranetPrivacy::MAX_EVENT_BUFFER_CAPACITY_V1
+        {
+            emit(
+                emitter,
+                format!(
+                    "network.soranet_privacy.event_buffer_capacity must be in 1..={}, got {}",
+                    actual::SoranetPrivacy::MAX_EVENT_BUFFER_CAPACITY_V1,
+                    self.event_buffer_capacity
+                ),
+            );
+        }
+        actual::SoranetPrivacy {
+            bucket_secs: self.bucket_secs,
+            min_handshakes: self.min_handshakes,
+            flush_delay_buckets: self.flush_delay_buckets,
+            force_flush_buckets: self.force_flush_buckets,
+            max_completed_buckets: self.max_completed_buckets,
+            max_share_lag_buckets: self.max_share_lag_buckets,
+            expected_shares: self.expected_shares,
+            event_buffer_capacity: self.event_buffer_capacity,
+        }
+    }
+}
+
+#[cfg(test)]
+mod soranet_privacy_config_tests {
+    use super::*;
+
+    #[test]
+    fn parse_rejects_unbounded_privacy_state() {
+        let invalid = [
+            SoranetPrivacy {
+                max_completed_buckets: actual::SoranetPrivacy::MAX_BUCKET_BACKLOG_V1 + 1,
+                ..SoranetPrivacy::default()
+            },
+            SoranetPrivacy {
+                force_flush_buckets: actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1 + 1,
+                ..SoranetPrivacy::default()
+            },
+            SoranetPrivacy {
+                flush_delay_buckets: 0,
+                force_flush_buckets: 0,
+                ..SoranetPrivacy::default()
+            },
+            SoranetPrivacy {
+                max_share_lag_buckets: actual::SoranetPrivacy::MAX_BUCKET_WINDOW_V1 + 1,
+                ..SoranetPrivacy::default()
+            },
+            SoranetPrivacy {
+                expected_shares: actual::SoranetPrivacy::MAX_EXPECTED_SHARES_V1 + 1,
+                ..SoranetPrivacy::default()
+            },
+            SoranetPrivacy {
+                event_buffer_capacity: actual::SoranetPrivacy::MAX_EVENT_BUFFER_CAPACITY_V1 + 1,
+                ..SoranetPrivacy::default()
+            },
+        ];
+        for config in invalid {
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            let _error = emitter
+                .into_result()
+                .expect_err("unbounded privacy configuration must fail closed");
+        }
+    }
+
+    #[test]
+    fn parse_preserves_valid_zero_flush_delay() {
+        let config = SoranetPrivacy {
+            flush_delay_buckets: 0,
+            ..SoranetPrivacy::default()
+        };
+        let mut emitter = Emitter::new();
+        let parsed = config.parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("bounded privacy configuration must parse");
+        assert_eq!(parsed.flush_delay_buckets, 0);
     }
 }
 
@@ -8080,7 +8191,7 @@ impl Network {
                 None
             };
         let soranet_handshake = soranet_handshake.parse(emitter);
-        let soranet_privacy = user_soranet_privacy.parse();
+        let soranet_privacy = user_soranet_privacy.parse(emitter);
         let soranet_vpn = soranet_vpn.parse();
         let scion_listen_endpoint = scion_listen_endpoint.and_then(|endpoint| {
             let trimmed = endpoint.trim();
@@ -13166,7 +13277,7 @@ impl SoracloudRuntime {
             egress,
             hf,
         };
-        actual.assert_production_posture();
+        actual.assert_runtime_posture();
         actual
     }
 }
@@ -13355,36 +13466,22 @@ impl SoracloudRuntimeCacheBudgets {
     }
 }
 /// User-level mutable `Inrou` microVM ceilings.
+const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
+const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
+/// User-level Inrou PortableVM configuration and resource ceilings.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrou {
-    /// Maximum number of Inrou microVMs hosted concurrently.
-    #[config(default = "defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS")]
-    #[norito(default = "default_soracloud_runtime_inrou_max_concurrent_vms")]
-    pub max_concurrent_vms: NonZeroU16,
     /// Whether this validator advertises and materializes local Inrou workloads.
     #[config(default = "defaults::soracloud_runtime::INROU_ENABLED")]
     #[norito(default = "default_soracloud_runtime_inrou_enabled")]
     pub enabled: bool,
-    /// Exact enabled backend name; Inrou V1 accepts only `portable_vm`.
-    #[norito(default)]
-    pub backends: Option<Vec<String>>,
-    /// Exact PortableVM QEMU accelerator: `tcg`, `kvm`, `hvf`, or `whpx`.
-    #[norito(default)]
-    pub portable_vm_acceleration: Option<String>,
-    /// Dedicated non-root uid used to execute QEMU.
+    /// Fixed-corridor uid of the locked local `iroha-inrou` service account.
     #[norito(default)]
     pub portable_vm_uid: Option<NonZeroU32>,
-    /// Dedicated non-root primary gid used to execute QEMU.
+    /// Fixed-corridor gid of the locked local `iroha-inrou` primary group.
     #[norito(default)]
     pub portable_vm_gid: Option<NonZeroU32>,
-    /// Supplementary gids retained by QEMU after the privilege drop.
-    #[config(default = "Vec::new()")]
-    #[norito(default)]
-    pub portable_vm_supplementary_gids: Vec<NonZeroU32>,
-    /// Root-owned base directory for private QMP control sockets.
-    #[norito(default)]
-    pub portable_vm_control_dir: Option<WithOrigin<PathBuf>>,
     /// Maximum aggregate hosted CPU budget in millicores.
     #[norito(default)]
     pub max_cpu_millis: Option<NonZeroU32>,
@@ -13427,9 +13524,6 @@ pub struct SoracloudRuntimeInrou {
     #[norito(default = "default_soracloud_runtime_inrou_stop_grace_ms")]
     pub stop_grace_ms: DurationMs,
 }
-fn default_soracloud_runtime_inrou_max_concurrent_vms() -> NonZeroU16 {
-    defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
-}
 fn default_soracloud_runtime_inrou_enabled() -> bool {
     defaults::soracloud_runtime::INROU_ENABLED
 }
@@ -13459,15 +13553,9 @@ fn default_soracloud_runtime_inrou_stop_grace_ms() -> DurationMs {
     ))
 }
 impl_default!(SoracloudRuntimeInrou {
-    max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
     enabled: defaults::soracloud_runtime::INROU_ENABLED,
-    backends: None,
-    portable_vm_acceleration: None,
     portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
     portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
-    portable_vm_supplementary_gids: Vec::new(),
-    portable_vm_control_dir: defaults::soracloud_runtime::INROU_PORTABLE_VM_CONTROL_DIR
-        .map(|path| WithOrigin::inline(PathBuf::from(path))),
     max_cpu_millis: None,
     max_memory_bytes: None,
     max_storage_bytes: None,
@@ -13488,6 +13576,13 @@ impl_default!(SoracloudRuntimeInrou {
 });
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
+        if self.enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "first-release iroha3d forbids soracloud_runtime.inrou.enabled = true until PortableVM has mandatory mount, network, IPC, and MAC confinement",
+                ),
+            );
+        }
         if self.bundle_archive_max_compressed_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
         {
@@ -13552,77 +13647,11 @@ impl SoracloudRuntimeInrou {
                 )),
             );
         }
-        let mut backends = BTreeSet::new();
-        match self.backends.as_ref() {
-            Some(labels) => {
-                for label in labels {
-                    let backend = match label.as_str() {
-                        "portable_vm" => {
-                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm
-                        }
-                        other => {
-                            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                                format!(
-                                    "unsupported soracloud_runtime.inrou backend `{other}`; Inrou V1 accepts only `portable_vm`"
-                                ),
-                            ));
-                            continue;
-                        }
-                    };
-                    if !backends.insert(backend) {
-                        emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                            format!(
-                                "duplicate soracloud_runtime.inrou backend `{label}` is not allowed"
-                            ),
-                        ));
-                    }
-                }
-            }
-            None if self.enabled => {
-                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                    "soracloud_runtime.inrou.backends is required when Inrou hosting is enabled",
-                ))
-            }
-            None => {}
-        }
-        if self.enabled && backends.is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                "soracloud_runtime.inrou.backends must contain at least one backend when Inrou hosting is enabled",
-            ));
-        }
-        let portable_backend_enabled =
-            backends.contains(&iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm);
-        let portable_vm_acceleration = match self.portable_vm_acceleration.as_deref() {
-            Some("tcg") => actual::SoracloudRuntimePortableVmAcceleration::Tcg,
-            Some("kvm") => actual::SoracloudRuntimePortableVmAcceleration::Kvm,
-            Some("hvf") => actual::SoracloudRuntimePortableVmAcceleration::Hvf,
-            Some("whpx") => actual::SoracloudRuntimePortableVmAcceleration::Whpx,
-            Some(other) => {
-                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
-                    "unknown soracloud_runtime.inrou.portable_vm_acceleration `{other}`; expected `tcg`, `kvm`, `hvf`, or `whpx`"
-                )));
-                actual::SoracloudRuntimePortableVmAcceleration::Tcg
-            }
-            None if self.enabled && portable_backend_enabled => {
-                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                    "soracloud_runtime.inrou.portable_vm_acceleration is required when `portable_vm` is enabled",
-                ));
-                actual::SoracloudRuntimePortableVmAcceleration::Tcg
-            }
-            None => actual::SoracloudRuntimePortableVmAcceleration::Tcg,
-        };
-        if !portable_backend_enabled && self.portable_vm_acceleration.is_some() {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                "soracloud_runtime.inrou.portable_vm_acceleration is only valid when `portable_vm` is enabled",
-            ));
-        }
+        let backends = BTreeSet::new();
+        let portable_backend_enabled = self.enabled;
         for (field, present) in [
             ("portable_vm_uid", self.portable_vm_uid.is_some()),
             ("portable_vm_gid", self.portable_vm_gid.is_some()),
-            (
-                "portable_vm_control_dir",
-                self.portable_vm_control_dir.is_some(),
-            ),
         ] {
             if self.enabled && portable_backend_enabled && !present {
                 emitter.emit(
@@ -13638,33 +13667,18 @@ impl SoracloudRuntimeInrou {
                 );
             }
         }
-        if !portable_backend_enabled && !self.portable_vm_supplementary_gids.is_empty() {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                "soracloud_runtime.inrou.portable_vm_supplementary_gids is only valid when `portable_vm` is enabled",
-            ));
-        }
-        let mut portable_vm_supplementary_gids = self.portable_vm_supplementary_gids.clone();
-        portable_vm_supplementary_gids.sort_unstable();
-        if portable_vm_supplementary_gids
-            .windows(2)
-            .any(|pair| pair[0] == pair[1])
-        {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                "soracloud_runtime.inrou.portable_vm_supplementary_gids must not contain duplicates",
-            ));
-            portable_vm_supplementary_gids.dedup();
-        }
-        let portable_vm_control_dir = self
-            .portable_vm_control_dir
-            .as_ref()
-            .map(WithOrigin::resolve_relative_path);
-        if portable_vm_control_dir
-            .as_ref()
-            .is_some_and(|path| !path.is_absolute())
-        {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
-                "soracloud_runtime.inrou.portable_vm_control_dir must resolve to an absolute path",
-            ));
+        for (field, value) in [
+            ("portable_vm_uid", self.portable_vm_uid),
+            ("portable_vm_gid", self.portable_vm_gid),
+        ] {
+            if value.is_some_and(|value| {
+                !(SORACLOUD_INROU_PRIMARY_ID_MIN..SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE)
+                    .contains(&value.get())
+            }) {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.{field} must be in the fixed host-reserved corridor {SORACLOUD_INROU_PRIMARY_ID_MIN}..{SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE} (upper bound exclusive)"
+                )));
+            }
         }
         for (field, present) in [
             ("max_cpu_millis", self.max_cpu_millis.is_some()),
@@ -13680,14 +13694,11 @@ impl SoracloudRuntimeInrou {
             }
         }
         actual::SoracloudRuntimeInrou {
-            max_concurrent_vms: self.max_concurrent_vms,
-            enabled: self.enabled,
+            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            enabled: false,
             backends,
-            portable_vm_acceleration,
             portable_vm_uid: self.portable_vm_uid,
             portable_vm_gid: self.portable_vm_gid,
-            portable_vm_supplementary_gids,
-            portable_vm_control_dir,
             max_cpu_millis: self
                 .max_cpu_millis
                 .unwrap_or(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS),
@@ -31988,7 +31999,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
-        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+        Emitter, LaneId, NexusFees, NonZeroU32, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
     };
     use crate::parameters::{
         actual, defaults,
@@ -35447,12 +35458,8 @@ publish_delay_seconds = 17
                 r#"
 [inrou]
 enabled = {enabled}
-max_concurrent_vms = 8
-backends = ["portable_vm"]
-portable_vm_acceleration = "tcg"
-portable_vm_uid = 60001
-portable_vm_gid = 60001
-portable_vm_control_dir = "/run/iroha-inrou-test"
+portable_vm_uid = 70000
+portable_vm_gid = 70000
 max_cpu_millis = 8000
 max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
@@ -35487,13 +35494,14 @@ max_bytes_per_minute = 1048576
     #[test]
     #[should_panic(expected = "egress.rate_per_minute")]
     fn soracloud_runtime_production_mode_requires_fail_closed_egress_limits() {
-        let _ = load_root(production_soracloud_runtime_table(Some(true), false));
+        let _ = load_root(production_soracloud_runtime_table(None, false));
     }
     #[test]
     fn soracloud_runtime_production_mode_accepts_bounded_posture() {
-        let actual = load_root(production_soracloud_runtime_table(Some(true), true));
+        let actual = load_root(production_soracloud_runtime_table(None, true));
         let runtime = actual.soracloud_runtime;
         assert!(runtime.production_mode);
+        assert!(!runtime.inrou.enabled);
         assert_eq!(
             runtime.egress.rate_per_minute.expect("rate quota").get(),
             60
@@ -35511,9 +35519,9 @@ max_bytes_per_minute = 1048576
         );
     }
     #[test]
-    #[should_panic(expected = "inrou.enabled")]
-    fn soracloud_runtime_production_mode_rejects_disabled_inrou() {
-        let _ = load_root(production_soracloud_runtime_table(None, false));
+    #[should_panic(expected = "first-release iroha3d forbids")]
+    fn soracloud_runtime_first_release_rejects_enabled_inrou() {
+        let _ = load_root(production_soracloud_runtime_table(Some(true), true));
     }
     #[test]
     #[should_panic(expected = "sponsor payer requires fee_program_id")]
@@ -35560,18 +35568,12 @@ max_bytes_per_minute = 1048576
         );
     }
     #[test]
-    #[should_panic(expected = "inrou.backends")]
-    fn soracloud_runtime_enabled_inrou_requires_explicit_backends() {
-        let _ = load_root(table_with_soracloud_runtime("[inrou]\nenabled = true\n"));
-    }
-    #[test]
-    fn soracloud_runtime_rejects_retired_firecracker_backend() {
+    fn soracloud_runtime_portable_vm_requires_dedicated_identity() {
         let result =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
                 r#"
 [inrou]
 enabled = true
-backends = ["firecracker_kvm"]
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
@@ -35579,8 +35581,98 @@ max_storage_bytes = 10737418240
             )));
         assert!(
             result.is_err(),
-            "Firecracker must not remain selectable through first-release configuration"
+            "PortableVM must fail closed without an explicit uid and gid"
         );
+    }
+    #[test]
+    fn soracloud_runtime_portable_vm_rejects_ids_outside_the_fixed_corridor() {
+        for identity_fields in [
+            "portable_vm_uid = 65535\nportable_vm_gid = 70001",
+            "portable_vm_uid = 524288\nportable_vm_gid = 70001",
+            "portable_vm_uid = 4294967294\nportable_vm_gid = 70001",
+            "portable_vm_uid = 70000\nportable_vm_gid = 4294967295",
+        ] {
+            let result = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!(
+                    r#"
+[inrou]
+enabled = true
+{identity_fields}
+max_cpu_millis = 1000
+max_memory_bytes = 1073741824
+max_storage_bytes = 10737418240
+"#,
+                )),
+            ));
+            assert!(
+                result.is_err(),
+                "primary uid/gid values outside the fixed reservation corridor must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_release_gate_rejects_enabled_inrou_at_fixed_corridor_boundaries() {
+        let runtime =
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                r#"
+[inrou]
+enabled = true
+portable_vm_uid = 65536
+portable_vm_gid = 524287
+max_cpu_millis = 1000
+max_memory_bytes = 1073741824
+max_storage_bytes = 10737418240
+"#,
+            )));
+        assert!(
+            runtime.is_err(),
+            "even structurally reserved primary ids cannot bypass the first-release hosting gate"
+        );
+    }
+    #[test]
+    fn soracloud_runtime_rejects_retired_portable_vm_selectors() {
+        for retired in [
+            "max_concurrent_vms = 1",
+            "backends = [\"portable_vm\"]",
+            "portable_vm_acceleration = \"kvm\"",
+            "portable_vm_supplementary_gids = [108]",
+            "portable_vm_control_dir = \"/run/iroha-inrou-test\"",
+        ] {
+            let result = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!(
+                    r#"
+[inrou]
+enabled = true
+portable_vm_uid = 70000
+portable_vm_gid = 70001
+{retired}
+max_cpu_millis = 1000
+max_memory_bytes = 1073741824
+max_storage_bytes = 10737418240
+"#,
+                )),
+            ));
+            assert!(
+                result.is_err(),
+                "retired first-release selector `{retired}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_nonproduction_also_rejects_enabled_inrou() {
+        let result =
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                r#"
+[inrou]
+enabled = true
+portable_vm_uid = 70000
+portable_vm_gid = 70001
+max_cpu_millis = 1000
+max_memory_bytes = 1073741824
+max_storage_bytes = 10737418240
+"#,
+            )));
+        assert!(result.is_err());
     }
     #[test]
     fn soracloud_runtime_disabled_inrou_keeps_backend_set_empty() {
@@ -35622,14 +35714,6 @@ model_artifact_bytes = 5120
 model_weight_bytes = 6144
 
 [inrou]
-max_concurrent_vms = 5
-enabled = true
-backends = ["portable_vm"]
-portable_vm_acceleration = "tcg"
-portable_vm_uid = 60001
-portable_vm_gid = 60001
-portable_vm_supplementary_gids = [108]
-portable_vm_control_dir = "/run/iroha-inrou-test"
 max_cpu_millis = 5000
 max_memory_bytes = 5368709120
 max_storage_bytes = 10737418240
@@ -35691,7 +35775,7 @@ policy_digest_hex = "{}"
             runtime.hydration_concurrency.get() => 7,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
-            inrou.max_concurrent_vms.get() => 5,
+            inrou.max_concurrent_vms.get() => 1,
             inrou.bundle_archive_max_compressed_bytes.get() => 10_000,
             inrou.bundle_archive_max_decoded_bytes.get() => 40_000,
             inrou.bundle_archive_max_entries.get() => 123,
@@ -35716,10 +35800,12 @@ policy_digest_hex = "{}"
             hf.inference_max_response_bytes => 7_654_321,
             hf.import_file_allowlist => vec!["*.safetensors".to_string(), "config.json".to_string()],
         );
-        assert!(inrou.enabled);
+        assert!(!inrou.enabled);
         assert_eq!(inrou.max_cpu_millis.get(), 5_000);
         assert_eq!(inrou.max_memory_bytes.get(), 5_368_709_120);
         assert_eq!(inrou.max_storage_bytes.get(), 10_737_418_240);
+        assert_eq!(inrou.portable_vm_uid, None);
+        assert_eq!(inrou.portable_vm_gid, None);
         assert!(matches!(
             &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority

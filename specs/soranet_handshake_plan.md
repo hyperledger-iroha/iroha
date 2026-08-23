@@ -25,7 +25,7 @@ summary: Outline for SNNet-1a handshake design and review.
 | Implementation effort | Custom Noise framing inside a QUIC stream; deterministic behaviour under our control. | Uses existing TLS libs but needs patches for PQ suites, ECH, and deterministic padding. |
 | Interop & testing | Harness can generate canonical vectors; fewer library differences. | Behaviour varies by TLS implementation, challenging for reproducible fixtures. |
 | Ossification risk | GREASE + custom TLVs maintained by spec. | TLS middleboxes may block new extensions; GREASE limited to what TLS allows. |
-| Decision | Adopt as primary transport (WG resolution 2026‑02‑12). | Retained as audit fallback until PQ TLS matures. |
+| Decision | Adopt as the first-release transport (WG resolution 2026‑02‑12). | Rejected as an alternate first-release path. |
 
 ## Crypto Review Feedback (Feb 2026)
 
@@ -34,7 +34,10 @@ summary: Outline for SNNet-1a handshake design and review.
   1. Dual-KDF (`HKDF(classical || pq, transcript_hash)`) confirmed secure; transcript hash must include TLV ordering and GREASE bytes (already documented).
   2. ML-KEM-768 mandatory; ML-KEM-1024 optional. Classical-only clients must trigger downgrade alarms and rejection pre-KDF.
   3. Dilithium3 signatures required for descriptors/salt announcements; Ed25519 witness retained for tooling.
-  4. TLS fallback permitted only for audit paths with session resumption disabled until PQ TLS stabilises.
-  5. Action items: publish handshake test vectors (baseline/downgrade/GREASE), document TLS fallback audit procedure, ensure harness covers downgrade telemetry.
+  4. There is no PQ-TLS fallback handshake in the first-release protocol;
+     audits exercise the same QUIC + Noise path that production uses.
+  5. Action items: publish handshake test vectors (baseline/downgrade/GREASE),
+     document rejection of alternate handshakes, and ensure the harness covers
+     downgrade telemetry.
 
 Feedback recorded in WG minutes; this plan now reflects the agreed baseline.

@@ -2302,22 +2302,6 @@ fn render_peer_config(
     );
     if taira {
         soracloud_runtime.insert("production_mode".into(), Value::Boolean(true));
-        let mut inrou = Table::new();
-        inrou.insert("enabled".into(), Value::Boolean(true));
-        inrou.insert("max_concurrent_vms".into(), Value::Integer(1));
-        inrou.insert(
-            "backends".into(),
-            Value::Array(vec![Value::String("portable_vm".to_owned())]),
-        );
-        inrou.insert(
-            "portable_vm_acceleration".into(),
-            Value::String("hvf".to_owned()),
-        );
-        inrou.insert("max_cpu_millis".into(), Value::Integer(1_000));
-        inrou.insert("max_memory_bytes".into(), Value::Integer(1_073_741_824));
-        inrou.insert("max_storage_bytes".into(), Value::Integer(10_737_418_240));
-        soracloud_runtime.insert("inrou".into(), Value::Table(inrou));
-
         let (_, runtime_public_key) = peer
             .runtime_signer_public_key
             .try_to_bytes()
@@ -5468,15 +5452,10 @@ mod tests {
                 PeerId::from(peer.public_key.clone())
             );
             let inrou = &parsed.soracloud_runtime.inrou;
-            assert!(inrou.enabled);
-            assert_eq!(inrou.max_concurrent_vms.get(), 1);
-            assert_eq!(inrou.max_cpu_millis.get(), 1_000);
-            assert_eq!(inrou.max_memory_bytes.get(), 1_073_741_824);
-            assert_eq!(inrou.max_storage_bytes.get(), 10_737_418_240);
-            assert_eq!(
-                inrou.portable_vm_acceleration,
-                actual::SoracloudRuntimePortableVmAcceleration::Hvf
-            );
+            assert!(!inrou.enabled);
+            assert!(inrou.backends.is_empty());
+            assert!(inrou.portable_vm_uid.is_none());
+            assert!(inrou.portable_vm_gid.is_none());
 
             let key_path = taira_runtime_signer_key_path(temp.path(), peer_index);
             let key_record = fs::read_to_string(&key_path).expect("read Taira runtime signer key");

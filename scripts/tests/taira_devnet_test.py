@@ -52,10 +52,7 @@ class FakeRuntime:
         self.api_port = module.DEFAULT_API_PORT
         self.help_options = {
             option
-            for _binary, _subcommands, options in (
-                *module.CLI_SURFACES,
-                *module.INROU_CLI_SURFACES,
-            )
+            for _binary, _subcommands, options in module.CLI_SURFACES
             for option in options
         } | {"--public-root", "--json"}
         self.sumeragi_status_http = 200
@@ -122,29 +119,6 @@ class FakeRuntime:
         elif "--check-config" in values:
             config = Path(values[values.index("--config") + 1])
             module.require_canonical_taira_storage_profiles(config.parent)
-        elif "inrou-stage" in values:
-            stage = Path(values[values.index("--stage-dir") + 1])
-            (stage / "manifests").mkdir(parents=True, mode=0o700)
-            (stage / "payloads" / "guest" / "aarch64").mkdir(
-                parents=True, mode=0o700
-            )
-            (stage / module.INROU_STAGE_RECEIPT_FILE).write_text(
-                '{"schema_version":1}\n', encoding="utf-8"
-            )
-            (stage / module.INROU_STAGE_BUNDLE_PAYLOAD).write_bytes(b"bundle")
-            (stage / module.INROU_STAGE_BUNDLE_MANIFEST).write_bytes(b"bundle-manifest")
-            (stage / module.INROU_STAGE_GUEST_MANIFEST).write_bytes(b"guest-manifest")
-            (stage / module.INROU_STAGE_GUEST_PAYLOAD / "aarch64" / "kernel").write_bytes(
-                b"kernel"
-            )
-            stage.chmod(0o700)
-            for staged_file in (
-                stage / module.INROU_STAGE_RECEIPT_FILE,
-                stage / module.INROU_STAGE_BUNDLE_PAYLOAD,
-                stage / module.INROU_STAGE_BUNDLE_MANIFEST,
-                stage / module.INROU_STAGE_GUEST_MANIFEST,
-            ):
-                staged_file.chmod(0o600)
         elif values[0] == "/bin/bash" and values[1].endswith("/start.sh"):
             target = Path(str(kwargs["cwd"]))
             self.start_env = dict(kwargs["env"])
@@ -237,7 +211,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        for name in ("kagami", "iroha3d_taira", "iroha", "sorafs-node"):
+        for name in ("kagami", "iroha3d_taira", "iroha"):
             executable(self.bin_dir / name)
 
     def tearDown(self) -> None:
@@ -267,20 +241,6 @@ class TairaDevnetTests(unittest.TestCase):
             ]
         )
 
-    def inrou_canary_workspace(self) -> Path:
-        """Create the exact three-file runtime-only canary interface."""
-
-        workspace = self.root / "inrou-canary"
-        workspace.mkdir()
-        (workspace / module.INROU_CANARY_CONTAINER_FILE).write_text(
-            "{}\n", encoding="utf-8"
-        )
-        (workspace / module.INROU_CANARY_SERVICE_FILE).write_text(
-            "{}\n", encoding="utf-8"
-        )
-        (workspace / module.INROU_CANARY_BUNDLE_FILE).write_bytes(b"bundle")
-        return workspace
-
     def generated_network(self, name: str) -> tuple[FakeRuntime, Path]:
         """Ask the fake Kagami runtime for one unmodified generated network."""
 
@@ -305,7 +265,8 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(report["final_height"], 2)
         self.assertEqual(report["transaction_hash"], "a" * 64)
         self.assertEqual(report["terminal_status"], "Applied")
-        self.assertFalse(report["inrou_canary"])
+        self.assertNotIn("inrou_canary", report)
+        self.assertNotIn("inrou_stage", report)
         kagami = next(
             command
             for command in runtime.commands
@@ -407,13 +368,13 @@ class TairaDevnetTests(unittest.TestCase):
         }
         self.assertEqual(mcp_roots, set(module.torii_roots(module.DEFAULT_API_PORT)))
 
-    def test_default_up_excludes_unused_sorafs_and_inrou_gates(self) -> None:
-        (self.bin_dir / "sorafs-node").unlink()
+    def test_default_up_preflights_only_shipping_surfaces(self) -> None:
         runtime = FakeRuntime()
 
         report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
 
-        self.assertFalse(report["inrou_canary"])
+        self.assertNotIn("inrou_canary", report)
+        self.assertNotIn("inrou_stage", report)
         help_commands = [
             command for command in runtime.commands if "--help" in command
         ]
@@ -422,35 +383,6 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertFalse(any("inrou-stage" in command for command in help_commands))
         self.assertFalse(any("inrou-canary" in command for command in help_commands))
-
-    def test_inrou_opt_in_requires_and_preflights_optional_toolchain(self) -> None:
-        workspace = self.inrou_canary_workspace()
-        (self.bin_dir / "sorafs-node").unlink()
-        runtime = FakeRuntime()
-        args = self.up_args("--inrou-canary-dir", str(workspace))
-
-        with self.assertRaisesRegex(module.DevnetError, "sorafs-node"):
-            module.up(args, run=runtime.run, request=runtime.request)
-
-        self.assertEqual(runtime.commands, [])
-        executable(self.bin_dir / "sorafs-node")
-
-        report = module.up(args, run=runtime.run, request=runtime.request)
-
-        self.assertTrue(report["inrou_canary"])
-        help_commands = [
-            command for command in runtime.commands if "--help" in command
-        ]
-        self.assertIn((str(self.bin_dir / "sorafs-node"), "--help"), help_commands)
-        self.assertIn(
-            (str(self.bin_dir / "iroha"), "taira", "inrou-stage", "--help"),
-            help_commands,
-        )
-        self.assertIn(
-            (str(self.bin_dir / "iroha"), "taira", "inrou-canary", "--help"),
-            help_commands,
-        )
-        self.assertFalse(any("doctor" in command for command in help_commands))
 
     def test_storage_overlay_fails_closed_before_rewriting_any_peer(self) -> None:
         source_nexus = (
@@ -860,138 +792,25 @@ class TairaDevnetTests(unittest.TestCase):
 
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
-        workspace = self.inrou_canary_workspace()
         report = module.up(
-            self.up_args(
-                "--full-doctor",
-                "--inrou-canary-dir",
-                str(workspace),
-            ),
+            self.up_args("--full-doctor"),
             run=runtime.run,
             request=runtime.request,
         )
-        stages = [
-            command
-            for command in runtime.commands
-            if "inrou-stage" in command and "--stage-dir" in command
-        ]
-        canaries = [
-            command
-            for command in runtime.commands
-            if "inrou-canary" in command and "--stage-dir" in command
-        ]
-        ingests = [command for command in runtime.commands if "ingest" in command]
         doctor = [
             command
             for command in runtime.commands
             if "doctor" in command and "--public-root" in command
         ]
-        self.assertTrue(report["inrou_canary"])
-        self.assertIsNotNone(report["inrou_stage"])
-        self.assertEqual(len(stages), 1)
-        self.assertEqual(len(canaries), 1)
-        self.assertEqual(len(ingests), module.PEER_COUNT * 2)
+        self.assertNotIn("inrou_canary", report)
+        self.assertNotIn("inrou_stage", report)
+        self.assertFalse(any("inrou-stage" in command for command in runtime.commands))
+        self.assertFalse(any("inrou-canary" in command for command in runtime.commands))
         self.assertEqual(len(doctor), 1)
-        self.assertTrue(
-            all(
-                f"--max-capacity-bytes={module.TAIRA_SORAFS_MAX_CAPACITY_BYTES}"
-                in command
-                for command in ingests
-            )
-        )
         self.assertEqual(
-            {
-                next(value for value in command if value.startswith("--data-dir="))
-                for command in ingests
-            },
-            {
-                "--data-dir="
-                + str(
-                    (
-                        self.root
-                        / "state"
-                        / "network"
-                        / "state"
-                        / f"peer{index}"
-                        / "sorafs"
-                    ).resolve()
-                )
-                for index in range(module.PEER_COUNT)
-            },
+            doctor[0][doctor[0].index("--public-root") + 1],
+            "http://127.0.0.1:29080/",
         )
-        stage = stages[0]
-        canary = canaries[0]
-        self.assertEqual(
-            stage[stage.index("--container") + 1],
-            str((workspace / module.INROU_CANARY_CONTAINER_FILE).resolve()),
-        )
-        self.assertEqual(
-            stage[stage.index("--service") + 1],
-            str((workspace / module.INROU_CANARY_SERVICE_FILE).resolve()),
-        )
-        self.assertEqual(
-            stage[stage.index("--bundle-file") + 1],
-            str((workspace / module.INROU_CANARY_BUNDLE_FILE).resolve()),
-        )
-        self.assertEqual(
-            canary[canary.index("--stage-dir") + 1],
-            stage[stage.index("--stage-dir") + 1],
-        )
-        self.assertIn("--fee-payer", canary)
-        self.assertEqual(doctor[0][doctor[0].index("--public-root") + 1], "http://127.0.0.1:29080/")
-        ping_index = next(
-            index
-            for index, command in enumerate(runtime.commands)
-            if "ping" in command and "--no-wait" in command
-        )
-        status_index = next(
-            index
-            for index, command in enumerate(runtime.commands)
-            if "status" in command and "--wait" in command
-        )
-        stage_index = runtime.commands.index(stage)
-        ingest_indexes = [runtime.commands.index(command) for command in ingests]
-        start_index = next(
-            index
-            for index, command in enumerate(runtime.commands)
-            if command[0] == "/bin/bash" and command[1].endswith("start.sh")
-        )
-        canary_index = runtime.commands.index(canary)
-        doctor_index = runtime.commands.index(doctor[0])
-        self.assertLess(stage_index, min(ingest_indexes))
-        self.assertLess(max(ingest_indexes), start_index)
-        self.assertLess(ping_index, status_index)
-        self.assertLess(status_index, canary_index)
-        self.assertLess(canary_index, doctor_index)
-
-    def test_full_doctor_without_inrou_workspace_fails_before_commands(self) -> None:
-        runtime = FakeRuntime()
-
-        with self.assertRaisesRegex(
-            module.DevnetError, "--full-doctor requires --inrou-canary-dir"
-        ):
-            module.up(
-                self.up_args("--full-doctor"),
-                run=runtime.run,
-                request=runtime.request,
-            )
-
-        self.assertEqual(runtime.commands, [])
-        self.assertFalse((self.root / "state").exists())
-
-    def test_inrou_workspace_requires_all_three_regular_files(self) -> None:
-        runtime = FakeRuntime()
-        workspace = self.inrou_canary_workspace()
-        (workspace / module.INROU_CANARY_BUNDLE_FILE).unlink()
-
-        with self.assertRaisesRegex(module.DevnetError, "missing regular file"):
-            module.up(
-                self.up_args("--inrou-canary-dir", str(workspace)),
-                run=runtime.run,
-                request=runtime.request,
-            )
-
-        self.assertEqual(runtime.commands, [])
 
     def test_managed_directory_refuses_foreign_contents(self) -> None:
         foreign = self.root / "foreign"
@@ -1033,7 +852,7 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(runtime.commands, [])
 
-    def test_build_command_selects_only_the_requested_toolchain(self) -> None:
+    def test_build_command_selects_only_the_shipping_toolchain(self) -> None:
         command = module.cargo_build_command("local-release", Path("/tmp/taira-target"))
         self.assertEqual(command[0], str(REPO_ROOT / "scripts" / "cargo_fast.sh"))
         self.assertIn("--stable-local-metadata", command)
@@ -1046,19 +865,6 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertNotIn("external-software-signer-bin", rendered)
         self.assertIn("--locked", command)
         self.assertNotIn("--features", command)
-
-        inrou_command = module.cargo_build_command(
-            "local-release",
-            Path("/tmp/taira-target"),
-            include_inrou=True,
-        )
-        self.assertEqual(inrou_command.count("--bin"), 4)
-        self.assertIn("sorafs_node", inrou_command)
-        self.assertIn("sorafs-node", inrou_command)
-        self.assertEqual(
-            inrou_command[: len(command)],
-            command,
-        )
 
         runtime = FakeRuntime()
         state = module.managed_root(self.root / "state", create=True)
@@ -1295,6 +1101,14 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertIn("{up,check,down}", completed.stdout)
         self.assertNotIn("promote", completed.stdout.lower())
         self.assertNotIn("publish", completed.stdout.lower())
+        up_help = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "up", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(up_help.returncode, 0)
+        self.assertNotIn("--inrou-canary-dir", up_help.stdout)
 
     def test_retired_taira_orchestration_does_not_reappear(self) -> None:
         def names(directory: Path, pattern: str = "*taira*") -> set[str]:

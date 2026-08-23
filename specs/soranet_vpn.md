@@ -79,7 +79,7 @@ the same deterministic framing.
   value is configurable under `network.soranet_vpn` or advertised by the
   pre-quote profile; quote, session, and receipt records retain the resolved
   values needed to authorize and audit settlement.
-- **Helper tickets:** Helper tickets are fixed 664-byte v1 frames. Each tariff
+- **Helper tickets:** Helper tickets are fixed 696-byte v1 frames. Each tariff
   component occupies a fixed slot containing a canonical exact `Quantity`
   frame, so no implicit integer nano-XOR unit crosses the helper boundary. The
   node-side MAC key is configured only through
@@ -89,8 +89,11 @@ the same deterministic framing.
   newline), and startup pins its identity across a bounded read. Inline secret
   config is not accepted.
   MAC covers the session, quote, account hash, relay id, payment hash,
-  authorized Ed25519 metering public key, full deterministic tariff, and
-  expiry. The client helper may structurally decode those fields to construct
+  authorized Ed25519 metering public key, full deterministic tariff, the
+  domain-separated canonical hash of the ordered route pushes, excluded
+  routes, DNS servers, tunnel addresses, and MTU, and expiry. The client helper
+  recomputes that policy hash and rejects any mismatch before a worker can
+  mutate host networking. It may structurally decode ticket fields to construct
   usage vouchers because it does not possess the relay MAC secret, but that
   path grants no authority. Relays always verify the MAC and expiry, reject
   old-length tickets, and reject vouchers signed by any key other than the
@@ -152,9 +155,12 @@ the same deterministic framing.
   Each file contains exactly 64 lowercase hexadecimal characters, with no
   whitespace and no all-zero placeholder.
   Bootstrap frames are Norito envelopes with timestamp, nonce, and keyed MAC;
-  the backend rejects bad MACs, stale timestamps, and replayed nonces, and Unix
-  endpoints additionally check peer credentials against the configured allowed
-  uid/gid; peer identity does not replace the keyed bootstrap authentication.
+  the backend rejects bad MACs, stale timestamps, and replayed nonces. Replay
+  reservations and the accepted-time high-water mark are fsync-backed in the
+  private backend replay directory before admission, preserving that guarantee
+  across restarts and failing closed on clock rollback. Unix endpoints
+  additionally check peer credentials against the configured allowed uid/gid;
+  peer identity does not replace the keyed bootstrap authentication.
 - **Local helper secrecy:** Hidden helper workers read their connect payloads
   from stdin instead of argv, and that stdin payload is a magic-prefixed Norito
   frame rather than JSON. The helper's private state file is also a
@@ -162,6 +168,16 @@ the same deterministic framing.
   UX. Usage voucher signing derives the metering key and tariff from the helper
   ticket, and helper traffic counters are batched in memory with
   at-most-once-per-second state-file flushes plus a forced shutdown flush.
+  First-release privileged mutations are Linux-only and fail closed unless the
+  root-owned executable was entered directly through a set-user-ID transition:
+  the real UID must be non-root while the effective and saved UIDs are root.
+  Direct root, `sudo`, unprivileged, and capability-only invocation are refused
+  until a private root daemon can authenticate clients with `SO_PEERCRED`.
+  State persists that real UID, exact session id, and authenticated network
+  policy hash. Connect cannot replace another UID's state, while disconnect and
+  repair require both the same UID and an explicit matching `--session-id`.
+  `install-check` and `status` are observational and never persist caller-triggered
+  state changes.
 - **End-to-end metrics harness:** The adapter suite now includes a paced
   bridge→adapter round-trip that pumps data and cover cells over a duplex link
   and asserts ingress/egress counters for cover/data frames and bytes on both

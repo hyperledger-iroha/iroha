@@ -529,14 +529,16 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 Build one release-bound activation instruction from an authenticated V4 catalog
 
-**Usage:** `kagami kagemusha prepare-activation-v4 --promotion-id <PROMOTION_ID> --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
+**Usage:** `kagami kagemusha prepare-activation-v4 --promotion-id <PROMOTION_ID> --promotion-binding <PROMOTION_BINDING> --artifact-root <ARTIFACT_ROOT> --release-policy <RELEASE_POLICY> --manifest-sha256 <MANIFEST_SHA256> --runtime-effective-config-sha256 <RUNTIME_EFFECTIVE_CONFIG_SHA256> --verifier-version <VERIFIER_VERSION> --device-attestation-policy <DEVICE_ATTESTATION_POLICY> --policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS> --output <OUTPUT>`
 
 ###### **Options:**
 
 * `--promotion-id <PROMOTION_ID>` — Unique nonzero promotion-run identity reserved before validator qualification
+* `--promotion-binding <PROMOTION_BINDING>` — Exact canonical controller-signed promotion binding committed by activation
 * `--artifact-root <ARTIFACT_ROOT>` — Root containing lowercase manifest-digest release directories
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy configured on every validator
 * `--manifest-sha256 <MANIFEST_SHA256>` — Exact lowercase SHA-256 directory name of the release to activate
+* `--runtime-effective-config-sha256 <RUNTIME_EFFECTIVE_CONFIG_SHA256>` — Domain-separated SHA-256 shared by all four validator runtime projections
 * `--verifier-version <VERIFIER_VERSION>` — Next atomic Eq/Ep verifier version observed from live consensus state
 * `--device-attestation-policy <DEVICE_ATTESTATION_POLICY>` — Exact governed verifier policy derived from authenticated physical-device evidence. The policy and release are embedded in one composite consensus instruction
 * `--policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS>` — Explicit Unix timestamp used for the same certificate-validity checks as consensus. The activation is checked again against its actual block timestamp on every validator

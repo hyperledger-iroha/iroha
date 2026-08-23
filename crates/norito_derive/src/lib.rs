@@ -1662,10 +1662,6 @@ fn derive_struct_deserialize(
                         let ty = &f.ty;
                         if attrs.skip {
                             quote! { #name: Default::default() }
-                        } else if let Some(path) = attrs.default_fn.as_ref() {
-                            quote! { #name: (#path)() }
-                        } else if attrs.default {
-                            quote! { #name: Default::default() }
                         } else {
                             quote! {
                                 #name: {
@@ -2049,10 +2045,6 @@ fn derive_struct_deserialize(
                         let ty = &f.ty;
                         if attrs.skip {
                             quote! { let #idx_var = Default::default(); }
-                        } else if let Some(path) = attrs.default_fn.as_ref() {
-                            quote! { let #idx_var = (#path)(); }
-                        } else if attrs.default {
-                            quote! { let #idx_var = Default::default(); }
                         } else {
                             quote! {
                                 let #idx_var = {
@@ -2086,10 +2078,6 @@ fn derive_struct_deserialize(
                         let fixed_size = is_fixed_size(ty);
                         if attrs.skip {
                             quote! { let #idx_var = Default::default(); }
-                        } else if let Some(path) = attrs.default_fn.as_ref() {
-                            quote! { let #idx_var = (#path)(); }
-                        } else if attrs.default {
-                            quote! { let #idx_var = Default::default(); }
                         } else if let Some(len_expr) = u8_array_len(ty) {
                             quote! {
                                 let #idx_var = {
@@ -2102,16 +2090,10 @@ fn derive_struct_deserialize(
                         } else if is_self_delimiting(ty) {
                             quote! {
                                 let #idx_var = {
-                                    let data_ptr = unsafe { data_base.add(__data_off) };
-                                    let remaining = total_rem
-                                        .checked_sub(__data_off)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    let field_data =
-                                        unsafe { std::slice::from_raw_parts(data_ptr, remaining) };
-                                    let (value, used) =
-                                        norito::core::decode_field_canonical::<#ty>(field_data)?;
-                                    __data_off += used;
-                                    value
+                                    norito::core::decode_context_field_prefix::<#ty>(
+                                        data_base,
+                                        &mut __data_off,
+                                    )?
                                 };
                             }
                         } else if let Some(fixed_len) = fixed_size {
@@ -2227,13 +2209,6 @@ fn derive_struct_deserialize(
                                 { #(#read_sizes_stmts_unnamed)* }
                                 // Decode payload sequentially
                                 let data_base = unsafe { ptr.add(__o) };
-                                let (base, total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                    ctx
-                                } else {
-                                    return Err(norito::core::Error::MissingPayloadContext);
-                                };
-                                let base_off = (data_base as usize).saturating_sub(base);
-                                let total_rem = total.saturating_sub(base_off);
                                 let mut __data_off = 0usize;
                                 let mut __sz_i = 0usize;
                                 #(#packed_unnamed_stmts_hybrid)*
@@ -2614,6 +2589,34 @@ fn derive_enum_serialize(
     }
 }
 
+fn binary_field_value_with_default(
+    attrs: &FieldAttr,
+    ty: &syn::Type,
+    decode: TokenStream2,
+    generics: &mut Generics,
+) -> TokenStream2 {
+    let fallback = if let Some(path) = attrs.default_fn.as_ref() {
+        Some(quote! { (#path)() })
+    } else if attrs.default {
+        add_bound(generics, ty, quote!(Default));
+        Some(quote! { Default::default() })
+    } else {
+        None
+    };
+    fallback.map_or_else(
+        || quote! { (#decode)? },
+        |fallback| {
+            quote! {
+                match (#decode) {
+                    Ok(value) => value,
+                    Err(norito::core::Error::LengthMismatch) => #fallback,
+                    Err(error) => return Err(error),
+                }
+            }
+        },
+    )
+}
+
 /// Generate `NoritoDeserialize` implementation for an enum.
 fn derive_enum_deserialize(
     ident: &syn::Ident,
@@ -2653,74 +2656,59 @@ fn derive_enum_deserialize(
                             quote! {
                                 let #idx_var = Default::default();
                             }
-                        } else if let Some(path) = attrs.default_fn.as_ref() {
-                            quote! {
-                                let #idx_var = (#path)();
-                            }
-                        } else if attrs.default {
-                            add_bound(&mut r#gen, ty, quote!(Default));
-                            quote! {
-                                let #idx_var = Default::default();
-                            }
                         } else {
                             add_bound(&mut r#gen, ty, quote!(for<'__d> norito::core::NoritoDeserialize<'__d>));
                             add_bound(&mut r#gen, ty, quote!(norito::core::NoritoSerialize));
                             let is_sd = is_self_delimiting(&f.ty);
                             let fixed_size = is_fixed_size(&f.ty);
                             let is_fixed = fixed_size.is_some();
-                            if is_sd || is_fixed {
+                            let decode = if is_sd || is_fixed {
                                 if let Some(len_expr) = u8_array_len(ty) {
                                     quote! {
-                                        let #idx_var = {
-                                            if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_byte_array::<{ #len_expr }>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            } else {
-                                                norito::core::decode_context_field_canonical::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            }
-                                        };
+                                        if norito::core::use_packed_struct() {
+                                            norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        } else {
+                                            norito::core::decode_context_field_canonical::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        }
                                     }
                                 } else {
                                     // Distinguish self-delimiting vs fixed-size for packed enums.
                                     if is_sd {
                                         quote! {
-                                            let #idx_var = {
-                                                if norito::core::use_packed_struct() {
-                                                    norito::core::decode_context_field_prefix::<#ty>(
-                                                        ptr,
-                                                        &mut offset,
-                                                    )?
-                                                } else {
-                                                    norito::core::decode_context_field_archived::<#ty>(
-                                                        ptr,
-                                                        &mut offset,
-                                                    )?
-                                                }
-                                            };
+                                            if norito::core::use_packed_struct() {
+                                                norito::core::decode_context_field_prefix::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )
+                                            } else {
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )
+                                            }
                                         }
                                     } else {
-                                    // Fixed-size (non [u8;N]) unnamed variant field
-                                    let fixed_len_lit = fixed_size.expect("fixed-size field");
-                                    quote! {
-                                            let #idx_var = {
-                                                if norito::core::use_packed_struct() {
-                                                    norito::core::decode_context_field_fixed_archived::<#ty>(
-                                                        ptr,
-                                                        &mut offset,
-                                                        #fixed_len_lit,
-                                                    )?
-                                                } else {
-                                                    norito::core::decode_context_field_archived::<#ty>(
-                                                        ptr,
-                                                        &mut offset,
-                                                    )?
-                                                }
-                                            };
+                                        // Fixed-size (non [u8;N]) unnamed variant field
+                                        let fixed_len_lit = fixed_size.expect("fixed-size field");
+                                        quote! {
+                                            if norito::core::use_packed_struct() {
+                                                norito::core::decode_context_field_fixed_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                    #fixed_len_lit,
+                                                )
+                                            } else {
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -2728,39 +2716,42 @@ fn derive_enum_deserialize(
                                 let is_opt_res = is_option_or_result(ty);
                                 if is_opt_res {
                                     quote! {
-                                        let #idx_var = {
-                                            norito::core::decode_context_field_canonical::<#ty>(
-                                                ptr,
-                                                &mut offset,
-                                            )?
-                                        };
+                                        norito::core::decode_context_field_canonical::<#ty>(
+                                            ptr,
+                                            &mut offset,
+                                        )
                                     }
                                 } else if is_vec_type(ty) {
                                     quote! {
-                                        let #idx_var = {
-                                            if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_field_canonical_or_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            }
-                                        };
-                                    }
-                                } else {
-                                    quote! {
-                                        let #idx_var = {
+                                        if norito::core::use_packed_struct() {
                                             norito::core::decode_context_field_canonical_or_archived::<#ty>(
                                                 ptr,
                                                 &mut offset,
-                                            )?
-                                        };
+                                            )
+                                        } else {
+                                            norito::core::decode_context_field_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    quote! {
+                                        norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                            ptr,
+                                            &mut offset,
+                                        )
                                     }
                                 }
+                            };
+                            let value = binary_field_value_with_default(
+                                &attrs,
+                                ty,
+                                decode,
+                                &mut r#gen,
+                            );
+                            quote! {
+                                let #idx_var = #value;
                             }
                         }
                     })
@@ -2791,103 +2782,91 @@ fn derive_enum_deserialize(
                             quote! {
                                 let #name = Default::default();
                             }
-                        } else if let Some(path) = attrs.default_fn.as_ref() {
-                            quote! {
-                                let #name = (#path)();
-                            }
-                        } else if attrs.default {
-                            add_bound(&mut r#gen, ty, quote!(Default));
-                            quote! {
-                                let #name = Default::default();
-                            }
                         } else {
                             add_bound(&mut r#gen, ty, quote!(for<'__d> norito::core::NoritoDeserialize<'__d>));
                             add_bound(&mut r#gen, ty, quote!(norito::core::NoritoSerialize));
                             let is_sd = is_self_delimiting(&f.ty);
                             let fixed_size = is_fixed_size(&f.ty);
                             let is_fixed = fixed_size.is_some();
-                            if is_sd || is_fixed {
+                            let decode = if is_sd || is_fixed {
                                 if let Some(len_expr) = u8_array_len(ty) {
                                     quote! {
-                                        let #name = {
-                                            if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_byte_array::<{ #len_expr }>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            }
-                                        };
+                                        if norito::core::use_packed_struct() {
+                                            norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        } else {
+                                            norito::core::decode_context_field_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        }
                                     }
                                 } else if is_sd {
                                     quote! {
-                                        let #name = {
-                                            if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_field_prefix::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            }
-                                        };
+                                        if norito::core::use_packed_struct() {
+                                            norito::core::decode_context_field_prefix::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        } else {
+                                            norito::core::decode_context_field_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        }
                                     }
                                 } else { // fixed-size, non-[u8;N]
                                     let fixed_len_lit = fixed_size.expect("fixed-size field");
                                     quote! {
-                                        let #name = {
-                                            if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_field_fixed_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                    #fixed_len_lit,
-                                                )?
-                                            } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
-                                                    ptr,
-                                                    &mut offset,
-                                                )?
-                                            }
-                                        };
+                                        if norito::core::use_packed_struct() {
+                                            norito::core::decode_context_field_fixed_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                                #fixed_len_lit,
+                                            )
+                                        } else {
+                                            norito::core::decode_context_field_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )
+                                        }
                                     }
                                 }
                             } else {
                                 let is_opt_res = is_option_or_result(ty);
                                 if is_opt_res {
                                     quote! {
-                                        let #name = {
-                                            norito::core::decode_context_field_canonical::<#ty>(
-                                                ptr,
-                                                &mut offset,
-                                            )?
-                                        };
+                                        norito::core::decode_context_field_canonical::<#ty>(
+                                            ptr,
+                                            &mut offset,
+                                        )
                                     }
                                 } else if is_vec_type(ty) {
                                     quote! {
-                                        let #name = {
-                                            norito::core::decode_context_field_canonical_or_archived::<#ty>(
-                                                ptr,
-                                                &mut offset,
-                                            )?
-                                        };
+                                        norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                            ptr,
+                                            &mut offset,
+                                        )
                                     }
                                 } else {
                                     quote! {
-                                        let #name = {
-                                            norito::core::decode_context_field_archived::<#ty>(
-                                                ptr,
-                                                &mut offset,
-                                            )?
-                                        };
+                                        norito::core::decode_context_field_archived::<#ty>(
+                                            ptr,
+                                            &mut offset,
+                                        )
                                     }
                                 }
+                            };
+                            let value = binary_field_value_with_default(
+                                &attrs,
+                                ty,
+                                decode,
+                                &mut r#gen,
+                            );
+                            quote! {
+                                let #name = #value;
                             }
                         }
                     })

@@ -29,35 +29,18 @@ fn soracloud_runtime_json_rejects_removed_proxy_only_field() {
         .expect_err("the removed proxy_only field must not be accepted as a compatibility alias");
 }
 #[test]
-fn soracloud_runtime_rejects_inrou_capacity_above_wire_limit() {
-    let mut table = base_table();
-    let runtime = table
-        .entry("soracloud_runtime")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("soracloud_runtime table");
-    runtime.insert(
-        "inrou".into(),
-        Value::Table(Table::from_iter([(
-            "max_concurrent_vms".into(),
-            Value::Integer(i64::from(u16::MAX) + 1),
-        )])),
-    );
-
-    let _ = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("Inrou capacity must fit the canonical u16 advert field");
-    norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(&format!(
-        r#"{{"max_concurrent_vms":{}}}"#,
-        u32::from(u16::MAX) + 1
-    ))
-    .expect_err("JSON Inrou capacity must fit the canonical u16 advert field");
-}
-#[test]
-fn soracloud_runtime_accepts_inrou_capacity_at_wire_limit() {
-    let parsed: crate::parameters::user::SoracloudRuntimeInrou =
-        norito::json::from_json(&format!(r#"{{"max_concurrent_vms":{}}}"#, u16::MAX))
-            .expect("the canonical u16 capacity limit must remain accepted");
-    assert_eq!(parsed.max_concurrent_vms.get(), u16::MAX);
+fn soracloud_runtime_json_rejects_retired_portable_vm_selectors() {
+    for field in [
+        r#""max_concurrent_vms":1"#,
+        r#""backends":["portable_vm"]"#,
+        r#""portable_vm_acceleration":"kvm""#,
+        r#""portable_vm_supplementary_gids":[108]"#,
+    ] {
+        norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(&format!(
+            "{{{field}}}"
+        ))
+        .expect_err("retired one-value PortableVM selectors must fail closed");
+    }
 }
 #[test]
 fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
@@ -74,9 +57,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
                 "model_weight_bytes":6144
             },
             "inrou":{
-                "max_concurrent_vms":5,
-                "backends":["portable_vm"],
-                "portable_vm_acceleration":"tcg",
                 "max_cpu_millis":5000,
                 "max_memory_bytes":5368709120,
                 "max_storage_bytes":10737418240,
@@ -124,7 +104,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
             .to_string_lossy()
             .ends_with("runtime/json")
     );
-    assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
     assert_eq!(
         parsed.inrou.max_cpu_millis.expect("CPU budget").get(),
         5_000
@@ -236,7 +215,6 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
             },
             "__REMOVED_FIELD__":{},
             "inrou":{
-                "max_concurrent_vms":5,
                 "start_grace_ms":7500,
                 "stop_grace_ms":9500
             },

@@ -46,6 +46,7 @@ use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
     VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
     VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+    vpn_helper_network_policy_hash_v1,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -157,8 +158,16 @@ enum Command {
     Status,
     #[command(about = "Connect using a bounded JSON payload read from stdin")]
     Connect,
-    Disconnect,
-    Repair,
+    #[command(about = "Disconnect the exact caller-owned VPN session")]
+    Disconnect {
+        #[arg(long)]
+        session_id: String,
+    },
+    #[command(about = "Repair the exact caller-owned VPN session")]
+    Repair {
+        #[arg(long)]
+        session_id: String,
+    },
     #[command(hide = true)]
     RunTunnel,
 }
@@ -177,8 +186,10 @@ struct State {
     bytes_out: u64,
     message: String,
     worker_identity: Option<WorkerProcessIdentity>,
+    owner_uid: Option<u32>,
     session_id: Option<String>,
     relay_endpoint: Option<String>,
+    network_policy_hash: Option<[u8; 32]>,
     applied_network: Option<AppliedNetworkState>,
 }
 impl Default for State {
@@ -196,8 +207,10 @@ impl Default for State {
             bytes_out: 0,
             message: "ready".to_owned(),
             worker_identity: None,
+            owner_uid: None,
             session_id: None,
             relay_endpoint: None,
+            network_policy_hash: None,
             applied_network: None,
         }
     }
@@ -223,6 +236,10 @@ struct WorkerProcessIdentity {
     executable_device: u64,
     executable_inode: u64,
     role: WorkerRole,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PrivilegedCaller {
+    uid: u32,
 }
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -490,16 +507,8 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), ControllerError> {
     match cli.command {
         Command::InstallCheck => {
-            let mut state = current_state()?;
-            state.message = if state.repair_required {
-                "repair required".to_owned()
-            } else if state.active {
-                "connected".to_owned()
-            } else {
-                "ready".to_owned()
-            };
-            persist_state(&state)?;
-            print_state(&state)?;
+            let state = current_state()?;
+            print_state(&install_check_display_state(&state))?;
             Ok(())
         }
         Command::Status => {
@@ -508,27 +517,91 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
             Ok(())
         }
         Command::Connect => {
+            let caller = current_privileged_caller()?;
             let _lock = acquire_controller_action_lock()?;
-            connect_command()
+            connect_command(caller)
         }
-        Command::Disconnect => {
+        Command::Disconnect { session_id } => {
+            let caller = current_privileged_caller()?;
             let _lock = acquire_controller_action_lock()?;
-            disconnect_command("idle")
+            disconnect_command("idle", caller, &session_id)
         }
-        Command::Repair => {
+        Command::Repair { session_id } => {
+            let caller = current_privileged_caller()?;
             let _lock = acquire_controller_action_lock()?;
-            repair_command()
+            repair_command(caller, &session_id)
         }
         Command::RunTunnel => {
+            let caller = current_privileged_caller()?;
             let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(run_tunnel_command(payload))
+            runtime.block_on(run_tunnel_command(payload, caller))
         }
     }
 }
-fn connect_command() -> Result<(), ControllerError> {
+fn install_check_display_state(state: &State) -> State {
+    let mut display = state.clone();
+    display.message = if state.repair_required {
+        "repair required".to_owned()
+    } else if state.active {
+        "connected".to_owned()
+    } else {
+        "ready".to_owned()
+    };
+    display
+}
+fn connect_payload_network_policy_hash(payload: &ConnectPayload) -> [u8; 32] {
+    vpn_helper_network_policy_hash_v1(
+        &payload.route_pushes,
+        &payload.excluded_routes,
+        &payload.dns_servers,
+        &payload.tunnel_addresses,
+        payload.mtu_bytes,
+    )
+}
+fn state_has_session_binding(state: &State) -> bool {
+    state.owner_uid.is_some()
+        || state.session_id.is_some()
+        || state.relay_endpoint.is_some()
+        || state.network_policy_hash.is_some()
+}
+fn authorize_connect_replacement(
+    state: &State,
+    caller: PrivilegedCaller,
+) -> Result<(), ControllerError> {
+    if state_has_session_binding(state) && state.owner_uid != Some(caller.uid) {
+        return Err(ControllerError::State(
+            "refusing to replace a VPN session owned by a different local UID".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn authorize_session_control(
+    state: &State,
+    caller: PrivilegedCaller,
+    session_id: &str,
+) -> Result<(), ControllerError> {
+    if state.owner_uid != Some(caller.uid) {
+        return Err(ControllerError::State(
+            "refusing privileged VPN control for a different local UID".to_owned(),
+        ));
+    }
+    if state.session_id.as_deref() != Some(session_id) {
+        return Err(ControllerError::State(
+            "refusing privileged VPN control for a different or stale session id".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn clear_session_binding(state: &mut State) {
+    state.owner_uid = None;
+    state.session_id = None;
+    state.relay_endpoint = None;
+    state.network_policy_hash = None;
+}
+fn connect_command(caller: PrivilegedCaller) -> Result<(), ControllerError> {
     let raw_payload = read_connect_payload_json_from_stdin()?;
     let parsed_payload = std::str::from_utf8(&raw_payload)
         .map_err(|error| {
@@ -538,6 +611,7 @@ fn connect_command() -> Result<(), ControllerError> {
     drop(raw_payload);
     let mut payload = parsed_payload?;
     let mut previous_state = current_state()?;
+    authorize_connect_replacement(&previous_state, caller)?;
     if let Some(existing_worker) = previous_state.worker_identity.as_ref() {
         terminate_worker(existing_worker)?;
         if !wait_for_worker_exit(existing_worker, Duration::from_secs(2))? {
@@ -550,8 +624,10 @@ fn connect_command() -> Result<(), ControllerError> {
     cleanup_persisted_network(&mut previous_state)?;
     let mut state = State {
         message: "starting".to_owned(),
+        owner_uid: Some(caller.uid),
         session_id: Some(payload.session_id.clone()),
         relay_endpoint: Some(payload.relay_endpoint.clone()),
+        network_policy_hash: Some(connect_payload_network_policy_hash(&payload)),
         ..State::default()
     };
     persist_state(&state)?;
@@ -594,6 +670,7 @@ fn connect_command() -> Result<(), ControllerError> {
         let _ = child.wait();
         state.worker_identity = None;
         state.message = "failed to deliver worker credentials".to_owned();
+        clear_session_binding(&mut state);
         if let Err(state_error) = persist_state(&state) {
             return Err(ControllerError::State(format!(
                 "{error}; failed to clear the blocked worker identity: {state_error}"
@@ -620,8 +697,13 @@ fn connect_command() -> Result<(), ControllerError> {
         "timed out waiting for VPN tunnel worker to report readiness".to_owned(),
     ))
 }
-fn disconnect_command(message: &str) -> Result<(), ControllerError> {
+fn disconnect_command(
+    message: &str,
+    caller: PrivilegedCaller,
+    session_id: &str,
+) -> Result<(), ControllerError> {
     let mut state = current_state()?;
+    authorize_session_control(&state, caller, session_id)?;
     if let Some(worker) = state.worker_identity.as_ref() {
         terminate_worker(worker)?;
         if !wait_for_worker_exit(worker, Duration::from_secs(2))? {
@@ -635,13 +717,15 @@ fn disconnect_command(message: &str) -> Result<(), ControllerError> {
     state.active = false;
     state.repair_required = false;
     state.worker_identity = None;
+    clear_session_binding(&mut state);
     state.message = message.to_owned();
     persist_state(&state)?;
     print_state(&state)?;
     Ok(())
 }
-fn repair_command() -> Result<(), ControllerError> {
+fn repair_command(caller: PrivilegedCaller, session_id: &str) -> Result<(), ControllerError> {
     let mut state = current_state()?;
+    authorize_session_control(&state, caller, session_id)?;
     if let Some(worker) = state.worker_identity.as_ref() {
         terminate_worker(worker)?;
         if !wait_for_worker_exit(worker, Duration::from_secs(2))? {
@@ -655,12 +739,16 @@ fn repair_command() -> Result<(), ControllerError> {
     state.active = false;
     state.repair_required = false;
     state.worker_identity = None;
+    clear_session_binding(&mut state);
     state.message = "repaired".to_owned();
     persist_state(&state)?;
     print_state(&state)?;
     Ok(())
 }
-async fn run_tunnel_command(mut payload: ConnectPayload) -> Result<(), ControllerError> {
+async fn run_tunnel_command(
+    mut payload: ConnectPayload,
+    caller: PrivilegedCaller,
+) -> Result<(), ControllerError> {
     // Install the signal handlers before any privileged network mutation. Signals delivered
     // while the handshake or synchronous setup is in progress remain queued and are consumed by
     // the packet loop, which then runs the normal rollback path.
@@ -668,7 +756,7 @@ async fn run_tunnel_command(mut payload: ConnectPayload) -> Result<(), Controlle
     let pid = std::process::id();
     let worker_identity = capture_worker_identity(pid, WorkerRole::Tunnel)?;
     let mut state = current_state()?;
-    authorize_worker_start(&state, &worker_identity, &payload)?;
+    authorize_worker_start(&state, &worker_identity, &payload, caller)?;
     state.active = false;
     state.repair_required = false;
     state.worker_identity = Some(worker_identity.clone());
@@ -881,13 +969,16 @@ fn authorize_worker_start(
     state: &State,
     worker_identity: &WorkerProcessIdentity,
     payload: &ConnectPayload,
+    caller: PrivilegedCaller,
 ) -> Result<(), ControllerError> {
     let exact_start_record = !state.active
         && !state.repair_required
         && state.message == "starting"
         && state.worker_identity.as_ref() == Some(worker_identity)
+        && state.owner_uid == Some(caller.uid)
         && state.session_id.as_deref() == Some(payload.session_id.as_str())
         && state.relay_endpoint.as_deref() == Some(payload.relay_endpoint.as_str())
+        && state.network_policy_hash == Some(connect_payload_network_policy_hash(payload))
         && state.applied_network.is_none();
     if !exact_start_record {
         return Err(ControllerError::State(
@@ -2398,6 +2489,9 @@ fn apply_terminal_network_lifecycle(state: &mut State, active: bool, repair_requ
     if !active && !repair_required {
         state.applied_network = None;
         state.network_service = None;
+        if state.worker_identity.is_none() {
+            clear_session_binding(state);
+        }
     }
 }
 fn current_state() -> Result<State, ControllerError> {
@@ -2639,12 +2733,40 @@ fn persist_state_at(path: &Path, state: &State) -> Result<(), ControllerError> {
 }
 fn validate_state_invariants(state: &State) -> Result<(), ControllerError> {
     match &state.worker_identity {
-        None if !state.active => Ok(()),
-        Some(identity) if identity.pid > 1 => Ok(()),
-        _ => Err(ControllerError::State(
-            "active state must have a valid worker process identity".to_owned(),
-        )),
+        None if !state.active => {}
+        Some(identity) if identity.pid > 1 => {}
+        _ => {
+            return Err(ControllerError::State(
+                "active state must have a valid worker process identity".to_owned(),
+            ));
+        }
     }
+    let binding_is_complete = state.owner_uid.is_some_and(|uid| uid != 0)
+        && state
+            .session_id
+            .as_deref()
+            .is_some_and(|session_id| !session_id.is_empty())
+        && state
+            .relay_endpoint
+            .as_deref()
+            .is_some_and(|relay_endpoint| !relay_endpoint.is_empty())
+        && state.network_policy_hash.is_some();
+    if state_has_session_binding(state) != binding_is_complete {
+        return Err(ControllerError::State(
+            "persisted VPN session ownership binding is incomplete".to_owned(),
+        ));
+    }
+    if (state.active
+        || state.repair_required
+        || state.worker_identity.is_some()
+        || state.applied_network.is_some())
+        && !binding_is_complete
+    {
+        return Err(ControllerError::State(
+            "privileged VPN state is missing its caller/session ownership binding".to_owned(),
+        ));
+    }
+    Ok(())
 }
 fn print_state(state: &State) -> Result<(), ControllerError> {
     let rendered = json::to_json(&state_json_value(state))
@@ -2912,6 +3034,67 @@ fn default_state_root() -> PathBuf {
     // environment select the persistence root, including for non-root capability deployments.
     PathBuf::from("/var/lib/sora-vpn-controller")
 }
+fn validate_privileged_caller_identity(
+    real_uid: u32,
+    effective_uid: u32,
+    saved_uid: u32,
+) -> Result<PrivilegedCaller, ControllerError> {
+    if real_uid == 0 {
+        return Err(ControllerError::State(
+            "unsafe privileged invocation refused: connect, disconnect, repair, and run-tunnel require an authenticated non-root real UID; direct root and sudo invocation are unsupported"
+                .to_owned(),
+        ));
+    }
+    if effective_uid != 0 || saved_uid != 0 {
+        return Err(ControllerError::State(
+            "unsafe privileged invocation refused: install the root-owned controller with its set-user-ID bit, or use a future root daemon that authenticates SO_PEERCRED"
+                .to_owned(),
+        ));
+    }
+    Ok(PrivilegedCaller { uid: real_uid })
+}
+fn validate_privileged_executable_custody(
+    owner_uid: u32,
+    mode: u32,
+) -> Result<(), ControllerError> {
+    if owner_uid != 0 || mode & 0o4_000 == 0 || mode & 0o022 != 0 {
+        return Err(ControllerError::State(
+            "unsafe privileged invocation refused: the running controller inode must be root-owned, set-user-ID, and not group/other-writable; capability-only mode is unsupported"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn current_privileged_caller() -> Result<PrivilegedCaller, ControllerError> {
+    let mut real_uid = 0;
+    let mut effective_uid = 0;
+    let mut saved_uid = 0;
+    // SAFETY: `getresuid` receives three valid output pointers and retains none of them.
+    let result = unsafe { nix::libc::getresuid(&mut real_uid, &mut effective_uid, &mut saved_uid) };
+    if result != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let caller = validate_privileged_caller_identity(real_uid, effective_uid, saved_uid)?;
+    let executable = fs::metadata("/proc/self/exe").map_err(|error| {
+        ControllerError::State(format!(
+            "failed to inspect the running privileged controller inode: {error}"
+        ))
+    })?;
+    if !executable.file_type().is_file() {
+        return Err(ControllerError::State(
+            "unsafe privileged invocation refused: /proc/self/exe is not a regular file".to_owned(),
+        ));
+    }
+    validate_privileged_executable_custody(executable.uid(), executable.mode())?;
+    Ok(caller)
+}
+#[cfg(not(target_os = "linux"))]
+fn current_privileged_caller() -> Result<PrivilegedCaller, ControllerError> {
+    Err(ControllerError::State(
+        "privileged VPN controller caller authentication is only available on Linux".to_owned(),
+    ))
+}
 fn effective_uid() -> u32 {
     #[cfg(unix)]
     {
@@ -3131,6 +3314,9 @@ fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
     state.active = false;
     state.worker_identity = None;
     state.repair_required = state.applied_network.is_some();
+    if !state.repair_required {
+        clear_session_binding(state);
+    }
     if state.message == "connected" || state.message == "starting" || state.message == "connecting"
     {
         state.message = "tunnel worker exited".to_owned();
@@ -3420,76 +3606,81 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
     let object = value.0.as_object().ok_or_else(|| {
         ControllerError::InvalidPayload("connect payload must be a JSON object".to_owned())
     })?;
+    validate_connect_payload_keys(object)?;
     let payload = ConnectPayload {
-        session_id: require_json_string(object, &["sessionId", "session_id"], "sessionId")?,
-        relay_endpoint: require_json_string(
-            object,
-            &["relayEndpoint", "relay_endpoint"],
-            "relayEndpoint",
-        )?,
-        exit_class: optional_json_string(object, &["exitClass", "exit_class"])?.unwrap_or_default(),
-        helper_ticket_hex: require_json_string(
-            object,
-            &["helperTicketHex", "helper_ticket_hex"],
-            "helperTicketHex",
-        )?,
-        relay_id_hex: require_json_string(object, &["relayIdHex", "relay_id_hex"], "relayIdHex")?,
+        session_id: require_json_string(object, &["sessionId"], "sessionId")?,
+        relay_endpoint: require_json_string(object, &["relayEndpoint"], "relayEndpoint")?,
+        exit_class: optional_json_string(object, &["exitClass"])?.unwrap_or_default(),
+        helper_ticket_hex: require_json_string(object, &["helperTicketHex"], "helperTicketHex")?,
+        relay_id_hex: require_json_string(object, &["relayIdHex"], "relayIdHex")?,
         descriptor_commit_hex: require_json_string(
             object,
-            &["descriptorCommitHex", "descriptor_commit_hex"],
+            &["descriptorCommitHex"],
             "descriptorCommitHex",
         )?,
-        tls_server_name: require_json_string(
-            object,
-            &["tlsServerName", "tls_server_name"],
-            "tlsServerName",
-        )?,
+        tls_server_name: require_json_string(object, &["tlsServerName"], "tlsServerName")?,
         relay_tls_spki_sha256_hex: require_json_string(
             object,
-            &["relayTlsSpkiSha256Hex", "relay_tls_spki_sha256_hex"],
+            &["relayTlsSpkiSha256Hex"],
             "relayTlsSpkiSha256Hex",
         )?,
         relay_certificate_sha256_hex: require_json_string(
             object,
-            &["relayCertificateSha256Hex", "relay_certificate_sha256_hex"],
+            &["relayCertificateSha256Hex"],
             "relayCertificateSha256Hex",
         )?,
         directory_snapshot_digest_hex: require_json_string(
             object,
-            &[
-                "directorySnapshotDigestHex",
-                "directory_snapshot_digest_hex",
-            ],
+            &["directorySnapshotDigestHex"],
             "directorySnapshotDigestHex",
         )?,
-        padding_budget_ms: require_json_u16(
-            object,
-            &["paddingBudgetMs", "padding_budget_ms"],
-            "paddingBudgetMs",
-        )?,
-        route_pushes: optional_json_string_array(object, &["routePushes", "route_pushes"])?,
-        excluded_routes: optional_json_string_array(
-            object,
-            &["excludedRoutes", "excluded_routes"],
-        )?,
-        dns_servers: optional_json_string_array(object, &["dnsServers", "dns_servers"])?,
-        tunnel_addresses: optional_json_string_array(
-            object,
-            &["tunnelAddresses", "tunnel_addresses"],
-        )?,
-        mtu_bytes: require_json_u64(object, &["mtuBytes", "mtu_bytes"], "mtuBytes")?,
-        lease_secs: optional_json_u64(object, &["leaseSecs", "lease_secs"])?.unwrap_or_default(),
+        padding_budget_ms: require_json_u16(object, &["paddingBudgetMs"], "paddingBudgetMs")?,
+        route_pushes: optional_json_string_array(object, &["routePushes"])?,
+        excluded_routes: optional_json_string_array(object, &["excludedRoutes"])?,
+        dns_servers: optional_json_string_array(object, &["dnsServers"])?,
+        tunnel_addresses: optional_json_string_array(object, &["tunnelAddresses"])?,
+        mtu_bytes: require_json_u64(object, &["mtuBytes"], "mtuBytes")?,
+        lease_secs: optional_json_u64(object, &["leaseSecs"])?.unwrap_or_default(),
         metering_private_key_seed_hex: optional_json_string(
             object,
-            &["meteringPrivateKeySeedHex", "metering_private_key_seed_hex"],
+            &["meteringPrivateKeySeedHex"],
         )?,
-        usage_voucher_interval_ms: optional_json_u64(
-            object,
-            &["usageVoucherIntervalMs", "usage_voucher_interval_ms"],
-        )?
-        .unwrap_or_else(default_usage_voucher_interval_ms),
+        usage_voucher_interval_ms: optional_json_u64(object, &["usageVoucherIntervalMs"])?
+            .unwrap_or_else(default_usage_voucher_interval_ms),
     };
     validate_connect_payload(payload)
+}
+fn validate_connect_payload_keys(object: &JsonMap) -> Result<(), ControllerError> {
+    const ALLOWED_KEYS: &[&str] = &[
+        "sessionId",
+        "relayEndpoint",
+        "exitClass",
+        "helperTicketHex",
+        "relayIdHex",
+        "descriptorCommitHex",
+        "tlsServerName",
+        "relayTlsSpkiSha256Hex",
+        "relayCertificateSha256Hex",
+        "directorySnapshotDigestHex",
+        "paddingBudgetMs",
+        "routePushes",
+        "excludedRoutes",
+        "dnsServers",
+        "tunnelAddresses",
+        "mtuBytes",
+        "leaseSecs",
+        "meteringPrivateKeySeedHex",
+        "usageVoucherIntervalMs",
+    ];
+    if let Some(key) = object
+        .keys()
+        .find(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+    {
+        return Err(ControllerError::InvalidPayload(format!(
+            "unknown connect payload field {key:?}"
+        )));
+    }
+    Ok(())
 }
 fn validate_connect_payload(payload: ConnectPayload) -> Result<ConnectPayload, ControllerError> {
     validate_connect_payload_ref(&payload)?;
@@ -3577,6 +3768,12 @@ fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), Controll
     if ticket.session_id != relay_session_id_from_session_id(payload.session_id.as_str()) {
         return Err(ControllerError::InvalidPayload(
             "helper ticket session id does not match sessionId".to_owned(),
+        ));
+    }
+    if ticket.network_policy_hash != connect_payload_network_policy_hash(payload) {
+        return Err(ControllerError::InvalidPayload(
+            "helper ticket network policy hash does not match route, DNS, tunnel address, and MTU inputs"
+                .to_owned(),
         ));
     }
     if ticket.expires_at_ms <= unix_now_ms()? {
@@ -3935,6 +4132,13 @@ mod tests {
                 ingress_fee_per_mib: quantity_nanos(7),
                 egress_fee_per_mib: quantity_nanos(11),
             },
+            network_policy_hash: vpn_helper_network_policy_hash_v1(
+                &[],
+                &[],
+                &[],
+                &["10.208.0.2/32".to_owned()],
+                1_280,
+            ),
             expires_at_ms: unix_now_ms()
                 .expect("valid test clock")
                 .saturating_add(60_000),
@@ -4179,6 +4383,23 @@ mod tests {
         );
     }
     #[test]
+    fn connect_payload_rejects_unknown_aliases_and_duplicate_fields() {
+        let ticket = test_helper_ticket("session-1");
+        let canonical = test_connect_payload_json("session-1", &ticket, None);
+        let alias = canonical.replacen(
+            r#""sessionId":"#,
+            r#""session_id":"shadow","sessionId":"#,
+            1,
+        );
+        let error = parse_connect_payload(Some(&alias)).expect_err("retired alias must fail");
+        assert!(error.to_string().contains("unknown connect payload field"));
+
+        let duplicate =
+            canonical.replacen(r#""sessionId":"#, r#""sessionId":"shadow","sessionId":"#, 1);
+        let error = parse_connect_payload(Some(&duplicate)).expect_err("duplicate key must fail");
+        assert!(error.to_string().contains("duplicate field"));
+    }
+    #[test]
     fn connect_payload_rejects_dns_directive_injection() {
         let mut payload = test_connect_payload("session-1");
         payload.dns_servers = vec!["1.1.1.1\noptions trust-ad".to_owned()];
@@ -4191,6 +4412,35 @@ mod tests {
         payload.route_pushes = vec!["2001:0db8::/64".to_owned()];
         let error = validate_connect_payload(payload).expect_err("non-canonical CIDR must fail");
         assert!(error.to_string().contains("canonical CIDR syntax"));
+    }
+    #[test]
+    fn connect_payload_requires_ticket_bound_network_policy() {
+        let payload = test_connect_payload("session-1");
+        let mut variants = Vec::new();
+        let mut changed = payload.clone();
+        changed.route_pushes.push("10.0.0.0/8".to_owned());
+        variants.push(("route push", changed));
+        let mut changed = payload.clone();
+        changed.excluded_routes.push("192.0.2.0/24".to_owned());
+        variants.push(("excluded route", changed));
+        let mut changed = payload.clone();
+        changed.dns_servers.push("1.1.1.1".to_owned());
+        variants.push(("DNS server", changed));
+        let mut changed = payload.clone();
+        changed.tunnel_addresses = vec!["10.208.0.3/32".to_owned()];
+        variants.push(("tunnel address", changed));
+        let mut changed = payload;
+        changed.mtu_bytes = 1_400;
+        variants.push(("MTU", changed));
+
+        for (label, changed) in variants {
+            let error = validate_connect_payload(changed)
+                .expect_err("ticket must authorize the exact network policy");
+            assert!(
+                error.to_string().contains("network policy hash"),
+                "unexpected error for {label}: {error}"
+            );
+        }
     }
     #[test]
     fn connect_payload_credentials_can_be_wiped_early() {
@@ -4226,6 +4476,7 @@ mod tests {
             payment_tx_hash: [0x55; 32],
             metering_public_key: metering_keys.public_key().clone(),
             tariff,
+            network_policy_hash: [0x77; 32],
             expires_at_ms: 99_000,
         };
         let encoded = ticket.to_hex(&[0xAA; 32]);
@@ -4249,6 +4500,7 @@ mod tests {
                 ingress_fee_per_mib: quantity_nanos(7),
                 egress_fee_per_mib: quantity_nanos(11),
             },
+            network_policy_hash: [0x77; 32],
             expires_at_ms: 99_000,
         };
         for (label, public_key) in [
@@ -4453,6 +4705,83 @@ mod tests {
         let cli = Cli::try_parse_from(["sora-vpn-controller", "connect"]).expect("parse");
         assert!(matches!(cli.command, Command::Connect));
     }
+    #[test]
+    fn install_check_derives_display_state_without_mutating_persisted_state() {
+        let original = State {
+            active: true,
+            message: "persisted message".to_owned(),
+            ..State::default()
+        };
+        let display = install_check_display_state(&original);
+        assert_eq!(display.message, "connected");
+        assert_eq!(original.message, "persisted message");
+
+        let repair = State {
+            active: true,
+            repair_required: true,
+            ..State::default()
+        };
+        assert_eq!(
+            install_check_display_state(&repair).message,
+            "repair required"
+        );
+        assert_eq!(
+            install_check_display_state(&State::default()).message,
+            "ready"
+        );
+    }
+    #[test]
+    fn privileged_commands_require_an_explicit_session_id() {
+        for command in ["disconnect", "repair"] {
+            Cli::try_parse_from(["sora-vpn-controller", command])
+                .expect_err("session-less privileged teardown must fail");
+            let cli =
+                Cli::try_parse_from(["sora-vpn-controller", command, "--session-id", "session-1"])
+                    .expect("session-bound command");
+            match cli.command {
+                Command::Disconnect { session_id } | Command::Repair { session_id } => {
+                    assert_eq!(session_id, "session-1");
+                }
+                other => panic!("unexpected command: {other:?}"),
+            }
+        }
+    }
+    #[test]
+    fn privileged_caller_identity_fails_closed() {
+        assert_eq!(
+            validate_privileged_caller_identity(1_000, 0, 0).expect("setuid identity"),
+            PrivilegedCaller { uid: 1_000 }
+        );
+        for (label, ids) in [
+            ("direct root or sudo", (0, 0, 0)),
+            (
+                "unprivileged or capability-only executable",
+                (1_000, 1_000, 1_000),
+            ),
+            ("missing saved root UID", (1_000, 0, 1_000)),
+        ] {
+            let error = validate_privileged_caller_identity(ids.0, ids.1, ids.2)
+                .expect_err("unsafe credentials must fail");
+            assert!(
+                error.to_string().contains("unsafe privileged invocation"),
+                "unexpected error for {label}: {error}"
+            );
+        }
+        validate_privileged_executable_custody(0, 0o104_755).expect("root-owned setuid executable");
+        for (label, owner_uid, mode) in [
+            ("non-root owner", 1_000, 0o104_755),
+            ("capability-only mode", 0, 0o100_755),
+            ("group writable", 0, 0o104_775),
+            ("other writable", 0, 0o104_757),
+        ] {
+            let error = validate_privileged_executable_custody(owner_uid, mode)
+                .expect_err("unsafe executable custody must fail");
+            assert!(
+                error.to_string().contains("unsafe privileged invocation"),
+                "unexpected error for {label}: {error}"
+            );
+        }
+    }
     #[cfg(unix)]
     fn private_test_state_root(label: &str) -> PathBuf {
         let nonce = ATOMIC_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
@@ -4564,6 +4893,26 @@ mod tests {
         apply_terminal_network_lifecycle(&mut state, false, false);
         assert!(state.applied_network.is_none());
         assert!(state.network_service.is_none());
+
+        let mut exiting = State {
+            worker_identity: Some(WorkerProcessIdentity {
+                pid: 42,
+                start_time_ticks: 10,
+                executable_device: 11,
+                executable_inode: 12,
+                role: WorkerRole::Tunnel,
+            }),
+            owner_uid: Some(1_000),
+            session_id: Some("session-1".to_owned()),
+            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            network_policy_hash: Some([0x11; 32]),
+            ..State::default()
+        };
+        apply_terminal_network_lifecycle(&mut exiting, false, false);
+        assert_eq!(exiting.owner_uid, Some(1_000));
+        exiting.worker_identity = None;
+        apply_terminal_network_lifecycle(&mut exiting, false, false);
+        assert!(!state_has_session_binding(&exiting));
     }
     #[test]
     fn state_rejects_active_or_invalid_unbound_worker_identity() {
@@ -4581,6 +4930,10 @@ mod tests {
         });
         assert!(validate_state_invariants(&state).is_err());
         state.worker_identity.as_mut().expect("identity").pid = 42;
+        state.owner_uid = Some(1_000);
+        state.session_id = Some("session-1".to_owned());
+        state.relay_endpoint = Some("/ip4/127.0.0.1/udp/7777/quic".to_owned());
+        state.network_policy_hash = Some([0x11; 32]);
         assert!(validate_state_invariants(&state).is_ok());
     }
     #[test]
@@ -4596,18 +4949,47 @@ mod tests {
         let mut state = State {
             message: "starting".to_owned(),
             worker_identity: Some(identity.clone()),
+            owner_uid: Some(1_000),
             session_id: Some(payload.session_id.clone()),
             relay_endpoint: Some(payload.relay_endpoint.clone()),
+            network_policy_hash: Some(connect_payload_network_policy_hash(&payload)),
             ..State::default()
         };
-        authorize_worker_start(&state, &identity, &payload).expect("exact start record");
+        let caller = PrivilegedCaller { uid: 1_000 };
+        authorize_worker_start(&state, &identity, &payload, caller).expect("exact start record");
 
         state.session_id = Some("different-session".to_owned());
-        assert!(authorize_worker_start(&state, &identity, &payload).is_err());
+        assert!(authorize_worker_start(&state, &identity, &payload, caller).is_err());
         state.session_id = Some(payload.session_id.clone());
         state.worker_identity.as_mut().expect("identity").pid += 1;
-        assert!(authorize_worker_start(&state, &identity, &payload).is_err());
-        assert!(authorize_worker_start(&State::default(), &identity, &payload).is_err());
+        assert!(authorize_worker_start(&state, &identity, &payload, caller).is_err());
+        assert!(authorize_worker_start(&State::default(), &identity, &payload, caller).is_err());
+        state.worker_identity = Some(identity.clone());
+        assert!(
+            authorize_worker_start(&state, &identity, &payload, PrivilegedCaller { uid: 1_001 })
+                .is_err()
+        );
+    }
+    #[test]
+    fn privileged_session_control_requires_owner_and_exact_session() {
+        let state = State {
+            owner_uid: Some(1_000),
+            session_id: Some("session-1".to_owned()),
+            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            network_policy_hash: Some([0x11; 32]),
+            ..State::default()
+        };
+        authorize_session_control(&state, PrivilegedCaller { uid: 1_000 }, "session-1")
+            .expect("owner controls exact session");
+        assert!(
+            authorize_session_control(&state, PrivilegedCaller { uid: 1_001 }, "session-1")
+                .is_err()
+        );
+        assert!(
+            authorize_session_control(&state, PrivilegedCaller { uid: 1_000 }, "session-2")
+                .is_err()
+        );
+        assert!(authorize_connect_replacement(&state, PrivilegedCaller { uid: 1_001 }).is_err());
     }
     #[test]
     fn linux_process_stat_parser_handles_parentheses_in_command() {

@@ -28,6 +28,7 @@ use iroha_data_model::{
         VpnLeaseRecordV1, VpnLeaseStatusV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1,
         VpnSignedQuoteV1, VpnTariffV1, VpnUsageVoucherV1, derive_vpn_address_plan_v1,
         derive_vpn_address_slot_v1, derive_vpn_lease_id_v1, derive_vpn_session_id_v1,
+        vpn_helper_network_policy_hash_v1,
     },
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
@@ -722,6 +723,13 @@ fn build_helper_ticket_hex(
         payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment_tx_hash")?,
         metering_public_key: record.metering_public_key.clone(),
         tariff: record.tariff.clone(),
+        network_policy_hash: vpn_helper_network_policy_hash_v1(
+            &record.route_pushes,
+            &record.excluded_routes,
+            &record.dns_servers,
+            &record.tunnel_addresses,
+            record.mtu_bytes,
+        ),
         expires_at_ms,
     }
     .try_to_hex(secret)

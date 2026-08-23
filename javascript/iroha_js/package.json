@@ -34,6 +34,11 @@
       "import": "./dist/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
+    "./contract-payload": {
+      "browser": "./dist/contractPayload.js",
+      "import": "./dist/contractPayload.js",
+      "types": "./contract-payload.d.ts"
+    },
     "./smart-contract-deployment": {
       "browser": "./dist/smartContractDeployment.js",
       "import": "./dist/smartContractDeployment.js",
@@ -126,6 +131,9 @@
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
+      ],
+      "contract-payload": [
+        "./contract-payload.d.ts"
       ],
       "smart-contract-deployment": [
         "./smart-contract-deployment.d.ts"
@@ -230,6 +238,7 @@
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
+    "contract-payload.d.ts",
     "smart-contract-deployment.d.ts",
     "sumeragi-typed.d.ts",
     "connect.browser.d.ts",

@@ -1650,12 +1650,11 @@ Root {
             model_weight_bytes: 4294967296,
         },
         inrou: SoracloudRuntimeInrou {
-            max_concurrent_vms: 8,
+            max_concurrent_vms: 1,
             enabled: false,
-            backends: {
-                PortableVm,
-            },
-            portable_vm_acceleration: Tcg,
+            backends: {},
+            portable_vm_uid: None,
+            portable_vm_gid: None,
             max_cpu_millis: 8000,
             max_memory_bytes: 8589934592,
             max_storage_bytes: 68719476736,
@@ -2954,6 +2953,11 @@ Root {
             kagemusha_release_policy_path: None,
             kagemusha_artifact_dir: None,
             kagemusha_catalog_qualification_seal_path: None,
+            kagemusha_promotion_controller_public_key: None,
+            kagemusha_catalog_revalidation_authority_key_id: None,
+            kagemusha_catalog_revalidation_authority_public_key: None,
+            kagemusha_promotion_reservation_path: None,
+            kagemusha_validator_qualification_seal_path: None,
             kagemusha_max_decoded_bytes: 268435456,
         },
         router: Router {

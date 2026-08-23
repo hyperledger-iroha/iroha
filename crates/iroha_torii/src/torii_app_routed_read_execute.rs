@@ -30,6 +30,25 @@ fn torii_read_fanout_request(
     }
 }
 #[cfg(feature = "app_api")]
+fn bounded_space_directory_manifest_shard_query(
+    mut query: routing::SpaceDirectoryManifestQuery,
+    page_offset: u64,
+    page_limit: u64,
+) -> Result<(routing::SpaceDirectoryManifestQuery, &'static str), Error> {
+    let (page_offset, page_limit) =
+        routing::space_directory_manifest_pagination(Some(page_limit), page_offset)?;
+    if query.dataspace.is_none() {
+        let _ = routing::space_directory_manifest_fanout_window(page_offset, page_limit)?;
+    }
+    let requested_count_mode = routed_read_count_mode_label(query.count_mode.as_deref());
+    // The coordinator envelope is authoritative for global pagination. Every route is responsible
+    // for exactly one dataspace, so its complete local page contains at most one manifest.
+    query.offset = Some(0);
+    query.limit = Some(1);
+    query.count_mode = Some("bounded".to_owned());
+    Ok((query, requested_count_mode))
+}
+#[cfg(feature = "app_api")]
 async fn resolve_torii_proof_record_for_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -622,7 +641,7 @@ async fn execute_torii_account_history_read_for_resolved_routes(
         Err(error) => return error.into_response(),
     };
     params.limit = Some(page_limit);
-    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let count_mode_label = routed_read_count_mode_label(params.count_mode.as_deref());
     let routed_by = routed_by_for_routes(app, &routes);
     if routes.len() == 1 {
         let query_string = match encode_torii_proxy_query(&params) {
@@ -1122,23 +1141,68 @@ async fn execute_torii_read_fanout_for_resolved_routes_admitted(
             page_offset,
             page_limit,
         } => {
-            match execute_torii_fanout_json_payloads_resolved_routes(
+            let Some(page_limit) = page_limit else {
+                return torii_proxy_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proxy_request",
+                    "space-directory manifest fanout requires a page limit",
+                );
+            };
+            let request_decode_plan = match torii_routed_read_request_decode_plan(app) {
+                Ok(plan) => plan,
+                Err(response) => return response,
+            };
+            let query = match decode_torii_proxy_query::<routing::SpaceDirectoryManifestQuery>(
+                request_decode_plan,
+                query_string.as_deref(),
+            ) {
+                Ok(query) => query,
+                Err(response) => return response,
+            };
+            let requested_dataspace = query.dataspace;
+            let requested_status =
+                match routing::space_directory_manifest_status_filter(query.status.as_deref()) {
+                    Ok(status) => status,
+                    Err(error) => return error.into_response(),
+                };
+            let (shard_query, requested_count_mode) =
+                match bounded_space_directory_manifest_shard_query(query, page_offset, page_limit) {
+                    Ok(bound) => bound,
+                    Err(error) => return error.into_response(),
+                };
+            let expected_uaid = match path_args.first() {
+                Some(raw) => match routing::canonical_routed_uaid_literal(raw) {
+                    Ok(uaid) => uaid,
+                    Err(error) => return error.into_response(),
+                },
+                None => {
+                    return torii_internal_json_error(
+                        "space-directory manifest fanout requires a UAID path argument",
+                    );
+                }
+            };
+            match execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
                 app,
                 routes,
-                endpoint,
                 path_args,
-                query_string,
+                shard_query,
                 body,
                 proxy_memory,
             )
             .await
             {
                 Ok((payloads, diagnostics, routed_by, budget)) => {
+                    let fanout_incomplete = diagnostics.failed_routes() > 0;
                     merge_with_torii_fanout_headers(diagnostics, || {
                         merged_space_directory_manifests_response(
                             payloads,
                             page_offset,
-                            page_limit,
+                            Some(page_limit),
+                            fanout_incomplete,
+                            requested_count_mode,
+                            requested_dataspace,
+                            requested_status,
+                            &expected_uaid,
                             routed_by,
                             budget,
                         )
@@ -1549,6 +1613,31 @@ async fn execute_torii_fanout_space_directory_manifests_read(
         query_string,
         Vec::new(),
         ToriiProxyResponseFormatV1::Json,
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+async fn execute_torii_space_directory_manifests_read_for_resolved_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    uaid_literal: String,
+    query_string: Option<String>,
+    offset: u64,
+    limit: Option<u64>,
+) -> Response {
+    execute_torii_read_fanout_for_resolved_routes(
+        app,
+        routes,
+        ToriiReadFanoutMergeV1::SpaceDirectoryManifests {
+            page_offset: offset,
+            page_limit: limit,
+        },
+        ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
+        vec![uaid_literal],
+        query_string,
+        Vec::new(),
+        ToriiProxyResponseFormatV1::Json,
+        None,
     )
     .await
 }

@@ -10864,6 +10864,8 @@ pub struct State {
     /// Immutable startup-authenticated ABI-21 recursive release catalog.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
+    /// Startup-authenticated complete runtime projection used only by local consensus gates.
+    kagemusha_runtime_effective_config_sha256: SyncOnceCell<[u8; 32]>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
@@ -23188,6 +23190,7 @@ impl LaneConsensusLifecycleSnapshot {
     }
 }
 include!("state/passive_lane_diagnostic_methods.rs");
+include!("state/runtime_configuration.rs");
 impl State {
     /// Return the authenticated Sumeragi-v2 snapshot bootstrap trust root, if this state was
     /// restored from an explicitly authorized audited snapshot boundary.
@@ -25447,6 +25450,7 @@ impl State {
             kagemusha_release_catalog: Arc::new(
                 crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
             ),
+            kagemusha_runtime_effective_config_sha256: SyncOnceCell::new(),
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -38418,83 +38422,6 @@ impl State {
         sys.key_allowed_hsm_providers = policy.key_allowed_hsm_providers.iter().cloned().collect();
         params_block.sumeragi = sys;
         params_block.commit();
-    }
-    /// Update pipeline preferences using a loaded configuration.
-    pub fn set_pipeline(&mut self, pipeline: iroha_config::parameters::actual::Pipeline) {
-        self.pipeline = pipeline;
-        self.pipeline_parallelism = PipelineParallelism::new(&self.pipeline);
-        self.stateless_validation_cache
-            .lock()
-            .set_cap(self.pipeline.stateless_cache_cap);
-        *self.trigger_ivm_cache.lock() = IvmCache::with_capacity(self.pipeline.cache_size);
-        *self.contract_query_ivm_cache.lock() = IvmCache::with_capacity(self.pipeline.cache_size);
-        *self.pipeline_ivm_prepared_cache.write() =
-            PreparedContractCache::with_capacity(self.pipeline.cache_size);
-        // Configure the IVM global pre-decode cache from pipeline settings.
-        ivm::ivm_cache::configure_limits(ivm::ivm_cache::CacheLimits {
-            capacity: self.pipeline.cache_size,
-            max_bytes: self.pipeline.ivm_cache_max_bytes,
-            max_decoded_ops: self.pipeline.ivm_cache_max_decoded_ops,
-        });
-        ivm::zk::set_prover_threads(self.pipeline.ivm_prover_threads);
-    }
-    #[inline]
-    pub(crate) fn stateless_validation_cache(
-        &self,
-    ) -> &parking_lot::Mutex<StatelessValidationCache> {
-        &self.stateless_validation_cache
-    }
-    /// Update oracle aggregation preferences.
-    pub fn set_oracle(&mut self, oracle: iroha_config::parameters::actual::Oracle) {
-        self.oracle = oracle;
-    }
-    /// Update the process-local streaming spool paths used for disk-budget enforcement.
-    pub fn set_streaming_storage_paths(
-        &mut self,
-        soranet_provision_spool_dir: PathBuf,
-        soravpn_provision_spool_dir: PathBuf,
-    ) {
-        self.streaming_storage_paths = StreamingStoragePaths {
-            soranet_provision_spool_dir,
-            soravpn_provision_spool_dir,
-        };
-    }
-    /// Update settlement configuration snapshot and rebuild the router engine.
-    pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
-        self.settlement = settlement;
-        self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
-    }
-    /// Install the fully authenticated immutable Kagemusha V4 release catalog.
-    ///
-    /// Startup calls this before Kura replay; transaction execution receives an
-    /// `Arc` snapshot and never performs release filesystem access.
-    pub fn set_kagemusha_release_catalog(
-        &mut self,
-        catalog: crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-    ) {
-        self.kagemusha_release_catalog = Arc::new(catalog);
-    }
-    /// Current settlement configuration snapshot.
-    #[must_use]
-    pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
-        &self.settlement
-    }
-    /// Update Nexus configuration snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `LaneLifecycleError` if lanes reference unknown dataspaces,
-    /// routing policy targets cannot resolve, or geometry updates cannot be
-    /// applied to the current state. A textual dataspace namespace also cannot
-    /// be retired until all asset-definition alias bindings in that namespace
-    /// are explicitly cleared.
-    pub fn set_nexus(
-        &mut self,
-        nexus: iroha_config::parameters::actual::Nexus,
-    ) -> Result<(), LaneLifecycleError> {
-        self.ensure_config_catalog_mutation_is_pre_genesis(&nexus.lane_catalog, false)?;
-        let configured_lane_catalog = self.nexus.read().configured_lane_catalog.clone();
-        self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog, None)
     }
     /// Verify that empty-state replay can recover the configured-primary geometry.
     ///

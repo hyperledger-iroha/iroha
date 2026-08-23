@@ -2,7 +2,7 @@
   "title": "SoraNet Privacy Metrics",
   "uid": "soranet-privacy",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "timezone": "browser",
   "refresh": "1m",
   "tags": ["soranet", "privacy"],
@@ -20,31 +20,18 @@
           "value": ""
         },
         "includeAll": true
-      },
-      {
-        "name": "bucket_start",
-        "label": "Bucket Start",
-        "type": "query",
-        "datasource": "Prometheus",
-        "query": "label_values(soranet_privacy_circuit_events_total{mode=~\"$mode\"}, bucket_start)",
-        "refresh": 1,
-        "current": {
-          "text": "All",
-          "value": ""
-        },
-        "includeAll": true
       }
     ]
   },
   "panels": [
     {
       "type": "timeseries",
-      "title": "Circuit Outcomes (per bucket)",
+      "title": "Circuit Outcomes (5m)",
       "id": 1,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (kind) (increase(soranet_privacy_circuit_events_total{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}[5m]))",
+          "expr": "sum by (kind) (increase(soranet_privacy_circuit_events_total{mode=~\"$mode\"}[5m]))",
           "legendFormat": "{{kind}}",
           "refId": "A"
         }
@@ -59,12 +46,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Throttle Events (per bucket)",
+      "title": "Throttle Events (5m)",
       "id": 2,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (scope) (increase(soranet_privacy_throttles_total{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}[5m]))",
+          "expr": "sum by (scope) (increase(soranet_privacy_throttles_total{mode=~\"$mode\"}[5m]))",
           "legendFormat": "{{scope}}",
           "refId": "A"
         }
@@ -79,12 +66,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Buckets Suppressed",
+      "title": "Latest Bucket Suppressed",
       "id": 3,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}",
+          "expr": "soranet_privacy_bucket_suppressed{mode=~\"$mode\"}",
           "legendFormat": "{{mode}}",
           "refId": "A"
         }
@@ -161,12 +148,12 @@
     },
     {
       "type": "stat",
-      "title": "Suppressed Bucket %",
+      "title": "Latest Buckets Suppressed %",
       "id": 5,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "100 * sum(soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}) / clamp_min(count(soranet_privacy_bucket_suppressed{mode=~\"$mode\", bucket_start=~\"$bucket_start\"}), 1)",
+          "expr": "100 * sum(soranet_privacy_bucket_suppressed{mode=~\"$mode\"}) / clamp_min(count(soranet_privacy_bucket_suppressed{mode=~\"$mode\"}), 1)",
           "refId": "A"
         }
       ],

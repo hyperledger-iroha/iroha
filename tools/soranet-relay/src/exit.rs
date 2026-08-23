@@ -11,6 +11,7 @@
 //! must match the decoded update before the route can enter the cache.
 use crate::config::{
     ConfigError, ExitRoutingConfig, KaigiStreamRoutingConfig, NoritoStreamRoutingConfig,
+    validate_gar_category_v1,
 };
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::soranet::RelayId;
@@ -399,6 +400,11 @@ impl NoritoStreamRoute {
             .as_deref()
             .unwrap_or(DEFAULT_GAR_CATEGORY_AUTH)
             .to_owned();
+        validate_gar_category_v1("norito_stream.gar_category_read_only", &gar_read_only)?;
+        validate_gar_category_v1(
+            "norito_stream.gar_category_authenticated",
+            &gar_authenticated,
+        )?;
         let connect_timeout = Duration::from_millis(cfg.connect_timeout_millis.max(1));
         let padding_target = Duration::from_millis(cfg.padding_target_millis.max(1));
         let route_refresh_interval = Duration::from_secs(cfg.route_refresh_secs.max(1));
@@ -472,6 +478,11 @@ impl KaigiStreamRoute {
             .as_deref()
             .unwrap_or(DEFAULT_KAIGI_CATEGORY_AUTH)
             .to_owned();
+        validate_gar_category_v1("kaigi_stream.gar_category_public", &gar_public)?;
+        validate_gar_category_v1(
+            "kaigi_stream.gar_category_authenticated",
+            &gar_authenticated,
+        )?;
         let connect_timeout = Duration::from_millis(cfg.connect_timeout_millis.max(1));
         let route_refresh_interval = Duration::from_secs(cfg.route_refresh_secs.max(1));
         Ok(Self {

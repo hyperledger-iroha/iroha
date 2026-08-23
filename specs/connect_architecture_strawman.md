@@ -85,15 +85,22 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
   `policy.relay_p2p_attached` (P2P relay availability). The disjoint
   `/v1/connect/status?sid=...` protocol route returns only one session after
   management-token authentication.
+- A session shadow learned from an authenticated Iroha peer retains the
+  `ConnectSessionClaimV1.expires_at_ms` deadline as an absolute ceiling. At the
+  deadline Torii rejects role-token attachment, management reads, and relay
+  traffic even if the shadow was recently active; cleanup also removes an
+  attached shadow and its WebSocket observes the standard TTL close. A repeated
+  claim with the same SID but a different deadline is a conflict, not a lease
+  extension.
 - WebSocket is the only Connect V1 client transport; WebRTC is unsupported.
-- Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
-- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
+- Fresh-session retry strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
+- Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before the client abandons the SID and provisions a fresh session; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
 - Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
 - SDK responsibilities:
   - Maintain ping/pong heartbeats (avoid draining batteries on mobile).
   - Buffer outgoing frames when offline (bounded queue, persisted for dApp).
 - Provide event stream API (Swift Combine `AsyncStream`, Android Flow, JS async iter).
-- Surface reconnect hooks and allow manual re-subscribe.
+- Surface fresh-session retry hooks and allow manual re-subscribe with newly provisioned role tokens.
 - Telemetry redaction: only emit session-level counters (`sid` hash, direction,
   sequence window, queue depth) with salts documented in the Connect telemetry
   guide; headers/keys must never appear in logs or debug strings.
@@ -196,10 +203,10 @@ live in the sibling `iroha-docs` repository at
 - Each direction keeps a dedicated 64-bit `sequence` counter whose first frame
   is `1`. Torii requires contiguous increments; gaps, wraparound, or a frame in
   the wrong role direction terminate the session.
-- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Connect V1 defines no `FlowControl` or `Resume` compatibility control. SDK
-  queues remain locally bounded and reconnect only to the still-live session;
-  otherwise they create a fresh exact-network SID.
+- Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs store `{sid, dir, seq, payload_hash}` in their journals to diagnose replay before discarding an interrupted session.
+- Connect V1 defines no `FlowControl` or `Resume` compatibility control. Each
+  role token is consumed atomically with its first successful WebSocket attach;
+  transport loss therefore requires a fresh exact-network SID and new tokens.
 - Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
 
 ## Threat model and data retention alignment
@@ -251,8 +258,9 @@ representation survives across the mobile/JS stacks.
 - A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
   bytes used, oldest/newest seq). It feeds the telemetry exporters and the
   SDK-local queue limiter. This is not a Connect wire control.
-- Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
-  oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
+- Journals cap at 32 frames / 1 MiB by default. Hitting the cap quarantines and
+  discards the interrupted SID (`reason=overflow`) rather than retaining a
+  sequence suffix with an unrecoverable gap. `ConnectFeatureConfig.max_queue_len`
   overrides these defaults per deployment.
 - Journals retain data for 24 h (`expires_at_ms`). Background GC removes stale
   segments eagerly so the on-disk footprint stays bounded.
@@ -267,24 +275,28 @@ representation survives across the mobile/JS stacks.
 - SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
   drains, and GC outcomes; this hook feeds status UIs without parsing logs.
 
-### Replay and reconnect semantics
+### Replay and fresh-session semantics
 
 Connect V1 has no Resume, ResumeAck, FlowControl, or key-rotation wire control.
-A live session may reconnect with the same role token only while Torii still
-owns that exact session and its sequence state. Clients must continue with the
-next contiguous sequence; they must never retransmit an accepted frame. A
-duplicate, gap, wraparound, or role/direction substitution terminates the
-session. If either peer cannot prove its next sequence locally, it discards any
-queued ciphertext and creates a fresh app key, nonce, SID, and session.
+Torii consumes each one-shot role token only when it atomically publishes that
+role's first WebSocket endpoint. An upgrade that never attaches rolls its token
+reservation back, but a transport that disconnects after attachment cannot
+reuse the consumed token. Torii therefore removes that exact session
+incarnation and sends `connect_transport_closed` to any surviving endpoint;
+it never leaves the remaining role attached to a zombie SID. A duplicate, gap, wraparound, role/direction
+substitution, delivery timeout, or buffer overflow terminates the session.
+Clients then discard queued ciphertext and create a fresh app key, nonce, SID,
+and session.
 
-### Reconnection flow
+### Retry flow
 
-1. Transport re-establishes the authenticated role WebSocket.
-2. The client resumes only locally queued frames whose sequence begins at the
-   next unconsumed value and remains contiguous.
-3. Approve and Open are one-shot controls and are never replayed.
-4. Any uncertainty, duplicate, gap, or server close discards the queue and
-   starts a fresh exact-network session.
+1. A failed HTTP upgrade may retry the same reserved role token because no
+   endpoint was attached and no token was consumed.
+2. Any disconnect after attachment discards the interrupted SID and its local
+   queue, then provisions a fresh exact-network session and role tokens.
+3. Approve and Open remain one-shot controls and are never replayed.
+4. Any uncertainty, duplicate, gap, terminal control, or server close follows
+   the same fresh-session path.
 
 ### Failure modes
 

@@ -9,9 +9,11 @@ use iroha_crypto::{
             RelayCertificateBundleV2, leaf_certificate_spki_sha256, select_vpn_endpoint,
         },
         handshake::{
-            DEFAULT_TLS_SERVER_NAME, HandshakeSuite, HarnessError as NoiseHandshakeError,
+            ClientHelloMetadata, DEFAULT_TLS_SERVER_NAME, HandshakeSuite,
+            HarnessError as NoiseHandshakeError, MAX_HANDSHAKE_FRAME_LEN,
             RuntimeParams as NoiseRuntimeParams, SORANET_QUIC_ALPN, SessionSecrets,
-            process_client_hello, relay_finalize_handshake, update_suite_list,
+            inspect_client_hello, process_client_hello, relay_finalize_handshake,
+            update_suite_list,
         },
         pow::{
             self, Parameters as PowParameters, Ticket as PowTicket, TicketRevocationStore,
@@ -38,6 +40,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
+#[cfg(test)]
+use crate::metrics::normalize_downgrade_reason;
 use crate::{
     capability::{
         self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
@@ -62,13 +66,12 @@ use crate::{
         RouteCatalogError, RouteOpenFrame, RouteOpenFrameError, derive_kaigi_room_id,
     },
     guard::{self, GuardDirectoryError},
-    handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
     incentive_log::IncentiveLogger,
     incentives::{
         BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
         RelayPerformanceAccumulator,
     },
-    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
+    metrics::{Metrics, VpnRuntimeState},
     privacy::{
         PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
     },
@@ -105,7 +108,7 @@ use norito::{
 };
 use quinn::{
     ClosedStream, Connection, Dir, Endpoint, Incoming, RecvStream, SendStream, Side, StreamId,
-    VarInt, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
+    TransportConfig, VarInt, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
 };
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
@@ -217,8 +220,24 @@ const ADMIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const ADMIN_MAX_HEADER_BYTES_V1: usize = 16 * 1024;
 const ADMIN_MAX_CONCURRENT_CONNECTIONS_V1: usize = 64;
-const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
-const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
+// A permit is held from validated `Incoming` admission through both the TLS
+// and signed SoraNet application handshakes. This bounds unauthenticated work
+// even when peers stop advancing after address validation.
+const QUIC_MAX_PENDING_HANDSHAKES_V1: usize = 64;
+const QUIC_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const QUIC_APPLICATION_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+const QUIC_MAX_INCOMING_V1: usize = QUIC_MAX_PENDING_HANDSHAKES_V1;
+const QUIC_INCOMING_BUFFER_BYTES_V1: u64 = 64 * 1024;
+const QUIC_TOTAL_INCOMING_BUFFER_BYTES_V1: u64 =
+    QUIC_INCOMING_BUFFER_BYTES_V1 * QUIC_MAX_INCOMING_V1 as u64;
+const QUIC_MAX_BIDI_STREAMS_V1: u32 = 32;
+const QUIC_MAX_UNI_STREAMS_V1: u32 = 8;
+const QUIC_STREAM_RECEIVE_WINDOW_BYTES_V1: u32 = 256 * 1024;
+const QUIC_CONNECTION_RECEIVE_WINDOW_BYTES_V1: u32 = 4 * 1024 * 1024;
+const QUIC_SEND_WINDOW_BYTES_V1: u64 = 4 * 1024 * 1024;
+const QUIC_CRYPTO_BUFFER_BYTES_V1: usize = 64 * 1024;
+const QUIC_DATAGRAM_BUFFER_BYTES_V1: usize = 64 * 1024;
+const QUIC_MAX_IDLE_TIMEOUT_MILLIS_V1: u32 = 30_000;
 // First-release bounds for the TLS identity artifacts read during relay
 // startup. Sixteen certificates leave ample room for a complete issuer chain,
 // while the byte ceilings cover ordinary PEM expansion without allowing a
@@ -649,6 +668,10 @@ struct HandshakeOutcome {
     puzzle_verify_micros: Option<u64>,
     vpn_session: Option<VpnSessionHandle>,
     vpn_helper_ticket: Option<VpnHelperTicketV1>,
+}
+struct RelayClientHelloPreflight {
+    metadata: ClientHelloMetadata,
+    negotiated: NegotiatedCapabilities,
 }
 struct HandshakeByteGuard<'a> {
     metrics: &'a Metrics,
@@ -1904,26 +1927,58 @@ impl RelayRuntime {
         Ok(())
     }
     async fn accept_loop(&self, endpoint: Endpoint) -> Result<(), RelayError> {
+        let handshake_permits = Arc::new(Semaphore::new(QUIC_MAX_PENDING_HANDSHAKES_V1));
         while let Some(incoming) = endpoint.accept().await {
+            let Some(incoming) = Self::require_validated_quic_address(incoming) else {
+                continue;
+            };
+            let Some(handshake_permit) = Self::try_quic_handshake_permit(&handshake_permits) else {
+                self.metrics.record_capacity_reject();
+                incoming.refuse();
+                warn!(
+                    limit = QUIC_MAX_PENDING_HANDSHAKES_V1,
+                    "refusing QUIC connection: pending-handshake capacity reached"
+                );
+                continue;
+            };
             let context = self.circuit_context();
-            tokio::spawn(async move { RelayRuntime::handle_incoming(incoming, context).await });
+            tokio::spawn(async move {
+                RelayRuntime::handle_incoming(incoming, context, handshake_permit).await;
+            });
         }
         Ok(())
     }
-    async fn handle_incoming(incoming: Incoming, context: CircuitContext) {
+    fn require_validated_quic_address(incoming: Incoming) -> Option<Incoming> {
+        if incoming.remote_address_validated() {
+            return Some(incoming);
+        }
+        if let Err(error) = incoming.retry() {
+            error.into_incoming().refuse();
+            warn!("failed to issue mandatory QUIC address-validation retry");
+        }
+        None
+    }
+    fn try_quic_handshake_permit(permits: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(permits).try_acquire_owned().ok()
+    }
+    async fn handle_incoming(
+        incoming: Incoming,
+        context: CircuitContext,
+        handshake_permit: OwnedSemaphorePermit,
+    ) {
         let metrics = Arc::clone(&context.metrics);
         let privacy = Arc::clone(&context.privacy);
         let privacy_events = Arc::clone(&context.privacy_events);
         let mode = context.mode;
         let privacy_mode: SoranetPrivacyModeV1 = mode.into();
         match incoming.accept() {
-            Ok(connecting) => match connecting.await {
-                Ok(connection) => {
+            Ok(connecting) => match timeout(QUIC_TLS_HANDSHAKE_TIMEOUT, connecting).await {
+                Ok(Ok(connection)) => {
                     let remote = connection.remote_address();
                     info!(mode = mode.as_label(), "accepted SoraNet connection");
-                    tokio::spawn(Self::establish_circuit(connection, context, remote));
+                    Self::establish_circuit(connection, context, remote, handshake_permit).await;
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     metrics.record_failure();
                     let now = SystemTime::now();
                     privacy.record_circuit_rejected(now, RejectReason::Other, None);
@@ -1935,6 +1990,22 @@ impl RelayRuntime {
                         None,
                     );
                     warn!(%error, "QUIC handshake failed");
+                }
+                Err(_) => {
+                    metrics.record_failure();
+                    let now = SystemTime::now();
+                    privacy.record_circuit_rejected(now, RejectReason::Other, None);
+                    privacy_events.record_handshake_failure(
+                        privacy_mode,
+                        now,
+                        SoranetPrivacyHandshakeFailureV1::Other,
+                        None,
+                        None,
+                    );
+                    warn!(
+                        timeout_secs = QUIC_TLS_HANDSHAKE_TIMEOUT.as_secs(),
+                        "QUIC TLS handshake timed out"
+                    );
                 }
             },
             Err(error) => {
@@ -1956,6 +2027,7 @@ impl RelayRuntime {
         connection: Connection,
         context: CircuitContext,
         remote: SocketAddr,
+        handshake_permit: OwnedSemaphorePermit,
     ) {
         let metrics = Arc::clone(&context.metrics);
         let privacy = Arc::clone(&context.privacy);
@@ -2230,7 +2302,19 @@ impl RelayRuntime {
                 return;
             }
         };
-        match Self::perform_handshake(&connection, &context, remote).await {
+        let handshake_result = match timeout(
+            QUIC_APPLICATION_HANDSHAKE_TIMEOUT,
+            Self::perform_handshake(&connection, &context, remote),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(HandshakeError::Timeout("application handshake")),
+        };
+        // Established circuits are bounded separately. Release admission
+        // capacity as soon as the authenticated application handshake ends.
+        drop(handshake_permit);
+        match handshake_result {
             Ok(HandshakeOutcome {
                 negotiated,
                 session,
@@ -2489,7 +2573,6 @@ impl RelayRuntime {
                         metrics.record_downgrade(&warning.message);
                     }
                 }
-                let downgrade_detail = downgrade_detail_from_warnings(&warnings);
                 let elapsed = attempt.elapsed();
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let event_time = SystemTime::now();
@@ -2498,14 +2581,12 @@ impl RelayRuntime {
                     privacy_mode,
                     event_time,
                     SoranetPrivacyHandshakeFailureV1::Downgrade,
-                    downgrade_detail.as_deref(),
+                    None,
                     Some(millis),
                 );
-                context.proxy_policy_events.record_downgrade(
-                    privacy_mode,
-                    event_time,
-                    downgrade_detail.as_deref(),
-                );
+                context
+                    .proxy_policy_events
+                    .record_downgrade(privacy_mode, event_time);
                 if let Some(payload) = telemetry.as_ref() {
                     warn!(
                         target: SORANET_HANDSHAKE_LOG_TARGET,
@@ -2555,6 +2636,7 @@ impl RelayRuntime {
                 let millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let pow_detail = match &error {
                     HandshakeError::Pow(pow_error) => Some(pow_failure_reason(pow_error)),
+                    HandshakeError::Puzzle(_) => Some(SoranetPowFailureReasonV1::InvalidSolution),
                     _ => None,
                 };
                 let reason = match &error {
@@ -2568,7 +2650,7 @@ impl RelayRuntime {
                     privacy_mode,
                     event_time,
                     SoranetPrivacyHandshakeFailureV1::from(reason),
-                    pow_detail.as_ref().map(|detail| detail.as_label()),
+                    pow_detail,
                     Some(millis),
                 );
                 match &error {
@@ -4132,26 +4214,15 @@ impl RelayRuntime {
                 Err(_) => return Err(HandshakeError::Timeout("client hello")),
             },
         };
-        let client_hello =
-            ClientHello::parse(&client_frame).map_err(HandshakeError::ClientHello)?;
-        ensure_nonzero("client nonce must not be all zeros", client_hello.nonce())?;
-        ensure_nonzero(
-            "client ephemeral public key must not be all zeros",
-            client_hello.ephemeral_public(),
-        )?;
-        ensure_nonzero(
-            "client KEM public key must not be all zeros",
-            client_hello.kem_public(),
-        )?;
-        let client_caps = parse_client_advertisement(client_hello.raw_capabilities())
-            .map_err(HandshakeError::Capability)?;
-        let mut negotiated = negotiate_capabilities(&client_caps, context.server_caps.as_ref())
-            .map_err(HandshakeError::Capability)?;
-        validate_client_selection(&negotiated, client_hello.kem_id(), client_hello.sig_id())?;
+        let RelayClientHelloPreflight {
+            metadata: client_hello,
+            mut negotiated,
+        } = preflight_client_hello(&client_frame, context.server_caps.as_ref())?;
         let transcript_binding = pow::derive_admission_transcript(&client_frame);
         let mut response_caps = negotiated.clone();
         response_caps.grease.extend(context.grease.iter().cloned());
-        let grease_entries = std::mem::take(&mut response_caps.grease);
+        let mut grease_entries = std::mem::take(&mut response_caps.grease);
+        grease_entries.sort_by_key(|entry| entry.ty);
         let relay_caps_bytes =
             encode_relay_advertisement(&response_caps, context.server_caps.role_bits)?;
         let relay_caps_bytes =
@@ -4226,7 +4297,7 @@ impl RelayRuntime {
             let mut rng = StdRng::from_os_rng();
             let runtime_params = NoiseRuntimeParams {
                 descriptor_commit: context.descriptor_commit.as_slice(),
-                client_capabilities: client_hello.raw_capabilities(),
+                client_capabilities: client_hello.client_capabilities(),
                 relay_capabilities: &relay_caps_bytes,
                 kem_id: negotiated.kem.id.code(),
                 sig_id: client_hello.sig_id(),
@@ -4403,14 +4474,59 @@ impl RelayRuntime {
         )
     }
     fn admin_bearer_token(request: &str) -> Option<&str> {
+        let headers = request.strip_suffix("\r\n\r\n")?;
         let mut token = None;
-        for line in request.lines().skip(1) {
-            if line.is_empty() {
-                break;
+        let mut host_seen = false;
+        for line in headers.split("\r\n").skip(1) {
+            if line.is_empty()
+                || line.starts_with(' ')
+                || line.starts_with('\t')
+                || line.contains('\r')
+                || line.contains('\n')
+                || !line.is_ascii()
+            {
+                return None;
             }
             let Some((name, value)) = line.split_once(':') else {
-                continue;
+                return None;
             };
+            if name.is_empty()
+                || !name.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(
+                            byte,
+                            b'!' | b'#'
+                                | b'$'
+                                | b'%'
+                                | b'&'
+                                | b'\''
+                                | b'*'
+                                | b'+'
+                                | b'-'
+                                | b'.'
+                                | b'^'
+                                | b'_'
+                                | b'`'
+                                | b'|'
+                                | b'~'
+                        )
+                })
+            {
+                return None;
+            }
+            if name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding")
+            {
+                // The first-release admin protocol is bodyless. Reject framing headers rather
+                // than letting a local reverse proxy and this parser disagree about boundaries.
+                return None;
+            }
+            if name.eq_ignore_ascii_case("host") {
+                if host_seen || value.trim().is_empty() {
+                    return None;
+                }
+                host_seen = true;
+            }
             if !name.eq_ignore_ascii_case("authorization") {
                 continue;
             }
@@ -4420,7 +4536,11 @@ impl RelayRuntime {
             let mut parts = value.split_ascii_whitespace();
             let scheme = parts.next()?;
             let candidate = parts.next()?;
-            if !scheme.eq_ignore_ascii_case("bearer") || parts.next().is_some() {
+            if !scheme.eq_ignore_ascii_case("bearer")
+                || !(32..=256).contains(&candidate.len())
+                || !candidate.bytes().all(|byte| byte.is_ascii_graphic())
+                || parts.next().is_some()
+            {
                 return None;
             }
             token = Some(candidate);
@@ -4469,9 +4589,6 @@ impl RelayRuntime {
                 "allow: GET\r\n",
             );
         }
-        if path == "/healthz" {
-            return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
-        }
         let authorized = Self::admin_bearer_token(request)
             .is_some_and(|candidate| authorization.matches(candidate));
         if !authorized {
@@ -4481,6 +4598,9 @@ impl RelayRuntime {
                 "authentication required\n",
                 "www-authenticate: Bearer realm=\"soranet-relay-admin\"\r\n",
             );
+        }
+        if path == "/healthz" {
+            return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
         }
         Self::render_admin_response(path, context, relay_id, mode).await
     }
@@ -4741,7 +4861,37 @@ impl RelayRuntime {
         let tls = Self::tls_server_config(certs, key)?;
         let crypto = QuinnRustlsServerConfig::try_from(Arc::new(tls))
             .map_err(|error| RelayError::Tls(error.to_string()))?;
-        Ok(quinn::ServerConfig::with_crypto(Arc::new(crypto)))
+        let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+        config
+            .transport_config(Self::quic_transport_config())
+            .max_incoming(QUIC_MAX_INCOMING_V1)
+            .incoming_buffer_size(QUIC_INCOMING_BUFFER_BYTES_V1)
+            .incoming_buffer_size_total(QUIC_TOTAL_INCOMING_BUFFER_BYTES_V1)
+            // The relay's abuse accounting is keyed to the validated peer
+            // address. Disabling migration prevents that identity from
+            // changing after admission.
+            .migration(false);
+        Ok(config)
+    }
+    fn quic_transport_config() -> Arc<TransportConfig> {
+        let mut transport = TransportConfig::default();
+        transport
+            .max_concurrent_bidi_streams(VarInt::from_u32(QUIC_MAX_BIDI_STREAMS_V1))
+            .max_concurrent_uni_streams(VarInt::from_u32(QUIC_MAX_UNI_STREAMS_V1))
+            .max_idle_timeout(Some(
+                VarInt::from_u32(QUIC_MAX_IDLE_TIMEOUT_MILLIS_V1).into(),
+            ))
+            .stream_receive_window(VarInt::from_u32(QUIC_STREAM_RECEIVE_WINDOW_BYTES_V1))
+            .receive_window(VarInt::from_u32(QUIC_CONNECTION_RECEIVE_WINDOW_BYTES_V1))
+            .send_window(QUIC_SEND_WINDOW_BYTES_V1)
+            .crypto_buffer_size(QUIC_CRYPTO_BUFFER_BYTES_V1)
+            // Padding and constant-rate cover traffic use QUIC datagrams, so
+            // retain the extension with fixed per-connection queue bounds.
+            .datagram_receive_buffer_size(Some(QUIC_DATAGRAM_BUFFER_BYTES_V1))
+            .datagram_send_buffer_size(QUIC_DATAGRAM_BUFFER_BYTES_V1)
+            // The spin bit leaks an otherwise unnecessary RTT signal.
+            .allow_spin(false);
+        Arc::new(transport)
     }
     fn tls_server_config(
         certs: Vec<CertificateDer<'static>>,
@@ -4806,13 +4956,6 @@ fn role_bits(mode: RelayMode) -> u8 {
         RelayMode::Exit => 0x04,
     }
 }
-fn ensure_nonzero(field: &'static str, bytes: &[u8]) -> Result<(), HandshakeError> {
-    if bytes.iter().any(|&byte| byte != 0) {
-        Ok(())
-    } else {
-        Err(HandshakeError::InvalidClient(field))
-    }
-}
 fn resolve_handshake_suites(
     bundle: Option<&RelayCertificateBundleV2>,
 ) -> Result<Vec<HandshakeSuite>, ConfigError> {
@@ -4832,6 +4975,24 @@ fn resolve_handshake_suites(
         ));
     }
     Ok(unique)
+}
+fn preflight_client_hello(
+    client_frame: &[u8],
+    server_caps: &ServerCapabilities,
+) -> Result<RelayClientHelloPreflight, HandshakeError> {
+    // This is deliberately the crypto engine's canonical NK2/NK3 parser. A
+    // second relay-local decoder previously diverged from the live wire types
+    // and rejected every current ClientHello before admission.
+    let metadata = inspect_client_hello(client_frame).map_err(HandshakeError::Noise)?;
+    let client_caps = parse_client_advertisement(metadata.client_capabilities())
+        .map_err(HandshakeError::Capability)?;
+    let negotiated =
+        negotiate_capabilities(&client_caps, server_caps).map_err(HandshakeError::Capability)?;
+    validate_client_selection(&negotiated, metadata.kem_id(), metadata.sig_id())?;
+    Ok(RelayClientHelloPreflight {
+        metadata,
+        negotiated,
+    })
 }
 fn validate_client_selection(
     negotiated: &NegotiatedCapabilities,

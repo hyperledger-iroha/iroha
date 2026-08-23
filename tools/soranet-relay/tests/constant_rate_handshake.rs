@@ -5,30 +5,7 @@ use soranet_relay::{
         TYPE_CONSTANT_RATE, TYPE_PADDING, TYPE_PQ_KEM, TYPE_PQ_SIG, parse_client_advertisement,
     },
     constant_rate::CONSTANT_RATE_CELL_BYTES,
-    handshake::{CLIENT_HELLO_TYPE, ClientHello, NOISE_PADDING_BLOCK},
 };
-fn build_client_hello(capabilities: &[u8]) -> Vec<u8> {
-    const NONCE: [u8; 32] = [0xAB; 32];
-    const EPHEMERAL: [u8; 32] = [0x11; 32];
-    let kem_public = [0x01, 0x02, 0x03, 0x04];
-    let mut frame = Vec::new();
-    frame.push(CLIENT_HELLO_TYPE);
-    frame.extend_from_slice(&(NONCE.len() as u16).to_be_bytes());
-    frame.extend_from_slice(&NONCE);
-    frame.push(KemId::MlKem768.code());
-    frame.push(SignatureId::Dilithium3.code());
-    frame.extend_from_slice(&EPHEMERAL);
-    frame.extend_from_slice(&(kem_public.len() as u16).to_be_bytes());
-    frame.extend_from_slice(&kem_public);
-    frame.extend_from_slice(&(capabilities.len() as u16).to_be_bytes());
-    frame.extend_from_slice(capabilities);
-    frame.push(0); // resume flag disabled
-    let rem = frame.len() % NOISE_PADDING_BLOCK;
-    if rem != 0 {
-        frame.resize(frame.len() + NOISE_PADDING_BLOCK - rem, 0);
-    }
-    frame
-}
 fn encode_tlv(ty: u16, value: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(4 + value.len());
     bytes.extend_from_slice(&ty.to_be_bytes());
@@ -83,10 +60,7 @@ fn handshake_caps(
 #[test]
 fn constant_rate_handshake_roundtrip() {
     let caps = client_capabilities(Some(constant_rate_capability(ConstantRateMode::Strict)));
-    let frame = build_client_hello(&caps);
-    let hello = ClientHello::parse(&frame).expect("client hello parses");
-    let negotiated = handshake_caps(hello.raw_capabilities(), &server_caps_with_constant_rate())
-        .expect("negotiate");
+    let negotiated = handshake_caps(&caps, &server_caps_with_constant_rate()).expect("negotiate");
     assert_eq!(
         negotiated.constant_rate,
         Some(constant_rate_capability(ConstantRateMode::Strict))
@@ -95,8 +69,6 @@ fn constant_rate_handshake_roundtrip() {
 #[test]
 fn constant_rate_handshake_rejects_mismatch() {
     let caps = client_capabilities(Some(constant_rate_capability(ConstantRateMode::Strict)));
-    let frame = build_client_hello(&caps);
-    let hello = ClientHello::parse(&frame).expect("client hello parses");
     let server = ServerCapabilities::new(
         vec![KemAdvertisement {
             id: KemId::MlKem768,
@@ -111,8 +83,7 @@ fn constant_rate_handshake_rejects_mismatch() {
         0x01,
         None,
     );
-    let err =
-        handshake_caps(hello.raw_capabilities(), &server).expect_err("should reject mismatch");
+    let err = handshake_caps(&caps, &server).expect_err("should reject mismatch");
     assert!(
         matches!(
             err,
@@ -125,10 +96,7 @@ fn constant_rate_handshake_rejects_mismatch() {
 #[test]
 fn constant_rate_profile_applied_when_viewer_omits_tlv() {
     let caps = client_capabilities(None);
-    let frame = build_client_hello(&caps);
-    let hello = ClientHello::parse(&frame).expect("client hello parses");
-    let negotiated = handshake_caps(hello.raw_capabilities(), &server_caps_with_constant_rate())
-        .expect("negotiate");
+    let negotiated = handshake_caps(&caps, &server_caps_with_constant_rate()).expect("negotiate");
     assert_eq!(
         negotiated.constant_rate,
         Some(constant_rate_capability(ConstantRateMode::Strict)),
