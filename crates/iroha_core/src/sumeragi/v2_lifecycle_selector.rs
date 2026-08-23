@@ -1088,21 +1088,6 @@ pub(crate) enum LifecycleIngressIoTargetKind {
     /// Persist one lifecycle-recovered Decision Fetch response without ordinary work ownership.
     RecoveredDecisionFetchBodyPersistence,
 }
-/// Exact owner of one selected current-context certified response occurrence.
-///
-/// A response family has one lowest-ordinal winner. Later fanout replies and
-/// replies whose request owner has already retired are non-priority queue
-/// occurrences; they must drain through the ordinary consumer without
-/// borrowing the winner's Fetch authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SelectedCertifiedBodyResponseOwnerV1 {
-    /// The selected occurrence is the ordinary certified-Fetch family winner.
-    OrdinaryWinner,
-    /// The selected occurrence is the recovered Decision-Fetch family winner.
-    RecoveredWinner,
-    /// The selected occurrence owns no live response family.
-    NonPriority,
-}
 /// Opaque binding between a selected fair-ingress occurrence and its I/O target.
 ///
 /// No constructor or scalar debt accessor is exposed. The production service

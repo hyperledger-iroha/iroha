@@ -531,7 +531,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         durable_receipt: &DurableBodyReceipt,
     ) -> Result<(), EffectExecutorError> {
         self.ensure_open()?;
-        if self.runtime.live_clocks_are_armed() {
+        if self.runtime.lifecycle_live_clocks_are_armed() {
             return Err(EffectExecutorError::Contract(
                 "recovered lifecycle Validate marker installation followed live clock activation"
                     .to_owned(),
@@ -1720,7 +1720,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
             )?;
-            return Ok(None);
+            return Ok(());
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -1817,8 +1817,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )?;
-        Ok(None)
+        )
     }
 }
 

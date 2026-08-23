@@ -34,15 +34,6 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     parent = read(MODEL, errors)
     component = read_override(MODEL_COMPONENT, errors, overrides)
     verifier = read_override(MODEL_VERIFIER_COMPONENT, errors, overrides)
-<<<<<<< HEAD
-    promotion_receipt = read_override(MODEL_PROMOTION_RECEIPT_COMPONENT, errors, overrides)
-    internal_validation_receipt = read_override(
-        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT, errors, overrides
-    )
-    canary_evidence = read_override(MODEL_CANARY_EVIDENCE_COMPONENT, errors, overrides)
-    canary_liveness = read_override(MODEL_CANARY_LIVENESS_COMPONENT, errors, overrides)
-=======
->>>>>>> origin/optimizations
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
         return parent
@@ -50,37 +41,13 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     for marker in ("const VERIFIER_IDENTITY_SCHEMA_V4", "pub fn kagemusha_recursive_spend_verifier_key_id_v4"):
         if verifier.count(marker) != 1:
             errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
-<<<<<<< HEAD
-    parent = parent.replace(MODEL_VERIFIER_MODULE, "mod kagemusha_release_verifier {\n" + verifier + "\n}", 1)
-    if parent.count(MODEL_PROMOTION_RECEIPT_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_PROMOTION_RECEIPT_COMPONENT).name} module")
-        return parent
-    parent = parent.replace(MODEL_PROMOTION_RECEIPT_MODULE, "mod kagemusha_promotion_receipt {\n" + promotion_receipt + "\n}", 1)
-    if parent.count(MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE) != 1:
-        errors.append(
-            f"{MODEL}: expected exactly one reviewed "
-            f"{Path(MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT).name} module"
-        )
-        return parent
-    parent = parent.replace(
-        MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE,
-        "mod kagemusha_internal_validation_receipt {\n"
-        + internal_validation_receipt
-        + "\n}",
-        1,
-    )
-    if parent.count(MODEL_CANARY_EVIDENCE_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_EVIDENCE_COMPONENT).name} module")
-        return parent
-    parent = parent.replace(MODEL_CANARY_EVIDENCE_MODULE, "mod kagemusha_canary_evidence {\n" + canary_evidence + "\n}", 1)
-    if parent.count(MODEL_CANARY_LIVENESS_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_LIVENESS_COMPONENT).name} module")
-        return parent
-    return parent.replace(MODEL_CANARY_LIVENESS_MODULE, "mod kagemusha_post_canary_validator_liveness {\n" + canary_liveness + "\n}", 1)
-=======
     for module, relative in (
         (MODEL_VERIFIER_MODULE, MODEL_VERIFIER_COMPONENT),
         (MODEL_PROMOTION_RECEIPT_MODULE, MODEL_PROMOTION_RECEIPT_COMPONENT),
+        (
+            MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        ),
         (MODEL_CANARY_EVIDENCE_MODULE, MODEL_CANARY_EVIDENCE_COMPONENT),
         (MODEL_CANARY_LIVENESS_MODULE, MODEL_CANARY_LIVENESS_COMPONENT),
     ):
@@ -91,7 +58,6 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
         source = verifier if relative == MODEL_VERIFIER_COMPONENT else read_override(relative, errors, overrides)
         parent = parent.replace(module, f"mod {name} {{\n{source}\n}}", 1)
     return parent
->>>>>>> origin/optimizations
 
 def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
     if CATALOG in overrides:
@@ -2304,7 +2270,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "inherited promotion gate differs from its reviewed SHA-256",
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
         'READINESS_SOURCE_CONTRACT = (',
-        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 136 * 1024",
+        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 140 * 1024",
         "authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}",
         "READINESS_SOURCE_PROVIDERS = (",
         "def pin_authenticated_reviewed_source_file(",

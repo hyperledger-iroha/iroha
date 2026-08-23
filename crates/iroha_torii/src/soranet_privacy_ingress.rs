@@ -140,9 +140,11 @@ pub(crate) async fn enforce_soranet_privacy_collector_authentication(
     {
         return response;
     }
-    request.extensions_mut().insert(VerifiedSoranetPrivacyCollector(
-        collector_id_for_operator(&operator),
-    ));
+    request
+        .extensions_mut()
+        .insert(VerifiedSoranetPrivacyCollector(collector_id_for_operator(
+            &operator,
+        )));
     next.run(request).await
 }
 #[cfg(feature = "telemetry")]

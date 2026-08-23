@@ -1188,7 +1188,7 @@ fn privately_declared_source_hash_is_pinned_as_source_only_evidence() {
     // it does not replace the canonical runtime topology/tail digest that the
     // first authorized serialized run must record before backend admission.
     const SOURCE_ONLY_SHA256_HEX: &str =
-        "d609e227d30a74dafacbc49fb3a507a3bf0853197d13dd08b23bb19bc7a05074";
+        "bc6226bf69902398311026082939f3229c9d7964789fe6f6450a624b092f8ee8";
     let actual: [u8; 32] = Sha256::digest(include_bytes!("p256_packed_affine_v3.rs")).into();
     assert_eq!(actual, decode_hex::<32>(SOURCE_ONLY_SHA256_HEX));
 }

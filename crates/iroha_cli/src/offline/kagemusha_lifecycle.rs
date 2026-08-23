@@ -19,8 +19,9 @@ use iroha::{
             CanonicalRequestWitnessV1,
         },
         transaction::{
-            Executable, MultisigSignature, MultisigSignatures, SignedTransaction,
-            TransactionAdmissionIntent, TransactionBuilder, TransactionPayload,
+            Executable, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
+            TransactionPayload,
+            signed::{MultisigSignature, MultisigSignatures},
         },
     },
     http::Method as HttpMethod,
@@ -803,7 +804,7 @@ fn read_bounded_stable(path: &Path, maximum: usize, label: &str) -> Result<Vec<u
     bytes
         .try_reserve_exact(length)
         .wrap_err_with(|| format!("reserve {label} buffer"))?;
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(u64::try_from(maximum)?.saturating_add(1))
         .read_to_end(&mut bytes)
         .wrap_err_with(|| format!("read {label}"))?;

@@ -11,6 +11,7 @@ use super::{v2, v2_runner};
 mod authority;
 #[path = "v2_lifecycle_coordinator_support.rs"]
 mod coordinator_support;
+pub(in crate::sumeragi) use coordinator_support::RecoveredPendingKuraApplyCarrierPermitV1;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
@@ -311,9 +312,10 @@ pub(in crate::sumeragi) use work_registry::{
     LiveLifecycleDecisionApplyReconciliationAuthorityV1, PreparedLifecycleDecisionApplyDispatchV1,
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
-    RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
-    RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerV1,
-    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchDispatchIdentityV1,
+    RecoveredDecisionFetchDispatchKeyV1, RecoveredDurableValidateRetryCensusV1,
+    RecoveredDurableValidateRetryOwnerV1, RecoveredLifecycleSignDispatchIdentityV1,
+    RecoveredLifecycleSignDispatchKeyV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
@@ -510,6 +512,13 @@ impl LifecycleCoordinator {
         self.lifecycle_ordinal_authority = Some(authority);
         Ok(())
     }
+    /// Bind a launch-equivalent ordinal authority for durable coordinator tests.
+    #[cfg(test)]
+    pub(super) fn bind_test_lifecycle_ordinal_authority(&mut self) -> Result<(), String> {
+        let (_, authority) =
+            authority::lifecycle_ordinal_authorities_after_high_watermark(self.high_water);
+        self.bind_live_lifecycle_ordinal_authority(authority)
+    }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
     /// Tests use this direct seam; production Serve admission reaches the same
@@ -604,48 +613,6 @@ impl LifecycleCoordinator {
         (decision, reservation)
     }
 
-    /// Reserve one unpublished coordinator range without reducing a candidate.
-    fn begin_durable_ordinal_range(
-        &self,
-        count: usize,
-    ) -> Result<DurableLifecycleOrdinalReservation, DurableLifecycleOrdinalReservationError> {
-        if let Some(authority) = self.lifecycle_ordinal_authority.as_ref() {
-            return authority.begin_durable_range(self.high_water, count);
-        }
-        #[cfg(test)]
-        {
-            return authority::lifecycle_ordinal_authorities_after_high_watermark(self.high_water)
-                .1
-                .begin_durable_range(self.high_water, count);
-        }
-        #[cfg(not(test))]
-        Err(DurableLifecycleOrdinalReservationError::Invariant)
-    }
-
-    /// Reduce one candidate into an already fenced exact subrange.
-    fn reduce_admit_with_reserved_durable_ordinals(
-        &mut self,
-        request: AdmissionRequest,
-        first: u128,
-        last: u128,
-    ) -> AdmissionDecision {
-        let decision = self.reduce_admit_with_ordinal_allocator(request, |high_water, count| {
-            let span = last
-                .checked_sub(first)
-                .and_then(|distance| distance.checked_add(1))
-                .and_then(|span| usize::try_from(span).ok());
-            if first <= high_water || span != Some(count) {
-                return Err(AdmissionDecision::FailClosed(
-                    CoordinatorFault::DurabilityFailure,
-                ));
-            }
-            Ok((first, last))
-        });
-        if let AdmissionDecision::FailClosed(fault) = decision {
-            self.fault = Some(fault);
-        }
-        decision
-    }
     fn reduce_admit_with_ordinal_allocator(
         &mut self,
         request: AdmissionRequest,
