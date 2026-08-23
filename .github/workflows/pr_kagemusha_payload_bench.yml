@@ -871,6 +871,7 @@ jobs:
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
       - run: cargo test -p iroha_core --lib taira_canary -- --nocapture
+      - run: cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture
       - run: cargo test -p iroha_core offline_device_attestation_policy --lib
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib

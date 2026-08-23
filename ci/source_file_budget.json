@@ -61,7 +61,7 @@
     "crates/iroha_core/src/smartcontracts/isi/staking.rs": 6077,
     "crates/iroha_core/src/smartcontracts/isi/world.rs": 33797,
     "crates/iroha_core/src/smartcontracts/ivm/host.rs": 27505,
-    "crates/iroha_core/src/state.rs": 58444,
+    "crates/iroha_core/src/state.rs": 58442,
     "crates/iroha_core/src/state/tests.rs": 34145,
     "crates/iroha_core/src/state/tiered.rs": 6352,
     "crates/iroha_core/src/streaming.rs": 6403,

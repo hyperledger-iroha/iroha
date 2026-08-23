@@ -1276,7 +1276,12 @@ only when both the current external entrypoint hash and this
 authorization-proof-bearing signed-wire identity equal their reserved markers
 and the full activation binding and permit still match. The direct record
 affinely takes and clears that wire capability before any child data-trigger
-execution, and the exact canary is consumed once. A
+execution, and the exact canary is consumed once. Autonomous merge producers
+and live or historical followers separately admit only `QueuePlanSynced`
+entrypoints after authenticating their payload or batch commitments. The
+controller-authorized canary is signed with `Ordinary`; changing that intent
+changes its signed entrypoint and complete wire, so merge cannot reclassify it
+as the reserved direct canary. A
 pre-existing status without the corresponding journal, a mismatching journal,
 or an ambiguous submission cannot be retrospectively converted into production
 evidence.

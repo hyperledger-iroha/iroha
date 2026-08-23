@@ -21212,8 +21212,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     })
 }
 fn parse_usize(raw: &str, flag: &str) -> Result<usize, String> {
-    raw.trim()
-        .parse::<usize>()
+    require_canonical_unsigned_decimal(flag, raw, "sorafs_cli")?;
+    raw.parse::<usize>()
         .map_err(|err| format!("invalid {flag} value `{raw}`: {err}"))
 }
 fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>, String> {

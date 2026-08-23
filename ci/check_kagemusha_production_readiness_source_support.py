@@ -70,6 +70,15 @@ CORE_STATE = "crates/iroha_core/src/state.rs"
 CORE_COMMITTED_TX_CONTEXT = (
     "crates/iroha_core/src/state/committed_transaction_context.rs"
 )
+CORE_AUTONOMOUS_MERGE_TESTS = (
+    "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs"
+)
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS = (
+    "crates/iroha_core/src/state/autonomous_merge_admission_intent_tests.rs"
+)
+CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE = (
+    'include!("autonomous_merge_admission_intent_tests.rs");'
+)
 CORE_BLOCK = "crates/iroha_core/src/block.rs"
 CORE_EXECUTOR = "crates/iroha_core/src/executor.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
@@ -141,6 +150,7 @@ KAGEMUSHA_RELEASE_RUST_TEST_FILTERS = (
     "cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture",
     "cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture",
     "cargo test -p iroha_core --lib taira_canary -- --nocapture",
+    "cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture",
     "cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture",
     "cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture",
 )
@@ -515,6 +525,25 @@ def canary_source_errors(
          r"crate::state::seed_committed_transaction_context\(\s*"
          r"&mut transaction,\s*&entrypoint,\s*entrypoint_index,\s*\)"),
         wire_boundary,
+    )
+    require_pattern(
+        core_state, CORE_STATE, errors,
+        (r"fn preexecute_merge_execution_sources_into\(.*?"
+         r"if source\.input\.entrypoints\.iter\(\)\.any\(\|entrypoint\| \{.*?"
+         r"entrypoint\.admission_intent\(\).*?TransactionAdmissionIntent::QueuePlanSynced.*?"
+         r"autonomous merge entrypoint does not carry QueuePlanSynced admission intent.*?"
+         r"for \(\(\(entrypoint"),
+        "QueuePlanSynced-only authenticated autonomous merge producer boundary",
+    )
+    require_pattern(
+        core_state, CORE_STATE, errors,
+        (r"fn validate_merge_execution_batch\(.*?"
+         r"merge_execution_batch_commitments_match\(batch\).*?"
+         r"if batch\.lanes\.iter\(\)\.any\(\|execution\| \{.*?"
+         r"entrypoint\.admission_intent\(\).*?TransactionAdmissionIntent::QueuePlanSynced.*?"
+         r"autonomous merge entrypoint does not carry QueuePlanSynced admission intent.*?"
+         r"if batch\.application_block_header"),
+        "commitment-checked QueuePlanSynced autonomous merge follower boundary",
     )
     require_pattern(
         core_committed_transaction_context,
@@ -1092,9 +1121,23 @@ def release_closure_source_errors(
         if CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS in overrides
         else read(CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors)
     )
+    merge_tests = (
+        overrides[CORE_AUTONOMOUS_MERGE_TESTS]
+        if CORE_AUTONOMOUS_MERGE_TESTS in overrides
+        else read(CORE_AUTONOMOUS_MERGE_TESTS, errors)
+    )
+    merge_intent_tests = (
+        overrides[CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS]
+        if CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS in overrides
+        else read(CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS, errors)
+    )
     forbid_merge_conflict_markers(isi_tests, CORE_ISI_TESTS, errors)
     forbid_merge_conflict_markers(
         context_tests, CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS, errors
+    )
+    forbid_merge_conflict_markers(merge_tests, CORE_AUTONOMOUS_MERGE_TESTS, errors)
+    forbid_merge_conflict_markers(
+        merge_intent_tests, CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS, errors
     )
     require(
         core,
@@ -1107,6 +1150,35 @@ def release_closure_source_errors(
         CORE_ISI_TESTS,
         errors,
         CORE_KAGEMUSHA_CANARY_CONTEXT_TESTS_INCLUDE,
+    )
+    require(
+        merge_tests,
+        CORE_AUTONOMOUS_MERGE_TESTS,
+        errors,
+        CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS_INCLUDE,
+    )
+    require_pattern(
+        merge_intent_tests,
+        CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS,
+        errors,
+        (r"fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects\(\).*?"
+         r"TransactionAdmissionIntent::Ordinary.*?preexecute_merge_execution_sources_into.*?"
+         r"expect_err\(.*?assert_merge_queue_plan_synced_intent_error.*?"
+         r"direct_committed_entrypoints\.is_empty\(\).*?external_event_buf\.is_empty\(\)"),
+        "Ordinary autonomous merge producer no-effects regression",
+    )
+    require_pattern(
+        merge_intent_tests,
+        CORE_AUTONOMOUS_MERGE_ADMISSION_INTENT_TESTS,
+        errors,
+        (r"fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_external\(\).*?"
+         r"TransactionAdmissionIntent::QueuePlanSynced.*?"
+         r"for validate_live_authority in \[true, false\].*?"
+         r"QueuePlanSynced merge content remains valid.*?"
+         r"merge_execution_batch_commitments_match.*?"
+         r"for validate_live_authority in \[true, false\].*?expect_err\(.*?"
+         r"assert_merge_queue_plan_synced_intent_error"),
+        "Ordinary autonomous merge live and historical follower regression",
     )
     require_pattern(
         context_tests,

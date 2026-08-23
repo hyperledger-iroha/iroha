@@ -722,6 +722,7 @@ mod tests {
             .expect("derive canary signed-wire binding")
             .expect("single direct canary record has a signed-wire binding");
         assert_eq!(identity, fixture.reservation.body.canary_transaction_wire);
+        state_transaction.kagemusha_taira_canary_external_entrypoint = true;
         state_transaction.kagemusha_taira_canary_wire_identity = Some(identity);
     }
     fn commit_canary_activation_binding(
@@ -1040,6 +1041,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect("first exact signed wire is authorized");
         let markers_after_authorization = transaction.world.kagemusha_replay_keys.iter().count();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
         transaction.tx_call_hash = Some(second.exact_call_hash);
         transaction.kagemusha_taira_canary_wire_identity = Some(second_wire);
         let error = RecordKagemushaTairaCanaryV4::new(second.permit)
@@ -1063,7 +1065,6 @@ mod tests {
         transaction.tx_call_hash = Some(fixture.exact_call_hash);
         bind_canary_consensus_wire(&fixture, &mut transaction);
         let markers_before = transaction.world.kagemusha_replay_keys.iter().count();
-
         let mut invalid = fixture.permit.clone();
         invalid.body.canonical_torii_origin = "https://different.example".to_owned();
         let invalid_error = RecordKagemushaTairaCanaryV4::new(invalid)
@@ -1074,7 +1075,6 @@ mod tests {
                 .to_string()
                 .contains("invalid_taira_canary_permit")
         );
-
         let controller = canary_consensus_controller();
         let mut expired = fixture.permit;
         expired.body.expires_at_height = NonZeroU64::new(1).expect("non-zero expired height");
