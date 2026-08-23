@@ -47,12 +47,15 @@ public sealed record class TransferAssetInstruction(string AssetDefinitionId, st
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(2);
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, context.AuthorityAccountId));
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAccountId(DestinationAccountId));
-        return writer.ToArray();
+        var transfer = new CanonicalNoritoWriter();
+        transfer.WriteField(context.EncodeAssetId(AssetDefinitionId, context.AuthorityAccountId));
+        transfer.WriteField(context.EncodeQuantity(quantity));
+        transfer.WriteField(context.EncodeAccountId(DestinationAccountId));
+
+        var boxed = new CanonicalNoritoWriter();
+        boxed.WriteUInt32LittleEndian(2);
+        boxed.WriteField(transfer.ToArray());
+        return boxed.ToArray();
     }
 }
 
@@ -195,11 +198,14 @@ public sealed record class MintAssetInstruction(string AssetDefinitionId, string
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
-        return writer.ToArray();
+        var mint = new CanonicalNoritoWriter();
+        mint.WriteField(context.EncodeQuantity(quantity));
+        mint.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
+
+        var boxed = new CanonicalNoritoWriter();
+        boxed.WriteUInt32LittleEndian(0);
+        boxed.WriteField(mint.ToArray());
+        return boxed.ToArray();
     }
 }
 
@@ -246,11 +252,14 @@ public sealed record class BurnAssetInstruction(string AssetDefinitionId, string
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(context.EncodeQuantity(quantity));
-        writer.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
-        return writer.ToArray();
+        var burn = new CanonicalNoritoWriter();
+        burn.WriteField(context.EncodeQuantity(quantity));
+        burn.WriteField(context.EncodeAssetId(AssetDefinitionId, DestinationAccountId));
+
+        var boxed = new CanonicalNoritoWriter();
+        boxed.WriteUInt32LittleEndian(0);
+        boxed.WriteField(burn.ToArray());
+        return boxed.ToArray();
     }
 }
 
