@@ -9,7 +9,7 @@
 //! The wire format is defined with Norito. The proof envelope carries params, Merkle
 //! roots, and query decommitments. Verification replays the transcript and checks:
 //! - Merkle openings for each queried value
-//! - The domain-aware fold relation for `(x, -x)` openings in each round and query
+//! - The domain-aware fold relation for adjacent `(x, -x)` openings in bit-reversed layer order
 //! - Distinct transcript-derived query positions
 //! - Optional composition leaf constraints when `comp_root` is present
 //! - Exact reconstruction of the deterministic generic Binding AIR trace commitment
@@ -322,10 +322,19 @@ fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
     if layer_domain < 2 || !layer_domain.is_power_of_two() || pair_index >= layer_domain / 2 {
         return None;
     }
+    // Every FRI layer is stored in bit-reversed evaluation order. Adjacent positions `2j` and
+    // `2j + 1` therefore hold `(f(x), f(-x))`, where the subgroup exponent of `x` is `j` with the
+    // pair-index bits reversed. Folding preserves the same ordering in the next layer.
+    let pair_index_bits = layer_domain.trailing_zeros().checked_sub(1)?;
+    let pair_exponent = if pair_index_bits == 0 {
+        0
+    } else {
+        pair_index.reverse_bits() >> (usize::BITS - pair_index_bits)
+    };
     let layer_domain = u128::try_from(layer_domain).ok()?;
     let exponent = (MOD_P - 1) / layer_domain;
     let root = Fq::new(GOLDILOCKS_GENERATOR).pow(exponent);
-    Some(root.pow(pair_index as u128))
+    Some(root.pow(pair_exponent as u128))
 }
 fn fri_fold_pair(y0: Fq, y1: Fq, beta: Fq, x: Fq) -> Option<Fq> {
     let inv_2x = x.mul(Fq::from_canonical_u64(2)?).inv()?;
@@ -342,9 +351,8 @@ fn digest_le_to_u64(bytes: &[u8; 32]) -> Option<u64> {
     if bytes[8..].iter().any(|b| *b != 0) {
         return None;
     }
-    Some(u64::from_le_bytes(
-        bytes[..8].try_into().expect("slice length"),
-    ))
+    let value = u64::from_le_bytes(bytes[..8].try_into().expect("slice length"));
+    Fq::from_canonical_u64(value).map(|field| field.0)
 }
 /// Transcript helper: derive a 64-bit field element challenge from label+bytes.
 fn challenge(params: &StarkFriParamsV1, label: &str, bytes: &[u8]) -> Option<Fq> {
@@ -850,8 +858,8 @@ pub fn decode_stark_fri_verifying_key_v1(bytes: &[u8]) -> Result<StarkFriVerifyi
 /// Validate that a STARK/FRI verifier-key payload uses ledger-grade verifier parameters.
 ///
 /// This is a control-plane floor for proof-system admission. It rejects historical
-/// PoC-sized STARK/FRI parameters while still leaving circuit-specific algebraic
-/// validation to the verifier for each proof.
+/// PoC-sized STARK/FRI parameters and single-field Poseidon2 commitments while still
+/// leaving circuit-specific algebraic validation to the verifier for each proof.
 pub fn validate_stark_fri_canonical_verifying_key_payload(
     payload: &StarkFriVerifyingKeyV1,
     circuit_id: &str,
@@ -870,10 +878,13 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             "{label} STARK/FRI verifier key circuit id mismatch"
         ));
     }
-    if payload.hash_fn != STARK_HASH_SHA256_V1 && payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
+    if payload.hash_fn == STARK_HASH_POSEIDON2_V1 {
         return Err(format!(
-            "{label} STARK/FRI verifier key must use SHA-256 or Poseidon2"
+            "{label} STARK/FRI verifier key must use SHA-256: the single-Goldilocks-field Poseidon2 root lacks ledger-grade collision binding"
         ));
+    }
+    if payload.hash_fn != STARK_HASH_SHA256_V1 {
+        return Err(format!("{label} STARK/FRI verifier key must use SHA-256"));
     }
     if payload.fold_arity != 2 {
         return Err(format!(
@@ -1086,11 +1097,11 @@ pub struct StarkAirProofV1 {
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
 pub struct FoldDecommitV1 {
-    /// Index j at this layer (so layer k reads positions 2*j and 2*j+1 from layer k)
+    /// Index j at this bit-reversed layer (so layer k reads positions 2*j and 2*j+1 from layer k)
     pub j: u32,
-    /// Two values from layer k: y0 = f(2*j), y1 = f(2*j+1)
+    /// Left value from the adjacent `(x, -x)` pair at bit-reversed layer position `2*j`.
     pub y0: u64,
-    /// Right branch value at this layer (position 2*j+1)
+    /// Right value from the adjacent `(x, -x)` pair at bit-reversed layer position `2*j+1`.
     pub y1: u64,
     /// Merkle paths for y0 and y1 in layer k
     pub path_y0: MerklePath,
@@ -1207,6 +1218,24 @@ fn merkle_path_from_levels(index: usize, levels: &[Vec<[u8; 32]>]) -> Option<Mer
 }
 fn merkle_root_from_levels(levels: &[Vec<[u8; 32]>]) -> Option<[u8; 32]> {
     levels.last()?.first().copied()
+}
+fn stark_constant_field_merkle_root_v1(
+    params: &StarkFriParamsV1,
+    value: Fq,
+    value_count: usize,
+) -> Option<[u8; 32]> {
+    if value_count == 0 || !value_count.is_power_of_two() {
+        return None;
+    }
+    let mut root = match params.hash_fn {
+        STARK_HASH_SHA256_V1 => leaf_hash(value),
+        STARK_HASH_POSEIDON2_V1 => poseidon_leaf_hash(value),
+        _ => return None,
+    };
+    for _ in 0..value_count.trailing_zeros() {
+        root = merkle_node_hash(params, &root, &root)?;
+    }
+    Some(root)
 }
 fn merkle_levels_from_hashes(
     params: &StarkFriParamsV1,
@@ -1492,7 +1521,7 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_with_limits_v1(
             {
                 return Err("FRI query Merkle root mismatch");
             }
-            let beta = fri_round_challenge(params, transcript_label, current_root)
+            let beta = fri_round_challenge(params, transcript_label, round, current_root)
                 .ok_or("FRI query challenge derivation failed")?;
             let x = domain_x_for_pair(layer_domain, expected_j)
                 .ok_or("FRI query domain element derivation failed")?;
@@ -1611,7 +1640,7 @@ pub(crate) fn validate_stark_fri_query_shape_for_base_indices_with_limits_v1(
             {
                 return Err("FRI query Merkle root mismatch");
             }
-            let beta = fri_round_challenge(params, transcript_label, current_root)
+            let beta = fri_round_challenge(params, transcript_label, round, current_root)
                 .ok_or("FRI query challenge derivation failed")?;
             let x = domain_x_for_pair(layer_domain, expected_j)
                 .ok_or("FRI query domain element derivation failed")?;
@@ -1859,6 +1888,8 @@ fn stark_air_context_matches_statement(
                 && params.n_log2 <= MAX_BINDING_AIR_DOMAIN_LOG2
                 && stark_binding_air_trace_root(params, &air.public_digest, total_domain)
                     == Some(air.trace_root)
+                && stark_constant_field_merkle_root_v1(params, Fq::zero(), total_domain)
+                    == Some(air.composition_root)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash,
@@ -2068,8 +2099,10 @@ fn validate_stark_prover_params(
 fn fri_round_challenge(
     params: &StarkFriParamsV1,
     transcript_label: &str,
+    round: usize,
     root: &[u8; 32],
 ) -> Option<Fq> {
+    let round = u32::try_from(round).ok()?;
     let mut tb = Vec::new();
     tb.extend_from_slice(transcript_label.as_bytes());
     tb.extend_from_slice(&params.version.to_le_bytes());
@@ -2083,6 +2116,10 @@ fn fri_round_challenge(
     tb.extend_from_slice(&params.queries.to_le_bytes());
     tb.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
     tb.extend_from_slice(params.domain_tag.as_bytes());
+    // The same commitment digest must not reuse one challenge in two FRI layers. In addition to
+    // making every fold challenge independently domain-separated, this keeps the transcript
+    // unambiguous if a future commitment construction permits equal roots at different depths.
+    tb.extend_from_slice(&round.to_le_bytes());
     tb.extend_from_slice(root);
     challenge(params, "stark:fri:r:k", &tb)
 }
@@ -2128,7 +2165,7 @@ fn synthesize_stark_fri_envelope_from_values_with_base_indices(
             .ok_or_else(|| "failed to build STARK FRI Merkle layer".to_owned())?;
         let root = merkle_root_from_levels(&levels)
             .ok_or_else(|| "failed to derive STARK FRI root".to_owned())?;
-        let beta = fri_round_challenge(&params, &transcript_label, &root)
+        let beta = fri_round_challenge(&params, &transcript_label, round, &root)
             .ok_or_else(|| "failed to derive STARK FRI challenge".to_owned())?;
         roots.push(root);
         layer_merkle.push(levels);
@@ -2742,13 +2779,11 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
         material,
     )
 }
-/// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data.
+/// Reject a BFV full-bootstrap proof when only public-padding data is available.
 ///
-/// This verifier-facing check does not require the private row-major trace. It validates the
-/// STARK/FRI envelope, the statement-bound BFV domain tag, the canonical BFV circuit/profile,
-/// duplicate-free public padding openings, and zero public-padding composition samples. Callers
-/// that hold governed trace material should still use
-/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope`] for the stronger artifact-bound replay.
+/// The V1 proof does not separately establish low degree for the hidden trace columns. Sampled
+/// public-padding rows therefore cannot authenticate the unobserved private trace. Callers must
+/// use [`verify_stark_fri_bfv_full_bootstrap_air_envelope`] with the governed full trace material.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
     bytes: &[u8],
@@ -2766,9 +2801,34 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
         bound_mode,
     )
 }
-/// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data with limits.
+/// Reject a BFV full-bootstrap proof when only public-padding data is available, with limits.
+///
+/// Resource limits do not repair the missing hidden-trace low-degree argument, so this entrypoint
+/// intentionally fails closed. Full-material verification uses a private structural precheck and
+/// then reconstructs the verifier-owned trace and composition commitments exactly.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    statement_hash: iroha_crypto::Hash,
+    trace_material_digest: iroha_crypto::Hash,
+    slot_index: u32,
+    bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
+) -> bool {
+    // TODO: Re-enable public-only verification after V1 proves low degree for every hidden trace
+    // column and binds those columns to the sampled AIR composition evaluations.
+    let _ = (
+        bytes,
+        limits,
+        statement_hash,
+        trace_material_digest,
+        slot_index,
+        bound_mode,
+    );
+    false
+}
+/// Check the public-padding structure before a caller performs exact full-material replay.
+pub(crate) fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
     bytes: &[u8],
     limits: &StarkVerifierLimits,
     statement_hash: iroha_crypto::Hash,
@@ -2890,7 +2950,7 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     let statement_hash = material.proof_input_material.statement_hash;
     let public_digest: [u8; 32] = statement_hash.into();
     let witness = &material.proof_input_material.witness_material;
-    if !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    if !verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
         bytes,
         limits,
         statement_hash,
@@ -3387,21 +3447,7 @@ fn verify_stark_fri_envelope_with_context(
             if idx_y0 != expected_y0 || idx_y1 != expected_y1 || idx_z != expected_j {
                 return false;
             }
-            let mut tb = Vec::new();
-            tb.extend_from_slice(env.transcript_label.as_bytes());
-            tb.extend_from_slice(&env.params.version.to_le_bytes());
-            tb.extend_from_slice(&[
-                env.params.n_log2,
-                env.params.blowup_log2,
-                env.params.fold_arity,
-                env.params.merkle_arity,
-                env.params.hash_fn,
-            ]);
-            tb.extend_from_slice(&env.params.queries.to_le_bytes());
-            tb.extend_from_slice(&(env.params.domain_tag.len() as u32).to_le_bytes());
-            tb.extend_from_slice(env.params.domain_tag.as_bytes());
-            tb.extend_from_slice(&roots[k]);
-            let r_k = match challenge(&env.params, "stark:fri:r:k", &tb) {
+            let r_k = match fri_round_challenge(&env.params, &env.transcript_label, k, &roots[k]) {
                 Some(v) => v,
                 None => return false,
             };

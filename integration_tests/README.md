@@ -55,14 +55,16 @@ This crate hosts cross-component tests for Iroha.
   non-shipping and require the explicit feature. Run the exact release gate
   with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart -- --exact --nocapture --test-threads=1`.
-- Canonical native ZK-ACE, Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and
-  private-IVM proving, exact governed activation, six independently corrupted
+- Canonical native Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and
+  private-IVM proving, exact governed activation, independently corrupted
   proofs, cross-profile proof substitution, wrong statement binding,
-  pre-activation and stale-policy rejection, exact and stable-state replay,
-  public-state atomicity, four-peer DA/RBC finality, and restarted-validator
-  recovery live in `tests/privacy_exact12_retained_network.rs`. Every governed
-  setup action and proof traverses the production native executor path; the
-  fixture builders are non-shipping and require the explicit feature. Run the
+  pre-activation rejection, exact and stable-state replay, public-state
+  atomicity, four-peer DA/RBC finality, and restarted-validator recovery live
+  in `tests/privacy_exact12_retained_network.rs`. The same suite proves that
+  ZK-ACE remains unavailable on every peer and that its production builder
+  fails closed without changing public state. Every available-engine setup
+  action and proof traverses the production native executor path; the fixture
+  builders are non-shipping and require the explicit feature. Run the
   enforced release gate with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - Canonical native ZK-AMS and Vega proving, governed activation, corrupted

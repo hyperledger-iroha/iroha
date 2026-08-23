@@ -1,9 +1,10 @@
 //! Internal helpers for Kaigi privacy-mode execution.
 //!
-//! When the `kaigi_privacy_mocks` feature is enabled, these helpers accept
-//! deterministic mock proofs so that unit and integration tests can exercise
-//! privacy-mode workflows. Production builds wire into the canonical verifier
-//! pipeline to validate Halo2 envelopes against the configured roster circuit.
+//! Crate unit tests can use deterministic proof stubs; enabling
+//! `kaigi_privacy_mocks` for a non-test library build is rejected at compile
+//! time. Production usage and host proofs run through the canonical verifier.
+//! Roster joins fail closed until their circuit statement binds the signed
+//! participant authority.
 use super::{Error, privacy_error};
 use crate::state::StateTransaction;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
@@ -72,7 +73,7 @@ pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<()
     }
     Ok(())
 }
-#[cfg(any(test, feature = "kaigi_privacy_mocks"))]
+#[cfg(feature = "kaigi_privacy_mocks")]
 fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) -> Result<(), Error> {
     let commitment = artifacts
         .commitment
@@ -153,21 +154,25 @@ fn verify_host_stub(
     }
     Ok(())
 }
+fn reject_unbound_roster_join_statement() -> Result<(), Error> {
+    Err(privacy_error(
+        "Kaigi ZkRosterV1 joins are unavailable until the proof statement binds the signed participant authority",
+    ))
+}
 pub fn verify_roster_join(
     state_transaction: &mut StateTransaction<'_, '_>,
     artifacts: &PrivacyArtifacts<'_>,
     expected_root: &Hash,
 ) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
+    #[cfg(feature = "kaigi_privacy_mocks")]
     {
         let _ = state_transaction;
         return verify_roster_stub(artifacts, expected_root);
     }
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
+    #[cfg(not(feature = "kaigi_privacy_mocks"))]
     {
-        let proof_bytes = validate_roster_artifacts(artifacts, expected_root)?;
-        let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi roster join");
+        let _ = (state_transaction, artifacts, expected_root);
+        return reject_unbound_roster_join_statement();
     }
     #[allow(unreachable_code)]
     Err(privacy_error("kaigi privacy mode unavailable"))
@@ -549,6 +554,12 @@ mod tests {
         compute_commitment_hash, compute_nullifier_hash, compute_usage_commitment_hash,
         empty_roster_root_hash,
     };
+    #[test]
+    fn roster_join_fails_closed_before_candidate_proof_dispatch() {
+        let err = reject_unbound_roster_join_statement()
+            .expect_err("candidate roster join must fail closed");
+        assert!(format!("{err:?}").contains("binds the signed participant authority"));
+    }
     #[test]
     fn roster_public_input_validation_binds_every_instruction_artifact() {
         let root = empty_roster_root_hash();

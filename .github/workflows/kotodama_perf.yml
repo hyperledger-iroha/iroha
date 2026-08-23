@@ -213,11 +213,114 @@ jobs:
 
       - name: Enforce five-percent ceiling
         working-directory: candidate
-        run: >-
-          python3 scripts/check_kotodama_perf.py
-          --criterion-dir ../target-kotodama-perf/criterion
-          --baseline-root ../baseline
-          --threshold 0.05
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="../target-kotodama-perf/kotodama-perf-evidence"
+          rm -rf "$evidence"
+          mkdir -p "$evidence"
+          python3 scripts/check_kotodama_perf.py \
+            --criterion-dir ../target-kotodama-perf/criterion \
+            --baseline-root ../baseline \
+            --candidate-root . \
+            --expected-candidate-commit "${{ github.sha }}" \
+            --json-output "$evidence/report.json" \
+            --threshold 0.05 \
+            2>&1 | tee "$evidence/checker.log"
+
+      - name: Seal complete performance evidence
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_EVENT: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUNNER_NAME_VALUE: ${{ runner.name }}
+          RUNNER_OS_VALUE: ${{ runner.os }}
+          RUNNER_ARCH_VALUE: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          evidence="$CARGO_TARGET_DIR/kotodama-perf-evidence"
+          test -f "$evidence/report.json" && test ! -L "$evidence/report.json"
+          {
+            rustc -Vv
+            cargo -Vv
+            python3 --version
+            uname -a
+            if command -v lscpu >/dev/null 2>&1; then lscpu; fi
+          } > "$evidence/toolchain-and-host.txt"
+          git -C candidate rev-parse --verify HEAD > "$evidence/candidate-head.txt"
+          git -C baseline rev-parse --verify HEAD > "$evidence/baseline-head.txt"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          target = Path(os.environ["CARGO_TARGET_DIR"])
+          criterion = target / "criterion"
+          evidence = target / "kotodama-perf-evidence"
+          if criterion.is_symlink() or not criterion.is_dir():
+              raise SystemExit("Criterion evidence directory is absent or a symlink")
+          if evidence.is_symlink() or not evidence.is_dir():
+              raise SystemExit("performance evidence directory is absent or a symlink")
+          workflow = {
+              "schema": "iroha.kotodama.performance.workflow.v1",
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "repository": os.environ["WORKFLOW_REPOSITORY"],
+              "ref": os.environ["WORKFLOW_REF"],
+              "event": os.environ["WORKFLOW_EVENT"],
+              "run_id": os.environ["WORKFLOW_RUN_ID"],
+              "run_attempt": os.environ["WORKFLOW_RUN_ATTEMPT"],
+              "runner": {
+                  "name": os.environ["RUNNER_NAME_VALUE"],
+                  "os": os.environ["RUNNER_OS_VALUE"],
+                  "arch": os.environ["RUNNER_ARCH_VALUE"],
+              },
+              "cargo": {
+                  "build_jobs": os.environ["CARGO_BUILD_JOBS"],
+                  "incremental": os.environ["CARGO_INCREMENTAL"],
+                  "target_dir": os.environ["CARGO_TARGET_DIR"],
+                  "toolchain": os.environ["RUSTUP_TOOLCHAIN"],
+              },
+          }
+          (evidence / "workflow.json").write_text(
+              json.dumps(workflow, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          manifest = evidence / "SHA256SUMS"
+          entries = []
+          for label, root in (("criterion", criterion), ("evidence", evidence)):
+              for path in sorted(root.rglob("*")):
+                  if path == manifest:
+                      continue
+                  if path.is_symlink():
+                      raise SystemExit(f"non-regular evidence path: {path}")
+                  if path.is_dir():
+                      continue
+                  if not path.is_file():
+                      raise SystemExit(f"non-regular evidence path: {path}")
+                  relative = f"{label}/{path.relative_to(root).as_posix()}"
+                  entries.append(
+                      f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {relative}"
+                  )
+          if not entries:
+              raise SystemExit("performance evidence is empty")
+          manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload complete performance evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kotodama-performance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target-kotodama-perf/criterion
+            target-kotodama-perf/kotodama-perf-evidence
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
 
       - name: Build canonical Kotodama release tools
         working-directory: candidate

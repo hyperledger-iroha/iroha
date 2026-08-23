@@ -269,6 +269,52 @@ fn order_parity_and_bgh19_framing_mutations_fail_closed() {
 }
 
 #[test]
+fn paired_fold_result_owner_retains_exact_eq_then_ep_claims_without_verifying_them() {
+    let eq_proof_bytes = [0x31; STATE_RECURSIVE_FOLD_BGH19_PROOF_BYTES_V2];
+    let ep_proof_bytes = [0x52; STATE_RECURSIVE_FOLD_BGH19_PROOF_BYTES_V2];
+    let pair = UnverifiedStateRecursiveFoldResultPairV2::from_eq_then_ep(
+        OpaqueStateBgh19ProofV2::decode(&eq_proof_bytes).expect("canonical Eq framing"),
+        accumulator(StateRecursiveFoldParityV2::Eq),
+        OpaqueStateBgh19ProofV2::decode(&ep_proof_bytes).expect("canonical Ep framing"),
+        accumulator(StateRecursiveFoldParityV2::Ep),
+    )
+    .expect("canonical Eq-then-Ep result ownership");
+
+    assert_eq!(pair.eq_proof().as_bytes(), &eq_proof_bytes);
+    assert_eq!(pair.ep_proof().as_bytes(), &ep_proof_bytes);
+    assert_eq!(
+        pair.eq_claimed_output().parity(),
+        StateRecursiveFoldParityV2::Eq
+    );
+    assert_eq!(
+        pair.ep_claimed_output().parity(),
+        StateRecursiveFoldParityV2::Ep
+    );
+}
+
+#[test]
+fn paired_fold_result_owner_rejects_claimed_output_parity_substitution() {
+    assert_eq!(
+        UnverifiedStateRecursiveFoldResultPairV2::from_eq_then_ep(
+            proof(),
+            accumulator(StateRecursiveFoldParityV2::Ep),
+            proof(),
+            accumulator(StateRecursiveFoldParityV2::Ep),
+        ),
+        Err(StateRecursiveFoldResultOwnershipErrorV2::EqClaimedOutputParityMismatch)
+    );
+    assert_eq!(
+        UnverifiedStateRecursiveFoldResultPairV2::from_eq_then_ep(
+            proof(),
+            accumulator(StateRecursiveFoldParityV2::Eq),
+            proof(),
+            accumulator(StateRecursiveFoldParityV2::Eq),
+        ),
+        Err(StateRecursiveFoldResultOwnershipErrorV2::EpClaimedOutputParityMismatch)
+    );
+}
+
+#[test]
 fn direct_state_abi_word93_lineage_and_final_padding_are_exact() {
     assert_eq!(STATE_RECURSIVE_FOLD_STATE_ABI_WORDS_V2, 237);
     assert_eq!(STATE_RECURSIVE_FOLD_LINEAGE_WORD_START_V2, 93);
@@ -463,6 +509,64 @@ fn six_input_owner_consumes_exact_p0_p1_and_guard_types() {
     ));
     assert!(!source.contains("impl Clone for ProvenanceBoundStateSixInputSetV2"));
     assert!(!source.contains("into_six_input_parts"));
+}
+
+#[test]
+fn fold_result_carrier_consumes_the_six_input_owner_and_exposes_only_borrowed_views() {
+    let _assembly_signature: fn(
+        ProvenanceBoundStateSixInputSetV2,
+        UnverifiedStateRecursiveFoldResultPairV2,
+    ) -> ProvenanceBoundStateRecursiveFoldResultV2 =
+        assemble_provenance_bound_state_recursive_fold_result_v2;
+    let _fail_closed_signature: fn(
+        ProvenanceBoundStateRecursiveFoldResultV2,
+    ) -> Result<
+        core::convert::Infallible,
+        StateRecursiveFoldResultOwnershipErrorV2,
+    > = fail_closed_provenance_bound_state_recursive_fold_result_v2;
+
+    let source = include_str!("state_recursive_fold.rs");
+    let carrier = source
+        .split_once("pub(super) struct ProvenanceBoundStateRecursiveFoldResultV2 {")
+        .and_then(|(_, tail)| tail.split_once("/// Structurally valid six-input envelope."))
+        .map(|(carrier, _)| carrier)
+        .expect("fold-result carrier source section exists");
+
+    assert!(carrier.contains("inputs: ProvenanceBoundStateSixInputSetV2"));
+    assert!(carrier.contains("result: UnverifiedStateRecursiveFoldResultPairV2"));
+    assert!(carrier.contains("self.inputs.eq_inputs()"));
+    assert!(carrier.contains("self.inputs.ep_inputs()"));
+    assert!(carrier.contains("ProvenanceBoundStateRecursiveFoldResultV2 { inputs, result }"));
+    assert!(carrier.contains("StateRecursiveFoldResultOwnershipErrorV2::VerificationUnavailable"));
+    assert!(!carrier.contains("[StateRecursiveFoldInputV2;"));
+    assert!(!carrier.contains("into_parts"));
+    assert!(!carrier.contains("impl Clone for ProvenanceBoundStateRecursiveFoldResultV2"));
+    assert!(!carrier.contains("impl Copy for ProvenanceBoundStateRecursiveFoldResultV2"));
+    assert!(!source.contains("VerifiedStateRecursiveFoldResult"));
+    assert!(!source.contains("verify_provenance_bound_state_recursive_fold_result_v2"));
+}
+
+#[test]
+fn fold_result_carrier_keeps_every_authority_gate_false_and_adds_no_crypto_surface() {
+    assert!(!STATE_RECURSIVE_FOLD_COMPILER_AVAILABLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_CIRCUIT_IMPLEMENTED_V2);
+    assert!(!STATE_RECURSIVE_FOLD_ECC_STRATEGY_GOVERNED_V2);
+    assert!(!STATE_RECURSIVE_FOLD_GUARD_BUNDLE_AVAILABLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_FINAL_STATE_TARGET_GOVERNED_V2);
+    assert!(!STATE_RECURSIVE_FOLD_ARTIFACTS_AUTHENTICATED_V2);
+    assert!(!STATE_RECURSIVE_FOLD_BACKEND_AVAILABLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_MEASURED_RSS_EVIDENCE_AVAILABLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_READINESS_AVAILABLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_RELEASE_ELIGIBLE_V2);
+    assert!(!STATE_RECURSIVE_FOLD_PRODUCTION_AVAILABLE_V2);
+
+    let source = include_str!("state_recursive_fold.rs");
+    assert!(!source.contains("impl Circuit for"));
+    assert!(!source.contains("verify_proof("));
+    assert!(!source.contains("create_proof("));
+    assert!(!source.contains("VerifierIPA"));
+    assert!(!source.contains("semantic_hash"));
+    assert!(!source.contains("semantic_domain"));
 }
 
 #[test]

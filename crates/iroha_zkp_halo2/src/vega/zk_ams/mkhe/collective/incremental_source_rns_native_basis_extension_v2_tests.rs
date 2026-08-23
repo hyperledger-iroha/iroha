@@ -57,6 +57,14 @@ fn exact_38_to_40_geometry_and_missing_tail_census_are_frozen() {
         RECORD_COUNT_V2 * usize::from(CIPHERTEXT_TAIL_LIMBS_PER_RECORD_V2),
         CIPHERTEXT_TAIL_OBJECT_COUNT_V2
     );
+<<<<<<< HEAD
+    assert!(RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2);
+    assert!(RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
+    assert!(!RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2);
+    assert!(!RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2);
+    assert!(RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
+    assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
+=======
     const {
         assert!(RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2);
         assert!(!RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
@@ -65,6 +73,7 @@ fn exact_38_to_40_geometry_and_missing_tail_census_are_frozen() {
         assert!(!RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
         assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
     }
+>>>>>>> origin/optimizations
     assert_eq!(CHUNK_COUNT_PER_OBJECT_V2, 128);
     assert_eq!(OBJECT_BYTES_V2, 1_048_580);
     assert_eq!(TAIL_CAS_BYTES_V2, 184_550_080);
@@ -820,9 +829,21 @@ fn source_inventory_keeps_the_tranche_private_move_only_and_fail_closed() {
     assert!(source.contains("completion_hash.update(&completion.coefficient_digest)"));
     assert_eq!(
         source
-            .matches("RnsNativeCiphertextTailCompletionV2 {")
+            .matches("pub(super) struct RnsNativeCiphertextTailCompletionV2 {")
             .count(),
-        2
+        1
+    );
+    assert_eq!(
+        source
+            .matches("impl RnsNativeCiphertextTailCompletionV2 {")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .matches("Ok(RnsNativeCiphertextTailCompletionV2 {")
+            .count(),
+        1
     );
     assert!(!source.contains("pub(super) fn from_key_tail_integrity_digest_v2"));
     assert!(!source.contains("impl Clone for RnsNativeCollectiveKeyTail"));
@@ -843,7 +864,7 @@ fn source_inventory_keeps_the_tranche_private_move_only_and_fail_closed() {
     assert!(source.contains("PREFIX_RECOMPUTATION_ALLOWED_V2: bool = false"));
     assert!(source.contains("FAKE_TAIL_LIFT_ALLOWED_V2: bool = false"));
     assert!(source.contains("CONTRACT_IMPLEMENTED_V2: bool = true"));
-    assert!(source.contains("PRE_ENTROPY_CALL_SITE_INTEGRATED_V2: bool = false"));
+    assert!(source.contains("PRE_ENTROPY_CALL_SITE_INTEGRATED_V2: bool = true"));
     assert_eq!(
         source
             .matches("RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2")
@@ -852,11 +873,22 @@ fn source_inventory_keeps_the_tranche_private_move_only_and_fail_closed() {
     );
     assert!(source.contains("PRODUCTION_OWNER_AVAILABLE_V2: bool = false"));
     assert!(source.contains("SOURCE_ADAPTER_AVAILABLE_V2: bool = false"));
-    assert!(source.contains("INTEGRATED_V2: bool = false"));
+    assert!(source.contains("INTEGRATED_V2: bool = true"));
     assert!(source.contains("RELEASE_AUTHORIZED_V2: bool = false"));
-    assert!(source.contains("Binding it to V1 authority/receipts"));
-    assert!(source.contains("CAS publication remain"));
-    assert!(source.contains("cannot prove that a future parent call site"));
+    assert!(source.contains("validate_v1_authority_binding_v2"));
+    let unconsumed_owner = source
+        .split_once("impl RnsNativeCollectiveKeyTailOwnerV2")
+        .and_then(|(_, suffix)| {
+            suffix
+                .split_once("impl RnsNativePublishedCollectiveKeyTailOwnerV2")
+                .map(|(owner, _)| owner)
+        })
+        .expect("unconsumed key-tail owner implementation");
+    assert!(unconsumed_owner.contains("validate_v1_authority_binding_v2"));
+    assert!(unconsumed_owner.contains("self.axes.validate_v2()?"));
+    assert!(unconsumed_owner.contains("authority.authority_digest() == [0; 32]"));
+    assert!(source.contains("compiled V1 coordinator"));
+    assert!(source.contains("This is a source contract, not liveness"));
 }
 
 #[test]

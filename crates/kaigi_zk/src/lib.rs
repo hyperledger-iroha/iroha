@@ -23,6 +23,10 @@ use std::sync::OnceLock;
 pub type Scalar = Fp;
 /// Backend identifier used by the roster join circuit verifier metadata.
 pub const KAIGI_ROSTER_BACKEND: &str = "halo2/pasta/kaigi-roster-v1";
+/// Canonical circuit identifier authenticated by roster verifier-key carriers.
+pub const KAIGI_ROSTER_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/kaigi-roster-v1";
+/// Canonical outer-envelope public-input schema for roster join proofs.
+pub const KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = b"kaigi-roster-v1";
 /// Default log2 domain size used when instantiating the roster join circuit.
 ///
 /// `k = 8` gives a 256-row domain, which accommodates two complete
@@ -32,6 +36,10 @@ pub const KAIGI_ROSTER_CIRCUIT_K: u32 = 8;
 pub const KAIGI_ROSTER_ROOT_LIMBS: usize = 4;
 /// Backend identifier used by the usage commitment circuit verifier metadata.
 pub const KAIGI_USAGE_BACKEND: &str = "halo2/pasta/kaigi-usage-v1";
+/// Canonical circuit identifier authenticated by usage verifier-key carriers.
+pub const KAIGI_USAGE_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/kaigi-usage-v1";
+/// Canonical outer-envelope public-input schema for usage commitment proofs.
+pub const KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = b"kaigi-usage-v1";
 /// Default log2 domain size for the usage commitment circuit.
 pub const KAIGI_USAGE_CIRCUIT_K: u32 = 8;
 const POSEIDON_WIDTH: usize = 3;
@@ -388,30 +396,33 @@ pub fn compute_usage_commitment(
     let stage = poseidon_compress(DOMAIN_USAGE_STAGE, duration_ms, billed_gas);
     poseidon_compress(DOMAIN_USAGE_COMMITMENT, stage, segment_index)
 }
-/// Compute the roster commitment as a byte array matching the circuit output.
+/// Compute the roster commitment as an injective scalar-in-`Hash` byte array.
+///
+/// The field representation's top seven bits are shifted left and the vacated
+/// bit is set to satisfy [`Hash`]'s marker invariant.
 #[must_use]
 pub fn compute_commitment_bytes(account: u64, domain_salt: u64) -> [u8; Hash::LENGTH] {
-    scalar_to_bytes(compute_commitment(
+    scalar_to_hash_bytes(compute_commitment(
         Scalar::from(account),
         Scalar::from(domain_salt),
     ))
 }
-/// Compute the roster nullifier as a byte array matching the circuit output.
+/// Compute the roster nullifier using the injective scalar-in-`Hash` encoding.
 #[must_use]
 pub fn compute_nullifier_bytes(account: u64, nullifier_seed: u64) -> [u8; Hash::LENGTH] {
-    scalar_to_bytes(compute_nullifier(
+    scalar_to_hash_bytes(compute_nullifier(
         Scalar::from(account),
         Scalar::from(nullifier_seed),
     ))
 }
-/// Compute the usage commitment components as a byte array.
+/// Compute the usage commitment using the injective scalar-in-`Hash` encoding.
 #[must_use]
 pub fn compute_usage_commitment_bytes(
     duration_ms: u64,
     billed_gas: u64,
     segment_index: u64,
 ) -> [u8; Hash::LENGTH] {
-    scalar_to_bytes(compute_usage_commitment(
+    scalar_to_hash_bytes(compute_usage_commitment(
         Scalar::from(duration_ms),
         Scalar::from(billed_gas),
         Scalar::from(segment_index),
@@ -441,15 +452,29 @@ fn scalar_to_bytes(value: Scalar) -> [u8; Hash::LENGTH] {
     out.copy_from_slice(value.to_repr().as_ref());
     out
 }
+fn scalar_to_hash_bytes(value: Scalar) -> [u8; Hash::LENGTH] {
+    let mut out = scalar_to_bytes(value);
+    // Pasta Fp representations use at most 255 bits, so the high bit is free.
+    // Insert Hash's mandatory marker at bit 248 instead of overwriting that
+    // scalar bit, which would make the carrier two-to-one.
+    debug_assert_eq!(out[Hash::LENGTH - 1] & 0x80, 0);
+    out[Hash::LENGTH - 1] = (out[Hash::LENGTH - 1] << 1) | 1;
+    out
+}
 /// Decode a canonical Pasta scalar stored in a Kaigi commitment hash.
 ///
-/// Kaigi commitments and nullifiers use [`Hash::prehashed`] as a typed
-/// 32-byte container for the circuit output. Values at or above the Pasta
-/// modulus are therefore rejected instead of being reduced modulo the field.
+/// Kaigi commitments and nullifiers insert [`Hash`]'s mandatory marker bit
+/// rather than overwriting a scalar bit. Decoding removes that marker and
+/// rejects values at or above the Pasta modulus instead of reducing them.
 #[must_use]
 pub fn scalar_from_hash(hash: &Hash) -> Option<Scalar> {
     let mut representation = <Scalar as PrimeField>::Repr::default();
-    representation.as_mut().copy_from_slice(hash.as_ref());
+    let bytes = representation.as_mut();
+    bytes.copy_from_slice(hash.as_ref());
+    if bytes[Hash::LENGTH - 1] & 1 == 0 {
+        return None;
+    }
+    bytes[Hash::LENGTH - 1] >>= 1;
     Option::from(Scalar::from_repr(representation))
 }
 /// Domain separation tag for Kaigi roster commitment leaves.
@@ -633,11 +658,51 @@ mod tests {
     }
     #[test]
     fn commitment_hash_scalar_decoding_is_canonical() {
-        let scalar = compute_commitment(Scalar::from(11u64), Scalar::from(31u64));
-        let hash = Hash::prehashed(scalar_to_bytes(scalar));
-        assert_eq!(scalar_from_hash(&hash), Some(scalar));
+        let cases = [
+            (
+                compute_commitment_hash(11, 31),
+                compute_commitment(Scalar::from(11u64), Scalar::from(31u64)),
+            ),
+            (
+                compute_nullifier_hash(11, 57),
+                compute_nullifier(Scalar::from(11u64), Scalar::from(57u64)),
+            ),
+            (
+                compute_usage_commitment_hash(1_200, 345, 2),
+                compute_usage_commitment(
+                    Scalar::from(1_200u64),
+                    Scalar::from(345u64),
+                    Scalar::from(2u64),
+                ),
+            ),
+        ];
+        for (hash, scalar) in cases {
+            assert_eq!(scalar_from_hash(&hash), Some(scalar));
+        }
         let non_canonical = Hash::prehashed([u8::MAX; Hash::LENGTH]);
         assert_eq!(scalar_from_hash(&non_canonical), None);
+    }
+    #[test]
+    fn scalar_hash_encoding_does_not_overwrite_field_bit_248() {
+        let low = Scalar::ZERO;
+        let mut high_repr = <Scalar as PrimeField>::Repr::default();
+        high_repr.as_mut()[Hash::LENGTH - 1] = 1;
+        let high = Option::<Scalar>::from(Scalar::from_repr(high_repr))
+            .expect("2^248 is canonical in Pasta Fp");
+
+        let retired_low = Hash::prehashed(scalar_to_bytes(low));
+        let retired_high = Hash::prehashed(scalar_to_bytes(high));
+        assert_eq!(retired_low, retired_high, "retired carrier was two-to-one");
+
+        let encoded_low = Hash::prehashed(scalar_to_hash_bytes(low));
+        let encoded_high = Hash::prehashed(scalar_to_hash_bytes(high));
+        assert_ne!(encoded_low, encoded_high);
+        assert_eq!(scalar_from_hash(&encoded_low), Some(low));
+        assert_eq!(scalar_from_hash(&encoded_high), Some(high));
+
+        let field_max = -Scalar::ONE;
+        let encoded_max = Hash::prehashed(scalar_to_hash_bytes(field_max));
+        assert_eq!(scalar_from_hash(&encoded_max), Some(field_max));
     }
     #[test]
     fn roster_circuit_keygen_succeeds() {

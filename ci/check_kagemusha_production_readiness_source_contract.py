@@ -34,6 +34,15 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     parent = read(MODEL, errors)
     component = read_override(MODEL_COMPONENT, errors, overrides)
     verifier = read_override(MODEL_VERIFIER_COMPONENT, errors, overrides)
+<<<<<<< HEAD
+    promotion_receipt = read_override(MODEL_PROMOTION_RECEIPT_COMPONENT, errors, overrides)
+    internal_validation_receipt = read_override(
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT, errors, overrides
+    )
+    canary_evidence = read_override(MODEL_CANARY_EVIDENCE_COMPONENT, errors, overrides)
+    canary_liveness = read_override(MODEL_CANARY_LIVENESS_COMPONENT, errors, overrides)
+=======
+>>>>>>> origin/optimizations
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
         return parent
@@ -41,6 +50,34 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     for marker in ("const VERIFIER_IDENTITY_SCHEMA_V4", "pub fn kagemusha_recursive_spend_verifier_key_id_v4"):
         if verifier.count(marker) != 1:
             errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
+<<<<<<< HEAD
+    parent = parent.replace(MODEL_VERIFIER_MODULE, "mod kagemusha_release_verifier {\n" + verifier + "\n}", 1)
+    if parent.count(MODEL_PROMOTION_RECEIPT_MODULE) != 1:
+        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_PROMOTION_RECEIPT_COMPONENT).name} module")
+        return parent
+    parent = parent.replace(MODEL_PROMOTION_RECEIPT_MODULE, "mod kagemusha_promotion_receipt {\n" + promotion_receipt + "\n}", 1)
+    if parent.count(MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE) != 1:
+        errors.append(
+            f"{MODEL}: expected exactly one reviewed "
+            f"{Path(MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT).name} module"
+        )
+        return parent
+    parent = parent.replace(
+        MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE,
+        "mod kagemusha_internal_validation_receipt {\n"
+        + internal_validation_receipt
+        + "\n}",
+        1,
+    )
+    if parent.count(MODEL_CANARY_EVIDENCE_MODULE) != 1:
+        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_EVIDENCE_COMPONENT).name} module")
+        return parent
+    parent = parent.replace(MODEL_CANARY_EVIDENCE_MODULE, "mod kagemusha_canary_evidence {\n" + canary_evidence + "\n}", 1)
+    if parent.count(MODEL_CANARY_LIVENESS_MODULE) != 1:
+        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_LIVENESS_COMPONENT).name} module")
+        return parent
+    return parent.replace(MODEL_CANARY_LIVENESS_MODULE, "mod kagemusha_post_canary_validator_liveness {\n" + canary_liveness + "\n}", 1)
+=======
     for module, relative in (
         (MODEL_VERIFIER_MODULE, MODEL_VERIFIER_COMPONENT),
         (MODEL_PROMOTION_RECEIPT_MODULE, MODEL_PROMOTION_RECEIPT_COMPONENT),
@@ -54,6 +91,7 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
         source = verifier if relative == MODEL_VERIFIER_COMPONENT else read_override(relative, errors, overrides)
         parent = parent.replace(module, f"mod {name} {{\n{source}\n}}", 1)
     return parent
+>>>>>>> origin/optimizations
 
 def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
     if CATALOG in overrides:
@@ -172,6 +210,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             KAGEMUSHA_ROLLOUT_COMPONENT,
             KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT,
             MODEL_PROMOTION_RECEIPT_COMPONENT,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
             MODEL_CANARY_EVIDENCE_COMPONENT,
             MODEL_CANARY_LIVENESS_COMPONENT,
             MODEL_ISI_OFFLINE,
@@ -237,6 +276,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def source_provider_pipeline_errors(",
         'MODEL = "crates/iroha_data_model/src/offline/mod.rs"',
         "MODEL_PROMOTION_RECEIPT_COMPONENT",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT",
         "MODEL_CANARY_EVIDENCE_COMPONENT",
         "MODEL_CANARY_LIVENESS_COMPONENT",
         "MODEL_ISI_OFFLINE",
@@ -287,6 +327,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def expect_static_mutation(",
         "run_bounded_authenticated_process(",
         "expect_static_mutation(READINESS, *mutation)",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT: read(",
         "MODEL_CANARY_EVIDENCE_COMPONENT: read(",
         "MODEL_CANARY_LIVENESS_COMPONENT: read(",
         "MODEL_ISI_OFFLINE: read(",
@@ -352,6 +393,50 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         *RETIRED_RECURSIVE_LIFECYCLE_TYPES,
         *RETIRED_RECURSIVE_V3_MARKERS,
+    )
+    internal_validation = texts[MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT]
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r"pub fn decode_canonical\(.*?decode_canonical_with_limits\(bytes, limits\).*?"
+            r"receipt\.validate\(\)\?;.*?if canonical != bytes.*?Ok\(receipt\).*?"
+            r"pub fn validate\(&self\).*?self\.body\.validate\(\)\?;.*?"
+            r"self\.signature\s*\.verify\(&self\.body\.validation_runner_public_key, "
+            r"&self\.body\).*?InvalidSignature"
+        ),
+        "internal-validation receipt canonical signature/body validation",
+    )
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r"impl KagemushaRecursiveSpendInternalValidationReceiptBodyV1.*?"
+            r"pub fn validate\(&self\).*?self\.validate_identity\(\)\?;.*?"
+            r"self\.validate_tools\(\)\?;.*?self\.validate_commands\(\).*?"
+            r"fn validate_commands\(&self\).*?self\.commands\.len\(\).*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1\.len\(\).*?"
+            r"command\.command_id != spec\.command_id.*?!argv_matches.*?"
+            r"command\.exit_code != 0.*?command\.termination_signal\.is_some\(\).*?"
+            r"command\.timed_out.*?fuzz_targets != \[true, true\]"
+        ),
+        "internal-validation exact command outcomes",
+    )
+    require_pattern(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        errors,
+        (
+            r'command_id: "core-final-release-inventory".*?program: CARGO,.*?'
+            r'argv: &\[\s*"test",\s*"--locked",\s*"-p",\s*"iroha_core",\s*'
+            r'"--features",\s*"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",\s*'
+            r'"--bin",\s*"kagemusha_recursive_spend_v4_bundle",\s*'
+            r'"final_release_inventory_is_exact_and_includes_both_receipts",\s*\],\s*'
+            r"fuzz_target: None"
+        ),
+        "exact internal-validation final-inventory command",
     )
     forbid(
         "\n".join(
@@ -2148,6 +2233,33 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r'\("promotion-record-v4\.norito", MAX_PROMOTION_RECORD_BYTES\),'
         ),
         "bounded opaque internal-validation receipt staging",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"def validate_kagami_verification_report\(.*?"
+            r"internal_validation_receipt_sha256: str,.*?"
+            r'"internal_validation_receipt_sha256",.*?'
+            r"report\.get\(\"internal_validation_receipt_sha256\"\)\s*"
+            r"!= internal_validation_receipt_sha256.*?"
+            r'raise ValueError\(\"Kagami verified a different internal-validation receipt\"\)'
+        ),
+        "internal-validation report digest binding",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"internal_validation_receipt_sha256: str \| None = None.*?"
+            r'elif name == "internal-validation-receipt-v1\.norito":\s*'
+            r"internal_validation_receipt_sha256 = hashlib\.sha256\(payload\)\.hexdigest\(\).*?"
+            r"or internal_validation_receipt_sha256 is None.*?"
+            r"internal_validation_receipt_sha256=internal_validation_receipt_sha256,"
+        ),
+        "internal-validation staged-byte digest forwarding",
     )
     opaque_metadata_section = texts[READINESS].split(
         "BOUNDED_AUTHENTICATED_METADATA = (", 1

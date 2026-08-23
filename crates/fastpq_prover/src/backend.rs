@@ -73,6 +73,8 @@ const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS 
 /// lets equal-and-opposite residues at the same reuse offset cancel for every transcript.
 pub const AIR_COMPOSITION_ALPHA_COUNT: usize =
     AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT;
+/// Maximum algebraic degree of every implemented V1 AIR residue in trace columns.
+pub(crate) const AIR_MAX_CONSTRAINT_DEGREE_V1: usize = 2;
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
@@ -883,13 +885,13 @@ pub struct BackendArtifact {
     pub parameter: String,
     /// Number of real trace rows prior to padding.
     pub trace_rows: u32,
-    /// Poseidon2 Merkle root over column commitments.
+    /// Poseidon Merkle root over column commitments.
     pub trace_root: u64,
-    /// Poseidon2 Merkle root over row-major AIR trace openings.
+    /// Poseidon Merkle root over row-major AIR trace openings.
     pub air_trace_root: u64,
-    /// Poseidon2 Merkle root over AIR composition evaluations.
+    /// Poseidon Merkle root over AIR composition evaluations.
     pub air_composition_root: u64,
-    /// Poseidon2 Merkle root over the low-degree extension leaf hashes.
+    /// Poseidon Merkle root over the low-degree extension leaf hashes.
     pub lookup_root: u64,
     /// Number of evaluation rows committed under `lookup_root`.
     pub lde_domain_size: u32,
@@ -903,7 +905,7 @@ pub struct BackendArtifact {
     pub fri_arity: u32,
     /// Low-degree extension blowup factor.
     pub fri_blowup: u32,
-    /// Poseidon2 hash of each FRI layer plus the terminal root.
+    /// Poseidon hash of each FRI layer plus the terminal root.
     pub fri_layers: Vec<u64>,
     /// Fiat–Shamir challenges used for each FRI folding round.
     pub fri_betas: Vec<u64>,
@@ -1471,6 +1473,12 @@ fn merkle_paths_for_leaf_indices(
 /// Returns an error if an internal node hash cannot be computed.
 #[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64]) -> Result<bool> {
+    // FASTPQ's canonical tree duplicates a sole leaf and therefore always has
+    // at least one authentication level. Accepting an empty path would treat a
+    // raw leaf as a root even though the tree builder never emits that shape.
+    if path.is_empty() {
+        return Ok(false);
+    }
     let mut current = leaf;
     let mut index = leaf_index;
     for &sibling in path {
@@ -1481,7 +1489,10 @@ pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64])
         };
         index /= 2;
     }
-    Ok(current == root)
+    // Reject indices whose high bits lie above the authenticated tree depth.
+    // Without this check, `i` and `i + k * 2^path.len()` select identical
+    // left/right branches and therefore accept the same path.
+    Ok(index == 0 && current == root)
 }
 #[allow(clippy::unnecessary_wraps)]
 fn build_merkle_levels_with_mode(leaves: &[u64], mode: ExecutionMode) -> Result<Vec<Vec<u64>>> {
@@ -1696,7 +1707,7 @@ pub fn fold_with_fri(
     let mut layers = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > 1 && round < max_rounds {
+    while current.len() > arity && round < max_rounds {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
         let root = fri_layer_commitment(round, &current);
@@ -1725,6 +1736,13 @@ pub fn fold_with_fri(
         current = next;
         domain = domain.folded(round_arity);
         round += 1;
+    }
+    if current.len() > arity {
+        return Err(Error::FriReductionLimit {
+            max_reductions,
+            remaining: current.len(),
+            arity,
+        });
     }
     let final_root = fri_layer_commitment(round, &current);
     transcript.append_fri_final(final_root);
@@ -1770,7 +1788,7 @@ fn fold_with_fri_opening_layers(
     let mut roots = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > 1 && round < max_rounds {
+    while current.len() > arity_usize && round < max_rounds {
         let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
         let root = merkle_root_with_mode(&leaves, mode);
         transcript.append_fri_layer(round, root);
@@ -1782,6 +1800,13 @@ fn fold_with_fri_opening_layers(
         current = fold_round(&current, arity_usize, beta, domain)?;
         domain = domain.folded(round_arity);
         round += 1;
+    }
+    if current.len() > arity_usize {
+        return Err(Error::FriReductionLimit {
+            max_reductions: params.fri.max_reductions,
+            remaining: current.len(),
+            arity: arity_usize,
+        });
     }
     let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
     let final_root = merkle_root_with_mode(&leaves, mode);
@@ -1966,6 +1991,52 @@ impl FriDomain {
             generator: field_pow(self.generator, exponent),
             offset: field_pow(self.offset, exponent),
         }
+    }
+
+    /// Return whether evaluations on this domain encode a polynomial below
+    /// the exclusive degree bound.
+    pub(crate) fn evaluations_have_degree_below(
+        self,
+        values: &[u64],
+        degree_bound: usize,
+    ) -> Result<bool> {
+        if values.is_empty() || !values.len().is_power_of_two() {
+            return Err(Error::FriDomainSize {
+                length: values.len(),
+                arity: 1,
+            });
+        }
+        if degree_bound == 0 || degree_bound > values.len() {
+            return Err(Error::FriTerminalDegreeBound {
+                degree_bound,
+                domain_len: values.len(),
+            });
+        }
+        let inverse_len =
+            field_inverse(
+                u64::try_from(values.len()).map_err(|_| Error::FriDomainSize {
+                    length: values.len(),
+                    arity: values.len(),
+                })?,
+            );
+        let inverse_generator = field_inverse(self.generator);
+        let mut inverse_frequency = field_pow(
+            inverse_generator,
+            u64::try_from(degree_bound).expect("terminal FRI degree bound fits u64"),
+        );
+        for _degree in degree_bound..values.len() {
+            let mut coefficient = 0u64;
+            let mut twiddle = FIELD_ONE;
+            for &value in values {
+                coefficient = add_mod(coefficient, mul_mod(value, twiddle));
+                twiddle = mul_mod(twiddle, inverse_frequency);
+            }
+            if mul_mod(coefficient, inverse_len) != 0 {
+                return Ok(false);
+            }
+            inverse_frequency = mul_mod(inverse_frequency, inverse_generator);
+        }
+        Ok(true)
     }
 }
 
@@ -2785,6 +2856,7 @@ mod tests {
         let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
         let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
         assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
+        assert!(!verify_merkle_path(leaf, leaf, 0, &[]).expect("empty path is noncanonical"));
     }
     #[test]
     fn merkle_paths_verify_against_lookup_root_for_odd_leaf_count() {
@@ -2801,6 +2873,25 @@ mod tests {
         let chunks = open_query_chunks(&evaluations, &[query_index], 8).expect("chunk");
         let leaf = hash_lde_chunk(leaf_index, &chunks[0]).expect("leaf hash");
         assert!(verify_merkle_path(root, leaf, leaf_index, &paths[0]).expect("path verifies"));
+    }
+    #[test]
+    fn merkle_path_rejects_indices_with_bits_above_the_tree_depth() {
+        let evaluations = (0u64..256).collect::<Vec<_>>();
+        let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
+        let root = merkle_root(&leaves);
+        let paths =
+            merkle_paths_for_queries(&leaves, &[0], 8, evaluations.len()).expect("query path");
+        let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
+        let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
+        let aliased_index = 1usize
+            .checked_shl(u32::try_from(paths[0].len()).expect("path depth fits u32"))
+            .expect("test path depth fits usize");
+
+        assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
+        assert!(
+            !verify_merkle_path(root, leaf, aliased_index, &paths[0])
+                .expect("high-bit alias is rejected")
+        );
     }
     #[test]
     fn trace_row_hashes_match_cpu_reference_for_edge_shapes() {
@@ -3013,7 +3104,7 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let evaluations = [1u64, 2, 3, 4];
+        let evaluations = (1u64..=16).collect::<Vec<_>>();
         let (layers, betas) = fold_with_fri(
             &evaluations,
             params.fri.arity,
@@ -3164,6 +3255,60 @@ mod tests {
         );
     }
     #[test]
+    fn terminal_fri_degree_check_interpolates_the_folded_coset() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = super::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            8,
+            params.omega_coset,
+        )
+        .expect("terminal FRI domain");
+        let linear = (0..8)
+            .map(|index| {
+                let x = domain.point(index);
+                reference_add(3, reference_mul(5, x))
+            })
+            .collect::<Vec<_>>();
+        assert!(domain.evaluations_have_degree_below(&linear, 2).unwrap());
+        assert!(!domain.evaluations_have_degree_below(&linear, 1).unwrap());
+
+        let quadratic = (0..8)
+            .map(|index| {
+                let x = domain.point(index);
+                reference_add(
+                    reference_add(3, reference_mul(5, x)),
+                    reference_mul(7, reference_mul(x, x)),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(domain.evaluations_have_degree_below(&quadratic, 3).unwrap());
+        assert!(!domain.evaluations_have_degree_below(&quadratic, 2).unwrap());
+    }
+    #[test]
+    fn fri_rejects_a_reduction_limit_that_cannot_expose_the_terminal_layer() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let mut transcript = Transcript::initialise(
+            &crate::proof::PublicIO::default(),
+            params.name,
+            1,
+            1,
+            TRANSCRIPT_TAG_INIT,
+        )
+        .expect("transcript");
+        let error = super::fold_with_fri(
+            &(0u64..64).collect::<Vec<_>>(),
+            params.fri.arity,
+            0,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect_err("zero reductions cannot expose an arity-sized terminal layer");
+        assert!(matches!(error, super::Error::FriReductionLimit { .. }));
+    }
+    #[test]
     fn fri_merkle_leaves_commit_strided_cosets() {
         let values = (0u64..16).collect::<Vec<_>>();
         let leaves = super::hash_fri_leaves_with_mode(0, &values, 8, ExecutionMode::Cpu)
@@ -3213,7 +3358,7 @@ mod tests {
         )
         .expect("fri folding");
         assert_eq!(layers.len(), betas.len() + 1);
-        assert_eq!(betas.len(), 2);
+        assert_eq!(betas.len(), 1);
         let mut transcript_again = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
@@ -3237,18 +3382,18 @@ mod tests {
     }
     fn reference_add(a: u64, b: u64) -> u64 {
         u64::try_from((u128::from(a) + u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
-            .expect("Goldilocks remainder fits u64")
+            .expect("reduced sum fits u64")
     }
     fn reference_sub(a: u64, b: u64) -> u64 {
         u64::try_from(
             (u128::from(a) + u128::from(super::GOLDILOCKS_MODULUS) - u128::from(b))
                 % u128::from(super::GOLDILOCKS_MODULUS),
         )
-        .expect("Goldilocks remainder fits u64")
+        .expect("reduced difference fits u64")
     }
     fn reference_mul(a: u64, b: u64) -> u64 {
         u64::try_from((u128::from(a) * u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
-            .expect("Goldilocks remainder fits u64")
+            .expect("reduced product fits u64")
     }
     fn reference_pow(mut base: u64, mut exponent: u64) -> u64 {
         let mut result = 1;
@@ -3373,7 +3518,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > 1 && round < 3 {
+        while current.len() > arity && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             reference_layers.push(root);
@@ -3388,7 +3533,7 @@ mod tests {
         reference_transcript.append_fri_final(final_root);
         reference_layers.push(final_root);
         assert_eq!(layers, reference_layers);
-        assert_eq!(betas[..reference_betas.len()], reference_betas[..]);
+        assert_eq!(betas, reference_betas);
     }
     #[test]
     fn fri_reference_detects_mutation() {
@@ -3435,7 +3580,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > 1 && round < 3 {
+        while current.len() > arity && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             mutated_layers.push(root);

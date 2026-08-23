@@ -1636,7 +1636,12 @@ fn zk_ace_fixture_v1()
         .parse()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+        .map_err(|error| match error {
+            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                ..
+            } => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+            _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+        })?;
     let statement = ZkAcePqAuthorizationStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,

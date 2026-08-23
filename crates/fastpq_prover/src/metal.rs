@@ -1483,7 +1483,7 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Poseidon,
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
         tile_stage_cap: None,
-        notes: "High-occupancy Poseidon2 permutation over STATE_WIDTH=3 words. \
+        notes: "High-occupancy dense-MDS Poseidon permutation over STATE_WIDTH=3 words. \
                 Threadgroups cache the round constants/MDS matrix in threadgroup memory, \
                 each lane walks multiple states (tunable via FASTPQ_METAL_POSEIDON_BATCH) \
                 with unrolled rounds, and FASTPQ_METAL_POSEIDON_LANES pins the launch width \
