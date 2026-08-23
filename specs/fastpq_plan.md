@@ -26,6 +26,14 @@ release blockers.
   key-derived path, authenticates every sibling/root update, enforces debit and
   credit amounts, and chains the witnessed roots to `PublicIO.old_root` and
   `PublicIO.new_root`.
+- The sampled AIR composition is not the complete transfer semantic boundary.
+  The verifier deterministically rebuilds the caller-carried batch, transcript,
+  SMT witness, full trace, lookup material, and commitments and requires exact
+  equality. Key/asset identities, path nodes, public roots, running counters,
+  and permission fields are therefore enforced by full verifier replay rather
+  than by every trace column appearing in the current residue vector. Removing
+  that replay would be a protocol break; a future succinct profile must move
+  every accepted-state relation into authenticated public input and AIR.
 - Mint, Burn, RoleGrant, RoleRevoke, and state-changing MetaSet batches fail
   closed in the public state-transition profile. The trace columns retained for
   those future operations do not imply that their state semantics are proven.
@@ -33,10 +41,18 @@ release blockers.
   canonical outer `AxtFastpqBinding` is authenticated and exactly matched. The
   opaque profile accepts MetaSet carrier rows only; its public roots are
   externally authenticated statement context, not proven state updates.
+- Production CoreHost rejects non-null standalone `AXT_VERIFY_DS_PROOF` before
+  proof recording or cache mutation. The caller-carried witness and roughly
+  32-bit FASTPQ commitment cannot serve as remote authorization without an
+  authoritative finalized source-state anchor.
 - Handle-bound transfer proofs carry canonical remote-spend claim preimages.
   Verification reconstructs their commitments and requires an exact one-to-one
-  match with real transfer transcripts across the signed handle identity,
-  dataspace, asset, accounts, amount, and cardinality.
+  match with real transfer transcripts across handle identity, dataspace,
+  asset, accounts, amount, and cardinality. The issuer signature authenticates
+  the capability/asset fields, not the intent, proof, or amount, so this
+  specialized path remains outside release qualification while those exact
+  facts depend on the current 32-bit binding. Finalized lane-relay and
+  authoritative fee-vault paths retain their separate state anchors.
 - Test/dev-tools raw-statement helpers check cryptographic transcript and byte
   determinism only. They make no state-validity claim and are absent from normal
   production builds.

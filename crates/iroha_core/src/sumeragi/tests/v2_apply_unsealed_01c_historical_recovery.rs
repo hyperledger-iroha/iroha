@@ -3,6 +3,7 @@ v2_apply_test!(
     {
         use crate::{
             queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
+            state::WorldReadOnly as _,
             sumeragi::v2_lane_work::{
                 LaneApplicationEvidenceRepairPlanning, LaneApplicationEvidenceRepairSummary,
                 apply_lane_application_evidence_repair, plan_lane_application_evidence_repair,

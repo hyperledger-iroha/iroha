@@ -849,9 +849,7 @@ fn key_tail_integrity_digest_v2(
     let expected = TAIL_LIMB_COUNT_V2 * ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1;
     if public_a_tail.len() != expected
         || collective_b_tail.len() != expected
-        || party_contribution_digests
-            .iter()
-            .any(|digest| *digest == [0; 32])
+        || party_contribution_digests.contains(&[0; 32])
     {
         return Err(RnsNativeBasisExtensionErrorV2::InvalidResidue);
     }

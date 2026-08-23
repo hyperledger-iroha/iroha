@@ -336,6 +336,20 @@ fn request_bearer_token(headers: &HeaderMap) -> Option<&str> {
     }
     Some(token)
 }
+fn has_single_json_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(header::CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+}
 async fn authorize_mint_request(
     State(authorization): State<Arc<MintAuthorization>>,
     request: Request,
@@ -354,6 +368,14 @@ async fn authorize_mint_request(
             body,
         )
             .into_response();
+    }
+    if request.method() == axum::http::Method::POST
+        && !has_single_json_content_type(request.headers())
+    {
+        let body = JsonBytes::from_value(norito::json!({
+            "error": "content-type must be application/json"
+        }));
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, body).into_response();
     }
     let Ok(_permit) = Arc::clone(&authorization.permits).try_acquire_owned() else {
         let body = JsonBytes::from_value(norito::json!({ "error": "mint capacity exhausted" }));
@@ -1220,7 +1242,7 @@ async fn mint_token(
         ));
     }
     let ttl_override = payload.ttl_secs.map(Duration::from_secs);
-    let issued_at = SystemTime::now();
+    let issued_at = canonical_issued_at(SystemTime::now())?;
     let flags = payload.flags.unwrap_or(0);
     let mint_state = Arc::clone(&state);
     let minted = tokio::task::spawn_blocking(move || {
@@ -1270,6 +1292,13 @@ async fn mint_token(
         relay_id_hex: encode(token.relay_id()),
     };
     JsonBytes::from_serializable(&response)
+}
+fn canonical_issued_at(now: SystemTime) -> Result<SystemTime, ApiError> {
+    let seconds = now
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| ApiError::Internal(format!("system clock error: {error}")))?
+        .as_secs();
+    Ok(UNIX_EPOCH + Duration::from_secs(seconds))
 }
 async fn healthz() -> StatusCode {
     StatusCode::OK
@@ -1586,6 +1615,20 @@ mod tests {
             assert!(request_bearer_token(&invalid_headers).is_none());
         }
 
+        let mut content_headers = HeaderMap::new();
+        content_headers.insert(
+            header::CONTENT_TYPE,
+            "application/json; charset=utf-8"
+                .parse()
+                .expect("JSON content type"),
+        );
+        assert!(has_single_json_content_type(&content_headers));
+        content_headers.append(
+            header::CONTENT_TYPE,
+            "text/plain".parse().expect("duplicate content type"),
+        );
+        assert!(!has_single_json_content_type(&content_headers));
+
         let permits = (0..MAX_CONCURRENT_MINT_REQUESTS_V1)
             .map(|_| {
                 Arc::clone(&authorization.permits)
@@ -1602,6 +1645,18 @@ mod tests {
         authorization.clear_token_hash();
         assert_eq!(authorization.token_hash, [0; 32]);
         let _ = fs::remove_file(path);
+    }
+    #[test]
+    fn internally_generated_token_time_is_canonical_whole_seconds() {
+        let subsecond = UNIX_EPOCH + Duration::new(123, 999_999_999);
+        assert_eq!(
+            canonical_issued_at(subsecond).expect("canonical time"),
+            UNIX_EPOCH + Duration::from_secs(123)
+        );
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(Duration::from_nanos(1))
+            .expect("representable pre-epoch time");
+        assert!(canonical_issued_at(before_epoch).is_err());
     }
     #[test]
     fn private_secret_parser_requires_exact_lowercase_hex_and_wipes_input() {
@@ -2274,8 +2329,9 @@ mod tests {
     fn mint_token_roundtrip_verifies() {
         let (service, verifier) = token_service();
         let mut rng = StdRng::from_seed([0x77; 32]);
+        let issued_at = canonical_issued_at(SystemTime::now()).expect("canonical current time");
         let token = service
-            .mint_token(None, [0x22; 32], SystemTime::now(), 0, &mut rng)
+            .mint_token(None, [0x22; 32], issued_at, 0, &mut rng)
             .expect("mint result")
             .expect("token enabled");
         verifier

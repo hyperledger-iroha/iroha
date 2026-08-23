@@ -227,32 +227,20 @@ impl_default!(SoracloudRuntime => {
         }
 });
 impl SoracloudRuntime {
-    /// Assert that production mode is paired with fail-closed runtime settings.
+    /// Assert release-wide hosting admission and production-only runtime settings.
     ///
     /// This method is intentionally available on the parsed `actual` config so
     /// callers that construct runtime settings directly cannot bypass the
-    /// production posture checks performed by user-config parsing.
-    pub fn assert_production_posture(&self) {
+    /// runtime posture checks performed by user-config parsing.
+    pub fn assert_runtime_posture(&self) {
+        self.inrou.assert_archive_resource_bounds();
+        assert!(
+            !self.inrou.enabled,
+            "first-release iroha3d forbids soracloud_runtime.inrou.enabled = true until PortableVM has mandatory mount, network, IPC, and MAC isolation; QEMU seccomp and uid firewalls alone are insufficient"
+        );
         if !self.production_mode {
             return;
         }
-        self.inrou.assert_archive_resource_bounds();
-        assert!(
-            self.inrou.enabled,
-            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.enabled = true"
-        );
-        assert!(
-            !self.inrou.backends.is_empty(),
-            "soracloud_runtime.production_mode requires a nonempty soracloud_runtime.inrou.backends allowlist"
-        );
-        assert!(
-            self.inrou.backends.len() == 1
-                && self
-                    .inrou
-                    .backends
-                    .contains(&SoraInrouRuntimeBackendV1::PortableVm),
-            "Inrou V1 production hosting accepts only the `portable_vm` backend"
-        );
         assert!(
             !self.egress.default_allow,
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
@@ -305,22 +293,16 @@ impl_default!(SoracloudRuntimeCacheBudgets => {
 /// Resource ceilings for mutable Inrou microVM workloads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
-    /// Maximum number of Inrou VMs hosted concurrently.
+    /// Maximum number of Inrou VMs hosted concurrently (exactly one for PortableVM V1).
     pub max_concurrent_vms: NonZeroU16,
     /// Whether this node advertises and materializes local Inrou workloads.
     pub enabled: bool,
     /// Exact runtime backends this node is permitted to advertise and use.
     pub backends: BTreeSet<SoraInrouRuntimeBackendV1>,
-    /// Explicit accelerator used by the PortableVM backend.
-    pub portable_vm_acceleration: SoracloudRuntimePortableVmAcceleration,
-    /// Dedicated non-root uid used to execute QEMU, required for PortableVM hosting.
+    /// Fixed-corridor uid of the locked local `iroha-inrou` service account.
     pub portable_vm_uid: Option<NonZeroU32>,
-    /// Dedicated non-root primary gid used to execute QEMU, required for PortableVM hosting.
+    /// Fixed-corridor gid of the locked local `iroha-inrou` primary group.
     pub portable_vm_gid: Option<NonZeroU32>,
-    /// Explicit supplementary gids retained by the QEMU child (for example the KVM device gid).
-    pub portable_vm_supplementary_gids: Vec<NonZeroU32>,
-    /// Root-owned directory used for private, process-attested QMP control sockets.
-    pub portable_vm_control_dir: Option<PathBuf>,
     /// Maximum aggregate hosted CPU budget in millicores.
     pub max_cpu_millis: NonZeroU32,
     /// Maximum aggregate hosted memory budget in bytes.
@@ -347,12 +329,8 @@ impl_default!(SoracloudRuntimeInrou => {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
             backends: BTreeSet::new(),
-            portable_vm_acceleration: SoracloudRuntimePortableVmAcceleration::Tcg,
             portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
             portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
-            portable_vm_supplementary_gids: Vec::new(),
-            portable_vm_control_dir: defaults::soracloud_runtime::INROU_PORTABLE_VM_CONTROL_DIR
-                .map(PathBuf::from),
             max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
             max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
             max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
@@ -405,30 +383,6 @@ impl SoracloudRuntimeInrou {
             self.bundle_archive_max_total_file_bytes <= self.bundle_archive_max_decoded_bytes,
             "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes"
         );
-    }
-}
-/// Exact QEMU accelerator selected for PortableVM execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SoracloudRuntimePortableVmAcceleration {
-    /// Deterministic software translation.
-    Tcg,
-    /// Linux KVM acceleration.
-    Kvm,
-    /// macOS Hypervisor.framework acceleration.
-    Hvf,
-    /// Windows Hypervisor Platform acceleration.
-    Whpx,
-}
-impl SoracloudRuntimePortableVmAcceleration {
-    /// Return the exact QEMU `accel` identifier.
-    #[must_use]
-    pub const fn as_qemu_name(self) -> &'static str {
-        match self {
-            Self::Tcg => "tcg",
-            Self::Kvm => "kvm",
-            Self::Hvf => "hvf",
-            Self::Whpx => "whpx",
-        }
     }
 }
 /// Runtime-originated transaction submission settings.
@@ -1176,7 +1130,7 @@ pub struct SoranetPrivacy {
     pub flush_delay_buckets: u64,
     /// Forced flush interval expressed in buckets.
     pub force_flush_buckets: u64,
-    /// Maximum number of completed buckets retained in memory.
+    /// Per-queue cap for completed, open-event, and incomplete-share buckets.
     pub max_completed_buckets: usize,
     /// Maximum bucket lag tolerated for collector shares before suppression.
     pub max_share_lag_buckets: u64,
@@ -1186,6 +1140,14 @@ pub struct SoranetPrivacy {
     pub event_buffer_capacity: usize,
 }
 impl SoranetPrivacy {
+    /// First-release upper bound for flush and collector-retention windows.
+    pub const MAX_BUCKET_WINDOW_V1: u64 = 256;
+    /// First-release upper bound for each in-memory privacy bucket queue.
+    pub const MAX_BUCKET_BACKLOG_V1: usize = 256;
+    /// First-release upper bound for collectors contributing to one bucket.
+    pub const MAX_EXPECTED_SHARES_V1: u16 = 16;
+    /// First-release upper bound for the relay privacy event queue.
+    pub const MAX_EVENT_BUFFER_CAPACITY_V1: usize = 16_384;
     /// Default telemetry bucket width in seconds.
     pub const DEFAULT_BUCKET_SECS: u64 = defaults::soranet::privacy::BUCKET_SECS;
     /// Default minimum handshake contributors required before publishing.
@@ -1194,7 +1156,7 @@ impl SoranetPrivacy {
     pub const DEFAULT_FLUSH_DELAY_BUCKETS: u64 = defaults::soranet::privacy::FLUSH_DELAY_BUCKETS;
     /// Default forced flush interval expressed in buckets.
     pub const DEFAULT_FORCE_FLUSH_BUCKETS: u64 = defaults::soranet::privacy::FORCE_FLUSH_BUCKETS;
-    /// Default number of completed buckets retained in memory.
+    /// Default per-queue bucket capacity.
     pub const DEFAULT_MAX_COMPLETED_BUCKETS: usize =
         defaults::soranet::privacy::MAX_COMPLETED_BUCKETS;
     /// Default maximum bucket lag tolerated for collector shares before suppression.

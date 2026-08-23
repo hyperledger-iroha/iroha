@@ -1,6 +1,6 @@
 //! Fail-closed staged release lifecycle for Kagemusha V4 issuance.
 //!
-//! Release activation installs a reviewed release in the `Staged` phase. Public
+//! Release staging installs a reviewed release in the `Staged` phase. Public
 //! issuance remains disabled until a later enable transition authenticates the
 //! finalized activation, its post-activation canary, and four-validator
 //! post-canary liveness. Cancellation and deactivation retain durable terminal
@@ -16,13 +16,14 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use super::{
-    KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS, KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT,
-    KagemushaExactBytesDigestV1, KagemushaRecursiveSpendArtifactBindingV4,
-    KagemushaV4ActivationFinalityReceiptV1, KagemushaV4ActivationReceiptExpectationsArtifactV1,
+    KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT, KagemushaExactBytesDigestV1,
+    KagemushaRecursiveSpendArtifactBindingV4, KagemushaV4ActivationFinalityReceiptV1,
+    KagemushaV4ActivationReceiptExpectationsArtifactV1,
     KagemushaV4PostCanaryValidatorLivenessEvidenceV1, KagemushaV4PromotionBindingV1,
     KagemushaV4PromotionReservationV1, KagemushaV4TairaCanaryAuthorizationV1,
     KagemushaV4TairaCanaryEvidenceV1, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
     OfflineDeviceAttestationPolicy,
+    kagemusha_promotion_receipt::kagemusha_v4_governance_policy_requires_distinct_signers,
 };
 
 /// Stable metadata-key prefix for one manifest-scoped lifecycle record.
@@ -637,6 +638,9 @@ pub struct KagemushaV4ReleaseLifecycleStateV1 {
     pub staged_at_unix_ms: u64,
     /// Exact canonical release-record identity installed by staging.
     pub release_record_norito: KagemushaExactBytesDigestV1,
+    /// Domain-separated SHA-256 of the complete runtime projection required for consensus output.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub runtime_effective_config_sha256: [u8; 32],
     /// Exact governed policy retained for this release's future redemptions.
     pub device_attestation_policy: OfflineDeviceAttestationPolicy,
     /// Registry id of the installed EqAffine/Vesta verifier key.
@@ -709,6 +713,7 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
             || self.staged_at_unix_ms == 0
             || self.verifier_version == 0
             || typed_hash_is_zero(&self.stage_transaction_intent)
+            || self.runtime_effective_config_sha256 == [0; 32]
             || !self.step_eq_verifier_key_id.is_portable_registry_id()
             || !self.step_ep_verifier_key_id.is_portable_registry_id()
             || self.step_eq_verifier_key_id == self.step_ep_verifier_key_id
@@ -750,10 +755,7 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
         else {
             return Err(invalid("lifecycle.governance_authority"));
         };
-        if usize::from(governance_policy.threshold())
-            < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-            || governance_policy.members().len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS
-        {
+        if !kagemusha_v4_governance_policy_requires_distinct_signers(governance_policy) {
             return Err(invalid("lifecycle.governance_authority"));
         }
         Ok(())

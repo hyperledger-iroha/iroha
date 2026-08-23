@@ -44,24 +44,17 @@ Teardown returns success only after every managed PID file and matching peer
 process is gone. If that cannot be proved, the bundle is retained for diagnosis
 and the command fails instead of deleting its ownership evidence.
 
-Run the broader public-product route diagnostic only when that is the purpose
-of the deployment:
+Optionally run the broader read-only public-product route diagnostic after the
+standard signed smoke and four-peer MCP checks:
 
 ```bash
-python3 scripts/taira_devnet.py up \
-  --full-doctor \
-  --inrou-canary-dir /private/runtime/taira-inrou-canary
+python3 scripts/taira_devnet.py up --full-doctor
 ```
 
-The owner-held canary directory must be outside the disposable devnet tree and
-contain `container_manifest.json`, `service_manifest.json`, and `bundle.tgz`.
-Before startup, `up` creates the canonical Inrou stage and uses `sorafs-node`
-to preseed both staged payloads into every validator's disjoint store. After
-signed finality and four-peer MCP checks, it runs the Inrou canary and only then
-the broad doctor. `--full-doctor` without this exact canary input fails before
-building binaries or replacing a running cohort. The `sorafs-node` build and
-Inrou CLI surface preflight occur only for this explicit opt-in path; ordinary
-throwaway deployments do not pay for unused product-route tooling.
+`--full-doctor` runs the same-revision `iroha taira doctor` against the
+generated local endpoint. It uses the same three standard binaries as the
+default devnet and requires no Inrou workspace or SoraFS preseed. The
+first-release devnet interface has no `--inrou-canary-dir` option.
 
 Use already-built binaries when iterating on orchestration:
 
@@ -71,8 +64,8 @@ python3 scripts/taira_devnet.py up \
   --bin-dir "$PWD/target/local-release"
 ```
 
-The directory needs the three default binaries above. Add `sorafs-node` only
-when using `--inrou-canary-dir`.
+The directory needs the three default binaries above for both the standard and
+`--full-doctor` paths.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command stops

@@ -248,7 +248,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
     - `torii_ws_url`: `ws://` or `wss://` endpoint exposed by Torii for Norito streaming traffic.
     - `connect_timeout_millis` (default: `5000`): Relays abort connection attempts that exceed this bound.
     - `padding_target_millis` (default: `35`): Idle padding cadence applied when the spool entry omits `padding_budget_ms`. Set to `0` to disable background padding.
-    - `gar_category_read_only` / `gar_category_authenticated`: GAR labels recorded when unauthenticated or authenticated viewers request a Norito stream. Defaults are `stream.norito.read_only` / `stream.norito.authenticated`; customize when your telemetry pipeline expects different buckets.
+    - `gar_category_read_only` / `gar_category_authenticated`: GAR labels recorded when unauthenticated or authenticated viewers request a Norito stream. Values are canonical lowercase ASCII dot-separated segments of at most 64 bytes. Defaults are `stream.norito.read_only` / `stream.norito.authenticated`; the relay retains only their fixed-size hashes in buffered events.
     - `spool_dir`: Root path for the filesystem catalog. Each relay id gets an `exit-<relay-id>/norito-stream` subdirectory populated by Torii (see `streaming.soranet.provision_spool_dir`); omit to rely on the tool’s default (`./storage/streaming/soranet_routes`).
     - `route_refresh_secs` (default: `5`): Cache refresh cadence when scanning spool files. Lowering the value forces more frequent disk reads; increasing it favors steady-state performance when the spool is large.
 - `[crypto]`: Cryptography defaults surfaced via `iroha_config`.

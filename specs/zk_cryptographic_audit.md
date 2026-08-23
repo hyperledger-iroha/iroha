@@ -561,6 +561,47 @@ multiproof entry points independently enforce the same bound before hashing.
 `merkle_paths_bind_domain_index_leaf_order_and_depth` cover the configuration,
 construction, and verification boundaries.
 
+### ZK-AUDIT-25: Unanchored FASTPQ became generic AXT authorization
+
+Severity: Critical authorization-boundary failure.
+
+Status: Contained for standalone IVM admission; handle-backed authorization
+remains release-blocked. FASTPQ's current catalogue honestly declares a
+roughly 32-bit commitment ceiling. Its transfer verifier also reconstructs the
+complete caller-carried batch, transcript, SMT witness, trace, lookup material,
+and commitments. That deterministic replay checks transfer arithmetic and root
+chaining, but it does not make caller-supplied `old_root`, `new_root`, or
+transaction-set context an authoritative finalized source-state statement.
+Several trace fields—including key/asset identity, path-node, running-counter,
+and permission columns—are enforced by that replay rather than by every column
+appearing in the sampled AIR residue vector. The replay is therefore mandatory
+for current correctness and does not upgrade the commitment's security level.
+
+Production CoreHost formerly let `AXT_VERIFY_DS_PROOF` expose successful FASTPQ
+verification to a contract and record/cache the proof without matching its
+roots and transaction set to a finalized/QC-backed source anchor. A valid
+caller-carried witness could therefore be mistaken for authorization at only
+the proof system's approximately 32-bit binding strength. Non-null standalone
+admission now returns `PermissionDenied` with `AxtRejectReason::Proof` before
+recording proof state or touching an existing verified-proof cache entry. A
+zero pointer remains an explicit proof-clear operation. The adversarial
+`axt_verify_ds_proof_rejects_unanchored_fastpq_without_state_or_cache_mutation`
+regression preloads a valid cache sentinel, submits a fully valid FASTPQ proof,
+and proves the proof map, cache contents, and cache slot remain unchanged.
+
+Specialized callsites have distinct trust analyses. Verified lane-relay
+registration independently matches the proven roots and transaction set to a
+finalized lane execution commitment. Fee-sponsor vault allocation is checked
+against authenticated owner/delegation and current authoritative vault/policy
+state. Those paths do not derive authority from generic syscall success. The
+issuer-signed asset handle path is narrower but not release-qualified: its
+signature covers capability and asset identity, not the
+`RemoteSpendIntent`, proof bytes, or effective amount. Exact intent and amount
+still rely on FASTPQ metadata and the approximately 32-bit commitment. The
+handle path must remain outside production release authorization until those
+facts have at least 128-bit binding or are independently matched to an
+authoritative finalized source-state statement.
+
 ## Dependency Assumptions
 
 - SHA-256 and Blake2 are collision resistant and implemented correctly.
@@ -721,7 +762,8 @@ counterexamples.
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, canonical outer schema, strict ZK1 carrier, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
 | Diagnostic endpoint not ledger-grade | Satisfied in code; documentation risk | Torii attachment/prover worker are report-only; see ZK-AUDIT-02 |
-| FASTPQ public I/O and lane claim binding | Satisfied | `ensure_public_io_matches`, transcript checks, `verify_batch_matches_binding`, lane claim digest checks |
+| FASTPQ transfer replay and lane claim binding | Satisfied only with mandatory full verifier replay; standalone IVM admission unavailable | `ensure_public_io_matches`, transcript/SMT replay, `verify_batch_matches_binding`, finalized lane claim checks; see ZK-AUDIT-25 |
+| AXT remote-spend authorization strength | Unavailable for release; generic proof admission fails closed and handle intent/amount binding remains roughly 32 bits | non-mutating `AXT_VERIFY_DS_PROOF` rejection, inline authenticated-handle tests, release blocker; see ZK-AUDIT-25 |
 
 ## Verification Plan
 

@@ -541,7 +541,7 @@ impl<A: RnsNativeQuotientOpeningAuthorityV2> RnsNativeCrossFieldQuotientOpeningC
         self.poisoned = true;
 
         let expected_relation = self.next_owner / QUOTIENT_OPENING_SIGNS_V2;
-        let expected_sign = if self.next_owner % QUOTIENT_OPENING_SIGNS_V2 == 0 {
+        let expected_sign = if self.next_owner.is_multiple_of(QUOTIENT_OPENING_SIGNS_V2) {
             RnsNativeCrossFieldQuotientOpeningSignV1::Positive
         } else {
             RnsNativeCrossFieldQuotientOpeningSignV1::Negative

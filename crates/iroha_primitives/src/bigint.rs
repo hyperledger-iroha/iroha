@@ -105,20 +105,7 @@ impl BigInt {
     /// Exact length of [`Self::to_twos_bytes`] without allocating the byte representation.
     #[must_use]
     pub fn twos_byte_len(&self) -> usize {
-        if self.inner.is_zero() {
-            return 0;
-        }
-        let magnitude = self.inner.magnitude();
-        let magnitude_bits = magnitude.bits();
-        let signed_bits =
-            if self.inner.is_negative() && magnitude.trailing_zeros() == Some(magnitude_bits - 1) {
-                // A negative power of two uses the sign bit itself as the top bit
-                // (`-128` is exactly one byte, unlike `-129`).
-                magnitude_bits
-            } else {
-                magnitude_bits + 1
-            };
-        usize::try_from(signed_bits.div_ceil(8)).expect("bounded int byte length fits usize")
+        signed_twos_byte_len(&self.inner)
     }
     /// Checked addition.
     ///
@@ -206,12 +193,7 @@ impl BigInt {
         num_traits::ToPrimitive::to_u64(&self.inner)
     }
     pub(crate) fn from_inner(inner: InnerBigInt) -> Result<Self, BigIntError> {
-        let encoded_len = if inner.is_zero() {
-            0
-        } else {
-            inner.to_signed_bytes_le().len()
-        };
-        if encoded_len > MAX_ENCODED_BYTES {
+        if signed_twos_byte_len(&inner) > MAX_ENCODED_BYTES {
             return Err(BigIntError::Overflow);
         }
         Ok(Self { inner })
@@ -231,6 +213,22 @@ impl BigInt {
     pub(crate) fn inner(&self) -> &InnerBigInt {
         &self.inner
     }
+}
+fn signed_twos_byte_len(inner: &InnerBigInt) -> usize {
+    if inner.is_zero() {
+        return 0;
+    }
+    let magnitude = inner.magnitude();
+    let magnitude_bits = magnitude.bits();
+    let signed_bits =
+        if inner.is_negative() && magnitude.trailing_zeros() == Some(magnitude_bits - 1) {
+            // A negative power of two uses the sign bit itself as the top bit
+            // (`-128` is exactly one byte, unlike `-129`).
+            magnitude_bits
+        } else {
+            magnitude_bits.saturating_add(1)
+        };
+    usize::try_from(signed_bits.div_ceil(8)).unwrap_or(usize::MAX)
 }
 impl PartialOrd for BigInt {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
@@ -468,6 +466,35 @@ mod tests {
         assert_eq!(minimum.twos_byte_len(), MAX_ENCODED_BYTES);
         assert_eq!(maximum.twos_byte_len(), maximum.to_twos_bytes().len());
         assert_eq!(minimum.twos_byte_len(), minimum.to_twos_bytes().len());
+    }
+    #[test]
+    fn nonallocating_signed_length_preserves_from_inner_boundaries() {
+        let signed_limit = InnerBigInt::one() << (MAX_BITS - 1);
+        let values = [
+            -signed_limit.clone() - 1_u8,
+            -signed_limit.clone(),
+            -signed_limit.clone() + 1_u8,
+            InnerBigInt::from(-129_i16),
+            InnerBigInt::from(-128_i16),
+            InnerBigInt::from(0_u8),
+            InnerBigInt::from(127_u8),
+            InnerBigInt::from(128_u16),
+            signed_limit.clone() - 1_u8,
+            signed_limit.clone(),
+            signed_limit + 1_u8,
+        ];
+        for value in values {
+            let encoded_len = if value.is_zero() {
+                0
+            } else {
+                value.to_signed_bytes_le().len()
+            };
+            assert_eq!(signed_twos_byte_len(&value), encoded_len);
+            assert_eq!(
+                BigInt::from_inner(value).is_ok(),
+                encoded_len <= MAX_ENCODED_BYTES
+            );
+        }
     }
     #[test]
     fn exact_norito_length_matches_canonical_payload() {

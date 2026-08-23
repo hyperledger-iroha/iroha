@@ -517,10 +517,20 @@ fn load_registry() {
                 let mut guard = lock_registry();
                 guard.items.clear();
                 let mut max_id = 0u64;
-                for v in arr.into_iter().take(WEBHOOK_REGISTRY_MAX_ENTRIES) {
+                for (index, v) in arr.into_iter().enumerate() {
                     if let norito::json::Value::Object(m) = v {
-                        if let (Some(idv), Some(urlv), Some(activev)) = (
-                            m.get("id").and_then(norito::json::Value::as_u64),
+                        let Some(idv) = m.get("id").and_then(norito::json::Value::as_u64) else {
+                            continue;
+                        };
+                        // IDs are durable identities, including for entries
+                        // quarantined below or ignored past the storage cap.
+                        // Never recycle one merely because the rest of its
+                        // persisted record is corrupt.
+                        max_id = max_id.max(idv);
+                        if index >= WEBHOOK_REGISTRY_MAX_ENTRIES {
+                            continue;
+                        }
+                        if let (Some(urlv), Some(activev)) = (
                             m.get("url")
                                 .and_then(norito::json::Value::as_str)
                                 .map(ToString::to_string),
@@ -533,14 +543,34 @@ fn load_registry() {
                                 .get("secret")
                                 .and_then(norito::json::Value::as_str)
                                 .map(ToString::to_string);
+                            let filter = match m.get("filter") {
+                                None | Some(norito::json::Value::Null) => None,
+                                Some(value) => {
+                                    let Some(filter) = value_to_filter_expr(value) else {
+                                        iroha_logger::warn!(
+                                            webhook_id = idv,
+                                            "skipping persisted webhook with malformed filter"
+                                        );
+                                        continue;
+                                    };
+                                    if let Err(error) = crate::filter::validate_filter(&filter) {
+                                        iroha_logger::warn!(
+                                            webhook_id = idv,
+                                            %error,
+                                            "skipping persisted webhook with invalid filter"
+                                        );
+                                        continue;
+                                    }
+                                    Some(filter)
+                                }
+                            };
                             let entry = WebhookEntry {
                                 id: idv,
                                 url: urlv,
                                 active: activev,
                                 secret,
-                                filter: m.get("filter").and_then(value_to_filter_expr),
+                                filter,
                             };
-                            max_id = max_id.max(idv);
                             guard.items.insert(idv, entry);
                         }
                     }
@@ -2691,6 +2721,64 @@ mod tests {
                 .insert(u64::try_from(id).expect("id fits"), compact.clone());
         }
         assert!(!registry_can_retain(&registry, &compact));
+    }
+    #[test]
+    fn persisted_webhook_with_malformed_filter_is_skipped_instead_of_widened() {
+        let _env = TestDataDirGuard::new();
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 0;
+            registry.items.clear();
+        }
+        let mut malformed = webhook_entry_to_storage_json(&registry_entry(
+            7,
+            "https://filtered.example/hook".to_owned(),
+        ));
+        let norito::json::Value::Object(ref mut fields) = malformed else {
+            panic!("stored webhook entry must be an object");
+        };
+        fields.insert(
+            "filter".into(),
+            norito::json::Value::from("not-a-filter-expression"),
+        );
+        let valid = webhook_entry_to_storage_json(&WebhookEntry {
+            id: 2,
+            url: "https://valid-filter.example/hook".to_owned(),
+            active: true,
+            secret: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("status".to_owned()),
+                norito::json::Value::from("Approved"),
+            )),
+        });
+        fs::create_dir_all(data_dir()).expect("create webhook data directory");
+        let body =
+            norito::json::to_json_pretty(&norito::json::Value::Array(vec![malformed, valid]))
+                .expect("encode persisted webhook registry");
+        fs::write(registry_path(), body).expect("write persisted webhook registry");
+        load_registry();
+        let mut registry = lock_registry();
+        assert!(
+            !registry.items.contains_key(&7),
+            "a malformed stored filter must not become an unfiltered webhook"
+        );
+        assert!(
+            registry.items.contains_key(&2),
+            "a valid neighboring webhook must still load"
+        );
+        assert!(
+            registry
+                .items
+                .get(&2)
+                .is_some_and(|entry| entry.filter.is_some()),
+            "the valid neighboring webhook must retain its filter"
+        );
+        assert_eq!(
+            registry.next_id, 7,
+            "a quarantined webhook ID must not be recycled",
+        );
+        registry.next_id = 0;
+        registry.items.clear();
     }
     #[test]
     fn webhook_http_response_bound_rejects_limit_plus_one() {

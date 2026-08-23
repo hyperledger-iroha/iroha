@@ -3,23 +3,21 @@
 //! This module implements the TLV parsing and negotiation rules documented in
 //! `specs/soranet_handshake.md`. It is intentionally deterministic so
 //! transcript hashes computed by clients and relays match byte-for-byte.
-use crate::{
-    config::PaddingConfig,
-    constant_rate::CONSTANT_RATE_CELL_BYTES,
-    scheduler::{Cell, CellClass},
-};
+use crate::{config::PaddingConfig, constant_rate::CONSTANT_RATE_CELL_BYTES};
 use hex::FromHex;
-pub use iroha_crypto::soranet::handshake::CapabilityWarning;
+pub use iroha_crypto::soranet::handshake::{
+    CapabilityWarning, MAX_CAPABILITY_VECTOR_LEN as MAX_CAP_VECTOR_LEN,
+};
 use std::fmt;
 use thiserror::Error;
-/// Maximum capability vector size we accept during negotiation.
-pub const MAX_CAP_VECTOR_LEN: usize = 4096;
 /// `snnet.pqkem` TLV type.
 pub const TYPE_PQ_KEM: u16 = 0x0101;
 /// `snnet.pqsig` TLV type.
 pub const TYPE_PQ_SIG: u16 = 0x0102;
 /// `snnet.transcript_commit` TLV type.
 pub const TYPE_TRANSCRIPT_COMMIT: u16 = 0x0103;
+/// `snnet.suite_list` TLV type.
+pub const TYPE_SUITE_LIST: u16 = 0x0104;
 /// `snnet.role` TLV type.
 pub const TYPE_ROLE: u16 = 0x0201;
 /// `snnet.padding` TLV type.
@@ -28,11 +26,16 @@ pub const TYPE_PADDING: u16 = 0x0202;
 pub const TYPE_CONSTANT_RATE: u16 = 0x0203;
 const REQUIRED_FLAG: u8 = 0x01;
 const CONSTANT_RATE_FLAG_STRICT: u8 = 0x01;
+const SINGLETON_TRANSCRIPT_COMMIT: u8 = 1 << 0;
+const SINGLETON_SUITE_LIST: u8 = 1 << 1;
+const SINGLETON_ROLE: u8 = 1 << 2;
+const SINGLETON_PADDING: u8 = 1 << 3;
+const SINGLETON_CONSTANT_RATE: u8 = 1 << 4;
 /// Recognised ML-KEM variants exchanged during capability negotiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KemId {
-    /// Classical-only profile (no PQ KEM).
-    Classic,
+    /// ML-KEM-512.
+    MlKem512,
     /// Kyber768 (ML-KEM-768).
     MlKem768,
     /// Kyber1024 (ML-KEM-1024).
@@ -42,7 +45,7 @@ impl KemId {
     /// Return the wire code associated with this KEM identifier.
     pub const fn code(self) -> u8 {
         match self {
-            Self::Classic => 0x00,
+            Self::MlKem512 => 0x00,
             Self::MlKem768 => 0x01,
             Self::MlKem1024 => 0x02,
         }
@@ -50,38 +53,33 @@ impl KemId {
     /// Convert a wire code into a [`KemId`], rejecting unknown codes.
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
-            0x00 => Some(Self::Classic),
+            0x00 => Some(Self::MlKem512),
             0x01 => Some(Self::MlKem768),
             0x02 => Some(Self::MlKem1024),
             _ => None,
         }
     }
 }
-/// Recognised signature variants exchanged during capability negotiation.
+/// Signature variants accepted during capability negotiation.
+///
+/// SNNet-16 v1 defines a single transcript signature identifier. Online relay
+/// identity authentication remains a separate Ed25519 operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureId {
-    /// Ed25519 (classical baseline).
-    Ed25519,
-    /// Dilithium3 (preferred PQ signature).
+    /// Dilithium3 (the SNNet-16 v1 transcript signature).
     Dilithium3,
-    /// Falcon-512 (optional PQ signature).
-    Falcon512,
 }
 impl SignatureId {
     /// Return the wire code associated with this signature identifier.
     pub const fn code(self) -> u8 {
         match self {
-            Self::Ed25519 => 0x00,
             Self::Dilithium3 => 0x01,
-            Self::Falcon512 => 0x02,
         }
     }
     /// Convert a wire code into a [`SignatureId`], rejecting unknown codes.
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
-            0x00 => Some(Self::Ed25519),
             0x01 => Some(Self::Dilithium3),
-            0x02 => Some(Self::Falcon512),
             _ => None,
         }
     }
@@ -111,19 +109,14 @@ impl ConstantRateMode {
 }
 impl ConstantRateCapability {
     /// Serialize the capability into the TLV payload used in the handshake.
-    pub fn encode_value(&self) -> Vec<u8> {
-        let mut value = Vec::with_capacity(4 + usize::from(self.cell_bytes));
-        value.push(self.version);
-        value.push(self.mode.flags());
-        value.extend_from_slice(&self.cell_bytes.to_le_bytes());
-        let sample = Cell::dummy().to_bytes();
-        debug_assert_eq!(
-            sample.len(),
-            usize::from(self.cell_bytes),
-            "constant-rate capability sample must match declared cell size"
-        );
-        value.extend_from_slice(&sample);
-        value
+    pub fn encode_value(&self) -> [u8; 4] {
+        let cell_bytes = self.cell_bytes.to_le_bytes();
+        [
+            self.version,
+            self.mode.flags(),
+            cell_bytes[0],
+            cell_bytes[1],
+        ]
     }
 }
 /// `constant-rate-v1` capability parameters.
@@ -173,7 +166,7 @@ pub struct ClientAdvertisement {
     pub constant_rate: Option<ConstantRateCapability>,
     /// Optional transcript commit expected by the client.
     pub transcript_commit: Option<[u8; 32]>,
-    /// Vendor/unknown GREASE TLVs preserved during parsing.
+    /// GREASE TLVs in the reserved `0x7Fxx` range preserved during parsing.
     pub grease: Vec<GreaseEntry>,
 }
 /// Relay-side capabilities advertised in the configuration.
@@ -245,6 +238,22 @@ pub enum CapabilityError {
     InvalidTranscriptCommitLen,
     #[error("snnet.padding length must be 2 bytes")]
     InvalidPaddingLen,
+    #[error("snnet.role length must be 1 byte")]
+    InvalidRoleLen,
+    #[error("snnet.role uses invalid role bits {0:#04x}")]
+    InvalidRoleBits(u8),
+    #[error("snnet.suite_list must contain at least one suite identifier")]
+    InvalidSuiteList,
+    #[error("capability TLV {ty:#06x} uses undefined flag bits {flags:#04x}")]
+    InvalidCapabilityFlags { ty: u16, flags: u8 },
+    #[error("duplicate singleton capability TLV {ty:#06x}")]
+    DuplicateSingleton { ty: u16 },
+    #[error("duplicate algorithm identifier {id:#04x} in capability TLV {ty:#06x}")]
+    DuplicateAlgorithm { ty: u16, id: u8 },
+    #[error("unknown non-GREASE capability TLV {ty:#06x}")]
+    UnknownCapability { ty: u16 },
+    #[error("capability TLV type order is non-canonical: {current:#06x} follows {previous:#06x}")]
+    NonCanonicalTypeOrder { previous: u16, current: u16 },
     #[error("snnet.pqkem required capability {0:?} not supported by relay")]
     RequiredKemMissing(KemId),
     #[error("snnet.pqsig required capability {0:?} not supported by relay")]
@@ -255,7 +264,7 @@ pub enum CapabilityError {
     NoMutualSignature,
     #[error("client requested padding cell size {requested} but relay supports {supported}")]
     PaddingMismatch { requested: u16, supported: u16 },
-    #[error("snnet.constant_rate length must be 2 bytes")]
+    #[error("snnet.constant_rate length must be exactly 4 bytes")]
     ConstantRateInvalidLen,
     #[error("snnet.constant_rate requested unsupported version {0}")]
     ConstantRateUnsupportedVersion(u8),
@@ -263,12 +272,6 @@ pub enum CapabilityError {
     ConstantRateUnsupported,
     #[error("snnet.constant_rate strict mode requested but relay only supports best-effort")]
     ConstantRateStrictRequired,
-    #[error(
-        "snnet.constant_rate envelope sample length {actual} does not match declared cell size {declared}"
-    )]
-    ConstantRateEnvelopeLength { declared: u16, actual: usize },
-    #[error("snnet.constant_rate envelope sample is invalid")]
-    ConstantRateEnvelopeInvalid,
     #[error(
         "snnet.constant_rate cell size {advertised} bytes is unsupported (expected {expected})"
     )]
@@ -287,8 +290,19 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
     }
     let mut cursor = 0usize;
     let mut advert = ClientAdvertisement::default();
+    let mut seen_singletons = 0u8;
+    let mut previous_ty = None;
     while cursor + 4 <= bytes.len() {
         let ty = u16::from_be_bytes([bytes[cursor], bytes[cursor + 1]]);
+        if let Some(previous) = previous_ty {
+            if ty < previous {
+                return Err(CapabilityError::NonCanonicalTypeOrder {
+                    previous,
+                    current: ty,
+                });
+            }
+        }
+        previous_ty = Some(ty);
         let len = u16::from_be_bytes([bytes[cursor + 2], bytes[cursor + 3]]) as usize;
         cursor += 4;
         if cursor + len > bytes.len() {
@@ -306,7 +320,11 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
                 let Some(id) = KemId::from_code(value[0]) else {
                     return Err(CapabilityError::InvalidKemId(value[0]));
                 };
+                validate_capability_flags(ty, value[1], REQUIRED_FLAG)?;
                 let required = (value[1] & REQUIRED_FLAG) != 0;
+                if advert.kem.iter().any(|entry| entry.id == id) {
+                    return Err(CapabilityError::DuplicateAlgorithm { ty, id: value[0] });
+                }
                 advert.kem.push(KemAdvertisement { id, required });
             }
             TYPE_PQ_SIG => {
@@ -318,12 +336,17 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
                 let Some(id) = SignatureId::from_code(value[0]) else {
                     return Err(CapabilityError::InvalidSignatureId(value[0]));
                 };
+                validate_capability_flags(ty, value[1], REQUIRED_FLAG)?;
                 let required = (value[1] & REQUIRED_FLAG) != 0;
+                if advert.signatures.iter().any(|entry| entry.id == id) {
+                    return Err(CapabilityError::DuplicateAlgorithm { ty, id: value[0] });
+                }
                 advert
                     .signatures
                     .push(SignatureAdvertisement { id, required });
             }
             TYPE_TRANSCRIPT_COMMIT => {
+                mark_singleton(&mut seen_singletons, SINGLETON_TRANSCRIPT_COMMIT, ty)?;
                 if value.len() != 32 {
                     return Err(CapabilityError::InvalidTranscriptCommitLen);
                 }
@@ -331,18 +354,34 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
                 commit.copy_from_slice(value);
                 advert.transcript_commit = Some(commit);
             }
+            TYPE_SUITE_LIST => {
+                mark_singleton(&mut seen_singletons, SINGLETON_SUITE_LIST, ty)?;
+                if value.is_empty() {
+                    return Err(CapabilityError::InvalidSuiteList);
+                }
+            }
             TYPE_PADDING => {
+                mark_singleton(&mut seen_singletons, SINGLETON_PADDING, ty)?;
                 if value.len() != 2 {
                     return Err(CapabilityError::InvalidPaddingLen);
                 }
                 advert.padding = Some(u16::from_le_bytes([value[0], value[1]]));
             }
             TYPE_CONSTANT_RATE => {
+                mark_singleton(&mut seen_singletons, SINGLETON_CONSTANT_RATE, ty)?;
                 let capability = parse_constant_rate_capability(value)?;
                 advert.constant_rate = Some(capability);
             }
             TYPE_ROLE => {
-                // Clients normally omit `snnet.role`, so we ignore it silently.
+                mark_singleton(&mut seen_singletons, SINGLETON_ROLE, ty)?;
+                if value.len() != 1 {
+                    return Err(CapabilityError::InvalidRoleLen);
+                }
+                if value[0] == 0 || value[0] & !0x07 != 0 {
+                    return Err(CapabilityError::InvalidRoleBits(value[0]));
+                }
+                // Clients normally omit `snnet.role`; after strict validation,
+                // relay-side role selection remains authoritative.
             }
             ty if (0x7F00..=0x7FFF).contains(&ty) => {
                 advert.grease.push(GreaseEntry {
@@ -350,12 +389,7 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
                     value: value.to_vec(),
                 });
             }
-            _ => {
-                advert.grease.push(GreaseEntry {
-                    ty,
-                    value: value.to_vec(),
-                });
-            }
+            _ => return Err(CapabilityError::UnknownCapability { ty }),
         }
     }
     if cursor != bytes.len() {
@@ -363,32 +397,36 @@ pub fn parse_client_advertisement(bytes: &[u8]) -> Result<ClientAdvertisement, C
     }
     Ok(advert)
 }
+fn mark_singleton(seen: &mut u8, bit: u8, ty: u16) -> Result<(), CapabilityError> {
+    if *seen & bit != 0 {
+        return Err(CapabilityError::DuplicateSingleton { ty });
+    }
+    *seen |= bit;
+    Ok(())
+}
+fn validate_capability_flags(ty: u16, flags: u8, allowed: u8) -> Result<(), CapabilityError> {
+    if flags & !allowed != 0 {
+        return Err(CapabilityError::InvalidCapabilityFlags { ty, flags });
+    }
+    Ok(())
+}
 fn parse_constant_rate_capability(value: &[u8]) -> Result<ConstantRateCapability, CapabilityError> {
-    if value.len() < 4 {
+    if value.len() != 4 {
         return Err(CapabilityError::ConstantRateInvalidLen);
     }
     let version = value[0];
+    if version != 1 {
+        return Err(CapabilityError::ConstantRateUnsupportedVersion(version));
+    }
+    validate_capability_flags(TYPE_CONSTANT_RATE, value[1], CONSTANT_RATE_FLAG_STRICT)?;
     let mode = ConstantRateMode::from_flags(value[1]);
     let cell_bytes = u16::from_le_bytes([value[2], value[3]]);
-    let sample = &value[4..];
-    if sample.len() != usize::from(cell_bytes) {
-        return Err(CapabilityError::ConstantRateEnvelopeLength {
-            declared: cell_bytes,
-            actual: sample.len(),
-        });
-    }
     let expected = CONSTANT_RATE_CELL_BYTES as u16;
     if cell_bytes != expected {
         return Err(CapabilityError::ConstantRateUnsupportedCellSize {
             advertised: cell_bytes,
             expected,
         });
-    }
-    let Some(cell) = Cell::from_bytes(sample, CellClass::Bulk) else {
-        return Err(CapabilityError::ConstantRateEnvelopeInvalid);
-    };
-    if !cell.is_dummy || !cell.data.is_empty() {
-        return Err(CapabilityError::ConstantRateEnvelopeInvalid);
     }
     Ok(ConstantRateCapability {
         version,
@@ -553,11 +591,19 @@ fn flag_byte(required: bool) -> u8 {
     if required { REQUIRED_FLAG } else { 0 }
 }
 fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) -> Result<(), CapabilityError> {
-    buffer.extend_from_slice(&ty.to_be_bytes());
     let len = u16::try_from(value.len()).map_err(|_| CapabilityError::CapabilityValueTooLarge {
         ty,
         length: value.len(),
     })?;
+    let encoded_len = buffer
+        .len()
+        .checked_add(4)
+        .and_then(|encoded_len| encoded_len.checked_add(value.len()))
+        .ok_or(CapabilityError::CapabilityVectorTooLarge)?;
+    if encoded_len > MAX_CAP_VECTOR_LEN {
+        return Err(CapabilityError::CapabilityVectorTooLarge);
+    }
+    buffer.extend_from_slice(&ty.to_be_bytes());
     buffer.extend_from_slice(&len.to_be_bytes());
     buffer.extend_from_slice(value);
     Ok(())
@@ -565,7 +611,7 @@ fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) -> Result<(), Capabilit
 impl fmt::Display for KemId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            KemId::Classic => write!(f, "classical"),
+            KemId::MlKem512 => write!(f, "ml-kem-512"),
             KemId::MlKem768 => write!(f, "ml-kem-768"),
             KemId::MlKem1024 => write!(f, "ml-kem-1024"),
         }
@@ -574,9 +620,7 @@ impl fmt::Display for KemId {
 impl fmt::Display for SignatureId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SignatureId::Ed25519 => write!(f, "ed25519"),
             SignatureId::Dilithium3 => write!(f, "dilithium3"),
-            SignatureId::Falcon512 => write!(f, "falcon512"),
         }
     }
 }
@@ -604,10 +648,11 @@ mod tests {
             &[SignatureId::Dilithium3.code(), REQUIRED_FLAG],
         )
         .expect("pqsig TLV");
+        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
+        push_tlv(&mut bytes, TYPE_SUITE_LIST, &[0x84, 0x05]).expect("suite-list TLV");
         push_tlv(&mut bytes, TYPE_PADDING, &1024u16.to_le_bytes()).expect("padding TLV");
         let value = sample_constant_rate(ConstantRateMode::BestEffort).encode_value();
         push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &value).expect("constant-rate TLV");
-        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
         push_tlv(&mut bytes, 0x7F10, &[0xDE, 0xAD, 0xBE, 0xEF]).expect("GREASE TLV");
         bytes
     }
@@ -658,6 +703,149 @@ mod tests {
                 .windows(6)
                 .any(|window| window == [0x02, 0x02, 0x00, 0x02, 0x00, 0x04])
         );
+    }
+    #[test]
+    fn parser_rejects_duplicate_singletons_and_preserves_distinct_algorithms() {
+        let singleton_values = vec![
+            (TYPE_TRANSCRIPT_COMMIT, vec![0xAA; 32]),
+            (TYPE_SUITE_LIST, vec![0x84, 0x05]),
+            (TYPE_ROLE, vec![0x01]),
+            (TYPE_PADDING, 1024u16.to_le_bytes().to_vec()),
+            (
+                TYPE_CONSTANT_RATE,
+                sample_constant_rate(ConstantRateMode::Strict)
+                    .encode_value()
+                    .to_vec(),
+            ),
+        ];
+        for (ty, value) in singleton_values {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, ty, &value).expect("first singleton");
+            push_tlv(&mut bytes, ty, &value).expect("duplicate singleton");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::DuplicateSingleton { ty: duplicate }) if duplicate == ty
+            ));
+        }
+
+        let mut multi = Vec::new();
+        push_tlv(&mut multi, TYPE_PQ_KEM, &[KemId::MlKem512.code(), 0]).expect("first KEM");
+        push_tlv(
+            &mut multi,
+            TYPE_PQ_KEM,
+            &[KemId::MlKem768.code(), REQUIRED_FLAG],
+        )
+        .expect("second KEM");
+        push_tlv(
+            &mut multi,
+            TYPE_PQ_SIG,
+            &[SignatureId::Dilithium3.code(), 0],
+        )
+        .expect("first signature");
+        push_tlv(&mut multi, 0x7F10, &[1]).expect("first GREASE");
+        push_tlv(&mut multi, 0x7F10, &[2]).expect("second GREASE");
+        let parsed = parse_client_advertisement(&multi).expect("multi-entry types stay legal");
+        assert_eq!(parsed.kem.len(), 2);
+        assert_eq!(parsed.signatures.len(), 1);
+        assert_eq!(parsed.grease.len(), 2);
+        assert_eq!(parsed.grease[0].value, [1]);
+        assert_eq!(parsed.grease[1].value, [2]);
+    }
+    #[test]
+    fn parser_rejects_duplicate_algorithm_ids_even_when_flags_differ() {
+        for (ty, id) in [
+            (TYPE_PQ_KEM, KemId::MlKem768.code()),
+            (TYPE_PQ_SIG, SignatureId::Dilithium3.code()),
+        ] {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, ty, &[id, 0]).expect("first algorithm");
+            push_tlv(&mut bytes, ty, &[id, REQUIRED_FLAG]).expect("duplicate algorithm");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::DuplicateAlgorithm {
+                    ty: duplicate_ty,
+                    id: duplicate_id,
+                }) if duplicate_ty == ty && duplicate_id == id
+            ));
+        }
+    }
+    #[test]
+    fn parser_rejects_unknown_types_malformed_role_and_reserved_flags() {
+        let mut unknown = Vec::new();
+        push_tlv(&mut unknown, 0x1234, &[1]).expect("unknown TLV");
+        assert!(matches!(
+            parse_client_advertisement(&unknown),
+            Err(CapabilityError::UnknownCapability { ty: 0x1234 })
+        ));
+
+        for role in [Vec::new(), vec![1, 2]] {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, TYPE_ROLE, &role).expect("role TLV");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::InvalidRoleLen)
+            ));
+        }
+        for role in [0x00, 0x08, 0x80, 0xFF] {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, TYPE_ROLE, &[role]).expect("role TLV");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::InvalidRoleBits(rejected)) if rejected == role
+            ));
+        }
+
+        for (ty, id) in [
+            (TYPE_PQ_KEM, KemId::MlKem768.code()),
+            (TYPE_PQ_SIG, SignatureId::Dilithium3.code()),
+        ] {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, ty, &[id, 0x80]).expect("flagged TLV");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::InvalidCapabilityFlags {
+                    ty: rejected,
+                    flags: 0x80,
+                }) if rejected == ty
+            ));
+        }
+
+        let mut constant_rate = sample_constant_rate(ConstantRateMode::BestEffort).encode_value();
+        constant_rate[1] = 0x80;
+        let mut bytes = Vec::new();
+        push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &constant_rate).expect("constant-rate TLV");
+        assert!(matches!(
+            parse_client_advertisement(&bytes),
+            Err(CapabilityError::InvalidCapabilityFlags {
+                ty: TYPE_CONSTANT_RATE,
+                flags: 0x80,
+            })
+        ));
+
+        let mut empty_suite_list = Vec::new();
+        push_tlv(&mut empty_suite_list, TYPE_SUITE_LIST, &[]).expect("suite-list TLV");
+        assert!(matches!(
+            parse_client_advertisement(&empty_suite_list),
+            Err(CapabilityError::InvalidSuiteList)
+        ));
+    }
+    #[test]
+    fn parser_rejects_decreasing_tlv_type_order() {
+        let mut bytes = Vec::new();
+        push_tlv(&mut bytes, TYPE_PADDING, &1024_u16.to_le_bytes()).expect("padding TLV");
+        push_tlv(
+            &mut bytes,
+            TYPE_PQ_KEM,
+            &[KemId::MlKem768.code(), REQUIRED_FLAG],
+        )
+        .expect("out-of-order KEM TLV");
+        assert!(matches!(
+            parse_client_advertisement(&bytes),
+            Err(CapabilityError::NonCanonicalTypeOrder {
+                previous: TYPE_PADDING,
+                current: TYPE_PQ_KEM,
+            })
+        ));
     }
     #[test]
     fn required_kem_missing_fails() {
@@ -716,12 +904,25 @@ mod tests {
     }
     #[test]
     fn constant_rate_version_mismatch_rejected() {
-        let mut client = parse_client_advertisement(&sample_client_vector()).expect("parse");
-        let mut upgraded = sample_constant_rate(ConstantRateMode::BestEffort);
-        upgraded.version = 2;
-        client.constant_rate = Some(upgraded);
-        let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
-        matches!(err, CapabilityError::ConstantRateUnsupportedVersion(2));
+        let mut bytes = Vec::new();
+        let mut upgraded = sample_constant_rate(ConstantRateMode::BestEffort).encode_value();
+        upgraded[0] = 2;
+        push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &upgraded).expect("constant-rate TLV");
+        assert!(matches!(
+            parse_client_advertisement(&bytes),
+            Err(CapabilityError::ConstantRateUnsupportedVersion(2))
+        ));
+    }
+    #[test]
+    fn constant_rate_payload_is_exactly_four_bytes() {
+        for payload in [vec![1, 0, 0], vec![1, 0, 0, 4, 0]] {
+            let mut bytes = Vec::new();
+            push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &payload).expect("constant-rate TLV");
+            assert!(matches!(
+                parse_client_advertisement(&bytes),
+                Err(CapabilityError::ConstantRateInvalidLen)
+            ));
+        }
     }
     #[test]
     fn constant_rate_best_effort_allows_degraded_session() {
@@ -781,7 +982,7 @@ mod tests {
                     == [
                         (TYPE_CONSTANT_RATE >> 8) as u8,
                         (TYPE_CONSTANT_RATE & 0xFF) as u8,
-                        0x04,
+                        0x00,
                         0x04,
                         1,
                         ConstantRateMode::Strict.flags(),
@@ -811,6 +1012,32 @@ mod tests {
                 ty: 0x7F12,
                 length
             } if length == usize::from(u16::MAX) + 1
+        ));
+    }
+    #[test]
+    fn encode_relay_advertisement_enforces_aggregate_vector_limit() {
+        let mut negotiated = negotiate_capabilities(
+            &parse_client_advertisement(&sample_client_vector()).unwrap(),
+            &sample_server_caps(),
+        )
+        .expect("negotiate");
+        negotiated.grease.clear();
+        let base = encode_relay_advertisement(&negotiated, 0x01).expect("base relay caps");
+        let grease_value_len = MAX_CAP_VECTOR_LEN
+            .checked_sub(base.len() + 4)
+            .expect("base response leaves room for one GREASE header");
+        negotiated.grease.push(GreaseEntry {
+            ty: 0x7F12,
+            value: vec![0xAA; grease_value_len],
+        });
+        let exact = encode_relay_advertisement(&negotiated, 0x01)
+            .expect("exact-limit relay capability vector must encode");
+        assert_eq!(exact.len(), MAX_CAP_VECTOR_LEN);
+
+        negotiated.grease[0].value.push(0xAA);
+        assert!(matches!(
+            encode_relay_advertisement(&negotiated, 0x01),
+            Err(CapabilityError::CapabilityVectorTooLarge)
         ));
     }
 }

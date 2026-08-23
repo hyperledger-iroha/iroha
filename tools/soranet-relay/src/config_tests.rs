@@ -412,26 +412,56 @@ fn certificate_issuer_fields_are_length_checked_before_hex_decode() {
 #[test]
 fn handshake_validation_enforces_producer_collection_limit() {
     let mut policy = HandshakePolicy {
-        kem: std::iter::repeat_with(|| KemPolicyEntry {
-            id: "ml-kem-768".to_string(),
-            required: true,
+        grease: std::iter::repeat_with(|| GreasePolicyEntry {
+            typ: 0x7F10,
+            value_hex: String::new(),
         })
         .take(RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1)
         .collect(),
         ..HandshakePolicy::default()
     };
-    policy
+    let error = policy
         .validate()
-        .expect("producer collection at exact limit must validate");
-    policy.kem.push(KemPolicyEntry {
-        id: "ml-kem-768".to_string(),
-        required: true,
+        .expect_err("wire semantics must reject an aggregate above the capability limit");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("capability vector")),
+        "unexpected error: {error:?}"
+    );
+    policy.grease.push(GreasePolicyEntry {
+        typ: 0x7F10,
+        value_hex: String::new(),
     });
     let error = policy
         .validate()
         .expect_err("producer list limit + 1 must fail");
     assert!(
         matches!(error, ConfigError::Handshake(ref message) if message.contains("first-release limit")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn handshake_validation_bounds_worst_case_relay_capability_vector() {
+    // The canonical worst-case v1 response occupies 73 bytes before GREASE:
+    // KEM, signature, descriptor, role, padding, constant-rate, and two suites.
+    // One GREASE TLV adds a four-byte header, leaving 4,019 value bytes.
+    let mut policy = HandshakePolicy {
+        grease: vec![GreasePolicyEntry {
+            typ: 0x7F10,
+            value_hex: "aa".repeat(4_019),
+        }],
+        ..HandshakePolicy::default()
+    };
+    policy
+        .validate()
+        .expect("capability vector at the exact wire limit must validate");
+
+    policy.grease[0].value_hex.push_str("aa");
+    let error = policy
+        .validate()
+        .expect_err("capability vector one byte above the wire limit must fail");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message)
+            if message.contains("4097 bytes") && message.contains("4096 bytes")),
         "unexpected error: {error:?}"
     );
 }
@@ -609,7 +639,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
-    assert_vpn_config_error(&entry, "relay mode Exit");
+    assert_vpn_config_error(entry, "relay mode Exit");
     let missing_tls = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
@@ -619,23 +649,21 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
-    assert_vpn_config_error(&missing_tls, "persistent tls.certificate_path");
-    let missing_certificate = format!(
-        r#"{{
+    assert_vpn_config_error(missing_tls, "persistent tls.certificate_path");
+    let missing_certificate = r#"{
                 "mode": "Exit",
                 "listen": "127.0.0.1:0",
-                "tls": {{
+                "tls": {
                     "certificate_path": "/run/secrets/relay-cert.pem",
                     "private_key_path": "/run/secrets/relay-key.pem"
-                }},
-                "vpn": {{
+                },
+                "vpn": {
                     "enabled": true,
                     "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
-                }}
-            }}"#
-    );
-    assert_vpn_config_error(&missing_certificate, "verified handshake.certificate");
+                }
+            }"#;
+    assert_vpn_config_error(missing_certificate, "verified handshake.certificate");
 }
 #[test]
 fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
@@ -894,6 +922,38 @@ fn exit_routing_validation_rejects_plain_http() {
         }
         other => panic!("unexpected error {other:?}"),
     }
+}
+#[test]
+fn exit_routing_validation_requires_bounded_canonical_gar_categories() {
+    assert!(is_canonical_gar_category_v1("stream.norito.read_only"));
+    assert!(!is_canonical_gar_category_v1("Stream.Norito.ReadOnly"));
+
+    let mut routing = ExitRoutingConfig {
+        norito_stream: Some(NoritoStreamRoutingConfig {
+            torii_ws_url: "wss://localhost:8080/ws".into(),
+            connect_timeout_millis: 0,
+            padding_target_millis: 0,
+            gar_category_read_only: Some("Stream.Norito.ReadOnly".into()),
+            gar_category_authenticated: None,
+            spool_dir: None,
+            route_refresh_secs: 0,
+        }),
+        ..ExitRoutingConfig::default()
+    };
+    let error = routing.validate().expect_err("mixed-case label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
+
+    routing
+        .norito_stream
+        .as_mut()
+        .expect("route retained")
+        .gar_category_read_only = Some("a".repeat(GAR_CATEGORY_MAX_BYTES_V1 + 1));
+    let error = routing.validate().expect_err("oversized label must fail");
+    assert!(
+        matches!(error, ConfigError::Routing(message) if message.contains("canonical lowercase ASCII"))
+    );
 }
 #[test]
 fn exit_routing_validation_rejects_kaigi_plain_http() {
@@ -1348,6 +1408,54 @@ fn rejects_unknown_kem_identifier() {
         }
         other => panic!("unexpected error variant: {other:?}"),
     }
+}
+#[test]
+fn kem_zero_wire_id_is_ml_kem_512_and_classic_alias_is_rejected() {
+    assert_eq!(
+        parse_kem_id("ml-kem-512"),
+        Some(capability::KemId::MlKem512)
+    );
+    assert_eq!(capability::KemId::MlKem512.code(), 0x00);
+    assert_eq!(
+        capability::KemId::from_code(0x00),
+        Some(capability::KemId::MlKem512)
+    );
+    assert_eq!(capability::KemId::MlKem512.to_string(), "ml-kem-512");
+    assert_eq!(parse_kem_id("classic"), None);
+}
+#[test]
+fn only_dilithium3_is_accepted_as_a_transcript_signature() {
+    assert_eq!(
+        parse_signature_id("dilithium3"),
+        Some(capability::SignatureId::Dilithium3)
+    );
+    assert_eq!(capability::SignatureId::Dilithium3.code(), 0x01);
+    assert_eq!(
+        capability::SignatureId::from_code(0x01),
+        Some(capability::SignatureId::Dilithium3)
+    );
+    assert_eq!(capability::SignatureId::from_code(0x00), None);
+    assert_eq!(capability::SignatureId::from_code(0x02), None);
+    assert_eq!(parse_signature_id("ed25519"), None);
+    assert_eq!(parse_signature_id("falcon512"), None);
+}
+#[test]
+fn handshake_policy_rejects_duplicate_algorithm_identifiers() {
+    let mut duplicate_kem = HandshakePolicy::default();
+    duplicate_kem.kem.push(duplicate_kem.kem[0].clone());
+    assert!(matches!(
+        duplicate_kem.validate(),
+        Err(ConfigError::Handshake(message)) if message.contains("duplicate KEM identifier")
+    ));
+
+    let mut duplicate_signature = HandshakePolicy::default();
+    duplicate_signature
+        .signatures
+        .push(duplicate_signature.signatures[0].clone());
+    assert!(matches!(
+        duplicate_signature.validate(),
+        Err(ConfigError::Handshake(message)) if message.contains("duplicate signature identifier")
+    ));
 }
 #[test]
 fn rejects_oversized_handshake_grease_value() {
@@ -1864,12 +1972,27 @@ fn privacy_config_validates_force_flush_ordering() {
         other => panic!("unexpected error {other:?}"),
     }
 }
+
+#[test]
+fn privacy_config_rejects_zero_force_flush_window() {
+    let mut config = PrivacyTelemetryConfig {
+        flush_delay_buckets: 0,
+        force_flush_buckets: 0,
+        ..PrivacyTelemetryConfig::default()
+    };
+    assert!(matches!(
+        config.apply_defaults(),
+        Err(ConfigError::Privacy(message))
+            if message == "privacy.force_flush_buckets must be greater than zero"
+    ));
+}
 #[test]
 fn privacy_config_enforces_first_release_memory_limits() {
     let mut exact = PrivacyTelemetryConfig {
         flush_delay_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
         force_flush_buckets: PRIVACY_MAX_OPEN_BUCKETS_V1,
         max_completed_buckets: PRIVACY_MAX_COMPLETED_BUCKETS_V1,
+        expected_shares: PRIVACY_MAX_EXPECTED_SHARES_V1,
         event_buffer_capacity: PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1,
         ..PrivacyTelemetryConfig::default()
     };
@@ -1885,6 +2008,12 @@ fn privacy_config_enforces_first_release_memory_limits() {
     assert!(matches!(
         overflow.apply_defaults(),
         Err(ConfigError::Privacy(message)) if message.contains("event_buffer_capacity")
+    ));
+    let mut overflow = exact.clone();
+    overflow.expected_shares = PRIVACY_MAX_EXPECTED_SHARES_V1 + 1;
+    assert!(matches!(
+        overflow.apply_defaults(),
+        Err(ConfigError::Privacy(message)) if message.contains("expected_shares")
     ));
     let mut overflow = exact;
     overflow.force_flush_buckets = PRIVACY_MAX_OPEN_BUCKETS_V1 + 1;

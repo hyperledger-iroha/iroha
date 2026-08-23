@@ -11,7 +11,6 @@ pub mod dos;
 pub mod error;
 pub mod exit;
 pub mod guard;
-pub mod handshake;
 pub mod incentive_log;
 pub mod incentives;
 pub mod metrics;

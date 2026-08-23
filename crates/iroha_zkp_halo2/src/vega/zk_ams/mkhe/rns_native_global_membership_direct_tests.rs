@@ -119,9 +119,11 @@ fn clean_global_root_v2_surface_excludes_every_cyclic_or_successor_binding() {
     }
     assert!(source.contains("VERIFIED_GLOBAL_LOOKUP_CORE_ROOT_PREIMAGE_BYTES_V2: usize = 800"));
     assert!(source.contains("membership.u_sum_commitment() != inverse.u_sum_commitment()"));
-    assert!(!MULTIPLICITY_NONNEGATIVE_RANGE_VERIFIED_V1);
-    assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
-    assert!(!RELEASE_READY_V1);
+    const {
+        assert!(!MULTIPLICITY_NONNEGATIVE_RANGE_VERIFIED_V1);
+        assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
+        assert!(!RELEASE_READY_V1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

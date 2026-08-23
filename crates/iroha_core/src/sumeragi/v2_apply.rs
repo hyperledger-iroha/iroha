@@ -3830,6 +3830,13 @@ impl V2ApplyService {
             && self.network_id == context.network_id
             && self.validator_set_pops == validator_set_pops
     }
+    /// Recheck the committed Kagemusha runtime lock immediately before signing.
+    pub(crate) fn require_committed_kagemusha_runtime_effective_config(
+        &self,
+    ) -> Result<(), String> {
+        self.state
+            .require_committed_kagemusha_runtime_effective_config()
+    }
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
     pub(crate) fn execute(
         &self,
@@ -4405,6 +4412,9 @@ impl V2ApplyService {
             )
         })?;
         self.validate_prospective_autoscale_retirement_queue(valid.as_ref(), &state_block)?;
+        self.state
+            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
+            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4534,6 +4544,9 @@ impl V2ApplyService {
                 )
             })?;
         self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
+        self.state
+            .require_kagemusha_runtime_effective_config_for_world(state_block.world())
+            .map_err(V2ApplyError::Validation)?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
@@ -4882,5 +4895,6 @@ mod tests;
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
 #[cfg(all(test, feature = "bls"))]
 pub(in crate::sumeragi) use tests::{
-    ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
+    ProductionKagemushaRuntimeGateFixtureV1, ProductionRecoveredDecisionApplyFixtureV1,
+    production_kagemusha_runtime_gate_fixture_v1, production_recovered_decision_apply_fixture_v1,
 };

@@ -12,6 +12,7 @@ on:
       - "ci/check_kagemusha_production_readiness_source_contract.py"
       - "ci/check_kagemusha_production_readiness_source_support.py"
       - "ci/check_kagemusha_recursion_source_contract.py"
+      - "ci/check_kagemusha_lifecycle_source_contract.py"
       - "ci/check_kagemusha_production_readiness_self_test.py"
       - "scripts/deploy_localnet.sh"
       - "scripts/tests/deploy_localnet_test.py"
@@ -871,13 +872,20 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_v4 -- --nocapture
       - run: cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture
       - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core direct_ordinary_multisig_cancel_executes_exact_staged_transition --lib -- --nocapture
+      - run: cargo test -p iroha_core direct_ordinary_multisig_deactivate_executes_exact_enabled_transition --lib -- --nocapture
+      - run: cargo test -p iroha_core production_proposal_validation_enforces_kagemusha_runtime_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_commit_apply_enforces_kagemusha_runtime_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_vote_worker_rejects_missing_and_mismatched_kagemusha_projection --lib -- --nocapture
+      - run: cargo test -p iroha_core production_vote_worker_signs_prepare_and_commit_for_exact_kagemusha_projection --lib -- --nocapture
+      - run: cargo test -p irohad --bin iroha3d authenticated_snapshot_ -- --nocapture
       - run: cargo test -p iroha_core --lib taira_canary -- --nocapture
       - run: cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture
       - run: cargo test -p iroha_core --lib attestation_certificate_validation_tests -- --nocapture
@@ -899,6 +907,7 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_kagami --bin kagami atomic_activation_
+      - run: cargo test -p iroha_kagami --bin kagami lifecycle_ -- --nocapture
       - run: cargo test -p iroha_kagami --bin kagami backing_
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states

@@ -12,10 +12,15 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
 use iroha_primitives::addr::SocketAddr;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use sha2::{Digest, Sha256};
 
 use super::kagemusha_promotion_receipt::{
     KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT, KagemushaPromotionReceiptValidationError,
 };
+
+/// Domain separating the consensus lock for one complete runtime projection.
+pub const KAGEMUSHA_V4_RUNTIME_EFFECTIVE_CONFIG_SHA256_DOMAIN_V1: &[u8] =
+    b"iroha.kagemusha.v4.runtime_effective_config.sha256.v1";
 
 /// One effective public validator endpoint and its genesis-authenticated `PoP`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -55,8 +60,9 @@ impl KagemushaV4RuntimeValidatorProjectionV1 {
 /// Canonical projection derived after every startup configuration overlay.
 ///
 /// The Sumeragi fingerprint commits the complete protocol-effective shared
-/// config. The genesis context and `PoPs` are copied from the successfully
-/// frozen height-one bootstrap, not reconstructed from caller assertions.
+/// config. The genesis context and `PoPs` are copied from authenticated signed
+/// genesis or retained validator-qualification and snapshot authorities, not
+/// reconstructed from caller assertions.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -88,6 +94,27 @@ pub struct KagemushaV4RuntimeEffectiveConfigProjectionV1 {
 }
 
 impl KagemushaV4RuntimeEffectiveConfigProjectionV1 {
+    /// Return the domain-separated SHA-256 committed by activation and consensus.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaPromotionReceiptValidationError`] when the projection
+    /// is invalid or cannot be encoded canonically.
+    pub fn consensus_sha256(&self) -> Result<[u8; 32], KagemushaPromotionReceiptValidationError> {
+        self.validate()?;
+        let canonical = norito::encode_canonical(self)
+            .map_err(|_| KagemushaPromotionReceiptValidationError::ReceiptEncode)?;
+        let mut hasher = Sha256::new();
+        hasher.update(KAGEMUSHA_V4_RUNTIME_EFFECTIVE_CONFIG_SHA256_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(canonical.len())
+                .map_err(|_| KagemushaPromotionReceiptValidationError::ReceiptEncode)?
+                .to_be_bytes(),
+        );
+        hasher.update(canonical);
+        Ok(hasher.finalize().into())
+    }
+
     /// Validate the bounded public projection and its cryptographic identities.
     ///
     /// # Errors

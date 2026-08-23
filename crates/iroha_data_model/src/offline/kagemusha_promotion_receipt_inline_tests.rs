@@ -539,7 +539,9 @@ struct CompleteReceiptOptions {
     alternate_authorization: bool,
     failed_result: bool,
     instruction_promotion_id: Option<[u8; 32]>,
+    instruction_runtime_effective_config_sha256: Option<[u8; 32]>,
     expires_at_height: Option<u64>,
+    catalog_revalidation_receipt_json: &'static [u8],
 }
 
 #[cfg(feature = "transparent_api")]
@@ -550,7 +552,10 @@ impl Default for CompleteReceiptOptions {
             alternate_authorization: false,
             failed_result: false,
             instruction_promotion_id: None,
+            instruction_runtime_effective_config_sha256: None,
             expires_at_height: Some(3),
+            catalog_revalidation_receipt_json:
+                b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true}\n",
         }
     }
 }
@@ -620,7 +625,7 @@ fn complete_receipt_fixture_with_options(
             release_policy_source: binding.release_policy_source,
             signed_genesis: binding.signed_genesis,
             catalog_revalidation_receipt_json: exact_receipt_bytes(
-                b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true}\n",
+                options.catalog_revalidation_receipt_json,
             ),
             catalog_revalidation_catalog_sha256: digest(
                 b"fixture App-Attest catalog revalidation bindings",
@@ -637,7 +642,11 @@ fn complete_receipt_fixture_with_options(
     let promotion_reservation_bytes = norito::encode_canonical(&promotion_reservation)
         .expect("canonical signed promotion reservation");
     binding.promotion_reservation = exact_receipt_bytes(&promotion_reservation_bytes);
-    let (_validator_bodies, validator_seals, validator_keys) = qualified_receipt_hosts(&binding);
+    let (validator_bodies, validator_seals, validator_keys) = qualified_receipt_hosts(&binding);
+    let runtime_effective_config_sha256 = validator_bodies[0]
+        .runtime_effective_config
+        .consensus_sha256()
+        .expect("valid runtime-effective config digest");
     let (governance_keys, governance_policy, governance_authority) = governance_receipt_fixture();
     let mut metadata = Metadata::default();
     if let Some(expiry) = options.expires_at_height {
@@ -664,6 +673,9 @@ fn complete_receipt_fixture_with_options(
             },
             activation,
             policy,
+            options
+                .instruction_runtime_effective_config_sha256
+                .unwrap_or(runtime_effective_config_sha256),
         )])
     } else {
         TransactionBuilder::new(
@@ -816,7 +828,7 @@ fn github_promotion_id_derivation_matches_known_vector() {
     };
     assert_eq!(
         hex::encode(run.promotion_id()),
-        "a0ab5de0bf87e740b555f41b9eba3dd5b3cc14f2f811ad45ef87220713245a2d",
+        "347f1395c409aa93453a8497471a90a18122cd2e40ed197831f0bf3bb49f3291",
     );
 }
 
@@ -882,66 +894,44 @@ fn promotion_reservation_enforces_receipt_size_and_strict_signing_lifetime() {
 #[cfg(feature = "transparent_api")]
 #[test]
 fn validator_seals_reject_mixed_exact_reservation_generations() {
-    let fixture = complete_receipt_fixture(true);
-    let mut reservation_two_body = fixture.promotion_reservation.body.clone();
-    reservation_two_body.catalog_revalidation_receipt_json = exact_receipt_bytes(
-        b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true,\"generation\":2}\n",
-    );
-    let reservation_two = KagemushaV4PromotionReservationV1::try_sign(
-        reservation_two_body,
-        &fixture.promotion_controller,
-    )
-    .expect("controller can sign a second exact reservation generation");
-    let reservation_two_bytes =
-        norito::encode_canonical(&reservation_two).expect("canonical second reservation");
+    let fixture_one = complete_receipt_fixture(true);
+    let fixture_two = complete_receipt_fixture_with_options(CompleteReceiptOptions {
+        catalog_revalidation_receipt_json:
+            b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true,\"generation\":2}\n",
+        ..CompleteReceiptOptions::default()
+    });
     assert_ne!(
-        reservation_two_bytes, fixture.promotion_reservation_bytes,
+        fixture_two.promotion_reservation_bytes, fixture_one.promotion_reservation_bytes,
         "R1 and R2 must differ in their exact signed bytes"
     );
 
-    let mut binding_two = fixture.expectations_artifact.body.binding.clone();
-    binding_two.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-    let (_, seals_two, _) = qualified_receipt_hosts(&binding_two);
+    for fixture in [&fixture_one, &fixture_two] {
+        KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
+            &fixture.expectations_artifact_bytes,
+            fixture.promotion_controller.public_key(),
+            &fixture.promotion_reservation_bytes,
+        )
+        .expect("each complete reservation generation remains internally coherent");
+    }
 
-    let mut coherent_two_body = fixture.expectations_artifact.body.clone();
-    coherent_two_body.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-    coherent_two_body.binding = binding_two.clone();
-    coherent_two_body.validator_seals = seals_two.clone();
-    let coherent_two =
-        sign_expectations_body_unchecked(coherent_two_body, &fixture.promotion_controller);
-    let coherent_two_bytes =
-        norito::encode_canonical(&coherent_two).expect("canonical coherent R2 expectations");
-    KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
-        &coherent_two_bytes,
-        fixture.promotion_controller.public_key(),
-        &reservation_two_bytes,
-    )
-    .expect("four R2 seals and exact R2 reservation remain a coherent generation");
-
-    for use_second_generation_binding in [false, true] {
-        let mut mixed_body = fixture.expectations_artifact.body.clone();
-        if use_second_generation_binding {
-            mixed_body.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-            mixed_body.binding = binding_two.clone();
-            mixed_body.validator_seals = seals_two.clone();
-            mixed_body.validator_seals[0] =
-                fixture.expectations_artifact.body.validator_seals[0].clone();
-        } else {
-            mixed_body.validator_seals[0] = seals_two[0].clone();
-        }
-        let mixed = sign_expectations_body_unchecked(mixed_body, &fixture.promotion_controller);
+    for (claimed_generation, foreign_generation) in
+        [(&fixture_one, &fixture_two), (&fixture_two, &fixture_one)]
+    {
+        let mut mixed_body = claimed_generation.expectations_artifact.body.clone();
+        mixed_body.validator_seals[0] = foreign_generation
+            .expectations_artifact
+            .body
+            .validator_seals[0]
+            .clone();
+        let mixed =
+            sign_expectations_body_unchecked(mixed_body, &claimed_generation.promotion_controller);
         let mixed_bytes =
             norito::encode_canonical(&mixed).expect("canonical mixed-generation expectations");
-        let reservation_bytes = if use_second_generation_binding {
-            &reservation_two_bytes
-        } else {
-            &fixture.promotion_reservation_bytes
-        };
         assert_eq!(
             KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
                 &mixed_bytes,
-                fixture.promotion_controller.public_key(),
-                reservation_bytes,
+                claimed_generation.promotion_controller.public_key(),
+                &claimed_generation.promotion_reservation_bytes,
             ),
             Err(KagemushaPromotionReceiptValidationError::ValidatorSet),
             "one R1/R2 seal splice must fail under either claimed reservation generation"
@@ -1212,6 +1202,19 @@ fn root_expectations_authenticate_key_domain_provenance_seals_transaction_anchor
             &promotion_splice.expectations_artifact_bytes,
             promotion_splice.promotion_controller.public_key(),
             &promotion_splice.promotion_reservation_bytes,
+        ),
+        Err(KagemushaPromotionReceiptValidationError::ActivationPayload),
+    );
+
+    let runtime_splice = complete_receipt_fixture_with_options(CompleteReceiptOptions {
+        instruction_runtime_effective_config_sha256: Some([0xEF; 32]),
+        ..CompleteReceiptOptions::default()
+    });
+    assert_eq!(
+        KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
+            &runtime_splice.expectations_artifact_bytes,
+            runtime_splice.promotion_controller.public_key(),
+            &runtime_splice.promotion_reservation_bytes,
         ),
         Err(KagemushaPromotionReceiptValidationError::ActivationPayload),
     );
@@ -1836,9 +1839,11 @@ fn canary_query_rejects_reversed_node_status_observation_times() {
     let receipt_bytes =
         norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
     let mut body = fixture.evidence.body.clone();
-    let before_observed_at_ms = body.query.node_status_before_observed_at_ms;
-    body.query.node_status_before_observed_at_ms = body.query.node_status_after_observed_at_ms;
-    body.query.node_status_after_observed_at_ms = before_observed_at_ms;
+    let query = &mut body.query;
+    core::mem::swap(
+        &mut query.node_status_before_observed_at_ms,
+        &mut query.node_status_after_observed_at_ms,
+    );
 
     assert_eq!(
         KagemushaV4TairaCanaryEvidenceV1::try_sign(
@@ -1931,6 +1936,51 @@ fn production_canary_evidence_rejects_a_sealed_reveal_entrypoint() {
 }
 
 #[cfg(feature = "transparent_api")]
+fn assert_liveness_anchor_digest_splices_rejected(
+    fixture: &CompleteCanaryFixture,
+    verified: &KagemushaV4VerifiedTairaCanaryEvidenceV1,
+    canary_proof: &BridgeFinalityProof,
+    challenge_body: &KagemushaV4PostCanaryValidatorLivenessChallengeBodyV1,
+) {
+    for (case, tampered_digest) in [
+        (
+            "activation receipt",
+            exact_receipt_bytes(b"spliced receipt"),
+        ),
+        (
+            "canary transaction wire",
+            exact_receipt_bytes(b"spliced transaction wire"),
+        ),
+    ] {
+        let mut tampered = challenge_body.clone();
+        match case {
+            "activation receipt" => {
+                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
+            }
+            "canary transaction wire" => {
+                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
+            }
+            _ => unreachable!("closed hostile anchor table"),
+        }
+        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+            tampered.clone(),
+            &fixture.receipt.issuer,
+        )
+        .expect("issuer can sign hostile anchor fixture");
+        assert_eq!(
+            challenge.verify_bound(
+                &fixture.receipt.expectations,
+                verified,
+                &tampered.canary_anchor,
+                canary_proof,
+            ),
+            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
+            "{case} splice must fail against the verified canary capability",
+        );
+    }
+}
+
+#[cfg(feature = "transparent_api")]
 #[test]
 fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
     let fixture = complete_canary_fixture();
@@ -2015,42 +2065,12 @@ fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
         "a canary capability cannot move across exact expectations artifacts",
     );
 
-    for (case, tampered_digest) in [
-        (
-            "activation receipt",
-            exact_receipt_bytes(b"spliced receipt"),
-        ),
-        (
-            "canary transaction wire",
-            exact_receipt_bytes(b"spliced transaction wire"),
-        ),
-    ] {
-        let mut tampered = challenge_body.clone();
-        match case {
-            "activation receipt" => {
-                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
-            }
-            "canary transaction wire" => {
-                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
-            }
-            _ => unreachable!("closed hostile anchor table"),
-        }
-        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
-            tampered.clone(),
-            &fixture.receipt.issuer,
-        )
-        .expect("issuer can sign hostile anchor fixture");
-        assert_eq!(
-            challenge.verify_bound(
-                &fixture.receipt.expectations,
-                &verified,
-                &tampered.canary_anchor,
-                canary_proof,
-            ),
-            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
-            "{case} splice must fail against the verified canary capability",
-        );
-    }
+    assert_liveness_anchor_digest_splices_rejected(
+        &fixture,
+        &verified,
+        canary_proof,
+        &challenge_body,
+    );
 }
 
 #[cfg(feature = "transparent_api")]

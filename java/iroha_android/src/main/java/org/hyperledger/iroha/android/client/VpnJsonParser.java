@@ -17,7 +17,7 @@ import org.hyperledger.iroha.android.numeric.NumericV1;
 /** Minimal JSON parser for Sora VPN Torii responses. */
 public final class VpnJsonParser {
 
-  private static final int VPN_HELPER_TICKET_HEX_LENGTH = 1328;
+  private static final int VPN_HELPER_TICKET_HEX_LENGTH = 1392;
   private static final long U32_MAX = 4_294_967_295L;
   private static final Set<String> EXIT_CLASSES =
       fields("standard", "low-latency", "high-security");

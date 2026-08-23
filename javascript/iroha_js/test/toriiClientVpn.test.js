@@ -36,7 +36,7 @@ function sampleAccountId() {
 
 const SAMPLE_ACCOUNT_ID = sampleAccountId();
 
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(688)}`;
 const SAMPLE_VPN_RELAY_ID_HEX =
   "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
 
@@ -976,7 +976,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
   });
 });
 
-test("VPN session responses require an exact lowercase 664-byte helper ticket", async () => {
+test("VPN session responses require an exact lowercase 696-byte helper ticket", async () => {
   const canonicalAuth = {
     accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 7),
@@ -994,7 +994,7 @@ test("VPN session responses require an exact lowercase 664-byte helper ticket", 
 
   const session = await requestSession(SAMPLE_VPN_HELPER_TICKET_HEX);
   assert.equal(session.helperTicketHex, SAMPLE_VPN_HELPER_TICKET_HEX);
-  assert.equal(session.helperTicketHex.length, 1328);
+  assert.equal(session.helperTicketHex.length, 1392);
 
   const invalidTickets = [
     ["prefix", `0x${SAMPLE_VPN_HELPER_TICKET_HEX}`],
@@ -1005,7 +1005,7 @@ test("VPN session responses require an exact lowercase 664-byte helper ticket", 
   for (const [caseName, helperTicketHex] of invalidTickets) {
     await assert.rejects(
       () => requestSession(helperTicketHex),
-      /helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters/u,
+      /helper_ticket_hex must contain exactly 1392 lowercase hexadecimal characters/u,
       caseName,
     );
   }

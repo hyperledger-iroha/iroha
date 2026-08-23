@@ -657,6 +657,14 @@ Length-framed enum fields are decoded only from the bytes inside their declared
 frame; there is no compatibility retry that can consume following variant
 fields.
 
+Fields annotated with `#[norito(default)]` or a custom default remain ordinary
+encoded fields when present and consume their declaration-order packed span.
+The default is used only when a compatible older positional payload ends before
+an appended trailing field; malformed present values are rejected rather than
+replaced by a default. Defaults do not make middle-field insertion or reordering
+compatible. Packed-struct field-count or bitset changes require a versioned
+layout.
+
 Every derive-generated enum tag is a canonical little-endian `u32`. An explicit
 Rust discriminant selects the wire tag, and subsequent implicit variants follow
 Rust's incrementing discriminant sequence. `#[codec(index = N)]` may pin an

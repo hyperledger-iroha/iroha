@@ -1037,6 +1037,18 @@ struct FriQueryVerification<'a> {
     arity: u32,
     domain: backend::FriDomain,
 }
+
+#[derive(Clone, Copy)]
+struct FriFinalVerification<'a> {
+    query_pos: usize,
+    index: usize,
+    value: u64,
+    root: &'a [u8; 32],
+    length: usize,
+    round: usize,
+    arity: usize,
+}
+
 fn verify_fri_query_chain(
     fri_query: &FriQueryOpening,
     context: FriQueryVerification<'_>,
@@ -1118,28 +1130,59 @@ fn verify_fri_query_chain(
     let final_len = *fri_layer_lengths
         .last()
         .expect("FRI layer lengths checked non-empty");
-    if usize::try_from(fri_query.final_index).ok() != Some(index) || index >= final_len {
+    let final_round = betas.len();
+    verify_fri_final_opening(
+        fri_query,
+        FriFinalVerification {
+            query_pos,
+            index,
+            value,
+            root: &fri_layers[final_round],
+            length: final_len,
+            round: final_round,
+            arity,
+        },
+    )?;
+    if !domain.evaluations_have_degree_below(&fri_query.final_values, terminal_degree_bound)? {
+        return Err(Error::FriTerminalDegreeMismatch {
+            degree_bound: terminal_degree_bound,
+        });
+    }
+    Ok(())
+}
+
+fn verify_fri_final_opening(
+    fri_query: &FriQueryOpening,
+    context: FriFinalVerification<'_>,
+) -> Result<()> {
+    let FriFinalVerification {
+        query_pos,
+        index,
+        value,
+        root,
+        length,
+        round,
+        arity,
+    } = context;
+    if usize::try_from(fri_query.final_index).ok() != Some(index) || index >= length {
         return Err(Error::QueryMismatch { index: query_pos });
     }
-    let final_arity = backend::fri_round_arity(final_len, arity)?;
-    let final_leaf_count = final_len / final_arity;
+    let final_arity = backend::fri_round_arity(length, arity)?;
+    let final_leaf_count = length / final_arity;
     let final_leaf_index = index % final_leaf_count;
     let final_position = index / final_leaf_count;
-    if fri_query.final_values.len() != final_arity {
+    if fri_query.final_values.len() != final_arity
+        || fri_query.final_values.get(final_position).copied() != Some(value)
+    {
         return Err(Error::QueryMismatch { index: query_pos });
     }
-    if fri_query.final_values.get(final_position).copied() != Some(value) {
-        return Err(Error::QueryMismatch { index: query_pos });
-    }
-    let final_round = betas.len();
     let final_path_len = merkle_path_len_for_leaf_count(final_leaf_count)?;
     if fri_query.final_merkle_path.len() != final_path_len {
         return Err(Error::QueryMerklePathMismatch { index: query_pos });
     }
-    let final_root = field_norito::core::from_bytes(&fri_layers[final_round])
-        .ok_or(Error::FriLayerMismatch { round: final_round })?;
-    let final_leaf =
-        backend::hash_fri_chunk(final_round, final_leaf_index, &fri_query.final_values)?;
+    let final_root =
+        field_norito::core::from_bytes(root).ok_or(Error::FriLayerMismatch { round })?;
+    let final_leaf = backend::hash_fri_chunk(round, final_leaf_index, &fri_query.final_values)?;
     if !backend::verify_merkle_path(
         final_root,
         final_leaf,
@@ -1147,11 +1190,6 @@ fn verify_fri_query_chain(
         &fri_query.final_merkle_path,
     )? {
         return Err(Error::QueryMerklePathMismatch { index: query_pos });
-    }
-    if !domain.evaluations_have_degree_below(&fri_query.final_values, terminal_degree_bound)? {
-        return Err(Error::FriTerminalDegreeMismatch {
-            degree_bound: terminal_degree_bound,
-        });
     }
     Ok(())
 }
@@ -1292,14 +1330,6 @@ fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
 fn fold_fri_values(values: &[u64], challenge: u64, x: u64, coset_generator: u64) -> Result<u64> {
     backend::fold_fri_coset(values, challenge, x, coset_generator)
-}
-fn add_mod(a: u64, b: u64) -> u64 {
-    let sum = u128::from(a) + u128::from(b);
-    u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
-}
-fn mul_mod(a: u64, b: u64) -> u64 {
-    let product = u128::from(a) * u128::from(b);
-    u64::try_from(product % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
 }
 fn batch_size_hint(batch: &TransitionBatch) -> usize {
     let mut total = batch.parameter.len();
@@ -1592,6 +1622,18 @@ mod field_norito {
 mod tests {
     use super::*;
     use crate::{OperationKind, PublicInputs, StateTransition};
+
+    fn add_mod(a: u64, b: u64) -> u64 {
+        let sum = u128::from(a) + u128::from(b);
+        u64::try_from(sum % u128::from(GOLDILOCKS_MODULUS)).expect("modulus reduction fits in u64")
+    }
+
+    fn mul_mod(a: u64, b: u64) -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        u64::try_from(product % u128::from(GOLDILOCKS_MODULUS))
+            .expect("modulus reduction fits in u64")
+    }
+
     fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         verify_with_limits_raw(batch, proof, VerifyLimits::default())
     }
@@ -2841,10 +2883,10 @@ mod tests {
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
             matches!(
-                err,
+                &err,
                 Error::NonCanonicalGoldilocksElement {
                     context: "air_trace_root",
-                    ref indices,
+                    indices,
                 } if indices.is_empty()
             ),
             "unexpected verifier error: {err:?}"

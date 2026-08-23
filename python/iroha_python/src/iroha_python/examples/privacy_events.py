@@ -34,7 +34,7 @@ def _event_payload_to_dict(event: PrivacyEvent) -> dict | None:
         if isinstance(payload, PrivacyEventThrottle):
             payload_dict["scope"] = payload.scope.value
         elif isinstance(payload, PrivacyEventGarAbuseCategory):
-            payload_dict["label"] = payload.label
+            payload_dict["category_hash"] = list(payload.category_hash)
         return payload_dict
     payload_dict = asdict(payload)
     return payload_dict

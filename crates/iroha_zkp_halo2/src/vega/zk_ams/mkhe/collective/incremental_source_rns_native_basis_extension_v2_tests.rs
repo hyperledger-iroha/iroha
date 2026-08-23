@@ -57,12 +57,23 @@ fn exact_38_to_40_geometry_and_missing_tail_census_are_frozen() {
         RECORD_COUNT_V2 * usize::from(CIPHERTEXT_TAIL_LIMBS_PER_RECORD_V2),
         CIPHERTEXT_TAIL_OBJECT_COUNT_V2
     );
+<<<<<<< HEAD
     assert!(RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2);
     assert!(RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
     assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
+=======
+    const {
+        assert!(RNS_NATIVE_BASIS_EXTENSION_CONTRACT_IMPLEMENTED_V2);
+        assert!(!RNS_NATIVE_BASIS_EXTENSION_PRE_ENTROPY_CALL_SITE_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_BASIS_EXTENSION_PRODUCTION_OWNER_AVAILABLE_V2);
+        assert!(!RNS_NATIVE_BASIS_EXTENSION_SOURCE_ADAPTER_AVAILABLE_V2);
+        assert!(!RNS_NATIVE_BASIS_EXTENSION_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_BASIS_EXTENSION_RELEASE_AUTHORIZED_V2);
+    }
+>>>>>>> origin/optimizations
     assert_eq!(CHUNK_COUNT_PER_OBJECT_V2, 128);
     assert_eq!(OBJECT_BYTES_V2, 1_048_580);
     assert_eq!(TAIL_CAS_BYTES_V2, 184_550_080);
@@ -397,12 +408,12 @@ fn both_tail_roots_have_release_degree_negacyclic_product_kats() {
 #[test]
 fn scoped_workspace_is_cleared_when_an_unwind_is_caught() {
     let mut workspace = RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2().unwrap();
-    let rejected: Result<(), RnsNativeBasisExtensionErrorV2> = (|| {
+    let rejected: Result<(), RnsNativeBasisExtensionErrorV2> = {
         let mut lease = workspace.lease_v2();
         lease.left_mut()[1] = 11;
         lease.right_mut()[ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 - 2] = 13;
         Err(RnsNativeBasisExtensionErrorV2::VisitorRejected)
-    })();
+    };
     assert_eq!(
         rejected,
         Err(RnsNativeBasisExtensionErrorV2::VisitorRejected)

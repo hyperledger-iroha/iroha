@@ -23,7 +23,7 @@ use crate::{
         store::LiveQueryStore,
     },
     queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
-    state::{World, WorldReadOnly},
+    state::World,
     sumeragi::{
         v2_body_store::{
             BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
@@ -345,6 +345,28 @@ fn install_fixture_validator_authority(
         "fixture must expose every authenticated validator as lane authority"
     );
 }
+fn install_fixture_kagemusha_runtime_lifecycle(
+    state: &State,
+    runtime_effective_config_sha256: [u8; 32],
+) {
+    let lifecycle = crate::smartcontracts::isi::offline::staged_lifecycle_for_test(
+        runtime_effective_config_sha256,
+        state.network_id,
+    );
+    let key: iroha_data_model::state_path::StatePath =
+        iroha_data_model::offline::kagemusha_v4_release_lifecycle_state_key(
+            &lifecycle.artifact_binding.manifest_sha256,
+        )
+        .expect("derive canonical Kagemusha lifecycle key")
+        .parse()
+        .expect("parse canonical Kagemusha lifecycle key");
+    let mut world_block = state.world.block();
+    world_block.smart_contract_state.insert(
+        key,
+        norito::encode_canonical(&lifecycle).expect("encode Kagemusha lifecycle fixture"),
+    );
+    world_block.commit();
+}
 impl ApplyFixture {
     fn new() -> Self {
         Self::new_with_lane_payload(false)
@@ -367,6 +389,16 @@ impl ApplyFixture {
     fn new_for_production_recovered_decision_apply_with_lane_lifecycle() -> Self {
         Self::new_with_options_and_network(false, false, true, false, true)
     }
+    fn new_for_kagemusha_runtime_projection() -> Self {
+        Self::new_with_options_and_network_and_kagemusha(
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some(([0x55; 32], Some([0x55; 32]))),
+        )
+    }
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
@@ -387,6 +419,23 @@ impl ApplyFixture {
         include_lane_lifecycle: bool,
         include_native_lane: bool,
         match_context_network: bool,
+    ) -> Self {
+        Self::new_with_options_and_network_and_kagemusha(
+            include_lane_payload,
+            include_projection_policies,
+            include_lane_lifecycle,
+            include_native_lane,
+            match_context_network,
+            None,
+        )
+    }
+    fn new_with_options_and_network_and_kagemusha(
+        include_lane_payload: bool,
+        include_projection_policies: bool,
+        include_lane_lifecycle: bool,
+        include_native_lane: bool,
+        match_context_network: bool,
+        kagemusha_runtime: Option<([u8; 32], Option<[u8; 32]>)>,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
         let mut keys = (1_u8..=4)
@@ -470,6 +519,14 @@ impl ApplyFixture {
         install_fixture_validator_authority(&state, &context, &validator_set_pops);
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
+        }
+        if let Some((expected, local)) = kagemusha_runtime {
+            install_fixture_kagemusha_runtime_lifecycle(&state, expected);
+            if let Some(local) = local {
+                state
+                    .install_kagemusha_runtime_effective_config_sha256(local)
+                    .expect("install Kagemusha runtime projection fixture");
+            }
         }
         if match_context_network {
             context.nexus_amx_context_hash =
@@ -562,9 +619,16 @@ impl ApplyFixture {
             max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         };
         let transaction_instructions = || {
-            let mut instructions = vec![InstructionBox::from(SetParameter::new(
-                Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
-            ))];
+            let mut instructions = if kagemusha_runtime.is_some() {
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "Kagemusha runtime projection gate fixture".to_owned(),
+                ))]
+            } else {
+                vec![InstructionBox::from(SetParameter::new(
+                    Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
+                ))]
+            };
             if include_projection_policies {
                 instructions.push(InstructionBox::from(
                     SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy.clone()),
@@ -765,6 +829,19 @@ impl ApplyFixture {
             events_sender,
             self.service.validator_set_pops.clone(),
         );
+        (service, state)
+    }
+    fn restart_service_with_kagemusha_runtime_projection(
+        &self,
+        local_runtime_effective_config_sha256: Option<[u8; 32]>,
+    ) -> (V2ApplyService, Arc<State>) {
+        let (service, state) = self.restart_service_from_last_finalized_snapshot();
+        install_fixture_kagemusha_runtime_lifecycle(state.as_ref(), [0x55; 32]);
+        if let Some(local) = local_runtime_effective_config_sha256 {
+            state
+                .install_kagemusha_runtime_effective_config_sha256(local)
+                .expect("install restarted Kagemusha runtime projection");
+        }
         (service, state)
     }
     fn execute(&self, store: &mut V2BodyStore) -> Result<(), V2ApplyError> {

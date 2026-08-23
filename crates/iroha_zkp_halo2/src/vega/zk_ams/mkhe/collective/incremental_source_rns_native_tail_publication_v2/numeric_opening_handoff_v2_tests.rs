@@ -14,20 +14,21 @@ enum OpeningAuthorityBehaviorV2 {
 
 struct OpeningAuthorityFixtureV2 {
     behavior: OpeningAuthorityBehaviorV2,
-    calls: Rc<RefCell<Vec<(usize, RnsNativeCrossFieldQuotientOpeningSignV1)>>>,
+    calls: OpeningAuthorityCallsV2,
     clear_calls: Rc<Cell<usize>>,
     retained: Rc<Cell<bool>>,
 }
 
+type OpeningAuthorityCallsV2 = Rc<RefCell<Vec<(usize, RnsNativeCrossFieldQuotientOpeningSignV1)>>>;
+type OpeningAuthorityFixturePartsV2 = (
+    OpeningAuthorityFixtureV2,
+    OpeningAuthorityCallsV2,
+    Rc<Cell<usize>>,
+    Rc<Cell<bool>>,
+);
+
 impl OpeningAuthorityFixtureV2 {
-    fn new_v2(
-        behavior: OpeningAuthorityBehaviorV2,
-    ) -> (
-        Self,
-        Rc<RefCell<Vec<(usize, RnsNativeCrossFieldQuotientOpeningSignV1)>>>,
-        Rc<Cell<usize>>,
-        Rc<Cell<bool>>,
-    ) {
+    fn new_v2(behavior: OpeningAuthorityBehaviorV2) -> OpeningAuthorityFixturePartsV2 {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let clear_calls = Rc::new(Cell::new(0));
         let retained = Rc::new(Cell::new(true));
@@ -636,19 +637,21 @@ fn fixed_sizes_and_post_authentication_local_resource_ledger_are_exact_v2() {
 
 #[test]
 fn source_is_settled_but_every_live_and_release_gate_is_closed_v2() {
-    assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SOURCE_SETTLED_V2);
-    assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_CONTRACT_IMPLEMENTED_V2);
-    assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_QPCS_JOIN_IMPLEMENTED_V2);
-    assert!(RNS_NATIVE_QUOTIENT_OPENING_CURSOR_CONTRACT_IMPLEMENTED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_LIVE_OWNER_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SOURCE_PREFLIGHT_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_COMPLETED_LINEAGE_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_DIRECT_NUMERIC_SOURCE_INTEGRATED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_DIRECT_OPENINGS_AVAILABLE_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SINGLE_OWNER_DIRECT_CHRONOLOGY_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RESOURCE_EVIDENCE_QUALIFIED_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_READINESS_V2);
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RELEASE_AUTHORIZED_V2);
+    const {
+        assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SOURCE_SETTLED_V2);
+        assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_CONTRACT_IMPLEMENTED_V2);
+        assert!(RNS_NATIVE_NUMERIC_OPENING_HANDOFF_QPCS_JOIN_IMPLEMENTED_V2);
+        assert!(RNS_NATIVE_QUOTIENT_OPENING_CURSOR_CONTRACT_IMPLEMENTED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_LIVE_OWNER_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SOURCE_PREFLIGHT_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_COMPLETED_LINEAGE_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_DIRECT_NUMERIC_SOURCE_INTEGRATED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_DIRECT_OPENINGS_AVAILABLE_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_SINGLE_OWNER_DIRECT_CHRONOLOGY_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RESOURCE_EVIDENCE_QUALIFIED_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_READINESS_V2);
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RELEASE_AUTHORIZED_V2);
+    }
     assert!(matches!(
         RnsNativeDirectOpeningOwnersUnavailableV2::TestOnly,
         RnsNativeDirectOpeningOwnersUnavailableV2::TestOnly
@@ -814,7 +817,9 @@ fn production_path_does_not_revalidate_owner_graph_or_overclaim_qpcs_work_v2() {
     assert!(source.contains("not-end-to-end-resource-accounting"));
     assert!(source.contains("cannot qualify resource evidence"));
     assert!(source.contains("authenticate_rns_native_qpcs_fri_complete_with_schedule_v1("));
-    assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RESOURCE_EVIDENCE_QUALIFIED_V2);
+    const {
+        assert!(!RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RESOURCE_EVIDENCE_QUALIFIED_V2);
+    }
 }
 
 #[test]

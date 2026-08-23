@@ -1,25 +1,29 @@
-"""Always-enforced static source contract for Kagemusha production readiness."""
-
 if globals().get("_KAGEMUSHA_READINESS_SOURCE_CONTRACT_CONTEXT_V1") is not True:
-    raise RuntimeError("readiness source-contract provider must run inside the authenticated gate")
+    raise RuntimeError("detached readiness source contract")
 _source_contract_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_CONTRACT_SOURCE_V1")
 if not isinstance(_source_contract_source, str) or not _source_contract_source:
-    raise RuntimeError("readiness source-contract provider requires its exact loaded source bytes")
+    raise RuntimeError("missing readiness source bytes")
 _source_support_source = globals().get("_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1")
 if not isinstance(_source_support_source, str) or not _source_support_source:
-    raise RuntimeError("readiness source-contract provider requires its source-support bytes")
+    raise RuntimeError("missing support bytes")
 _source_support_pipeline_errors = globals().get("source_provider_pipeline_errors")
 if not callable(_source_support_pipeline_errors):
-    raise RuntimeError("readiness source-contract provider requires source-support checks")
+    raise RuntimeError("missing support checks")
 _runtime_projection_source_errors = globals().get("runtime_projection_source_errors")
 if not callable(_runtime_projection_source_errors):
-    raise RuntimeError("readiness source-contract provider requires runtime-projection checks")
+    raise RuntimeError("missing runtime checks")
 _canary_source_errors = globals().get("canary_source_errors")
 if not callable(_canary_source_errors):
-    raise RuntimeError("readiness source-contract provider requires canary checks")
+    raise RuntimeError("missing canary checks")
 _recursion_source_contract_evaluator = globals().get("_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1")
 if not callable(_recursion_source_contract_evaluator):
-    raise RuntimeError("readiness source-contract provider requires its recursion evaluator")
+    raise RuntimeError("missing recursion checks")
+_lifecycle_source_contract_source = globals().get("_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_SOURCE_V1")
+if not isinstance(_lifecycle_source_contract_source, str) or not _lifecycle_source_contract_source:
+    raise RuntimeError("missing lifecycle bytes")
+_lifecycle_source_contract_evaluator = globals().get("_KAGEMUSHA_LIFECYCLE_SOURCE_CONTRACT_EVALUATOR_V1")
+if not callable(_lifecycle_source_contract_evaluator):
+    raise RuntimeError("missing lifecycle checks")
 
 def read_override(path: str, errors: list[str], overrides: dict[str, str]) -> str:
     return overrides[path] if path in overrides else read(path, errors)
@@ -30,22 +34,23 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     parent = read(MODEL, errors)
     component = read_override(MODEL_COMPONENT, errors, overrides)
     verifier = read_override(MODEL_VERIFIER_COMPONENT, errors, overrides)
+<<<<<<< HEAD
     promotion_receipt = read_override(MODEL_PROMOTION_RECEIPT_COMPONENT, errors, overrides)
     internal_validation_receipt = read_override(
         MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT, errors, overrides
     )
     canary_evidence = read_override(MODEL_CANARY_EVIDENCE_COMPONENT, errors, overrides)
     canary_liveness = read_override(MODEL_CANARY_LIVENESS_COMPONENT, errors, overrides)
+=======
+>>>>>>> origin/optimizations
     if parent.count(MODEL_INCLUDE) != 1:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
         return parent
     parent = parent.replace(MODEL_INCLUDE, component, 1)
-    if parent.count(MODEL_VERIFIER_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module")
-        return parent
     for marker in ("const VERIFIER_IDENTITY_SCHEMA_V4", "pub fn kagemusha_recursive_spend_verifier_key_id_v4"):
         if verifier.count(marker) != 1:
             errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
+<<<<<<< HEAD
     parent = parent.replace(MODEL_VERIFIER_MODULE, "mod kagemusha_release_verifier {\n" + verifier + "\n}", 1)
     if parent.count(MODEL_PROMOTION_RECEIPT_MODULE) != 1:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_PROMOTION_RECEIPT_COMPONENT).name} module")
@@ -72,21 +77,34 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
         errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_CANARY_LIVENESS_COMPONENT).name} module")
         return parent
     return parent.replace(MODEL_CANARY_LIVENESS_MODULE, "mod kagemusha_post_canary_validator_liveness {\n" + canary_liveness + "\n}", 1)
+=======
+    for module, relative in (
+        (MODEL_VERIFIER_MODULE, MODEL_VERIFIER_COMPONENT),
+        (MODEL_PROMOTION_RECEIPT_MODULE, MODEL_PROMOTION_RECEIPT_COMPONENT),
+        (MODEL_CANARY_EVIDENCE_MODULE, MODEL_CANARY_EVIDENCE_COMPONENT),
+        (MODEL_CANARY_LIVENESS_MODULE, MODEL_CANARY_LIVENESS_COMPONENT),
+    ):
+        if parent.count(module) != 1:
+            errors.append(f"{MODEL}: expected exactly one reviewed {Path(relative).name} module")
+            continue
+        name = module.removeprefix("mod ").removesuffix(";")
+        source = verifier if relative == MODEL_VERIFIER_COMPONENT else read_override(relative, errors, overrides)
+        parent = parent.replace(module, f"mod {name} {{\n{source}\n}}", 1)
+    return parent
+>>>>>>> origin/optimizations
 
 def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
     if CATALOG in overrides:
         return overrides[CATALOG]
     parent = read(CATALOG, errors)
-    component = read_override(CATALOG_COMPONENT, errors, overrides)
-    qualification = read_override(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT, errors, overrides)
     if parent.count(CATALOG_INCLUDE) != 1:
         errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include")
         return parent
-    parent = parent.replace(CATALOG_INCLUDE, component, 1)
+    parent = parent.replace(CATALOG_INCLUDE, read_override(CATALOG_COMPONENT, errors, overrides), 1)
     if parent.count(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE) != 1:
         errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT).name} include")
         return parent
-    return parent.replace(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE, qualification, 1)
+    return parent.replace(CATALOG_VALIDATOR_QUALIFICATION_INCLUDE, read_override(CATALOG_VALIDATOR_QUALIFICATION_COMPONENT, errors, overrides), 1)
 
 def read_reviewed_core(errors: list[str], overrides: dict[str, str]) -> str:
     if CORE in overrides:
@@ -115,12 +133,11 @@ def read_reviewed_node(errors: list[str], overrides: dict[str, str]) -> str:
         (NODE_ROOT_OWNED_PUBLICATION_MODULE, NODE_ROOT_OWNED_PUBLICATION_COMPONENT),
     )
     for module, relative in components:
-        component = read_override(relative, errors, overrides)
         if parent.count(module) != 1:
             errors.append(f"{NODE}: expected exactly one reviewed {Path(relative).name} module")
             continue
         module_name = module.rsplit("mod ", 1)[-1].split(maxsplit=1)[0].rstrip(";{")
-        parent = parent.replace(module, f"mod {module_name} {{\n{component}\n}}", 1)
+        parent = parent.replace(module, f"mod {module_name} {{\n{read_override(relative, errors, overrides)}\n}}", 1)
     return parent
 
 def read_reviewed_authenticated_tool_controller(errors: list[str], overrides: dict[str, str]) -> str:
@@ -130,23 +147,21 @@ def read_reviewed_authenticated_tool_controller(errors: list[str], overrides: di
         (KAGEMUSHA_PYTHON_LAUNCHER_MODULE, KAGEMUSHA_PYTHON_LAUNCHER_COMPONENT),
     )
     for module, relative in components:
-        component = read_override(relative, errors, overrides)
         if parent.count(module) != 1:
             errors.append(f"{AUTHENTICATED_TOOL_CONTROLLER}: expected exactly one reviewed {Path(relative).name} module")
             continue
         module_name = module.rsplit("mod ", 1)[-1].rstrip(";")
-        parent = parent.replace(module, f"mod {module_name} {{\n{component}\n}}", 1)
+        parent = parent.replace(module, f"mod {module_name} {{\n{read_override(relative, errors, overrides)}\n}}", 1)
     return parent
 
 def read_reviewed_offline_cli(errors: list[str], overrides: dict[str, str]) -> str:
     if OFFLINE_CLI in overrides:
         return overrides[OFFLINE_CLI]
     parent = read(OFFLINE_CLI, errors)
-    component = read_override(KAGEMUSHA_ROLLOUT_COMPONENT, errors, overrides)
     if parent.count(KAGEMUSHA_ROLLOUT_MODULE) != 1:
         errors.append(f"{OFFLINE_CLI}: expected exactly one reviewed {Path(KAGEMUSHA_ROLLOUT_COMPONENT).name} module")
         return parent
-    return parent.replace(KAGEMUSHA_ROLLOUT_MODULE, "mod kagemusha_rollout {\n" + component + "\n}", 1)
+    return parent.replace(KAGEMUSHA_ROLLOUT_MODULE, "mod kagemusha_rollout {\n" + read_override(KAGEMUSHA_ROLLOUT_COMPONENT, errors, overrides) + "\n}", 1)
 
 def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     errors: list[str] = []
@@ -157,6 +172,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         )
     except Exception as error:
         errors.append(f"recursion source contract failed: {error}")
+    try:
+        errors += _lifecycle_source_contract_evaluator(root, overrides)
+    except Exception as error:
+        errors.append(f"lifecycle source contract failed: {error}")
     texts = {
         path: overrides.get(path, read(path, errors))
         for path in (
@@ -211,6 +230,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
     texts[READINESS_SOURCE_SUPPORT] = overrides.get(
         READINESS_SOURCE_SUPPORT, _source_support_source
     )
+    texts[READINESS_LIFECYCLE_SOURCE_CONTRACT] = overrides.get(
+        READINESS_LIFECYCLE_SOURCE_CONTRACT, _lifecycle_source_contract_source
+    )
     errors += _source_support_pipeline_errors(texts[READINESS])
     texts[MODEL] = read_reviewed_model(errors, overrides)
     texts[CATALOG] = read_reviewed_catalog(errors, overrides)
@@ -243,6 +265,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "def read_reviewed_offline_cli(",
         "def static_errors(",
         'require_shipping_backend=mode == "promotion"',
+        "_lifecycle_source_contract_evaluator(root, overrides)",
     )
     require(
         texts[READINESS_SOURCE_SUPPORT],
@@ -308,6 +331,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "MODEL_CANARY_EVIDENCE_COMPONENT: read(",
         "MODEL_CANARY_LIVENESS_COMPONENT: read(",
         "MODEL_ISI_OFFLINE: read(",
+        "READINESS_LIFECYCLE_SOURCE_CONTRACT: read(",
+        "LIFECYCLE_SOURCE_PATHS",
+        "CORE_REDEMPTION_POLICY_TESTS",
+        "authenticated lifecycle source-provider boundary",
         "CORE_KAGEMUSHA_CANARY_COMPONENT: read(",
         "CORE_ATTESTATION_CERTIFICATE_VALIDATION_COMPONENT: read(",
         "*ATTESTATION_STATIC_MUTATIONS",
@@ -930,12 +957,78 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")',
         "KagemushaAuthenticatedReleaseV4::verify",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
-        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
         "Self::Candidate => 17",
         "Self::Promoted => 18",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
         "if inventory_state.includes_promotion_record() && expected.len() != 18",
-        "ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy)",
+        "ActivateKagemushaRecursiveReleaseV4::new(",
+        "args.runtime_effective_config_sha256",
         r'instruction_count\":1',
+    )
+    require(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        '#[command(name = "prepare-enable-issuance-v4")]',
+        '#[command(name = "prepare-cancel-release-v4")]',
+        '#[command(name = "prepare-deactivate-issuance-v4")]',
+        "fn lifecycle_terminal_commands_publish_exact_typed_instructions_and_reports()",
+        "fn lifecycle_commands_reject_tampered_noncanonical_oversized_and_malformed_inputs()",
+        "fn lifecycle_command_refuses_to_replace_existing_output()",
+        "assert_eq!(\n            report_lines.len(),",
+        '"durability record and preparation report"',
+        'let error = outcome.expect_err("existing lifecycle output must never be replaced");',
+        'b"operator-reviewed sentinel"',
+    )
+    for command, source, maximum, model, constructor in (
+        (
+            "PrepareEnableIssuanceV4",
+            "enable_witness",
+            "KAGEMUSHA_V4_ISSUANCE_ENABLE_WITNESS_MAX_BYTES_V1",
+            "KagemushaV4IssuanceEnableWitnessV1",
+            "EnableKagemushaRecursiveIssuanceV4",
+        ),
+        (
+            "PrepareCancelReleaseV4",
+            "cancellation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseCancellationV1",
+            "CancelKagemushaRecursiveReleaseV4",
+        ),
+        (
+            "PrepareDeactivateIssuanceV4",
+            "deactivation",
+            "KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1",
+            "KagemushaV4ReleaseDeactivationV1",
+            "DeactivateKagemushaRecursiveIssuanceV4",
+        ),
+    ):
+        require_pattern(
+            texts[KAGAMI],
+            KAGAMI,
+            errors,
+            (
+                rf"Command::{command}\(args\)\s*=>\s*\{{.*?"
+                rf"read_external_bounded\(\s*&args\.{source},\s*{maximum},.*?"
+                rf"{model}::decode_canonical\(&bytes\).*?"
+                rf"prepare_lifecycle_instruction_v4\(.*?"
+                rf"InstructionBox::from\({constructor}::new\("
+            ),
+            f"bounded canonical {command} lifecycle preparation",
+        )
+    require_pattern(
+        texts[KAGAMI],
+        KAGAMI,
+        errors,
+        (
+            r"fn prepare_lifecycle_instruction_v4<.*?"
+            r"let instructions = vec!\[instruction\];.*?"
+            r"let instructions_hash = HashOf::new\(&instructions\);.*?"
+            r"norito::json::to_string\(&instructions\).*?"
+            r"publish_new_durable_file\(writer, output, instruction_json\.as_bytes\(\)\)\?;.*?"
+            r'instruction_count\\":1.*?input_sha256'
+        ),
+        "one-instruction no-replace lifecycle publication",
     )
     require_pattern(
         texts[KAGAMI],
@@ -2807,6 +2900,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "ci/check_kagemusha_production_readiness_source_contract.py",
         "ci/check_kagemusha_production_readiness_source_support.py",
         "ci/check_kagemusha_recursion_source_contract.py",
+        "ci/check_kagemusha_lifecycle_source_contract.py",
         "ci/check_kagemusha_production_readiness_self_test.py",
         "ci/check_kagemusha_recursive_spend_python_sdk.sh --self-test",
         "check_kagemusha_recursive_spend_v4_sdk_contract.sh",

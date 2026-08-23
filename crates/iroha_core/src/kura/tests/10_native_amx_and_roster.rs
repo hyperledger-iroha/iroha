@@ -127,7 +127,8 @@ fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
 #[test]
 fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt() {
     for drift_kind in ["executed wire", "finality", "manifest"] {
-        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) =
+            kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1146,7 +1147,8 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
 #[test]
 fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
     for pending_shape in ["metadata absent", "unbound checkpoint"] {
-        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) =
+            kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1216,7 +1218,8 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
         "missing published commit manifest",
         "below-tip metadata gap",
     ] {
-        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) =
+            kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura

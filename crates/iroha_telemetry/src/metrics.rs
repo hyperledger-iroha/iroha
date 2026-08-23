@@ -431,15 +431,6 @@ impl<'a> DecodeFromSlice<'a> for LayerWidthBuckets {
         ))
     }
 }
-fn encode_hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
 impl<'a> DecodeFromSlice<'a> for Uptime {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((secs, nanos), used) = <(u64, u32)>::decode_from_slice(bytes)?;
@@ -7956,20 +7947,20 @@ fields {
     pub torii_sorafs_replication_deadline_slack_epochs: float_gauge_vec(&["stat"]);
     /// Rejections at the SoraNet privacy ingest endpoints grouped by endpoint/reason.
     pub soranet_privacy_ingest_reject_total: int_counter_vec(&["endpoint", "reason"],);
-    /// Aggregated SoraNet circuit outcomes keyed by relay mode and bucket start.
-    pub soranet_privacy_circuit_events_total: int_counter_vec(&["mode", "bucket_start", "kind"],);
-    /// PoW validation failures grouped by relay mode, bucket start, and reason.
-    pub soranet_privacy_pow_rejects_total: int_counter_vec(&["mode", "bucket_start", "reason"],);
+    /// Aggregated SoraNet circuit outcomes keyed by relay mode and fixed event kind.
+    pub soranet_privacy_circuit_events_total: int_counter_vec(&["mode", "kind"],);
+    /// PoW validation failures grouped by relay mode and fixed reason.
+    pub soranet_privacy_pow_rejects_total: int_counter_vec(&["mode", "reason"],);
     /// Count of SoraNet PoW revocation store fallbacks grouped by reason.
     pub soranet_pow_revocation_store_total: int_counter_vec(&["reason"]);
-    /// Aggregated SoraNet throttling events keyed by relay mode and bucket start.
-    pub soranet_privacy_throttles_total: int_counter_vec(&["mode", "bucket_start", "scope"],);
-    /// Aggregated verified byte totals emitted per relay mode and bucket start.
-    pub soranet_privacy_verified_bytes_total: int_counter_vec(&["mode", "bucket_start"],);
-    /// Average active circuits per bucket.
-    pub soranet_privacy_active_circuits_avg: float_gauge_vec(&["mode", "bucket_start"],);
-    /// Maximum active circuits observed per bucket.
-    pub soranet_privacy_active_circuits_max: float_gauge_vec(&["mode", "bucket_start"],);
+    /// Aggregated SoraNet throttling events keyed by relay mode and fixed scope.
+    pub soranet_privacy_throttles_total: int_counter_vec(&["mode", "scope"],);
+    /// Aggregated verified byte totals emitted per relay mode.
+    pub soranet_privacy_verified_bytes_total: int_counter_vec(&["mode"],);
+    /// Average active circuits in the latest emitted bucket for each mode.
+    pub soranet_privacy_active_circuits_avg: float_gauge_vec(&["mode"],);
+    /// Maximum active circuits in the latest emitted bucket for each mode.
+    pub soranet_privacy_active_circuits_max: float_gauge_vec(&["mode"],);
     /// Open privacy buckets still accumulating contributors (per relay mode).
     pub soranet_privacy_open_buckets: float_gauge_vec(&["mode"]);
     /// Pending collector share accumulators grouped by relay mode.
@@ -7984,16 +7975,19 @@ fields {
     pub soranet_privacy_snapshot_suppression_ratio: float_gauge();
     /// Completed privacy buckets evicted due to retention.
     pub soranet_privacy_evicted_buckets_total: int_counter();
-    /// Suppression indicator for buckets that failed the contributor threshold.
-    pub soranet_privacy_bucket_suppressed: float_gauge_vec(&["mode", "bucket_start"],);
+    /// Suppression indicator for the latest emitted bucket in each relay mode.
+    pub soranet_privacy_bucket_suppressed: float_gauge_vec(&["mode"],);
     /// Suppressed bucket counters grouped by relay mode and suppression reason.
     pub soranet_privacy_suppression_total: int_counter_vec(&["mode", "reason"]);
-    /// RTT percentile gauges per bucket and relay mode.
-    pub soranet_privacy_rtt_millis: float_gauge_vec(&["mode", "bucket_start", "percentile"],);
-    /// Aggregated GAR abuse counters keyed by hashed category.
-    pub soranet_privacy_gar_reports_total: int_counter_vec(
-        &["mode", "bucket_start", "category_hash"],
-    );
+    /// Start time of the latest emitted bucket in each relay mode.
+    pub soranet_privacy_latest_bucket_start_unixtime: int_gauge_vec(&["mode"],);
+    /// RTT percentile gauges for the latest emitted bucket in each relay mode.
+    pub soranet_privacy_rtt_millis: float_gauge_vec(&["mode", "percentile"],);
+    /// Aggregated GAR abuse reports keyed only by relay mode.
+    ///
+    /// Per-category hashes remain in the bounded structured bucket payload. They are deliberately
+    /// excluded from Prometheus labels so authenticated category rotation cannot grow the registry.
+    pub soranet_privacy_gar_reports_total: int_counter_vec(&["mode"],);
     /// UNIX timestamp of the last successful privacy poll.
     pub soranet_privacy_last_poll_unixtime: int_gauge();
     /// Privacy polling failures grouped by provider alias.
@@ -9055,7 +9049,8 @@ construct {
         soranet_privacy_snapshot_suppressed_by_mode soranet_privacy_snapshot_drained
         soranet_privacy_snapshot_suppression_ratio soranet_privacy_evicted_buckets_total
         soranet_privacy_bucket_suppressed soranet_privacy_suppression_total
-        soranet_privacy_rtt_millis soranet_privacy_gar_reports_total
+        soranet_privacy_latest_bucket_start_unixtime soranet_privacy_rtt_millis
+        soranet_privacy_gar_reports_total
         soranet_privacy_last_poll_unixtime soranet_privacy_poll_errors_total
         soranet_privacy_collector_enabled sorafs_orchestrator_active_fetches
         sorafs_orchestrator_fetch_duration_ms sorafs_orchestrator_fetch_failures_total
@@ -9485,7 +9480,8 @@ initialize (metrics) {
         soranet_privacy_snapshot_suppressed_by_mode soranet_privacy_snapshot_drained
         soranet_privacy_snapshot_suppression_ratio soranet_privacy_evicted_buckets_total
         soranet_privacy_bucket_suppressed soranet_privacy_suppression_total
-        soranet_privacy_rtt_millis soranet_privacy_gar_reports_total
+        soranet_privacy_latest_bucket_start_unixtime soranet_privacy_rtt_millis
+        soranet_privacy_gar_reports_total
         soranet_privacy_last_poll_unixtime soranet_privacy_poll_errors_total
         soranet_privacy_collector_enabled sorafs_orchestrator_active_fetches
         sorafs_orchestrator_fetch_duration_ms sorafs_orchestrator_fetch_failures_total
@@ -9545,12 +9541,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 868;
-const METRIC_CATALOG_V2_REGISTERED: usize = 823;
-const METRIC_CATALOG_V2_BYTES: usize = 118_123;
+const METRIC_CATALOG_V2_ROWS: usize = 869;
+const METRIC_CATALOG_V2_REGISTERED: usize = 824;
+const METRIC_CATALOG_V2_BYTES: usize = 118_359;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "4f986d35fe2a1fa17430d6c2fcd59495fe492fd15592f94b060db5624078791d";
+    "5a9c2a5ed46e7ff790544aa948c9aaab14cd5191859b891164c49f9256588b59";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -10737,24 +10733,40 @@ impl Metrics {
         }
     }
     /// Update Prometheus metrics with a newly aggregated SoraNet privacy bucket.
+    ///
+    /// Only fixed-cardinality labels are exported. Bucket timestamps and GAR category hashes remain
+    /// available in the structured bucket payload, while this process-local registry exposes
+    /// cumulative counters and the latest per-mode gauges without retaining one series per bucket.
     pub fn record_soranet_privacy_bucket(&self, bucket: &SoranetPrivacyBucketMetricsV1) {
         let mode_label = bucket.mode.as_label();
-        let bucket_label_string = bucket.bucket_start_unix.to_string();
-        let bucket_label = bucket_label_string.as_str();
+        self.soranet_privacy_latest_bucket_start_unixtime
+            .with_label_values(&[mode_label])
+            .set(i64::try_from(bucket.bucket_start_unix).unwrap_or(i64::MAX));
         if bucket.is_suppressed() {
             let reason_label = bucket
                 .suppression_reason
                 .map_or("unknown", SoranetPrivacySuppressionReasonV1::as_label);
             self.soranet_privacy_bucket_suppressed
-                .with_label_values(&[mode_label, bucket_label])
+                .with_label_values(&[mode_label])
                 .set(1.0);
             self.soranet_privacy_suppression_total
                 .with_label_values(&[mode_label, reason_label])
                 .inc();
+            self.soranet_privacy_active_circuits_avg
+                .with_label_values(&[mode_label])
+                .set(0.0);
+            self.soranet_privacy_active_circuits_max
+                .with_label_values(&[mode_label])
+                .set(0.0);
+            for percentile in ["p50", "p90", "p99"] {
+                self.soranet_privacy_rtt_millis
+                    .with_label_values(&[mode_label, percentile])
+                    .set(0.0);
+            }
             return;
         }
         self.soranet_privacy_bucket_suppressed
-            .with_label_values(&[mode_label, bucket_label])
+            .with_label_values(&[mode_label])
             .set(0.0);
         for (kind, value) in [
             ("accepted", bucket.handshake_accept_total),
@@ -10765,14 +10777,14 @@ impl Metrics {
         ] {
             if value > 0 {
                 self.soranet_privacy_circuit_events_total
-                    .with_label_values(&[mode_label, bucket_label, kind])
+                    .with_label_values(&[mode_label, kind])
                     .inc_by(value);
             }
         }
         for entry in &bucket.pow_rejects_by_reason {
             if entry.count > 0 {
                 self.soranet_privacy_pow_rejects_total
-                    .with_label_values(&[mode_label, bucket_label, entry.reason.as_label()])
+                    .with_label_values(&[mode_label, entry.reason.as_label()])
                     .inc_by(entry.count);
             }
         }
@@ -10783,11 +10795,10 @@ impl Metrics {
             ("remote_quota", bucket.throttle_remote_total),
             ("descriptor_quota", bucket.throttle_descriptor_total),
             ("descriptor_replay", bucket.throttle_descriptor_replay_total),
-            ("emergency", bucket.throttle_emergency_total),
         ] {
             if value > 0 {
                 self.soranet_privacy_throttles_total
-                    .with_label_values(&[mode_label, bucket_label, scope])
+                    .with_label_values(&[mode_label, scope])
                     .inc_by(value);
             }
         }
@@ -10798,30 +10809,37 @@ impl Metrics {
                 u64::try_from(bucket.verified_bytes_total).unwrap_or(u64::MAX)
             };
             self.soranet_privacy_verified_bytes_total
-                .with_label_values(&[mode_label, bucket_label])
+                .with_label_values(&[mode_label])
                 .inc_by(bytes);
         }
         let avg_value = bucket.active_circuits_mean.map_or(0.0, Self::to_f64);
         self.soranet_privacy_active_circuits_avg
-            .with_label_values(&[mode_label, bucket_label])
+            .with_label_values(&[mode_label])
             .set(avg_value);
         let max_value = bucket.active_circuits_max.map_or(0.0, Self::to_f64);
         self.soranet_privacy_active_circuits_max
-            .with_label_values(&[mode_label, bucket_label])
+            .with_label_values(&[mode_label])
             .set(max_value);
-        for percentile in &bucket.rtt_percentiles_ms {
+        for percentile in ["p50", "p90", "p99"] {
             self.soranet_privacy_rtt_millis
-                .with_label_values(&[mode_label, bucket_label, percentile.label.as_str()])
-                .set(Self::to_f64(percentile.value_ms));
+                .with_label_values(&[mode_label, percentile])
+                .set(0.0);
         }
-        for entry in &bucket.gar_abuse_counts {
-            if entry.count == 0 {
-                continue;
+        for percentile in &bucket.rtt_percentiles_ms {
+            if matches!(percentile.label.as_str(), "p50" | "p90" | "p99") {
+                self.soranet_privacy_rtt_millis
+                    .with_label_values(&[mode_label, percentile.label.as_str()])
+                    .set(Self::to_f64(percentile.value_ms));
             }
-            let category_hex = encode_hex_lower(&entry.category_hash);
+        }
+        let gar_reports = bucket
+            .gar_abuse_counts
+            .iter()
+            .fold(0_u64, |total, entry| total.saturating_add(entry.count));
+        if gar_reports > 0 {
             self.soranet_privacy_gar_reports_total
-                .with_label_values(&[mode_label, bucket_label, category_hex.as_str()])
-                .inc_by(entry.count);
+                .with_label_values(&[mode_label])
+                .inc_by(gar_reports);
         }
     }
     /// Update the privacy collector enabled flag.

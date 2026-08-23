@@ -1069,10 +1069,22 @@ mod tests {
     };
     use iroha_crypto::soranet::token::compute_issuer_fingerprint;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::{fs, net::SocketAddr, thread, time::Duration as StdDuration};
+    use std::{
+        fs,
+        net::SocketAddr,
+        thread,
+        time::{Duration as StdDuration, UNIX_EPOCH},
+    };
     use tempfile::tempdir;
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))
+    }
+    fn canonical_system_now() -> SystemTime {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock after Unix epoch")
+            .as_secs();
+        UNIX_EPOCH + Duration::from_secs(seconds)
     }
     #[test]
     fn rate_limiter_throttles_after_burst() {
@@ -1467,7 +1479,7 @@ mod tests {
         .expect("dos controls");
         let relay_id = [0xAB; 32];
         let transcript_hash = [0xCD; 32];
-        let issued = SystemTime::now();
+        let issued = canonical_system_now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         let token = AdmissionToken::mint(
@@ -1499,7 +1511,7 @@ mod tests {
         let issuer_hex = hex::encode(keypair.public_key());
         let relay_id = [0x44; 32];
         let transcript_hash = [0x11; 32];
-        let issued = SystemTime::now();
+        let issued = canonical_system_now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(42);
         let token = AdmissionToken::mint(
@@ -1569,7 +1581,7 @@ mod tests {
         let issuer_hex = hex::encode(keypair.public_key());
         let relay_id = [0x55; 32];
         let transcript_hash = [0x66; 32];
-        let issued = SystemTime::now();
+        let issued = canonical_system_now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(17);
         let token = AdmissionToken::mint(

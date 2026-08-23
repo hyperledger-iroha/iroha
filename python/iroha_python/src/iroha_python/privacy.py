@@ -131,7 +131,9 @@ class PrivacyEventVerifiedBytes:
 
 @dataclass(frozen=True)
 class PrivacyEventGarAbuseCategory:
-    label: str
+    """GAR category represented only by its fixed eight-byte digest."""
+
+    category_hash: bytes
 
 
 PrivacyEventPayload = Optional[
@@ -180,6 +182,20 @@ def _coerce_str(value: object, field: str) -> str:
     return value
 
 
+def _require_fixed_bytes(
+    obj: Mapping[str, object], field: str, expected_len: int
+) -> bytes:
+    value = obj.get(field)
+    if not isinstance(value, (list, tuple)) or len(value) != expected_len:
+        raise TypeError(f"{field} must be an array of exactly {expected_len} bytes")
+    output = bytearray()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 255:
+            raise TypeError(f"{field} must contain only integer bytes")
+        output.append(item)
+    return bytes(output)
+
+
 def _parse_payload(kind: PrivacyEventKind, payload: Optional[Mapping[str, object]]) -> PrivacyEventPayload:
     if kind is PrivacyEventKind.HANDSHAKE_SUCCESS:
         payload = payload or {}
@@ -215,10 +231,9 @@ def _parse_payload(kind: PrivacyEventKind, payload: Optional[Mapping[str, object
     if kind is PrivacyEventKind.GAR_ABUSE_CATEGORY:
         if payload is None:
             raise TypeError("GAR abuse payload missing")
-        label = payload.get("label")
-        if not isinstance(label, str) or not label:
-            raise TypeError("GAR abuse payload missing string `label`")
-        return PrivacyEventGarAbuseCategory(label=label)
+        return PrivacyEventGarAbuseCategory(
+            category_hash=_require_fixed_bytes(payload, "category_hash", 8)
+        )
     return None
 
 

@@ -113,8 +113,6 @@ enum HandshakeError {
     Finish(ClosedStream),
     #[error("handshake frame exceeded maximum length ({0} bytes)")]
     FrameTooLarge(usize),
-    #[error("client hello parse failed: {0}")]
-    ClientHello(#[from] crate::handshake::ClientHelloError),
     #[error("capability negotiation failed: {0}")]
     Capability(#[from] CapabilityError),
     #[error("invalid client handshake material: {0}")]
