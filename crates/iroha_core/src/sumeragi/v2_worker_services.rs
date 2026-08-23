@@ -39,6 +39,8 @@ pub(crate) struct ProductionV2Services {
     exact_output_handoff_owner: DurableExactOutputServiceOwner,
     #[cfg(test)]
     exact_output_admission_hook: Option<Mutex<ExactOutputAdmissionHook>>,
+    #[cfg(test)]
+    consensus_broadcasts: Vec<wire::ConsensusMessageV2>,
     active_tag: EventTag,
     last_status: Option<EffectExecutorStatus>,
     fatal_reason: Option<String>,

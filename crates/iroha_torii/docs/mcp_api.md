@@ -48,7 +48,10 @@ catalog-projected `torii.*` namespace and all operator routes.
 
 ### Configuration Fields
 - `enabled`: master switch for `/v1/mcp`.
-- `max_request_bytes`: POST body limit for MCP JSON-RPC.
+- `max_request_bytes`: byte limit for the accepted POST body, each collected
+  nested-route response body, and the complete emitted JSON-RPC response. The
+  shared limit prevents a small tool request from amplifying into an unbounded
+  in-memory response.
 - `max_tools_per_list`: pagination size for `tools/list`.
 - `profile`: `read_only`, `writer`, or `operator`.
 - `expose_operator_routes`: include operator routes even when profile is not `operator`.
@@ -112,6 +115,13 @@ treat `structuredContent` as data rather than instructions.
 - Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
 - POST accepts either a single request object or a non-empty request array (batch).
 - Empty batch is rejected as `invalid_request`.
+- A request may represent at most 64 dispatches. Outer batch entries normally
+  cost one dispatch; a nested `tools/call_batch` entry costs the number of calls
+  it contains. This shared accounting prevents the two batch layers from
+  multiplying the ceiling.
+- Request bodies and nested-route response bodies have a 10-second collection
+  deadline. Nested routes advertised as streaming operations are not eligible
+  MCP tools.
 - Unknown method is `method_not_found`.
 - Missing/non-object `params` is treated as `{}`.
 
@@ -119,6 +129,7 @@ treat `structuredContent` as data rather than instructions.
 - `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
 - `202 Accepted`: accepted MCP notifications such as `notifications/initialized` (no response body).
 - `400 Bad Request`: invalid JSON payload.
+- `408 Request Timeout`: request body did not complete within the collection deadline.
 - `403 Forbidden`: API-token middleware rejected request before JSON-RPC handling.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
 - `429 Too Many Requests`: MCP rate-limited.
@@ -197,6 +208,10 @@ Result:
 - `results`: array where each entry has either `result` or `error`.
 
 Batch execution is best-effort per item. One failing call does not fail sibling calls.
+The `calls` array is also subject to the shared 64-dispatch ceiling. If retained
+batch results or the final response exceed `max_request_bytes`, Torii stops
+retaining further results and returns the typed `response_too_large` JSON-RPC
+error instead of allocating an oversized response.
 
 ## Tool Names And Discovery
 Tool names are stable and generated from HTTP method + path for

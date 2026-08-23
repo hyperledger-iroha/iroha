@@ -21,10 +21,7 @@ import {
   isStatusQueueStalled,
 } from "../src/toriiClient.js";
 import { __sumeragiNativeAmxTestHelpers } from "../src/sumeragiTyped.js";
-import {
-  OperatorSigningContext as DistOperatorSigningContext,
-  ToriiClient as DistToriiClient,
-} from "../dist/toriiClient.js";
+import { OperatorSigningContext as DistOperatorSigningContext, ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
 import { NetworkId as DistNetworkId } from "../dist/networkId.js";
 import {
   resolveToriiClientConfig,
@@ -116,26 +113,15 @@ const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
 const VK_SIGNING_NETWORK_ID = NetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
-const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  VK_SIGNING_NETWORK_ID,
-);
+const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(VK_SIGNING_NETWORK_ID);
 const ISO_OPERATOR_SIGNING_CONTEXT = makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
-const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(
-  DistNetworkId.parse(VK_SIGNING_NETWORK_ID.literal),
-  {
-    publicKey: ISO_OPERATOR_SIGNING_CONTEXT.publicKey,
-    sign: async () => Buffer.alloc(64, 0x22),
-  },
-);
+const DIST_OPERATOR_SIGNING_CONTEXT = new DistOperatorSigningContext(DistNetworkId.parse(VK_SIGNING_NETWORK_ID.literal), {
+  publicKey: ISO_OPERATOR_SIGNING_CONTEXT.publicKey, sign: async () => Buffer.alloc(64, 0x22), });
 class ToriiClient extends SelectedToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
-      localSigningContext:
-        sumeragiDiagnosticsFocus?.localSigningContext
-        ?? VK_LOCAL_SIGNING_CONTEXT,
-      operatorSigningContext:
-        sumeragiDiagnosticsFocus?.operatorSigningContext
-        ?? ISO_OPERATOR_SIGNING_CONTEXT,
+      localSigningContext: sumeragiDiagnosticsFocus?.localSigningContext ?? VK_LOCAL_SIGNING_CONTEXT,
+      operatorSigningContext: sumeragiDiagnosticsFocus?.operatorSigningContext ?? ISO_OPERATOR_SIGNING_CONTEXT,
       canonicalRequestAuth: APPLICATION_CANONICAL_AUTH,
       ...options,
     });
@@ -10530,9 +10516,7 @@ test("typed Sumeragi endpoints reject swapped status and diagnostics payloads", 
 
 function sumeragiClientForPayload(payload, Client = ToriiClient) {
   return new Client(BASE_URL, {
-    ...(Client === DistToriiClient
-      ? { operatorSigningContext: DIST_OPERATOR_SIGNING_CONTEXT }
-      : {}),
+    ...(Client === DistToriiClient ? { operatorSigningContext: DIST_OPERATOR_SIGNING_CONTEXT } : {}),
     fetchImpl: async () =>
       createResponse({
         status: 200,
@@ -13302,9 +13286,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getNodeCapabilities({
-    canonicalAuth: APPLICATION_CANONICAL_AUTH,
-  });
+  const result = await client.getNodeCapabilities({ canonicalAuth: APPLICATION_CANONICAL_AUTH });
   assert.deepEqual(result, {
     abiVersion: 1,
     dataModelVersion: 4,
@@ -13363,9 +13345,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getNodeCapabilities({
-      canonicalAuth: APPLICATION_CANONICAL_AUTH,
-    }),
+    () => client.getNodeCapabilities({ canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     (error) => {
       assert.match(error.message, /abi_version/);
       return true;
@@ -13392,9 +13372,7 @@ test("getRuntimeAbiActive normalizes ABI version", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeAbiActive({
-    canonicalAuth: APPLICATION_CANONICAL_AUTH,
-  });
+  const result = await client.getRuntimeAbiActive({ canonicalAuth: APPLICATION_CANONICAL_AUTH });
   assert.deepEqual(result, {
     abiVersion: 1,
   });
@@ -13454,9 +13432,7 @@ test("getRuntimeMetrics normalizes counters", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeMetrics({
-    canonicalAuth: APPLICATION_CANONICAL_AUTH,
-  });
+  const result = await client.getRuntimeMetrics({ canonicalAuth: APPLICATION_CANONICAL_AUTH });
   assert.deepEqual(result, {
     abiVersion: 1,
     upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
@@ -13720,8 +13696,7 @@ test("runtime upgrade wrappers reject unsupported option fields", async () => {
 });
 
 registerToriiClientGovernanceTests({
-  assert,
-  APPLICATION_CANONICAL_AUTH,
+  assert, APPLICATION_CANONICAL_AUTH,
   BASE_URL,
   FIXTURE_ALICE_ID,
   FIXTURE_BOB_ID,

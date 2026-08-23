@@ -91,6 +91,23 @@ impl KagemushaV4ValidatorQualificationSubjectV1 {
                 "Kagemusha V4 validator-qualification receipt lifetime is invalid".to_owned(),
             );
         }
+        // Qualification expiry is inclusive at the signing-clock boundary,
+        // while Android status freshness is half-open. Convert the inclusive
+        // millisecond to the exclusive endpoint expected by the shared policy
+        // helper so a seal cannot be signed at the first stale millisecond.
+        let status_coverage_exclusive_end_ms = validator_qualification_expires_at_unix_ms
+            .checked_add(1)
+            .ok_or_else(|| {
+                "Kagemusha V4 validator-qualification expiry overflows Android status coverage"
+                    .to_owned()
+            })?;
+        super::isi::validate_offline_attestation_policy_status_coverage(
+            &device_attestation_policy,
+            status_coverage_exclusive_end_ms,
+        )
+        .map_err(|error| {
+            format!("Kagemusha V4 promotion Android status coverage is invalid: {error}")
+        })?;
         Ok(Self {
             promotion_controller,
             promotion_reservation,

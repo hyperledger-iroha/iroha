@@ -324,6 +324,7 @@ pub(in crate::sumeragi) struct PreparedCertifiedFetchAdmissionV1 {
 enum PreparedLiveWalCompanionV1 {
     None,
     LocalProposal(LocalProposalIntentReplayEvidenceV1),
+    ApplyBodyFrame(DurablePayloadReference),
 }
 
 /// One WAL-bound admission plus any move-only lineage required by its live
@@ -356,26 +357,53 @@ impl PreparedLiveWalAdmissionV1 {
         }
     }
 
+    fn apply_body_frame(
+        bound: BoundAdapterEffectV1,
+        payload: DurablePayloadReference,
+    ) -> Result<Self, BoundAdapterEffectV1> {
+        if matches!(&bound.effect, AdapterEffect::Apply { .. })
+            && matches!(payload, DurablePayloadReference::BodyFrame(_))
+        {
+            Ok(Self {
+                bound,
+                companion: PreparedLiveWalCompanionV1::ApplyBodyFrame(payload),
+            })
+        } else {
+            Err(bound)
+        }
+    }
+
     fn exactly_authorizes_candidate(
         &self,
         active_context: LifecycleContext,
         candidate: &CandidateAdmission,
     ) -> bool {
-        self.bound
-            .exactly_authorizes_candidate(active_context, candidate)
-            && match &self.companion {
-                PreparedLiveWalCompanionV1::None => true,
-                PreparedLiveWalCompanionV1::LocalProposal(companion) => {
-                    companion.exactly_matches_live_wal_sign_effect(&self.bound.effect)
-                        && matches!(
-                            &self.bound.effect,
-                            AdapterEffect::Sign {
-                                request: SignRequest::Proposal(_),
-                                ..
-                            }
-                        )
-                }
+        match &self.companion {
+            PreparedLiveWalCompanionV1::None => self
+                .bound
+                .exactly_authorizes_candidate(active_context, candidate),
+            PreparedLiveWalCompanionV1::LocalProposal(companion) => {
+                self.bound
+                    .exactly_authorizes_candidate(active_context, candidate)
+                    && companion.exactly_matches_live_wal_sign_effect(&self.bound.effect)
+                    && matches!(
+                        &self.bound.effect,
+                        AdapterEffect::Sign {
+                            request: SignRequest::Proposal(_),
+                            ..
+                        }
+                    )
             }
+            PreparedLiveWalCompanionV1::ApplyBodyFrame(payload) => {
+                matches!(&self.bound.effect, AdapterEffect::Apply { .. })
+                    && matches!(payload, DurablePayloadReference::BodyFrame(_))
+                    && self.bound.exactly_authorizes_candidate_with_payload(
+                        active_context,
+                        candidate,
+                        *payload,
+                    )
+            }
+        }
     }
 }
 /// Ownership-preserving failure while binding mandatory replay authority.
@@ -596,45 +624,23 @@ impl BoundAdapterEffectV1 {
         active_context: LifecycleContext,
         candidate: &CandidateAdmission,
     ) -> bool {
-        let payload_is_exact = match (&self.effect, &self.replay_origin, candidate.payload) {
-            (
-                AdapterEffect::Apply { .. },
-                BoundAdapterReplayOriginV1::LiveWal(_),
-                DurablePayloadReference::BodyFrame(frame),
-            ) => {
-                candidate.work_class == LifecycleWorkClass::Apply
-                    && candidate.key.phase() == LifecyclePhase::Apply
-                    && candidate.stage.kind() == LifecycleStageKind::ApplyDecision
-                    && candidate.stage.predecessor_scope() == PredecessorScope::Independent
-                    && frame.matches_key(candidate.key)
-            }
-            (AdapterEffect::Apply { .. }, _, _) => false,
-            (_, _, DurablePayloadReference::None) => true,
-            (_, _, _) => false,
-        };
-        let initial_state_is_exact = match &self.replay_origin {
-            BoundAdapterReplayOriginV1::CertifiedFetch { request_hash, .. } => {
-                candidate.work_class == LifecycleWorkClass::Fetch
-                    && candidate.key.phase() == LifecyclePhase::Fetch
-                    && candidate.stage.kind() == LifecycleStageKind::FetchBody
-                    && candidate.initial_state
-                        == InitialLifecycleState::Waiting(WaitToken::new(
-                            projection::certified_fetch_wait_source(*request_hash),
-                            0,
-                        ))
-            }
-            BoundAdapterReplayOriginV1::LiveWal(_)
-            | BoundAdapterReplayOriginV1::InvalidBodyReport(_)
-            | BoundAdapterReplayOriginV1::DirectSigned(_) => {
-                candidate.initial_state == InitialLifecycleState::Ready
-            }
-        };
+        self.exactly_authorizes_candidate_with_payload(
+            active_context,
+            candidate,
+            DurablePayloadReference::None,
+        )
+    }
+    fn exactly_authorizes_candidate_with_payload(
+        &self,
+        active_context: LifecycleContext,
+        candidate: &CandidateAdmission,
+        expected_payload: DurablePayloadReference,
+    ) -> bool {
         self.validates()
             && candidate.causal_root
                 == super::CausalRoot::new(digest_from_hash(self.pending.causal_lifecycle_key()))
             && candidate.reconstruction_source == candidate.causal_root.digest()
-            && payload_is_exact
-            && initial_state_is_exact
+            && candidate.payload == expected_payload
             && candidate.replay_authority == *self.replay_origin.authority()
             && candidate.replay_authority_is_exact(active_context)
             && candidate.physical_geometry.normalized().is_ok_and(

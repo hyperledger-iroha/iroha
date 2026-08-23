@@ -1713,7 +1713,7 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let producer = Queue::test(config_factory(), &time_source);
-    let replica = Queue::test(config_factory(), &time_source);
+    let replica = Arc::new(Queue::test(config_factory(), &time_source));
     let producer_dir = tempdir().expect("producer tempdir");
     let replica_dir = tempdir().expect("replica tempdir");
     install_globally_certified_test_reservation_journals(&producer, &producer_dir);
@@ -1751,6 +1751,17 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
         vec![first_hash, second_hash],
     );
 
+    let (selected, global_selection) = replica
+        .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
+        .expect("acquire the replica's process-local global selection fence");
+    assert_eq!(
+        selected
+            .iter()
+            .map(|transaction| transaction.hash_as_entrypoint())
+            .collect::<Vec<_>>(),
+        vec![first_hash, second_hash],
+    );
+
     {
         let mut transactions = state.transactions.block();
         transactions.insert_block(
@@ -1769,6 +1780,17 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
             "committed replica TEU must remain until exact canonical Queue cleanup",
         );
     }
+
+    let conflict = replica
+        .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(
+            keys.clone(),
+        )])
+        .expect_err("a live global selection lease must fence canonical replica cleanup");
+    assert!(matches!(
+        conflict,
+        LaneQueueReservationError::Conflict { hash } if hash == first_hash
+    ));
+    drop(global_selection);
 
     let result = replica
         .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(

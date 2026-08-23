@@ -1,5 +1,6 @@
 use super::super::{
     rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1,
         ZkAmsMkheRnsNativeFamilyV1, zk_ams_mkhe_rns_native_profile_v1,
         zk_ams_mkhe_rns_native_release_candidate_digest_v1, zk_ams_mkhe_rns_native_topology_v1,
     },
@@ -26,6 +27,14 @@ const AGGREGATE_AUTHENTICATION_BYTES_OFFSET_V1: usize = 24;
 const DOWNSTREAM_BYTES_OFFSET_V1: usize = 28;
 const DESCRIPTORS_OFFSET_V1: usize = 32;
 const SCHEDULE_DIGEST_OFFSET_V1: usize = 352;
+
+const _: () = {
+    assert!(PRE_AUTH_CLAIMED_QPCS_TYPESTATE_SOURCE_IMPLEMENTED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_INTEGRATED_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_VERIFICATION_AUTHORITY_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_READINESS_V1);
+    assert!(!PRE_AUTH_CLAIMED_QPCS_RELEASE_READY_V1);
+};
 
 #[derive(Clone, Copy)]
 struct TestNodeV1 {
@@ -231,15 +240,22 @@ fn join_schedule_and_qpcs_v1(
     (schedule, qpcs)
 }
 
-fn join_challenge_seeds_v1(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
-    let (_, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
-    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
+fn join_terminal_roots_v1(
+    context: u16,
+    qpcs: &ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,
+) -> ZkAmsMkheRnsNativeTerminalRootsV1 {
+    ZkAmsMkheRnsNativeTerminalRootsV1::new(
         qpcs.binding_digest(),
         join_digest_v1(context, 700),
         join_digest_v1(context, 701),
         join_digest_v1(context, 702),
     )
-    .expect("terminal roots");
+    .expect("terminal roots")
+}
+
+fn join_challenge_seeds_v1(context: u16) -> ZkAmsMkheRnsNativeChallengeSeedsV1 {
+    let (_, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
     qpcs.bind_terminal_roots(roots).expect("challenge seeds")
 }
 
@@ -681,6 +697,478 @@ fn completed_qpcs_join_requires_the_exact_post_fri_state_and_is_one_shot() {
 }
 
 #[test]
+fn pre_auth_claimed_qpcs_validates_before_binding_and_retains_the_one_schedule() {
+    let context = 811;
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let expected_qpcs_bound_state = qpcs.binding_digest();
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("matching pre-auth claimed qPCS");
+    assert_eq!(
+        claimed.expected_qpcs_bound_transcript_state,
+        expected_qpcs_bound_state
+    );
+    assert!(
+        claimed
+            .terminal_chronology
+            .matches_qpcs_bound_transcript_state_v1(expected_qpcs_bound_state)
+    );
+
+    let (foreign_schedule, _) = join_schedule_and_qpcs_v1(context + 1, JoinQpcsVariantV1::Matching);
+    let (_, local_qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let local_roots = join_terminal_roots_v1(context, &local_qpcs);
+    assert!(matches!(
+        prepare_rns_native_qpcs_pre_auth_claimed_v1(foreign_schedule, local_qpcs, local_roots,),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let (matching_schedule, matching_qpcs) =
+        join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let (_, changed_qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Fri(17));
+    matching_schedule
+        .validate_qpcs_bound_lineage_v1(&matching_qpcs)
+        .expect("matching relation lineage before root binding");
+    let wrong_prior_roots = join_terminal_roots_v1(context, &changed_qpcs);
+    assert!(matches!(
+        prepare_rns_native_qpcs_pre_auth_claimed_v1(
+            matching_schedule,
+            matching_qpcs,
+            wrong_prior_roots,
+        ),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let (matching_schedule, matching_qpcs) =
+        join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let matching_roots = join_terminal_roots_v1(context, &matching_qpcs);
+    let (_, wrong_qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Quotient);
+    matching_schedule
+        .validate_qpcs_bound_lineage_v1(&wrong_qpcs)
+        .expect("changed qPCS still has the same pre-quotient lineage");
+    assert!(matches!(
+        prepare_rns_native_qpcs_pre_auth_claimed_v1(matching_schedule, wrong_qpcs, matching_roots,),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let legacy_schedule = RnsNativeQpcsRelationScheduleV1::test_fixture_with_binding_v1(
+        join_digest_v1(context, 402),
+        join_digest_v1(context, 401),
+        join_digest_v1(context, 800),
+        join_digest_v1(context, 801),
+        [1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * 5],
+    );
+    let (_, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    assert!(matches!(
+        prepare_rns_native_qpcs_pre_auth_claimed_v1(legacy_schedule, qpcs, roots),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+}
+
+#[test]
+fn authenticated_claimed_qpcs_requires_the_exact_state_and_unescaped_schedule() {
+    let context = 812;
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("matching pre-auth claimed qPCS");
+    let RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    } = claimed;
+    let qpcs = join_stage_v1(
+        relation_schedule,
+        terminal_chronology.final_challenge_seeds_v1(),
+    );
+    let authenticated = finish_rns_native_qpcs_pre_auth_claimed_v1(
+        qpcs,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    )
+    .expect("exact authenticated claimed qPCS state");
+    assert!(authenticated.qpcs.has_relation_schedule_v1());
+    assert!(
+        authenticated
+            .terminal_chronology
+            .matches_qpcs_bound_transcript_state_v1(expected_qpcs_bound_transcript_state)
+    );
+
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("replayed pre-auth claimed qPCS");
+    let RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    } = claimed;
+    let mut wrong_state_stage = join_stage_v1(
+        relation_schedule,
+        terminal_chronology.final_challenge_seeds_v1(),
+    );
+    wrong_state_stage.qpcs_bound_transcript_state = join_digest_v1(context, 899);
+    assert!(matches!(
+        finish_rns_native_qpcs_pre_auth_claimed_v1(
+            wrong_state_stage,
+            expected_qpcs_bound_transcript_state,
+            terminal_chronology,
+        ),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("third replayed pre-auth claimed qPCS");
+    let RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state: _,
+        terminal_chronology,
+    } = claimed;
+    let exact_stage = join_stage_v1(
+        relation_schedule,
+        terminal_chronology.final_challenge_seeds_v1(),
+    );
+    assert!(matches!(
+        finish_rns_native_qpcs_pre_auth_claimed_v1(
+            exact_stage,
+            join_digest_v1(context, 898),
+            terminal_chronology,
+        ),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("second replayed pre-auth claimed qPCS");
+    let RnsNativeQpcsPreAuthClaimedV1 {
+        relation_schedule,
+        expected_qpcs_bound_transcript_state,
+        terminal_chronology,
+    } = claimed;
+    let mut escaped_stage = join_stage_v1(
+        relation_schedule,
+        terminal_chronology.final_challenge_seeds_v1(),
+    );
+    escaped_stage
+        .take_relation_schedule_v1()
+        .expect("test-only attempted schedule escape");
+    assert!(matches!(
+        finish_rns_native_qpcs_pre_auth_claimed_v1(
+            escaped_stage,
+            expected_qpcs_bound_transcript_state,
+            terminal_chronology,
+        ),
+        Err(RnsNativeQpcsFriCompleteErrorV1::InvalidContext)
+    ));
+
+    let (schedule, qpcs) = join_schedule_and_qpcs_v1(context, JoinQpcsVariantV1::Matching);
+    let roots = join_terminal_roots_v1(context, &qpcs);
+    let claimed = prepare_rns_native_qpcs_pre_auth_claimed_v1(schedule, qpcs, roots)
+        .expect("authentication-entry pre-auth owner");
+    assert!(
+        authenticate_rns_native_qpcs_pre_auth_claimed_v1(claimed, &[], &[], &[], &[],).is_err()
+    );
+}
+
+#[test]
+fn pre_auth_claimed_qpcs_surface_is_move_only_source_only_and_fail_closed() {
+    let source = include_str!("rns_native_qpcs_fri_complete.rs");
+    for type_name in [
+        "RnsNativeQpcsPreAuthClaimedV1",
+        "RnsNativeQpcsAuthenticatedClaimedV1",
+    ] {
+        let declaration = source
+            .find(&format!("pub(super) struct {type_name}"))
+            .expect("claimed qPCS typestate declaration");
+        let prefix = &source[declaration.saturating_sub(320)..declaration];
+        assert!(!prefix.contains("derive(Clone"));
+        assert!(!prefix.contains("derive(Copy"));
+        assert!(!source.contains(&format!("impl Clone for {type_name}")));
+        assert!(!source.contains(&format!("impl Copy for {type_name}")));
+        assert!(!source.contains(&format!("impl {type_name}")));
+    }
+
+    let pre_auth_declaration = source
+        .split_once("pub(super) struct RnsNativeQpcsPreAuthClaimedV1")
+        .expect("pre-auth owner declaration")
+        .1
+        .split_once("/// Move-only non-authorizing owner after qPCS authenticates")
+        .expect("pre-auth owner boundary")
+        .0;
+    assert_eq!(
+        pre_auth_declaration.matches("relation_schedule:").count(),
+        1
+    );
+    assert!(!pre_auth_declaration.contains("Option<RnsNativeQpcsRelationScheduleV1>"));
+    assert!(!pre_auth_declaration.contains("pub relation_schedule"));
+    let authenticated_declaration = source
+        .split_once("pub(super) struct RnsNativeQpcsAuthenticatedClaimedV1")
+        .expect("authenticated claimed owner declaration")
+        .1
+        .split_once("/// Move-only joint owner proving that a completed qPCS")
+        .expect("authenticated claimed owner boundary")
+        .0;
+    assert!(!authenticated_declaration.contains("relation_schedule:"));
+
+    let prepare = source
+        .split_once("pub(super) fn prepare_rns_native_qpcs_pre_auth_claimed_v1(")
+        .expect("pre-auth constructor")
+        .1
+        .split_once("/// Authenticate qPCS using the final seeds")
+        .expect("pre-auth constructor boundary")
+        .0;
+    let lineage_validation = prepare
+        .find(".validate_qpcs_bound_lineage_v1(&qpcs_transcript)")
+        .expect("lineage validation");
+    let root_binding = prepare
+        .find(".bind_provisional_terminal_chronology_v1(terminal_roots)")
+        .expect("provisional terminal bind");
+    assert!(lineage_validation < root_binding);
+    assert!(prepare.contains("    relation_schedule: RnsNativeQpcsRelationScheduleV1,"));
+    assert!(prepare.contains("    qpcs_transcript: ZkAmsMkheRnsNativeQpcsBoundTranscriptV1,"));
+    assert!(!prepare.contains("&RnsNativeQpcsRelationScheduleV1"));
+    assert!(!prepare.contains("&ZkAmsMkheRnsNativeQpcsBoundTranscriptV1"));
+
+    let authenticate = source
+        .split_once("pub(super) fn authenticate_rns_native_qpcs_pre_auth_claimed_v1")
+        .expect("claimed qPCS authentication entry")
+        .1
+        .split_once("fn finish_rns_native_qpcs_pre_auth_claimed_v1")
+        .expect("claimed qPCS authentication boundary")
+        .0;
+    assert!(authenticate.contains("    claimed: RnsNativeQpcsPreAuthClaimedV1,"));
+    assert!(authenticate.contains("relation_schedule,"));
+    assert!(authenticate.contains("authenticate_rns_native_qpcs_fri_complete_with_schedule_v1("));
+    assert!(authenticate.contains("terminal_chronology.final_challenge_seeds_v1(),"));
+    assert!(!authenticate.contains("relation_schedule.clone()"));
+    assert!(!authenticate.contains("relation_schedule_v1()"));
+    assert!(!authenticate.contains("take_relation_schedule_v1()"));
+
+    let finish = source
+        .split_once("fn finish_rns_native_qpcs_pre_auth_claimed_v1")
+        .expect("exact-state finish")
+        .1
+        .split_once("/// Consume the authenticated fold-zero stage")
+        .expect("exact-state finish boundary")
+        .0;
+    assert!(
+        finish.contains("qpcs.qpcs_bound_transcript_state != expected_qpcs_bound_transcript_state")
+    );
+    assert!(finish.contains("qpcs.relation_schedule.is_none()"));
+    assert!(finish.contains("matches_qpcs_bound_transcript_state_v1("));
+    assert!(!source.contains("pub(super) fn claimed_cross_field_root_v1("));
+    assert!(!source.contains("pub(super) fn claimed_global_lookup_root_v1("));
+    assert!(!source.contains("pub(super) fn claimed_zero_padding_root_v1("));
+    let composite = include_str!("rns_native_composite_verifier.rs");
+    assert!(!composite.contains("authenticate_rns_native_qpcs_pre_auth_claimed_v1"));
+}
+
+#[test]
+fn claimed_inventory_direct_join_preserves_the_sole_schedule_and_whole_chronology() {
+    let qpcs = include_str!("rns_native_qpcs_fri_complete.rs");
+    let direct = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let joined = qpcs
+        .split_once("pub(super) struct RnsNativeQpcsClaimedInventoryChronologyV2")
+        .expect("joined claimed inventory owner")
+        .1
+        .split_once(
+            "impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsSchedulelessClaimedSourceV1",
+        )
+        .expect("joined owner boundary")
+        .0;
+    for field in [
+        "bound_pre_direct_inventory:",
+        "relation_schedule:",
+        "terminal_chronology:",
+        "numeric_tails:",
+        "source_binding_digest:",
+    ] {
+        assert_eq!(joined.matches(field).count(), 1, "joined field: {field}");
+    }
+    assert!(!joined.contains("derive(Clone"));
+    assert!(!joined.contains("derive(Copy"));
+
+    let inventory_join = qpcs
+        .split_once("pub(super) fn authenticate_claimed_inventory_v2")
+        .expect("sealed inventory join")
+        .1
+        .split_once("impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .expect("sealed inventory join boundary")
+        .0;
+    let final_bind = inventory_join
+        .find(".bind_final_context_v1(terminal_chronology.final_challenge_seeds_v1())")
+        .expect("own chronology final bind");
+    let inventory_auth = inventory_join
+        .find("authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1")
+        .expect("sealed inventory authentication");
+    let atomic_pre_direct_bind = inventory_join
+        .find("bind_rns_native_cross_field_rlwe_pre_direct_inventory_v1(inventory)")
+        .expect("atomic one-pass pre-direct inventory bind");
+    assert!(final_bind < inventory_auth && inventory_auth < atomic_pre_direct_bind);
+    for detached_field in ["candidate_inventory_axes:", "pre_direct_nested:"] {
+        assert!(
+            !joined.contains(detached_field),
+            "detached field leaked from joined owner: {detached_field}"
+        );
+    }
+
+    assert!(qpcs.contains("fn from_authenticated_claimed_schedule_v2("));
+    assert!(!qpcs.contains("pub(super) fn from_authenticated_claimed_schedule_v2("));
+    let direct_bind = direct
+        .split_once("pub(super) fn bind_authenticated_claimed_qpcs_inventory_direct_v2")
+        .expect("atomic direct join")
+        .1
+        .split_once("fn validate_relation_schedule_v1")
+        .expect("atomic direct join boundary")
+        .0;
+    let direct_bind_signature = direct_bind
+        .split_once(") -> Result<")
+        .expect("atomic direct join signature")
+        .0;
+    assert!(direct_bind_signature.contains("bound_pre_direct_inventory:"));
+    assert!(direct_bind_signature.contains("claimed_qpcs_input:"));
+    for detached_input in [
+        "inventory: RnsNativeCrossFieldInventoryPrerequisiteV1",
+        "candidate_inventory_axes:",
+        "pre_direct_nested:",
+        "completed_qpcs:",
+        "terminal_chronology:",
+        "numeric_tails:",
+        "source_binding_digest:",
+    ] {
+        assert!(
+            !direct_bind_signature.contains(detached_input),
+            "detached direct input: {detached_input}"
+        );
+    }
+
+    let claimed_input_constructor = direct
+        .split_once("impl RnsNativeCrossFieldRlweClaimedQpcsInputV2")
+        .expect("opaque claimed-qPCS input constructor")
+        .1
+        .split_once("/// Move-only owner of one claimed direct relation")
+        .expect("opaque claimed-qPCS input constructor boundary")
+        .0;
+    let claimed_input_signature = claimed_input_constructor
+        .split_once(") -> Result<")
+        .expect("opaque claimed-qPCS input constructor signature")
+        .0;
+    for owned_input in [
+        "origin: RnsNativeAuthenticatedClaimedQpcsOriginV2",
+        "completed_qpcs: RnsNativeQpcsCompletedLineageV1",
+        "terminal_chronology: ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1",
+        "numeric_tails: [RnsNativeQpcsAuthenticatedNumericTailV1; EVALUATIONS_V1]",
+        "source_binding_digest: [u8; DIGEST_BYTES_V1]",
+    ] {
+        assert!(
+            claimed_input_signature.contains(owned_input),
+            "owned claimed-qPCS input: {owned_input}"
+        );
+    }
+    let no_transcript = claimed_input_constructor
+        .find("completed_qpcs.has_unconsumed_qpcs_transcript_v1()")
+        .expect("transcript-empty lineage check");
+    let nonzero_source_binding = claimed_input_constructor
+        .find("source_binding_digest == [0; DIGEST_BYTES_V1]")
+        .expect("nonzero source binding check");
+    let claimed_input_mint = claimed_input_constructor
+        .find("Ok(Self {")
+        .expect("opaque claimed-qPCS input mint");
+    assert!(no_transcript < claimed_input_mint);
+    assert!(nonzero_source_binding < claimed_input_mint);
+    assert!(!claimed_input_constructor.contains("fn into_parts"));
+    assert!(!claimed_input_constructor.contains("fn completed_qpcs"));
+    assert!(!claimed_input_constructor.contains("fn terminal_chronology"));
+    assert!(!claimed_input_constructor.contains("fn numeric_tails"));
+    assert!(!claimed_input_constructor.contains("fn source_binding_digest"));
+
+    let origin_declaration = qpcs
+        .find("pub(super) struct RnsNativeAuthenticatedClaimedQpcsOriginV2")
+        .expect("leaf-private claimed-qPCS origin");
+    let origin_prefix = &qpcs[origin_declaration.saturating_sub(320)..origin_declaration];
+    assert!(!origin_prefix.contains("derive(Clone"));
+    assert!(!origin_prefix.contains("derive(Copy"));
+    let origin_surface = qpcs[origin_declaration..]
+        .split_once("const CLAIMED_SOURCE_REPETITIONS_V1")
+        .expect("leaf-private claimed-qPCS origin boundary")
+        .0;
+    assert!(
+        origin_surface
+            .starts_with("pub(super) struct RnsNativeAuthenticatedClaimedQpcsOriginV2(());")
+    );
+    assert!(!qpcs.contains("impl Clone for RnsNativeAuthenticatedClaimedQpcsOriginV2"));
+    assert!(!qpcs.contains("impl Copy for RnsNativeAuthenticatedClaimedQpcsOriginV2"));
+    assert!(!qpcs.contains("impl RnsNativeAuthenticatedClaimedQpcsOriginV2"));
+
+    let qpcs_bind = qpcs
+        .split_once("pub(super) fn bind_direct_claimed_relation_v2")
+        .expect("sole claimed-qPCS direct transition")
+        .1
+        .split_once("impl RnsNativeQpcsCompletedLineageV1")
+        .expect("sole claimed-qPCS direct transition boundary")
+        .0;
+    // The two exact spellings are the private tuple declaration and the sole
+    // construction below; the transition itself must contain exactly one.
+    assert_eq!(
+        qpcs.matches("RnsNativeAuthenticatedClaimedQpcsOriginV2(())")
+            .count(),
+        2
+    );
+    assert_eq!(
+        qpcs_bind
+            .matches("RnsNativeAuthenticatedClaimedQpcsOriginV2(())")
+            .count(),
+        1
+    );
+    assert_eq!(
+        qpcs.matches("let claimed_qpcs_origin = RnsNativeAuthenticatedClaimedQpcsOriginV2(());",)
+            .count(),
+        1
+    );
+    let completed_lineage = qpcs_bind
+        .find("RnsNativeQpcsCompletedLineageV1::from_authenticated_claimed_schedule_v2")
+        .expect("authenticated completed lineage");
+    let origin_mint = qpcs_bind
+        .find("RnsNativeAuthenticatedClaimedQpcsOriginV2(())")
+        .expect("sole claimed-qPCS origin mint");
+    let claimed_input = qpcs_bind
+        .find("RnsNativeCrossFieldRlweClaimedQpcsInputV2::from_authenticated_claimed_qpcs_v2")
+        .expect("opaque claimed-qPCS input construction");
+    let direct_call = qpcs_bind
+        .find("bind_authenticated_claimed_qpcs_inventory_direct_v2(")
+        .expect("immediate two-owner direct bind");
+    assert!(completed_lineage < origin_mint);
+    assert!(origin_mint < claimed_input && claimed_input < direct_call);
+    assert!(qpcs_bind.contains("                claimed_qpcs_origin,"));
+    assert!(
+        qpcs_bind.contains(
+            "            )?;\n        bind_authenticated_claimed_qpcs_inventory_direct_v2("
+        )
+    );
+    let direct_call_surface = &qpcs_bind[direct_call..];
+    assert!(direct_call_surface.starts_with(
+        "bind_authenticated_claimed_qpcs_inventory_direct_v2(\n            bound_pre_direct_inventory,\n            claimed_qpcs_input,\n        )"
+    ));
+
+    let q_mask = direct_bind
+        .find("q_mask_s_root_v1(axes.pre_qpcs_safe_axes_v1(), &source)")
+        .expect("authenticated inventory q-mask root");
+    let chronology_split = direct_bind
+        .find(".into_cross_field_obligation_and_global_pending_v1()")
+        .expect("atomic chronology split");
+    let obligation_install = direct_bind
+        .find("schedule.cross_field_root_equality_obligation = Some(")
+        .expect("cross obligation installation");
+    assert!(q_mask < chronology_split && chronology_split < obligation_install);
+    assert!(!qpcs.contains("fn from_schedule("));
+    assert!(!qpcs.contains("fn same_lineage"));
+    assert!(!qpcs.contains("fn into_parts_v2"));
+}
+
+#[test]
 fn closure_codec_rejects_caps_counts_truncation_trailing_and_context_splices() {
     let fixture = fixture_v1();
     decode_closure_exact_v1(&fixture.closure, fixture.context, fixture.shape)
@@ -1058,4 +1546,168 @@ fn every_fold_challenge_is_canonical_domain_separated_and_transcript_seed_bound(
         derive_fold_challenge_v1(fixture.context, LAST_LAYER_V1 + 1, 0, 0, fields[0].modulus),
         Err(RnsNativeQpcsFriCompleteErrorV1::InvalidChallenge)
     );
+}
+
+#[test]
+fn claimed_source_pair_decode_is_exact_big_endian_and_limb_major() {
+    let mut encoded = [0_u8; CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1];
+    for relation in 0..CLAIMED_SOURCE_RELATIONS_V1 {
+        let product = 0x0102_0304_0506_0708_u64 ^ relation as u64;
+        let opening_quotient = 0x8899_aabb_ccdd_eeff_u64 ^ (relation as u64).rotate_left(17);
+        let offset = relation * CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1;
+        encoded[offset..offset + 8].copy_from_slice(&product.to_be_bytes());
+        encoded[offset + 8..offset + 16].copy_from_slice(&opening_quotient.to_be_bytes());
+    }
+    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+        for repetition in 0..CLAIMED_SOURCE_REPETITIONS_V1 {
+            let relation = limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition;
+            assert_eq!(
+                claimed_source_qpcs_pair_v1(&encoded, relation),
+                Ok((
+                    0x0102_0304_0506_0708_u64 ^ relation as u64,
+                    0x8899_aabb_ccdd_eeff_u64 ^ (relation as u64).rotate_left(17),
+                ))
+            );
+        }
+    }
+    assert_eq!(
+        claimed_source_qpcs_pair_v1(&encoded[..encoded.len() - 1], 0),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)
+    );
+    assert_eq!(
+        claimed_source_qpcs_pair_v1(&encoded, CLAIMED_SOURCE_RELATIONS_V1),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidCount)
+    );
+}
+
+fn claimed_source_public_evaluation_kat_v1(
+    relation: usize,
+) -> RnsNativePublicPolynomialEvaluationV1 {
+    RnsNativePublicPolynomialEvaluationV1 {
+        public_a: 10_000 + relation as u64,
+        public_b: 20_000 + relation as u64,
+        ciphertext_c0: core::array::from_fn(|record| 30_000 + (relation * 43 + record) as u64),
+        ciphertext_c1: core::array::from_fn(|record| 50_000 + (relation * 43 + record) as u64),
+    }
+}
+
+fn claimed_source_nonzero_factor_point_kat_v1(relation: usize, modulus: u64) -> (u64, u64) {
+    for delta in 0_u64..64 {
+        let point = 2 + relation as u64 % 97 + delta;
+        let factor =
+            claimed_source_mod_add_v1(claimed_source_ring_power_v1(point, modulus), 1, modulus);
+        if factor != 0 {
+            return (point, factor);
+        }
+    }
+    panic!("bounded KAT could not find a nonzero relation factor")
+}
+
+#[test]
+fn claimed_source_numeric_tail_rejects_canonical_factor_and_relation_faults() {
+    let limb = 0;
+    let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[limb];
+    let public = claimed_source_public_evaluation_kat_v1(0);
+    let (point, factor) = claimed_source_nonzero_factor_point_kat_v1(0, modulus);
+    let opening_quotient = 7;
+    let product = claimed_source_mod_mul_v1(factor, opening_quotient, modulus);
+    assert_eq!(
+        validate_claimed_source_numeric_tail_v1(limb, 0, point, public, product, opening_quotient,)
+            .map(RnsNativeQpcsAuthenticatedNumericTailV1::values_v1),
+        Ok((point, product, opening_quotient))
+    );
+
+    let mut noncanonical_public = public;
+    noncanonical_public.public_a = modulus;
+    assert!(matches!(
+        validate_claimed_source_numeric_tail_v1(
+            limb,
+            0,
+            point,
+            noncanonical_public,
+            product,
+            opening_quotient,
+        ),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::NonCanonicalResidue)
+    ));
+    assert!(matches!(
+        validate_claimed_source_numeric_tail_v1(limb, 0, point, public, product, modulus,),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::NonCanonicalResidue)
+    ));
+    assert!(matches!(
+        validate_claimed_source_numeric_tail_v1(limb, 0, 0, public, product, opening_quotient,),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidPoint)
+    ));
+
+    let zero_factor_point = ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1[limb];
+    assert_eq!(
+        claimed_source_ring_power_v1(zero_factor_point, modulus),
+        modulus - 1
+    );
+    assert!(matches!(
+        validate_claimed_source_numeric_tail_v1(limb, 0, zero_factor_point, public, 0, 1,),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::ZeroFactor)
+    ));
+
+    let wrong_product = claimed_source_mod_add_v1(product, 1, modulus);
+    assert_ne!(wrong_product, product);
+    assert!(matches!(
+        validate_claimed_source_numeric_tail_v1(
+            limb,
+            0,
+            point,
+            public,
+            wrong_product,
+            opening_quotient,
+        ),
+        Err(RnsNativeQpcsClaimedSourceErrorV1::InvalidRelation)
+    ));
+}
+
+#[test]
+fn claimed_source_numeric_tail_kat_materializes_all_200_ordered_rows() {
+    let mut encoded = [0_u8; CLAIMED_SOURCE_QPCS_EVALUATION_BYTES_V1];
+    let mut points = [0_u64; CLAIMED_SOURCE_RELATIONS_V1];
+    let mut public_evaluations = Vec::with_capacity(CLAIMED_SOURCE_RELATIONS_V1);
+    for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
+        for repetition in 0..CLAIMED_SOURCE_REPETITIONS_V1 {
+            let relation = limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition;
+            let (point, factor) = claimed_source_nonzero_factor_point_kat_v1(relation, modulus);
+            let opening_quotient = 100 + relation as u64;
+            let product = claimed_source_mod_mul_v1(factor, opening_quotient, modulus);
+            points[relation] = point;
+            public_evaluations.push(claimed_source_public_evaluation_kat_v1(relation));
+            let offset = relation * CLAIMED_SOURCE_QPCS_PAIR_BYTES_V1;
+            encoded[offset..offset + 8].copy_from_slice(&product.to_be_bytes());
+            encoded[offset + 8..offset + 16].copy_from_slice(&opening_quotient.to_be_bytes());
+        }
+    }
+    assert_eq!(public_evaluations.len(), CLAIMED_SOURCE_RELATIONS_V1);
+
+    let mut tails =
+        [RnsNativeQpcsAuthenticatedNumericTailV1::UNFILLED; CLAIMED_SOURCE_RELATIONS_V1];
+    for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
+        for repetition in 0..CLAIMED_SOURCE_REPETITIONS_V1 {
+            let relation = limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition;
+            let (product, opening_quotient) =
+                claimed_source_qpcs_pair_v1(&encoded, relation).expect("KAT pair");
+            tails[relation] = validate_claimed_source_numeric_tail_v1(
+                limb,
+                repetition,
+                points[relation],
+                public_evaluations[relation],
+                product,
+                opening_quotient,
+            )
+            .expect("KAT numeric tail");
+            assert_eq!(
+                tails[relation].values_v1(),
+                (points[relation], product, opening_quotient)
+            );
+        }
+    }
+    assert!(tails.iter().all(|tail| {
+        let (a, product, opening_quotient) = tail.values_v1();
+        a != u64::MAX && product != u64::MAX && opening_quotient != u64::MAX
+    }));
 }

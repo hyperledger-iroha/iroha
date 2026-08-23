@@ -9,10 +9,45 @@ pub(in crate::sumeragi) struct PreparedLifecycleOutputRecoveryV1 {
     entries: BTreeMap<u128, super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1>,
 }
 
+/// Copy seal for one cold-open Broadcast retained outside the concrete registry.
+///
+/// The move-only executable effect stays in [`PreparedLifecycleOutputRecoveryV1`].
+/// This seal carries only the exact logical coordinates needed to keep that
+/// output passive in a full scheduler census until its dedicated settlement
+/// transaction can execute it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadyRecoveredLifecycleBroadcastAttestationV1 {
+    owner: super::OwnerId,
+    ordinal: u128,
+    key: super::LifecycleKey,
+    stage: super::LifecycleStage,
+    slot: super::PhysicalSlotId,
+    digest: super::LifecycleDigest,
+}
+
+impl ReadyRecoveredLifecycleBroadcastAttestationV1 {
+    /// Rejoin this seal to the unchanged Ready row before scheduler input minting.
+    pub(super) fn matches_ready_record(self, record: &super::LifecycleRecord) -> bool {
+        record.owner == self.owner
+            && record.ordinal == self.ordinal
+            && record.key == self.key
+            && record.work_class == super::LifecycleWorkClass::Broadcast
+            && record.stage == self.stage
+            && record.state == super::LifecycleState::Ready
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&self.slot) == Some(&self.digest)
+            && record.episode.slot_universe.len() == 1
+            && record.episode.slot_universe.contains(&self.slot)
+            && record.episode.consumed_slots == record.episode.slot_universe
+            && record.episode.frozen_predecessors.is_empty()
+    }
+}
+
 impl PreparedLifecycleOutputRecoveryV1 {
     fn assemble(
         ledger: &LifecycleLedgerV1,
         verified: &VerifiedHeightContext,
+        recovered_wal: RecoveredWalStartupProjectionV1<'_>,
     ) -> Result<Self, LifecycleRecoveryAssemblyErrorKind> {
         let mut entries = BTreeMap::new();
         let mut keys = BTreeSet::new();
@@ -32,9 +67,10 @@ impl PreparedLifecycleOutputRecoveryV1 {
                 .expect("filter decoded the output class");
             if work_class == LifecycleWorkClass::Broadcast
                 && has_durable_sign_predecessor(ledger, record)
+                && recovered_wal_exactly_owns_signed_broadcast(ledger, recovered_wal, record)
             {
-                // The recovered-WAL projection must authenticate this child;
-                // never downgrade it to the standalone signed-output path.
+                // This exact child remains owned by the active recovered-WAL
+                // projection and must not acquire a second output carrier.
                 continue;
             }
             let invalid_parent = if work_class == LifecycleWorkClass::InvalidBodyReport {
@@ -194,6 +230,49 @@ impl super::ProductionLifecycleOwnerV1 {
         self.recovered_lifecycle_outputs
             .as_ref()
             .is_some_and(|outputs| !outputs.entries.is_empty())
+    }
+
+    /// Authenticate one Ready cold-open Broadcast retained outside the registry.
+    ///
+    /// Absence is not authority: callers must separately prove that the exact
+    /// concrete registry address is also absent before accepting this carrier.
+    pub(super) fn attest_ready_recovered_lifecycle_broadcast(
+        &self,
+        ordinal: u128,
+    ) -> Option<ReadyRecoveredLifecycleBroadcastAttestationV1> {
+        let output = self
+            .recovered_lifecycle_outputs
+            .as_ref()?
+            .entries
+            .get(&ordinal)?;
+        let candidate = output.candidate();
+        if candidate.work_class != super::LifecycleWorkClass::Broadcast
+            || !self.coordinator.ready_index.contains(&ordinal)
+            || !recovered_output_matches_ready_coordinator(
+                &self.verified,
+                &self.coordinator,
+                output,
+            )
+        {
+            return None;
+        }
+        let (physical, universe, consumed) = candidate.physical_geometry.normalized().ok()?;
+        let (&slot, &digest) = physical.first_key_value()?;
+        if physical.len() != 1
+            || universe.len() != 1
+            || !universe.contains(&slot)
+            || consumed != universe
+        {
+            return None;
+        }
+        Some(ReadyRecoveredLifecycleBroadcastAttestationV1 {
+            owner: output.owner(),
+            ordinal,
+            key: candidate.key,
+            stage: candidate.stage,
+            slot,
+            digest,
+        })
     }
 
     /// Execute and terminalize the oldest eligible authenticated cold output.
@@ -760,11 +839,82 @@ mod output_recovery_tests {
             BTreeMap::new(),
         )
         .expect("construct authenticated Broadcast ledger");
-        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified)
-            .expect("authenticate Broadcast cold output");
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("authenticate Broadcast cold output");
         let output = recovered.entries.get(&7).expect("retain exact ordinal");
         assert_eq!(output.ordinal(), 7);
         assert_eq!(output.owner(), ledger.records()[0].owner());
+        assert!(output.authenticates_settlement(&verified));
+    }
+
+    #[test]
+    fn cold_output_recovery_reclaims_signed_broadcast_not_owned_by_active_wal() {
+        let (verified, keys) = verified_fixture();
+        let signed = signed_vote(&verified, &keys, 0xA5);
+        let mut unsigned = signed.clone();
+        unsigned.signature.clear();
+        let context = super::super::projection::lifecycle_context(verified.context());
+        let [parent_case, child_case] =
+            super::super::replay_authority::exact_prepare_sign_broadcast_fixture(
+                context,
+                unsigned,
+                signed.clone(),
+            );
+        let direct = direct_output_record(
+            &verified,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(signed),
+            )),
+            36,
+        );
+        assert_eq!(direct.key(), Some(child_case.key));
+        assert_eq!(direct.stage(), Some(child_case.stage));
+        let owner = OwnerId::new(direct.owner().causal_root(), 35);
+        let parent = LifecycleLedgerRecordV1::new(
+            parent_case.key,
+            owner,
+            35,
+            parent_case.work_class,
+            parent_case.stage,
+            Some(TerminalOutcome::Advanced),
+            owner.causal_root().digest(),
+            parent_case.payload,
+            parent_case.authority,
+            DurableContinuation::successor(DurableContinuationEdge::SignPrepareToBroadcast, 36),
+        )
+        .expect("construct historical SignPrepareVote parent");
+        let child = LifecycleLedgerRecordV1::new(
+            child_case.key,
+            owner,
+            36,
+            child_case.work_class,
+            child_case.stage,
+            None,
+            owner.causal_root().digest(),
+            child_case.payload,
+            child_case.authority,
+            DurableContinuation::None,
+        )
+        .expect("construct historical BroadcastPrepareVote child");
+        let ledger = LifecycleLedgerV1::new(context, 36, vec![parent, child], BTreeMap::new())
+            .expect("construct historical signed-Broadcast ledger");
+        assert!(has_durable_sign_predecessor(&ledger, &ledger.records()[1]));
+
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("the non-owning WAL must not hide an authenticated cold output");
+        let output = recovered
+            .entries
+            .get(&36)
+            .expect("retain the historical signed Broadcast at its exact ordinal");
+        assert_eq!(output.owner(), owner);
         assert!(output.authenticates_settlement(&verified));
     }
 
@@ -783,7 +933,11 @@ mod output_recovery_tests {
         )
         .expect("construct tampered Broadcast ledger");
         assert!(matches!(
-            PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified),
+            PreparedLifecycleOutputRecoveryV1::assemble(
+                &ledger,
+                &verified,
+                RecoveredWalStartupProjectionV1::None,
+            ),
             Err(
                 LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
                     ordinal: 8,
@@ -813,10 +967,18 @@ mod output_recovery_tests {
             BTreeMap::new(),
         )
         .expect("construct equivocation ledger");
-        let first_open = PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified)
-            .expect("first cold open");
-        let restart = PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified)
-            .expect("restart cold open");
+        let first_open = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("first cold open");
+        let restart = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("restart cold open");
         let first = first_open.entries.get(&9).expect("first exact row");
         let second = restart.entries.get(&9).expect("restart exact row");
         assert_eq!(first.owner(), second.owner());
@@ -829,8 +991,12 @@ mod output_recovery_tests {
     fn cold_output_recovery_accepts_exact_invalid_body_parent_qc_and_marker() {
         let (verified, keys) = verified_fixture();
         let (ledger, durable) = invalid_body_ledger(&verified, &keys, 10, 11, false);
-        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified)
-            .expect("authenticate cold invalid-body Report");
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("authenticate cold invalid-body Report");
         let report = recovered.entries.get(&11).expect("retain exact report row");
         assert!(report.authenticates_settlement(&verified));
         assert!(report.exactly_matches_rejected_body_outcome(
@@ -851,8 +1017,12 @@ mod output_recovery_tests {
     fn cold_output_recovery_accepts_invalid_body_lineage_across_shared_ordinal_gap() {
         let (verified, keys) = verified_fixture();
         let (ledger, durable) = invalid_body_ledger(&verified, &keys, 20, 23, false);
-        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified)
-            .expect("authenticate invalid-body Report after intervening runtime ordinals");
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("authenticate invalid-body Report after intervening runtime ordinals");
         let report = recovered.entries.get(&23).expect("retain exact report row");
         assert!(report.authenticates_settlement(&verified));
         assert!(report.exactly_matches_rejected_body_outcome(
@@ -865,7 +1035,11 @@ mod output_recovery_tests {
         let (verified, keys) = verified_fixture();
         let (ledger, _durable) = invalid_body_ledger(&verified, &keys, 12, 13, true);
         assert!(matches!(
-            PreparedLifecycleOutputRecoveryV1::assemble(&ledger, &verified),
+            PreparedLifecycleOutputRecoveryV1::assemble(
+                &ledger,
+                &verified,
+                RecoveredWalStartupProjectionV1::None,
+            ),
             Err(
                 LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
                     ordinal: 13,

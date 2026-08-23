@@ -38,7 +38,7 @@ data:
       "compliance": {
         "enable": true,
         "log_path": "/var/log/soranet/relay_compliance.jsonl",
-        "hash_salt_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
+        "hash_salt_path": "/etc/soranet/relay/secrets/compliance-hash-salt.hex",
         "max_log_bytes": 67108864,
         "max_backup_files": 7,
         "pipeline_spool_dir": "/var/spool/soranet/audit"
@@ -51,8 +51,7 @@ data:
           { "id": "ml-kem-1024", "required": false }
         ],
         "signatures": [
-          { "id": "dilithium3", "required": true },
-          { "id": "ed25519", "required": false }
+          { "id": "dilithium3", "required": true }
         ],
         "grease": [
           { "typ": 32528, "value_hex": "deadbeef" },
@@ -76,6 +75,8 @@ stringData:
   # Replace before deployment with at least 32 random printable ASCII bytes.
   # This deliberately invalid short value makes an uncustomized deployment fail closed.
   admin-token: "REPLACE_ME"
+  # Replace with 32 random bytes encoded as exactly 64 lowercase hex characters.
+  compliance-hash-salt.hex: "REPLACE_WITH_64_LOWERCASE_HEX_BYTES"
   relay-descriptor-manifest.json: |
     {
       "version": 1,
@@ -115,6 +116,36 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      # Kubernetes Secret projections are symlinks. Copy them once into a
+      # fresh emptyDir so the relay can enforce direct-file identity, owner,
+      # link-count, and permission checks on the files it actually reads.
+      initContainers:
+        - name: materialize-private-files
+          image: busybox:1.36.1
+          command:
+            - /bin/sh
+            - -eu
+            - -c
+            - |
+              umask 077
+              cp /var/run/soranet-relay-secret-source/admin-token /private/admin-token
+              cp /var/run/soranet-relay-secret-source/compliance-hash-salt.hex /private/compliance-hash-salt.hex
+              cp /var/run/soranet-relay-secret-source/relay-descriptor-manifest.json /private/relay-descriptor-manifest.json
+              chown 65532:65532 /private/admin-token /private/compliance-hash-salt.hex /private/relay-descriptor-manifest.json
+              chmod 0400 /private/admin-token /private/compliance-hash-salt.hex /private/relay-descriptor-manifest.json
+              chown 0:0 /private
+              chmod 0755 /private
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: manifest-source
+              mountPath: /var/run/soranet-relay-secret-source
+              readOnly: true
+            - name: manifest
+              mountPath: /private
       containers:
         - name: relay
           image: ghcr.io/sora-nexus/soranet-relay:latest
@@ -154,9 +185,12 @@ spec:
           configMap:
             name: soranet-relay-config
         - name: manifest
+          emptyDir:
+            medium: Memory
+        - name: manifest-source
           secret:
             secretName: soranet-relay-manifest
-            defaultMode: 0440
+            defaultMode: 0400
         - name: audit-spool
           emptyDir: {}
         - name: relay-logs

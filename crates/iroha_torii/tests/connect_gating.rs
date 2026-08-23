@@ -495,6 +495,29 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // Disabled admission runs before media parsing and body extraction. A
+    // request body that would panic if polled must therefore remain untouched.
+    let body = axum::body::Body::from_stream(futures::stream::poll_fn(
+        |_cx| -> core::task::Poll<Option<Result<axum::body::Bytes, std::io::Error>>> {
+            panic!("disabled Connect session body must not be polled")
+        },
+    ));
+    let resp = app
+        .clone()
+        .oneshot(request_with_loopback_connect_info(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/connect/session"))
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "invalid/media; value==bad",
+                )
+                .body(body)
+                .unwrap(),
+        ))
+        .await
+        .expect("disabled Connect pre-body response");
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     // Ordinary REST routes return the shared typed error envelope.
     let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);

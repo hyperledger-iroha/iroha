@@ -3,10 +3,11 @@ use iroha_data_model::soranet::vpn::{
     VpnFlowLabelV1,
 };
 use soranet_relay::{
-    config::VpnConfig,
+    config::{ConfigError, VpnConfig},
     metrics::Metrics,
     vpn::{
-        CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, read_frame, write_frame,
+        CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay as RelayVpnOverlay,
+        read_frame, write_frame,
     },
 };
 use std::sync::Arc;
@@ -14,8 +15,19 @@ use tokio::{
     io::{AsyncWriteExt, duplex},
     runtime::Runtime,
 };
-fn overlay() -> VpnOverlay {
-    let cfg = VpnConfig {
+
+/// Build a framing-only overlay without activating the privileged VPN control plane.
+struct VpnOverlay;
+
+impl VpnOverlay {
+    fn from_config(mut config: VpnConfig) -> RelayVpnOverlay {
+        config.enabled = false;
+        RelayVpnOverlay::from_config(config)
+    }
+}
+
+fn overlay() -> RelayVpnOverlay {
+    let mut cfg = VpnConfig {
         enabled: true,
         ..VpnConfig::default()
     };
@@ -59,35 +71,14 @@ fn overlay_rejects_short_frame() {
 }
 #[test]
 fn overlay_rejects_flow_label_overflow_for_configured_width() {
-    let mut cfg = VpnConfig {
-        enabled: true,
-        padding_budget_ms: 1,
+    let cfg = VpnConfig {
+        flow_label_bits: 8,
         ..VpnConfig::default()
     };
-    cfg.flow_label_bits = 8;
-    let overlay = VpnOverlay::from_config(cfg);
-    let header = VpnCellHeaderV1 {
-        version: 1,
-        class: VpnCellClassV1::Data,
-        flags: VpnCellFlagsV1::new(false, false, false, false),
-        circuit_id: [0xAA; 16],
-        flow_label: VpnFlowLabelV1::from_u32(0x1FF).expect("flow label"),
-        sequence: 0,
-        ack: 0,
-        padding_budget_ms: 1,
-        payload_len: 0,
-    };
-    let frame = VpnCellV1 {
-        header,
-        payload: vec![],
-    }
-    .into_padded_frame()
-    .expect("frame");
-    let err = overlay.parse_frame(&frame.bytes).expect_err("overflow");
-    assert!(matches!(
-        err,
-        VpnCellError::FlowLabelOverflow { max_bits: 8, .. }
-    ));
+    let error = cfg
+        .validate()
+        .expect_err("v1 must reject configurable flow-label widths");
+    assert!(matches!(error, ConfigError::Vpn(message) if message.contains("must be 24")));
 }
 #[test]
 fn session_records_frame_ingress_and_egress() {
@@ -172,6 +163,49 @@ fn session_rejects_replayed_ingress_sequence() {
         }
     ));
 }
+
+#[test]
+fn maximum_sequence_does_not_reset_replay_tracking() {
+    let metrics = Arc::new(Metrics::new());
+    let overlay = VpnOverlay::from_config(VpnConfig {
+        enabled: true,
+        padding_budget_ms: 5,
+        ..VpnConfig::default()
+    });
+    let session = overlay.start_session(metrics);
+    let frame = |sequence| {
+        VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Data,
+                flags: VpnCellFlagsV1::new(false, false, false, false),
+                circuit_id: [0x55; 16],
+                flow_label: VpnFlowLabelV1::from_u32(0x22).expect("flow"),
+                sequence,
+                ack: 0,
+                padding_budget_ms: 5,
+                payload_len: 0,
+            },
+            payload: vec![0xDE],
+        }
+        .into_padded_frame()
+        .expect("frame")
+    };
+    session
+        .record_frame_ingress(&overlay, &frame(u64::MAX).bytes)
+        .expect("maximum sequence is accepted once");
+    let error = session
+        .record_frame_ingress(&overlay, &frame(0).bytes)
+        .expect_err("lower sequence must remain rejected");
+    assert!(matches!(
+        error,
+        VpnCellError::NonMonotonicSequence {
+            last: u64::MAX,
+            actual: 0
+        }
+    ));
+}
+
 #[test]
 fn overlay_rejects_padding_budget_mismatch() {
     let overlay = overlay();

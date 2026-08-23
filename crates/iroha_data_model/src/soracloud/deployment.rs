@@ -432,9 +432,6 @@ fn validate_service_material_name(
     }
     Ok(())
 }
-const fn default_true() -> bool {
-    true
-}
 fn validate_nonempty_no_control(
     manifest: &'static str,
     field: &'static str,

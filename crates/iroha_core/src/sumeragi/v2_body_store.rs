@@ -136,6 +136,17 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreBodyAuthorityV1 {
     durable: DurableBodyReceipt,
 }
 impl RecoveredDecisionFetchStoreBodyAuthorityV1 {
+    /// Build one exact closed body authority for staged-address regressions.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        manifest: wire::PayloadManifest,
+        durable: DurableBodyReceipt,
+    ) -> Option<Self> {
+        (durable.round() == manifest.round
+            && durable.subject() == manifest.subject
+            && durable.manifest_hash() == HashOf::new(&manifest))
+        .then_some(Self { manifest, durable })
+    }
     /// Bind one live authenticated response to its exact durable completion.
     pub(in crate::sumeragi) fn from_persisted_certified_response(
         authenticated: &AuthenticatedCertifiedBodyResponse,

@@ -11,7 +11,7 @@ fn activation_promotion_binding_wire_fixture(
         promotion_reservation: KagemushaExactBytesDigestV1::from_bytes(b"wire reservation")
             .expect("wire reservation identity"),
         promotion_id,
-        network_id: manifest.network_id.clone(),
+        network_id: manifest.network_id,
         reviewed_source_closure_descriptor_sha256: manifest
             .reviewed_source_closure_descriptor_sha256,
         manifest_sha256: manifest.canonical_sha256().expect("wire manifest identity"),
@@ -33,7 +33,30 @@ fn activation_promotion_binding_wire_fixture(
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the wire audit keeps current roundtrips and every retired one- and two-field layout rejection together"
+)]
 fn v4_activation_wire_binds_policy_and_rejects_legacy_layouts() {
+    #[derive(Encode)]
+    struct RetiredOneFieldActivation {
+        activation: KagemushaRecursiveSpendReleaseActivationV4,
+    }
+    #[derive(Encode)]
+    struct RetiredTwoFieldActivation {
+        activation: KagemushaRecursiveSpendReleaseActivationV4,
+        device_attestation_policy: OfflineDeviceAttestationPolicy,
+    }
+    fn encode_with_flags(value: &impl norito::NoritoSerialize, flags: u8) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let mut bytes = Vec::new();
+        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
+        value
+            .serialize(&mut encoder)
+            .expect("encode activation payload with explicit layout flags");
+        bytes
+    }
+
     let promotion_id = [0xA4; 32];
     let policy = device_attestation_policy_wire_fixture();
     let activation = release_activation_wire_fixture();
@@ -43,6 +66,7 @@ fn v4_activation_wire_binds_policy_and_rejects_legacy_layouts() {
         promotion_binding.clone(),
         activation.clone(),
         policy.clone(),
+        [0xC4; 32],
     );
     let boxed = InstructionBox::from(instruction.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize composite activation");
@@ -61,11 +85,22 @@ fn v4_activation_wire_binds_policy_and_rejects_legacy_layouts() {
     assert_eq!(instruction.promotion_binding(), &promotion_binding);
     assert_eq!(instruction.promotion_id(), &promotion_id);
     assert!(instruction.validate_promotion_id().is_ok());
-    let mut zero_binding = promotion_binding;
+    let mut zero_binding = promotion_binding.clone();
     zero_binding.promotion_id = [0; 32];
-    let zero_promotion =
-        ActivateKagemushaRecursiveReleaseV4::new(zero_binding, activation, policy.clone());
+    let zero_promotion = ActivateKagemushaRecursiveReleaseV4::new(
+        zero_binding,
+        activation.clone(),
+        policy.clone(),
+        [0xC4; 32],
+    );
     assert!(zero_promotion.validate_promotion_id().is_err());
+    let zero_runtime = ActivateKagemushaRecursiveReleaseV4::new(
+        promotion_binding,
+        activation,
+        policy.clone(),
+        [0; 32],
+    );
+    assert!(zero_runtime.validate_promotion_id().is_err());
     let encoded = instruction.encode();
     let flags = norito::core::default_encode_flags();
     assert_eq!(
@@ -92,25 +127,13 @@ fn v4_activation_wire_binds_policy_and_rejects_legacy_layouts() {
         ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded[..legacy_len]).is_err(),
         "legacy two-field activation bytes must fail closed instead of defaulting a promotion id",
     );
-
-    #[derive(Encode)]
-    struct RetiredOneFieldActivation {
-        activation: KagemushaRecursiveSpendReleaseActivationV4,
-    }
-    #[derive(Encode)]
-    struct RetiredTwoFieldActivation {
-        activation: KagemushaRecursiveSpendReleaseActivationV4,
-        device_attestation_policy: OfflineDeviceAttestationPolicy,
-    }
-    fn encode_with_flags(value: &impl norito::NoritoSerialize, flags: u8) -> Vec<u8> {
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let mut bytes = Vec::new();
-        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
-        value
-            .serialize(&mut encoder)
-            .expect("encode activation payload with explicit layout flags");
-        bytes
-    }
+    crate::isi::read_aos_field(&encoded, &mut legacy_len, flags)
+        .expect("read the former promotion-binding field");
+    assert!(legacy_len < encoded.len());
+    assert!(
+        ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded[..legacy_len]).is_err(),
+        "legacy three-field activation bytes must fail closed instead of defaulting a runtime projection",
+    );
 
     let packed_flags =
         norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;

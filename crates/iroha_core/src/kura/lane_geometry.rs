@@ -9718,7 +9718,7 @@ impl Kura {
             &mut bound.index,
             &bound.namespace.data_path,
             &bound.namespace.index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
             "lane block execution input",
         )?;
         let descriptor = &artifact.proposal.descriptor;

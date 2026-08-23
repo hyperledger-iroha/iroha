@@ -1018,6 +1018,109 @@ async fn mcp_jsonrpc_rejects_oversized_payload() {
     );
 }
 #[tokio::test]
+async fn mcp_jsonrpc_bounds_the_complete_response_envelope() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.max_request_bytes = 128;
+    let app = build_router(cfg);
+    let (status, body) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_i64),
+        Some(-32002)
+    );
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("data"))
+            .and_then(|value| value.get("error_code"))
+            .and_then(Value::as_str),
+        Some("response_too_large")
+    );
+}
+#[tokio::test]
+async fn mcp_jsonrpc_rejects_outer_batch_above_dispatch_ceiling() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let app = build_router(cfg);
+    let payload = Value::Array(
+        (0_u64..65)
+            .map(|id| {
+                norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": (id),
+                    "method": "ping"
+                })
+            })
+            .collect(),
+    );
+    let (status, body) = post_mcp(&app, payload).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_i64),
+        Some(-32600)
+    );
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("data"))
+            .and_then(|value| value.get("error_code"))
+            .and_then(Value::as_str),
+        Some("batch_too_large")
+    );
+}
+#[tokio::test]
+async fn mcp_jsonrpc_rejects_tool_batch_above_dispatch_ceiling() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let app = build_router(cfg);
+    let calls = (0_u64..65)
+        .map(|index| {
+            norito::json!({
+                "name": "iroha.health",
+                "arguments": { "index": (index) }
+            })
+        })
+        .collect::<Vec<_>>();
+    let (status, body) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call_batch",
+            "params": { "calls": (calls) }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_i64),
+        Some(-32602)
+    );
+    assert_eq!(
+        body.get("error")
+            .and_then(|value| value.get("data"))
+            .and_then(|value| value.get("error_code"))
+            .and_then(Value::as_str),
+        Some("batch_too_large")
+    );
+}
+#[tokio::test]
 async fn mcp_jsonrpc_rejects_empty_batch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();

@@ -280,15 +280,15 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         .expect("VPN helper ticket schema");
     assert_eq!(
         helper_ticket.get("pattern").and_then(Value::as_str),
-        Some("^[0-9a-f]{1328}$")
+        Some("^[0-9a-f]{1392}$")
     );
     assert_eq!(
         helper_ticket.get("minLength").and_then(Value::as_u64),
-        Some(1328)
+        Some(1392)
     );
     assert_eq!(
         helper_ticket.get("maxLength").and_then(Value::as_u64),
-        Some(1328)
+        Some(1392)
     );
     let receipt_fields = openapi_contract_strings(
         "vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.4",

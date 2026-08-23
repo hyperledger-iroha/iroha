@@ -766,7 +766,13 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
 #[test]
 fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_reference() {
     let source = include_str!("incremental_source.rs");
-    assert!(!source.contains(concat!("mod incremental_source_", "phase23;")));
+    let disabled_phase23 = concat!(
+        "#[cfg(any())]\n",
+        "#[path = \"incremental_source_phase23.rs\"]\n",
+        "mod incremental_source_phase23;"
+    );
+    assert!(source.contains(disabled_phase23));
+    assert_eq!(source.matches("mod incremental_source_phase23;").count(), 1);
     assert!(source.contains("Source-authenticated, limb-streamed collective encryption"));
     assert!(source.contains("38 independently addressed `c0` limbs"));
     assert!(source.contains("38 independently addressed `c1` limbs"));
@@ -840,18 +846,34 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
     assert!(public_path.contains(
         "encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1"
     ));
+    assert!(borrowed_core.contains("&mut P,"));
+    assert!(public_path.contains("|_: &mut P"));
     assert!(!public_path.contains("plaintext_lift"));
     assert!(!public_path.contains("ZkAmsMkheCollectiveCiphertextV1"));
     assert!(!public_path.contains("impl FnOnce"));
+    let validation = borrowed_core
+        .find("ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1")
+        .unwrap();
+    let prepare_callback = borrowed_core
+        .find("let before_output_publication = prepare_before_entropy()?")
+        .unwrap();
     let prepared = borrowed_core
         .find("PreparedStreamingCollectiveEncryptionV1::new_v1")
         .unwrap();
     let prepass = borrowed_core.find("authenticate_key_source_v1").unwrap();
     let entropy = borrowed_core.find("activate_v1").unwrap();
+    let callback = borrowed_core.find("before_output_publication(").unwrap();
     let output = borrowed_core.find("publish_all_v1").unwrap();
+    assert!(validation < prepare_callback);
+    assert!(prepare_callback < prepared);
     assert!(prepared < prepass);
     assert!(prepass < entropy);
+    assert!(entropy < callback);
+    assert!(callback < output);
     assert!(entropy < output);
+    let callback_call = &borrowed_core[callback..output];
+    assert!(callback_call.contains("ciphertext_publisher,"));
+    assert!(callback_call.contains(")?;"));
     let second_pass = source
         .split("fn publish_next_limb_v1")
         .nth(1)

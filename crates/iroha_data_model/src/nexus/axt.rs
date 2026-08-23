@@ -2291,6 +2291,10 @@ mod tests {
         assert_eq!(decoded.asset_dsid, DataSpaceId::new(8));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the commitment audit mutates every authenticated remote-spend runtime field in one table"
+    )]
     fn remote_spend_intent_commitment_binds_every_runtime_field() {
         let dsid = DataSpaceId::new(7);
         let incarnation = test_asset_incarnation(b"remote-spend-current");
@@ -2505,6 +2509,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the incarnation audit keeps its canonical vector, identity mutations, and zero rejection together"
+    )]
     fn asset_incarnation_is_nonzero_canonical_and_binds_registration_identity() {
         let golden_network = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
@@ -2619,6 +2627,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the signature audit mutates every policy field and network binding in one fixture"
+    )]
     fn asset_handle_issuer_signature_binds_every_policy_field_and_network() {
         let issuer = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let impostor = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
@@ -2816,6 +2828,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the budget audit keeps atomic limit transitions and canonical roundtrip checks together"
+    )]
     fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
         let mut handle = sample_asset_handle();
         handle.budget.remaining = Quantity::from(50_u64);
@@ -2932,6 +2948,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the permanent counter audit keeps boundary, overflow, generation, and canonical checks together"
+    )]
     fn handle_counter_record_is_permanent_exact_and_checked() {
         let mut record = AxtHandleCounterRecord::initial(4);
         assert_eq!(record.next(), 1);
@@ -3145,6 +3165,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the V1 binary audit enumerates every retired layout that previously defaulted a required field"
+    )]
     fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         #[derive(Encode)]
         struct PreReleaseDescriptor {
@@ -3376,6 +3400,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the V1 JSON audit checks every nested mandatory nullable slot in one schema contract"
+    )]
     fn axt_v1_json_requires_every_nested_nullable_slot() {
         macro_rules! assert_required_json_fields {
             ($value:expr, $ty:ty, [$($field:literal),+ $(,)?]) => {{
@@ -3745,6 +3773,10 @@ mod tests {
         assert!(record.is_expired(26, 15));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the replay audit keeps authoritative-key, canonical-storage, expiry, and conflict checks together"
+    )]
     fn replay_record_validation_uses_authoritative_key_and_canonical_storage_key() {
         let key = AxtHandleReplayKey::from_parts(
             DataSpaceId::new(7),

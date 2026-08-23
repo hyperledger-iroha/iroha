@@ -303,9 +303,9 @@ pub fn install_vega_mdl_figure9_verifier_key_v1(
 /// idempotent only for the same pair, and neither artifact can be replaced.
 /// This API performs no filesystem lookup, setup, or key generation.
 ///
-/// Installing the pair does not authorize proof production while the exact
-/// Microsoft split-witness adapter remains unavailable; the prover continues
-/// to fail closed without consuming caller randomness.
+/// Installing the pair authorizes only the exact first-party Figure 9 prover
+/// path. Proof production still fails closed unless the mutually bound
+/// artifacts pass their complete profile preflight before caller randomness.
 ///
 /// # Errors
 ///
@@ -334,9 +334,10 @@ pub fn vega_microsoft_fixture_conformance_v1(
 }
 /// Attempt the pinned Figure 9 Vega-MC prover path.
 ///
-/// The current dependency-locked implementation validates context and the
-/// installed PK/VK pair before caller randomness, then fails closed because it
-/// does not yet have the exact Microsoft split step/core witness adapter.
+/// The dependency-locked implementation validates context and the installed
+/// PK/VK pair before caller randomness, synthesizes the exact Microsoft split
+/// step/core witness, and returns a proof only after canonical re-encoding and
+/// a complete first-party verifier replay.
 ///
 /// # Errors
 ///

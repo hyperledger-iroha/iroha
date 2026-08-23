@@ -165,11 +165,10 @@ is a staging/dogfood preset; only enable it when exercising the SNNet‑17A capa
   | 0      | `version:u8`                   | Currently `1`. |
   | 1      | `flags:u8`                     | `0x01` = strict, `0x00` = best-effort. |
   | 2–3    | `cell_bytes:u16 (little-endian)` | Always `1024` for SNNet-17A profiles. |
-  | 4..    | `cell_envelope[cell_bytes]`    | Deterministic sample of the scheduler’s dummy cell (type byte, length field, and zeroed payload). |
 
-  The sample envelope makes the layout self-describing: clients MUST parse it (see
-  `Cell::from_bytes()` in the relay scheduler) and reject handshakes whose sample length,
-  header, or padding diverge from the profile they support.
+  The payload is exactly four bytes. Clients reject alternate lengths, versions,
+  reserved flag bits, and cell sizes; a capability advertisement does not carry
+  a dummy cell or allocate storage proportional to `cell_bytes`.
 - Clients that set the strict flag require every hop to expose the same TLV; the relay now rejects
   handshakes when a strict request is received but the server advertises best-effort or no
   constant-rate support. Best-effort requests gracefully downgrade when a hop lacks the capability.

@@ -599,8 +599,12 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             crate::soranet_privacy_ingress::enforce_soranet_privacy_collector_authentication,
         );
         let operator_layer = axum::middleware::from_fn_with_state(
-            app_state,
-            operator_signatures::enforce_operator_access,
+            operator_signatures::BoundedOperatorAccessState {
+                app: app_state,
+                max_body_bytes:
+                    crate::soranet_privacy_ingress::SORANET_PRIVACY_INGEST_MAX_BODY_BYTES,
+            },
+            operator_signatures::enforce_bounded_operator_access,
         );
         CatalogMethodRouter {
             method: self.method,

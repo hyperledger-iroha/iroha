@@ -5,7 +5,9 @@ use iroha_data_model::transaction::TransactionEntrypoint;
 
 use super::StateTransaction;
 use crate::{
-    smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1,
+    smartcontracts::isi::offline::{
+        signed_kagemusha_taira_canary_wire_identity_v1, signed_lifecycle_entrypoint_context,
+    },
     tx::AcceptedTransaction,
 };
 
@@ -17,6 +19,7 @@ pub(crate) fn seed_committed_transaction_context(
 ) {
     state_transaction.kagemusha_taira_canary_external_entrypoint = false;
     state_transaction.kagemusha_taira_canary_wire_identity = None;
+    state_transaction.kagemusha_release_lifecycle_entrypoint = None;
     let transaction = match entrypoint {
         TransactionEntrypoint::External(transaction) => {
             state_transaction.kagemusha_taira_canary_external_entrypoint = true;
@@ -32,6 +35,9 @@ pub(crate) fn seed_committed_transaction_context(
         state_transaction.kagemusha_taira_canary_wire_identity =
             signed_kagemusha_taira_canary_wire_identity_v1(transaction)
                 .expect("committed external canary wire must encode");
+        state_transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(transaction)
+                .expect("committed external lifecycle context must derive");
     }
     state_transaction.current_entrypoint_index =
         Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));

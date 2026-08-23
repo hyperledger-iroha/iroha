@@ -31,6 +31,18 @@ device_lab = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = device_lab
 SPEC.loader.exec_module(device_lab)  # type: ignore[misc]
 
+try:
+    from scripts.tests import (
+        android_attestation_certificate_profile_fixtures as _android_x509_fixtures,
+    )
+except ModuleNotFoundError:
+    import android_attestation_certificate_profile_fixtures as _android_x509_fixtures
+
+_android_x509_fixtures.bind_device_lab(device_lab)
+test_android_attestation_chain = _android_x509_fixtures.test_android_attestation_chain
+test_android_attestation_chain.__test__ = False
+android_attestation_metadata = _android_x509_fixtures.android_attestation_metadata
+
 SIGNER_MODULE_PATH = (
     Path(__file__).resolve().parents[1] / "sign_android_device_lab_evidence.py"
 )
@@ -72,269 +84,6 @@ def write_text(path: Path, text: str) -> None:
 
 def write_json(path: Path, payload: dict) -> None:
     write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
-
-
-_TEST_ATTESTATION_OPENSSL: Path | None = None
-_TEST_ATTESTATION_ROOT_KEY: Path | None = None
-_TEST_ATTESTATION_ROOT_CERT: Path | None = None
-_TEST_ATTESTATION_CHAIN_CACHE: dict[
-    tuple[bytes, str, bytes, int, int, int, bool, bool], bytes
-] = {}
-
-
-def _der_length(length: int) -> bytes:
-    if length < 0x80:
-        return bytes((length,))
-    encoded = length.to_bytes((length.bit_length() + 7) // 8, "big")
-    return bytes((0x80 | len(encoded),)) + encoded
-
-
-def _der_tlv(tag: bytes, value: bytes) -> bytes:
-    return tag + _der_length(len(value)) + value
-
-
-def _der_integer(value: int, *, enumerated: bool = False) -> bytes:
-    if value < 0:
-        raise AssertionError("test DER integers must be non-negative")
-    encoded = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
-    if encoded[0] & 0x80:
-        encoded = b"\0" + encoded
-    return _der_tlv(b"\x0a" if enumerated else b"\x02", encoded)
-
-
-def _der_sequence(*values: bytes) -> bytes:
-    return _der_tlv(b"\x30", b"".join(values))
-
-
-def _der_set(*values: bytes) -> bytes:
-    return _der_tlv(b"\x31", b"".join(sorted(values)))
-
-
-def _der_octets(value: bytes) -> bytes:
-    return _der_tlv(b"\x04", value)
-
-
-def _der_context_explicit(tag: int, value: bytes) -> bytes:
-    if tag < 31:
-        encoded_tag = bytes((0xA0 | tag,))
-    else:
-        chunks = [tag & 0x7F]
-        tag >>= 7
-        while tag:
-            chunks.append(0x80 | (tag & 0x7F))
-            tag >>= 7
-        encoded_tag = b"\xbf" + bytes(reversed(chunks))
-    return _der_tlv(encoded_tag, value)
-
-
-def android_key_description_der(
-    challenge: bytes,
-    package_name: str,
-    signing_digest: bytes,
-    *,
-    attestation_level: int = 2,
-    keymint_level: int = 2,
-    verified_boot_state: int = 0,
-    device_locked: bool = True,
-    append_ninth_sequence: bool = False,
-) -> bytes:
-    package_info = _der_sequence(
-        _der_octets(package_name.encode("utf-8")),
-        _der_integer(1),
-    )
-    app_id = _der_sequence(
-        _der_set(package_info),
-        _der_set(_der_octets(signing_digest)),
-    )
-    root_of_trust = _der_sequence(
-        _der_octets(b"\x11" * 32),
-        _der_tlv(b"\x01", b"\xff" if device_locked else b"\x00"),
-        _der_integer(verified_boot_state, enumerated=True),
-        _der_octets(b"\x22" * 32),
-    )
-    software = _der_sequence(
-        _der_context_explicit(
-            device_lab.ANDROID_TAG_ATTESTATION_APPLICATION_ID,
-            _der_octets(app_id),
-        )
-    )
-    hardware = _der_sequence(
-        _der_context_explicit(
-            device_lab.ANDROID_TAG_ROOT_OF_TRUST,
-            root_of_trust,
-        )
-    )
-    fields = [
-        _der_integer(400),
-        _der_integer(attestation_level, enumerated=True),
-        _der_integer(400),
-        _der_integer(keymint_level, enumerated=True),
-        _der_octets(challenge),
-        _der_octets(b""),
-        software,
-        hardware,
-    ]
-    if append_ninth_sequence:
-        fields.append(_der_sequence())
-    return _der_sequence(*fields)
-
-
-def test_android_attestation_chain(
-    challenge: bytes,
-    package_name: str,
-    signing_digest: bytes,
-    *,
-    attestation_level: int = 2,
-    keymint_level: int = 2,
-    verified_boot_state: int = 0,
-    device_locked: bool = True,
-    append_ninth_sequence: bool = False,
-) -> bytes:
-    cache_key = (
-        challenge,
-        package_name,
-        signing_digest,
-        attestation_level,
-        keymint_level,
-        verified_boot_state,
-        device_locked,
-        append_ninth_sequence,
-    )
-    cached = _TEST_ATTESTATION_CHAIN_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    if (
-        _TEST_ATTESTATION_OPENSSL is None
-        or _TEST_ATTESTATION_ROOT_KEY is None
-        or _TEST_ATTESTATION_ROOT_CERT is None
-    ):
-        raise AssertionError("test Android attestation authority is not initialized")
-    description = android_key_description_der(
-        challenge,
-        package_name,
-        signing_digest,
-        attestation_level=attestation_level,
-        keymint_level=keymint_level,
-        verified_boot_state=verified_boot_state,
-        device_locked=device_locked,
-        append_ninth_sequence=append_ninth_sequence,
-    )
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        leaf_key = root / "leaf.key"
-        leaf_csr = root / "leaf.csr"
-        leaf_pem = root / "leaf.pem"
-        extensions = root / "extensions.cnf"
-        write_text(
-            extensions,
-            "basicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature\n"
-            "subjectKeyIdentifier=hash\n"
-            "authorityKeyIdentifier=keyid,issuer\n"
-            f"{device_lab.ANDROID_KEY_ATTESTATION_EXTENSION_OID}=DER:{description.hex()}\n",
-        )
-        subprocess.run(
-            [
-                str(_TEST_ATTESTATION_OPENSSL),
-                "genpkey",
-                "-algorithm",
-                "EC",
-                "-pkeyopt",
-                "ec_paramgen_curve:P-256",
-                "-out",
-                str(leaf_key),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                str(_TEST_ATTESTATION_OPENSSL),
-                "req",
-                "-new",
-                "-key",
-                str(leaf_key),
-                "-subj",
-                "/CN=Iroha Android StrongBox Test Leaf",
-                "-out",
-                str(leaf_csr),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        serial = int.from_bytes(hashlib.sha256(b"serial\0" + challenge).digest()[:16], "big") or 1
-        subprocess.run(
-            [
-                str(_TEST_ATTESTATION_OPENSSL),
-                "x509",
-                "-req",
-                "-in",
-                str(leaf_csr),
-                "-CA",
-                str(_TEST_ATTESTATION_ROOT_CERT),
-                "-CAkey",
-                str(_TEST_ATTESTATION_ROOT_KEY),
-                "-set_serial",
-                hex(serial),
-                "-days",
-                "3650",
-                "-sha256",
-                "-extfile",
-                str(extensions),
-                "-out",
-                str(leaf_pem),
-            ],
-            check=True,
-            capture_output=True,
-        )
-        chain = leaf_pem.read_bytes() + _TEST_ATTESTATION_ROOT_CERT.read_bytes()
-    _TEST_ATTESTATION_CHAIN_CACHE[cache_key] = chain
-    return chain
-
-
-test_android_attestation_chain.__test__ = False
-
-
-def android_attestation_metadata(slot_id: str = "pixel8-crypto") -> dict[str, str]:
-    signing_digest = hashlib.sha256(f"{slot_id}:wallet-signer".encode()).hexdigest()
-    metadata = {
-        "slot_id": slot_id,
-        "candidate_record_sha256": hashlib.sha256(b"candidate-record").hexdigest(),
-        "candidate_manifest_sha256": hashlib.sha256(b"candidate-manifest").hexdigest(),
-        "candidate_stage_manifest_sha256": hashlib.sha256(b"stage-manifest").hexdigest(),
-        "candidate_lab_native_library_sha256": hashlib.sha256(b"native-library").hexdigest(),
-        "candidate_lab_apk_sha256": hashlib.sha256(b"candidate-apk").hexdigest(),
-        "candidate_lab_test_apk_sha256": hashlib.sha256(b"candidate-test-apk").hexdigest(),
-        "candidate_source_commit": "1" * 40,
-        "candidate_source_tree_sha256": hashlib.sha256(b"source-tree").hexdigest(),
-        "app_package_name": device_lab.KAGEMUSHA_WALLET_PACKAGE_NAME,
-        "app_signing_certificate_sha256": signing_digest,
-    }
-    challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
-    metadata["attestation_challenge_sha256"] = hashlib.sha256(challenge).hexdigest()
-    return metadata
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def inject_duplicate_json_key(path: Path, key: str, first_value) -> None:
@@ -1312,7 +1061,7 @@ def write_candidate_binding_v2(
             "candidate_source_tree_sha256": source_tree_sha256,
         }
     )
-    if _TEST_ATTESTATION_ROOT_CERT is not None:
+    if _android_x509_fixtures.authority_is_configured():
         chain_payload = test_android_attestation_chain(
             challenge,
             device_lab.KAGEMUSHA_WALLET_PACKAGE_NAME,
@@ -2177,10 +1926,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        global _TEST_ATTESTATION_OPENSSL
-        global _TEST_ATTESTATION_ROOT_KEY
-        global _TEST_ATTESTATION_ROOT_CERT
-
         cls._authority_directory = tempfile.TemporaryDirectory()
         authority = Path(cls._authority_directory.name).resolve(strict=True)
         openssl_found = shutil.which("openssl")
@@ -2265,6 +2010,27 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         root_cert.chmod(0o600)
         status = authority / "android-attestation-status.json"
         write_json(status, {"entries": {}})
+        capture_time_ms = (device_lab.time.time_ns() // 1_000_000_000) * 1_000
+        format_http_date = lambda milliseconds: device_lab.android_status_capture.email.utils.format_datetime(
+            device_lab.android_status_capture.dt.datetime.fromtimestamp(
+                milliseconds / 1_000,
+                tz=device_lab.android_status_capture.dt.timezone.utc,
+            ),
+            usegmt=True,
+        )
+        _, capture_receipt = device_lab.android_status_capture.build_capture(
+            status.read_bytes(),
+            [
+                ("Date", format_http_date(capture_time_ms)),
+                ("Age", "0"),
+                ("Cache-Control", "public, max-age=86400"),
+                ("Expires", format_http_date(capture_time_ms + 86_400_000)),
+                ("Last-Modified", format_http_date(capture_time_ms)),
+            ],
+            captured_at_ms=capture_time_ms,
+        )
+        capture_receipt_path = authority / "android-attestation-status-capture.json"
+        write_json(capture_receipt_path, capture_receipt)
         cls._authority_kwargs = {
             "java": java,
             "java_sha256": hashlib.sha256(java.read_bytes()).hexdigest(),
@@ -2282,15 +2048,19 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "attestation_revocation_status_sha256": hashlib.sha256(
                 status.read_bytes()
             ).hexdigest(),
+            "attestation_status_capture_receipt": capture_receipt_path,
+            "attestation_status_capture_receipt_sha256": hashlib.sha256(
+                capture_receipt_path.read_bytes()
+            ).hexdigest(),
         }
         authority_errors = device_lab.configure_android_evidence_authority(
             **cls._authority_kwargs,
         )
         if authority_errors:
             raise AssertionError(authority_errors)
-        _TEST_ATTESTATION_OPENSSL = openssl
-        _TEST_ATTESTATION_ROOT_KEY = root_key
-        _TEST_ATTESTATION_ROOT_CERT = root_cert
+        _android_x509_fixtures.configure_test_authority(
+            openssl, root_key, root_cert
+        )
         cls._authority_cli_args = [
             "--java", str(java),
             "--java-sha256", cls._authority_kwargs["java_sha256"],
@@ -2305,6 +2075,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "--android-attestation-revocation-status", str(status),
             "--android-attestation-revocation-status-sha256",
             cls._authority_kwargs["attestation_revocation_status_sha256"],
+            "--android-attestation-status-capture-receipt",
+            str(capture_receipt_path),
+            "--android-attestation-status-capture-receipt-sha256",
+            cls._authority_kwargs["attestation_status_capture_receipt_sha256"],
         ]
         cls._original_device_lab_main = staticmethod(device_lab.main)
 
@@ -2327,13 +2101,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        global _TEST_ATTESTATION_OPENSSL
-        global _TEST_ATTESTATION_ROOT_KEY
-        global _TEST_ATTESTATION_ROOT_CERT
-        _TEST_ATTESTATION_OPENSSL = None
-        _TEST_ATTESTATION_ROOT_KEY = None
-        _TEST_ATTESTATION_ROOT_CERT = None
-        _TEST_ATTESTATION_CHAIN_CACHE.clear()
+        _android_x509_fixtures.clear_test_authority()
         device_lab.main = cls._original_device_lab_main
         device_lab._ANDROID_EVIDENCE_AUTHORITY = None  # type: ignore[attr-defined]
         cls._authority_directory.cleanup()
@@ -2493,6 +2261,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "/authority/status.json",
             "--android-attestation-revocation-status-sha256",
             "33" * 32,
+            "--android-attestation-status-capture-receipt",
+            "/authority/status-capture-receipt.json",
+            "--android-attestation-status-capture-receipt-sha256",
+            "44" * 32,
         ]
         with (
             mock.patch.object(
@@ -2541,6 +2313,16 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 "openssl": {"sha256": "22" * 32},
                 "attestation_trust_roots": (),
                 "attestation_revocation_status": {"sha256": "33" * 32},
+                "attestation_status_capture_receipt": {
+                    "sha256": "44" * 32,
+                    "snapshot": {
+                        "payload_sha256": [0] * 32,
+                        "response_date_ms": 1_800_000_000_000,
+                        "last_modified_ms": 1_800_000_000_000,
+                        "cache_max_age_seconds": 86_400,
+                        "non_valid_serials": [],
+                    },
+                },
             }
             return []
 
@@ -2593,6 +2375,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         "/authority/status.json",
                         "--android-attestation-revocation-status-sha256",
                         "33" * 32,
+                        "--android-attestation-status-capture-receipt",
+                        "/authority/status-capture-receipt.json",
+                        "--android-attestation-status-capture-receipt-sha256",
+                        "44" * 32,
                     ]
                 )
 
@@ -2781,33 +2567,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
                 self.assertTrue(any(expected in error for error in errors), errors)
 
-    def test_android_attestation_rejects_authenticated_revoked_serial(self) -> None:
+    def test_android_attestation_rejects_every_authenticated_non_valid_serial(self) -> None:
         metadata = android_attestation_metadata("pixel8-revoked")
         challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
         chain = test_android_attestation_chain(
             challenge,
             metadata["app_package_name"],
             bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+            chain_kind="rkp",
         )
-        leaf = device_lab._decode_attestation_certificate_chain("chain.pem", chain)[0]
-        serial = device_lab._x509_certificate_serial(leaf)
+        certificates = device_lab._decode_attestation_certificate_chain("chain.pem", chain)
         authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
         assert authority is not None
         status_record = authority["attestation_revocation_status"]
         original_payload = status_record["payload"]
-        try:
-            status_record["payload"] = {
-                "entries": {serial: {"status": "REVOKED", "reason": "KEY_COMPROMISE"}}
-            }
-            errors: list[str] = []
-            self.assertIsNone(
-                device_lab._validate_android_attestation_certificate_chain(
-                    "attestation/chain.pem", chain, metadata, errors
+        for certificate in certificates:
+            serial = device_lab._x509_certificate_serial(certificate)
+            try:
+                status_record["payload"] = {
+                    "entries": {
+                        serial: {"status": "SUSPENDED", "reason": "KEY_COMPROMISE"}
+                    }
+                }
+                errors: list[str] = []
+                self.assertIsNone(
+                    device_lab._validate_android_attestation_certificate_chain(
+                        "attestation/chain.pem", chain, metadata, errors
+                    )
                 )
+            finally:
+                status_record["payload"] = original_payload
+            self.assertTrue(
+                any("authenticated revocation status" in error for error in errors), errors
             )
-        finally:
-            status_record["payload"] = original_payload
-        self.assertTrue(any("authenticated revocation status" in error for error in errors), errors)
 
     def test_candidate_causal_stream_rejects_unrelated_valid_digests(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -6,13 +6,16 @@ impl Execute for ActivateKagemushaRecursiveReleaseV4 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        kagemusha_release_lifecycle::require_direct_stage(&self, state_transaction)?;
         ensure_kagemusha_recursive_release_v4_activation_authorized(state_transaction, authority)?;
+        let runtime_effective_config_sha256 = self.runtime_effective_config_sha256;
         let promotion_binding = self.promotion_binding;
         let policy = self.device_attestation_policy;
         validate_offline_attestation_policy_for_release_activation(
             &policy,
             state_transaction.block_unix_timestamp_ms(),
         )?;
+        validate_offline_attestation_policy_transition_from_state(&policy, state_transaction)?;
         let policy_bytes = norito::encode_canonical(&policy).map_err(|error| {
             labeled_invariant(
                 "invalid_attestation_policy",
@@ -144,11 +147,21 @@ impl Execute for ActivateKagemushaRecursiveReleaseV4 {
             )
             .into());
         }
-        // Publish the validated policy, release, verifier records, and promotion atomically.
-        state_transaction.world.smart_contract_state.insert(
-            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
-            policy_bytes,
-        );
+        let lifecycle_plan = kagemusha_release_lifecycle::plan_staged(
+            authority,
+            promotion_binding,
+            binding.clone(),
+            policy,
+            &release_record_bytes,
+            runtime_effective_config_sha256,
+            expected_eq_id.clone(),
+            expected_ep_id.clone(),
+            expected_version,
+            state_transaction,
+        )?;
+        // Stage the release, verifier records, and promotion atomically. The
+        // bound device policy becomes globally active only with the later
+        // evidence-backed issuance-enable transition.
         state_transaction
             .world
             .smart_contract_state
@@ -175,6 +188,7 @@ impl Execute for ActivateKagemushaRecursiveReleaseV4 {
             ),
             expected_ep_id,
         );
+        kagemusha_release_lifecycle::commit_staged(lifecycle_plan, state_transaction);
         commit_v4_promotion_binding(
             promotion_marker,
             promotion_binding_marker,

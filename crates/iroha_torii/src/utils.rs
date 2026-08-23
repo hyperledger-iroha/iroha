@@ -1,6 +1,9 @@
 //! Utilities for Norito encoding and Axum integration.
 use axum::{
-    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, IF_NONE_MATCH},
+    },
     response::{IntoResponse, Response},
 };
 use iroha_data_model::{
@@ -25,6 +28,134 @@ const JSON_MIME_TYPE: &str = "application/json";
 pub(crate) const MAX_ERROR_MESSAGE_CHARACTERS: usize = 1024;
 pub(crate) const MAX_ERROR_DETAIL_CHARACTERS: usize = 1024;
 pub(crate) const MAX_REJECT_CODE_BYTES: usize = 128;
+
+/// Return whether any syntactically valid `If-None-Match` validator weakly matches `etag`.
+///
+/// Entity-tag opaque values are case-sensitive. A wildcard is accepted only as the sole
+/// validator, matching the HTTP field grammar.
+#[must_use]
+pub(crate) fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(expected) = http_entity_tag_opaque(etag.as_bytes()) else {
+        return false;
+    };
+    let mut token_count = 0_usize;
+    let mut wildcard = false;
+    let mut matched = false;
+    for value in headers.get_all(IF_NONE_MATCH).iter() {
+        let mut remaining = value.as_bytes();
+        loop {
+            while remaining
+                .first()
+                .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+            {
+                remaining = &remaining[1..];
+            }
+            if remaining.is_empty() {
+                return false;
+            }
+            token_count = match token_count.checked_add(1) {
+                Some(count) => count,
+                None => return false,
+            };
+            if let Some(rest) = remaining.strip_prefix(b"*") {
+                wildcard = true;
+                remaining = rest;
+            } else {
+                let after_prefix = remaining.strip_prefix(b"W/").unwrap_or(remaining);
+                let Some(after_quote) = after_prefix.strip_prefix(b"\"") else {
+                    return false;
+                };
+                let Some(closing_quote) = after_quote.iter().position(|byte| *byte == b'"') else {
+                    return false;
+                };
+                let token_len = remaining.len() - after_quote.len() + closing_quote + 1;
+                let token = &remaining[..token_len];
+                let Some(candidate) = http_entity_tag_opaque(token) else {
+                    return false;
+                };
+                matched |= candidate == expected;
+                remaining = &remaining[token_len..];
+            }
+            while remaining
+                .first()
+                .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+            {
+                remaining = &remaining[1..];
+            }
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(rest) = remaining.strip_prefix(b",") else {
+                return false;
+            };
+            remaining = rest;
+        }
+    }
+    token_count != 0 && if wildcard { token_count == 1 } else { matched }
+}
+
+fn http_entity_tag_opaque(tag: &[u8]) -> Option<&[u8]> {
+    let tag = tag.strip_prefix(b"W/").unwrap_or(tag);
+    let opaque = tag.strip_prefix(b"\"")?.strip_suffix(b"\"")?;
+    opaque
+        .iter()
+        .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte) || *byte >= 0x80)
+        .then_some(opaque)
+}
+
+#[cfg(test)]
+mod cache_validator_tests {
+    use super::if_none_match_matches;
+    use axum::http::{HeaderMap, HeaderValue, header::IF_NONE_MATCH};
+
+    #[test]
+    fn if_none_match_supports_lists_repeated_fields_weak_tags_and_wildcard() {
+        let mut headers = HeaderMap::new();
+        headers.append(IF_NONE_MATCH, HeaderValue::from_static("\"stale\""));
+        headers.append(
+            IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"proof:abc\", \"other\""),
+        );
+        assert!(if_none_match_matches(&headers, "\"proof:abc\""));
+
+        let mut quoted_comma = HeaderMap::new();
+        quoted_comma.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_static("\"stale\", W/\"proof,abc\""),
+        );
+        assert!(if_none_match_matches(&quoted_comma, "\"proof,abc\""));
+
+        let mut obs_text = HeaderMap::new();
+        obs_text.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_bytes(b"\"\x80\", \"proof:abc\"").unwrap(),
+        );
+        assert!(if_none_match_matches(&obs_text, "\"proof:abc\""));
+
+        let mut wildcard = HeaderMap::new();
+        wildcard.insert(IF_NONE_MATCH, HeaderValue::from_static("*"));
+        assert!(if_none_match_matches(&wildcard, "\"proof:abc\""));
+    }
+
+    #[test]
+    fn if_none_match_rejects_case_changes_and_malformed_lists() {
+        for value in [
+            "\"PROOF:ABC\"",
+            "\"proof:abc\"junk",
+            "*, \"proof:abc\"",
+            "\"stale\", malformed, \"proof:abc\"",
+            "\"stale\",",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                IF_NONE_MATCH,
+                HeaderValue::from_bytes(value.as_bytes()).unwrap(),
+            );
+            assert!(!if_none_match_matches(&headers, "\"proof:abc\""), "{value}");
+        }
+    }
+}
+
 /// Bounded stable error code copied into response extensions for telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HttpErrorCode(Arc<str>);
@@ -2204,6 +2335,10 @@ pub mod extractors {
         }
     }
     /// Extractor enforcing JSON payloads decoded with the Norito JSON codec.
+    ///
+    /// A missing `Content-Type` remains accepted for compatibility. When the
+    /// header is present exactly once, its media type is validated before the
+    /// body is read; duplicate declarations fail closed.
     #[derive(Clone, Debug)]
     pub struct JsonOnly<T>(pub T);
     impl<S, T> FromRequest<S> for JsonOnly<T>
@@ -2214,14 +2349,27 @@ pub mod extractors {
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
-            let body = admitted_typed_body(req, state).await?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
-            if let Some(ct) = declared {
+            let mut content_types = req.headers().get_all(CONTENT_TYPE).iter();
+            if let Some(content_type) = content_types.next() {
+                if content_types.next().is_some() {
+                    return Err((
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "Content-Type must appear at most once",
+                    )
+                        .into_response());
+                }
+                let Some(ct) = content_type
+                    .to_str()
+                    .ok()
+                    .map(str::trim)
+                    .filter(|ct| !ct.is_empty())
+                else {
+                    return Err((
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "unsupported Content-Type; expected application/json",
+                    )
+                        .into_response());
+                };
                 if !super::is_json_media_type(ct) {
                     return Err((
                         StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -2230,6 +2378,7 @@ pub mod extractors {
                         .into_response());
                 }
             }
+            let body = admitted_typed_body(req, state).await?;
             decode_as_json::<T>(&body).map(JsonOnly)
         }
     }
@@ -4148,7 +4297,7 @@ pub mod extractors {
             }
         }
         #[tokio::test]
-        async fn json_only_accepts_charset_and_suffix_json() {
+        async fn json_only_accepts_missing_header_charset_and_suffix_json() {
             #[derive(
                 Clone,
                 Debug,
@@ -4162,6 +4311,14 @@ pub mod extractors {
                 value: u32,
             }
             let body_bytes = norito::json::to_vec(&Payload { value: 9 }).expect("json encode");
+            let req = Request::builder()
+                .method("POST")
+                .body(Body::from(body_bytes.clone()))
+                .expect("build request without Content-Type");
+            let extracted = JsonOnly::<Payload>::from_request(req, &())
+                .await
+                .expect("extract headerless compatibility JSON");
+            assert_eq!(extracted.0.value, 9);
             let req = Request::builder()
                 .method("POST")
                 .header(CONTENT_TYPE, "application/json; charset=utf-8")
@@ -4180,6 +4337,57 @@ pub mod extractors {
                 .await
                 .expect("extract json suffix");
             assert_eq!(extracted.0.value, 9);
+        }
+        #[tokio::test]
+        async fn json_only_rejects_unsupported_media_before_body_admission() {
+            #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+            struct Payload {
+                value: u32,
+            }
+            let was_polled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stream_was_polled = std::sync::Arc::clone(&was_polled);
+            let stalled = futures::stream::poll_fn(move |_| {
+                stream_was_polled.store(true, std::sync::atomic::Ordering::SeqCst);
+                std::task::Poll::<
+                    Option<Result<axum::body::Bytes, std::convert::Infallible>>,
+                >::Pending
+            });
+            let request = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Body::from_stream(stalled))
+                .expect("build stalled unsupported-media request");
+            let rejection = tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                JsonOnly::<Payload>::from_request(request, &()),
+            )
+            .await
+            .expect("unsupported media must not wait for the body")
+            .expect_err("unsupported media must fail");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert!(!was_polled.load(std::sync::atomic::Ordering::SeqCst));
+
+            let mut oversized = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from("oversized"))
+                .expect("build oversized unsupported-media request");
+            DefaultBodyLimit::max(1).apply(&mut oversized);
+            let rejection = JsonOnly::<Payload>::from_request(oversized, &())
+                .await
+                .expect_err("unsupported media must precede the body limit");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+            let duplicate = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/json")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{\"value\":9}"))
+                .expect("build duplicate Content-Type request");
+            let rejection = JsonOnly::<Payload>::from_request(duplicate, &())
+                .await
+                .expect_err("duplicate media declarations must fail closed");
+            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
         #[tokio::test]
         async fn canonical_json_only_accepts_exact_json_representations() {

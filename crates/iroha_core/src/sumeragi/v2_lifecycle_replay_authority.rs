@@ -17,7 +17,7 @@ use super::{
     projection::{
         AdapterEffectAdmissionError, AuthenticatedDurableBodyFrameRecovery,
         DurableBodyFrameRecoveryError, block_subject, certified_serve_key_subject,
-        durable_body_frame_reference, execution_commitment,
+        durable_body_frame_reference, execution_commitment, timeout_certificate_envelope_subject,
     },
     schema::{
         CandidateAdmission, CausalRoot, DurableBodyFrameReference, DurableContinuationEdge,
@@ -5129,7 +5129,8 @@ pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture,
     durable_certified_fetch_waiting_record_fixture, exact_body_execution_commitment_fixture,
     exact_body_record_fixture, exact_durable_certified_fetch_record_fixture,
-    exact_local_body_record_fixture, exact_record_fixture,
+    exact_local_body_record_fixture, exact_pending_certified_fetch_candidate_fixture,
+    exact_prepare_sign_broadcast_fixture, exact_record_fixture,
     exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
     exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
 };

@@ -1,5 +1,6 @@
 //! Kagemusha offline-cash instruction execution.
 mod kagemusha_marker;
+mod kagemusha_release_lifecycle;
 mod kagemusha_runtime_effective_config;
 mod kagemusha_terminal_registry_v4;
 use super::prelude::*;
@@ -17,9 +18,10 @@ use iroha_data_model::{
         error::InstructionExecutionError,
         offline::{
             ActivateKagemushaRecursiveReleaseV4, AuthorizeKagemushaTairaCanaryV4,
-            RecordKagemushaTairaCanaryV4, RedeemKagemushaRecursiveV4,
-            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
-            TopUpKagemushaRecursiveV4,
+            CancelKagemushaRecursiveReleaseV4, DeactivateKagemushaRecursiveIssuanceV4,
+            EnableKagemushaRecursiveIssuanceV4, RecordKagemushaTairaCanaryV4,
+            RedeemKagemushaRecursiveV4, RegisterOfflineDeviceAttestation,
+            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
         },
     },
     offline::{
@@ -49,9 +51,9 @@ use iroha_data_model::{
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1, OFFLINE_REJECTION_REASON_PREFIX,
-        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
-        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
-        OfflineIosAppAttestationPolicy,
+        OfflineAndroidAppAttestationPolicy, OfflineAndroidAttestationStatusSnapshotV1,
+        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
+        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     state_path::StatePath,
@@ -59,7 +61,15 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Quantity;
+pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;
 use kagemusha_marker::v2_marker as kagemusha_v2_marker;
+#[cfg(test)]
+pub(crate) use kagemusha_release_lifecycle::tests::staged_lifecycle_for_test;
+pub(crate) use kagemusha_release_lifecycle::{
+    LifecycleEntrypointContext, direct_lifecycle_entrypoint_kind,
+    require_local_runtime_effective_config, signed_lifecycle_entrypoint_context,
+    validate_runtime_consensus_parameter_update,
+};
 pub use kagemusha_runtime_effective_config::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
 pub use kagemusha_terminal_registry_v4::{
     KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1, KagemushaCatalogQualificationSealV1,
@@ -575,6 +585,14 @@ pub fn resolve_kagemusha_recursive_readiness_v4(
         );
     }
     let resolved_artifact_set = resolved.artifact_set();
+    let lifecycle_binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+        version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+        generation: resolved_artifact_set.generation.clone(),
+        manifest_sha256: resolved_artifact_set.manifest_sha256,
+    };
+    if !kagemusha_release_lifecycle::issuance_enabled(world, &lifecycle_binding)? {
+        return Ok(None);
+    }
     let artifact_set = KagemushaAuthenticatedArtifactSetReadinessV4 {
         generation: resolved_artifact_set.generation,
         manifest_sha256: resolved_artifact_set.manifest_sha256,
@@ -713,6 +731,10 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
         max_proof_bytes: resolved_artifact_set.max_proof_bytes,
         asset_scale: resolved_artifact_set.asset_scale,
     };
+    // Lifecycle corruption disables issuance but must not strand redemption of
+    // notes already created under an authenticated release.
+    let lifecycle_enabled =
+        kagemusha_release_lifecycle::issuance_enabled(world, binding).unwrap_or(false);
     Ok(KagemushaRecursiveTransactionReleaseV4 {
         step_eq: project_kagemusha_v4_verifier(
             iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
@@ -724,11 +746,12 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
             step_ep_record,
             &artifact_set,
         ),
-        issuance_active: kagemusha_v4_issuance_active_at(
-            artifact_set.activation_height,
-            artifact_set.withdrawal_height,
-            current_height,
-        ),
+        issuance_active: lifecycle_enabled
+            && kagemusha_v4_issuance_active_at(
+                artifact_set.activation_height,
+                artifact_set.withdrawal_height,
+                current_height,
+            ),
         artifact_set,
     })
 }
@@ -962,6 +985,9 @@ pub mod isi {
     const OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN: usize = 65;
     const OFFLINE_ATTESTATION_MAX_REPORT_BYTES: usize = 64 * 1024;
     const OFFLINE_ATTESTATION_MAX_EVIDENCE_BYTES: usize = 128 * 1024;
+    const OFFLINE_ATTESTATION_MAX_X509_CERTIFICATE_BYTES: usize = 16 * 1024;
+    const OFFLINE_ATTESTATION_MAX_X509_CHAIN_CERTIFICATES: usize = 8;
+    const OFFLINE_ATTESTATION_MAX_IOS_X509_CHAIN_CERTIFICATES: usize = 4;
     const OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MIN_LEN: usize = 37 + 16 + 2;
     const OFFLINE_ATTESTATION_APP_ATTEST_AUTH_DATA_MAX_LEN: usize = 8 * 1024;
     const OFFLINE_ATTESTATION_APP_ATTEST_FLAG_USER_PRESENT: u8 = 0x01;
@@ -978,65 +1004,10 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_STRONG_BOX: i64 = 2;
     const OFFLINE_ATTESTATION_ANDROID_TAG_USAGE_COUNT_LIMIT: u32 = 405;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS: u32 = 600;
+    const OFFLINE_ATTESTATION_ANDROID_TAG_ROOT_OF_TRUST: u32 = 704;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_APPLICATION_ID: u32 = 709;
-    const APPLE_APP_ATTESTATION_ROOT_CA_DER_B64: &str = concat!(
-        "MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw",
-        "JAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwK",
-        "QXBwbGUgSW5jLjETMBEGA1UECAwKQ2FsaWZvcm5pYTAeFw0yMDAzMTgxODMyNTNa",
-        "Fw00NTAzMTUwMDAwMDBaMFIxJjAkBgNVBAMMHUFwcGxlIEFwcCBBdHRlc3RhdGlv",
-        "biBSb290IENBMRMwEQYDVQQKDApBcHBsZSBJbmMuMRMwEQYDVQQIDApDYWxpZm9y",
-        "bmlhMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERTHhmLW07ATaFQIEVwTtT4dyctdh",
-        "NbJhFs/Ii2FdCgAHGbpphY3+d8qjuDngIN3WVhQUBHAoMeQ/cLiP1sOUtgjqK9au",
-        "Yen1mMEvRq9Sk3Jm5X8U62H+xTD3FE9TgS41o0IwQDAPBgNVHRMBAf8EBTADAQH/",
-        "MB0GA1UdDgQWBBSskRBTM72+aEH/pwyp5frq5eWKoTAOBgNVHQ8BAf8EBAMCAQYw",
-        "CgYIKoZIzj0EAwMDaAAwZQIwQgFGnByvsiVbpTKwSga0kP0e8EeDS4+sQmTvb7vn",
-        "53O5+FRXgeLhpJ06ysC5PrOyAjEAp5U4xDgEgllF7En3VcE3iexZZtKeYnpqtijV",
-        "oyFraWVIyd/dganmrduC1bmTBGwD"
-    );
-    const ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64: &str = concat!(
-        "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",
-        "w1IdYIg2Wxg7yHcQZemFQg=="
-    );
-    const ANDROID_KEY_ATTESTATION_CA_DER_B64: &str = concat!(
-        "MIICIjCCAaigAwIBAgIRAISp0Cl7DrWK5/8OgN52BgUwCgYIKoZIzj0EAwMwUjEc",
-        "MBoGA1UEAwwTS2V5IEF0dGVzdGF0aW9uIENBMTEQMA4GA1UECwwHQW5kcm9pZDET",
-        "MBEGA1UECgwKR29vZ2xlIExMQzELMAkGA1UEBhMCVVMwHhcNMjUwNzE3MjIzMjE4",
-        "WhcNMzUwNzE1MjIzMjE4WjBSMRwwGgYDVQQDDBNLZXkgQXR0ZXN0YXRpb24gQ0Ex",
-        "MRAwDgYDVQQLDAdBbmRyb2lkMRMwEQYDVQQKDApHb29nbGUgTExDMQswCQYDVQQG",
-        "EwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABCPaI3FO3z5bBQo8cuiEas4HjqCt",
-        "G/mLFfRT0MsIssPBEEU5Cfbt6sH5yOAxqEi5QagpU1yX4HwnGb7OtBYpDTB57uH5",
-        "Eczm34A5FNijV3s0/f0UPl7zbJcTx6xwqMIRq6NCMEAwDwYDVR0TAQH/BAUwAwEB",
-        "/zAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFFIyuyz7RkOb3NaBqQ5lZuA0QepA",
-        "MAoGCCqGSM49BAMDA2gAMGUCMETfjPO/HwqReR2CS7p0ZWoD/LHs6hDi422opifH",
-        "EUaYLxwGlT9SLdjkVpz0UUOR5wIxAIoGyxGKRHVTpqpGRFiJtQEOOTp/+s1GcxeY",
-        "uR2zh/80lQyu9vAFCj6E4AXc+osmRg=="
-    );
+    const OFFLINE_ATTESTATION_ANDROID_VERIFIED_BOOT_STATE_VERIFIED: i64 = 0;
+    include!("offline/device_attestation_roots.rs");
     struct IosAppAttestReport {
         auth_data: Vec<u8>,
         certificates: Vec<Vec<u8>>,
@@ -1186,7 +1157,14 @@ pub mod isi {
                         .into());
                     }
                     first_high_tag_octet = false;
-                    number = (number << 7) | u32::from(byte & 0x7F);
+                    number = number
+                        .checked_mul(128)
+                        .and_then(|number| number.checked_add(u32::from(byte & 0x7F)))
+                        .ok_or_else(|| {
+                            invalid_attestation(
+                                "attestation extension DER high-tag number is invalid",
+                            )
+                        })?;
                     if byte & 0x80 == 0 {
                         break;
                     }
@@ -1314,6 +1292,7 @@ pub mod isi {
         mut ios_bundle_versions: Vec<String>,
         android_package_name: String,
         mut android_signing_certificate_sha256: Vec<[u8; 32]>,
+        android_status_snapshot: OfflineAndroidAttestationStatusSnapshotV1,
         evaluation_time_ms: u64,
     ) -> Result<OfflineDeviceAttestationPolicy, String> {
         let original_category_count = ios_validation_categories.len();
@@ -1361,7 +1340,7 @@ pub mod isi {
                     not_after_ms: None,
                 },
             ],
-            revoked_certificate_sha256: Vec::new(),
+            revoked_certificate_tbs_sha256: Vec::new(),
             ios_apps: vec![OfflineIosAppAttestationPolicy {
                 team_id: ios_team_id,
                 bundle_id: ios_bundle_id,
@@ -1376,6 +1355,7 @@ pub mod isi {
                     .map(|digest| digest.to_vec())
                     .collect(),
             }],
+            android_status_snapshot: Some(android_status_snapshot),
             require_ios_app_policy: true,
             require_android_app_policy: true,
         };
@@ -1384,8 +1364,8 @@ pub mod isi {
         Ok(policy)
     }
     #[cfg(test)]
-    fn default_offline_device_attestation_policy() -> Result<OfflineDeviceAttestationPolicy, Error>
-    {
+    pub(super) fn default_offline_device_attestation_policy()
+    -> Result<OfflineDeviceAttestationPolicy, Error> {
         Ok(OfflineDeviceAttestationPolicy {
             version: 1,
             trusted_roots: vec![
@@ -1408,9 +1388,10 @@ pub mod isi {
                     not_after_ms: None,
                 },
             ],
-            revoked_certificate_sha256: Vec::new(),
+            revoked_certificate_tbs_sha256: Vec::new(),
             ios_apps: Vec::new(),
             android_apps: Vec::new(),
+            android_status_snapshot: None,
             require_ios_app_policy: false,
             require_android_app_policy: false,
         })
@@ -1441,6 +1422,7 @@ pub mod isi {
         }
     }
     include!("offline/attestation_policy_validation.rs");
+    include!("offline/attestation_certificate_der_profile.rs");
     include!("offline/attestation_certificate_validation.rs");
     include!("offline/topup_shield_verifier_resolution.rs");
     fn resolve_kagemusha_unshield_verifier(
@@ -2744,130 +2726,7 @@ pub mod isi {
             assertion_hash: Hash::new(assertion_archive),
         })
     }
-    fn authenticate_registered_kagemusha_v2_device(
-        authorization: &KagemushaRequestAuthorizationV2,
-        asset: &AssetDefinitionId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaAuthenticatedDeviceV1, Error> {
-        if &authorization.asset_definition_id != asset {
-            return Err(labeled_invariant(
-                "invalid_authorization",
-                "Kagemusha hardware authorization asset does not match the operation asset",
-            )
-            .into());
-        }
-        let state_key = kagemusha_online_registration_state_key(&authorization.registration_hash)?;
-        let previous_archive = state_transaction
-            .world
-            .smart_contract_state
-            .get(&state_key)
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "device_not_registered",
-                    "Kagemusha hardware authorization references an unknown registration hash",
-                )
-            })?;
-        if previous_archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "persisted Kagemusha registration exceeds the protocol byte limit",
-            )
-            .into());
-        }
-        let previous_archive = previous_archive.clone();
-        let state = decode_kagemusha_online_registration_state_v4(&state_key, &previous_archive)
-            .map_err(|err| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    format!("failed to validate persisted Kagemusha registration: {err}"),
-                )
-            })?;
-        if state.original_registration_hash != authorization.registration_hash {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "persisted Kagemusha registration is non-canonical, corrupt, or keyed incorrectly",
-            )
-            .into());
-        }
-        let registration = &state.registration;
-        if registration.account_id != authorization.authority
-            || registration.device_id != authorization.device_id
-            || registration.asset_definition_id.as_ref() != Some(asset)
-            || authorization.expires_at_ms > registration.expires_at_ms
-            || registration.expires_at_ms <= state_transaction.block_unix_timestamp_ms()
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Kagemusha authorization account, device, asset, or expiry does not match its registration",
-            )
-            .into());
-        }
-        validate_offline_attestation_platform_profile(registration)?;
-        validate_offline_attestation_optional_metadata(registration)?;
-        let policy = effective_offline_device_attestation_policy(state_transaction)?;
-        validate_offline_attestation_policy(&policy, state_transaction.block_unix_timestamp_ms())?;
-        if state.admission_policy_hash != canonical_offline_device_attestation_policy_hash(&policy)?
-        {
-            return Err(labeled_invariant(
-                "attestation_policy_changed",
-                "Offline device attestation policy changed after registration; the device must register again",
-            )
-            .into());
-        }
-        let assertion = match (&authorization.hardware_assertion, &state.lifecycle) {
-            (
-                KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_),
-                KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused
-                | KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(_),
-            ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
-                let (package_name, signing_digest) = android_attestation_metadata(registration)?;
-                ensure_android_app_allowed_by_policy(&policy, &package_name, &signing_digest)?;
-                authorization
-                    .verify_hardware_signature(&registration.assertion_public_key)
-                    .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
-                KagemushaAuthenticatedHardwareAssertionV1::AndroidKeyMint
-            }
-            (
-                KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion),
-                KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest { .. },
-            ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
-                let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)?;
-                let app_policy =
-                    ensure_ios_app_allowed_by_policy(&policy, &team_id, &bundle_id, &environment)?;
-                let authenticator_data =
-                    parse_ios_app_attest_assertion_auth_data(&assertion.authenticator_data)?;
-                validate_ios_app_attest_extensions_against_policy(
-                    app_policy,
-                    &authenticator_data.extensions,
-                )?;
-                let expected_rp_id_hash = sha256_bytes(format!("{team_id}.{bundle_id}").as_bytes());
-                validate_ios_app_attest_assertion_identity(
-                    &authenticator_data,
-                    expected_rp_id_hash,
-                )?;
-                authorization
-                    .verify_hardware_signature(&registration.assertion_public_key)
-                    .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
-                KagemushaAuthenticatedHardwareAssertionV1::IosAppAttest {
-                    sign_count: authenticator_data.sign_count,
-                }
-            }
-            _ => {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Kagemusha authorization platform does not match its persisted registration lifecycle",
-                )
-                .into());
-            }
-        };
-        Ok(KagemushaAuthenticatedDeviceV1 {
-            state_key,
-            previous_archive,
-            state,
-            consumption: assertion_consumption(authorization)?,
-            assertion,
-        })
-    }
+    include!("offline/kagemusha_redemption_policy_validation.rs");
     fn plan_kagemusha_online_hardware_assertion(
         mut authenticated: KagemushaAuthenticatedDeviceV1,
     ) -> Result<KagemushaOnlineHardwareAssertionCommitPlan, Error> {
@@ -3884,7 +3743,7 @@ pub mod isi {
         );
         world_has_offline_permission(world, authority, &required)
     }
-    fn ensure_kagemusha_recursive_release_v4_activation_authorized(
+    pub(super) fn ensure_kagemusha_recursive_release_v4_activation_authorized(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<(), Error> {
@@ -3962,12 +3821,17 @@ pub mod isi {
         asset: &AssetDefinitionId,
         authority: &AccountId,
         authorization: &KagemushaRequestAuthorizationV2,
+        release_policy: &OfflineDeviceAttestationPolicy,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(KagemushaAuthenticatedDeviceV1, KagemushaV4ReplayStatus), Error> {
         // Preserve the same auth-before-state boundary for redemption receipts and markers.
         ensure_can_submit_kagemusha_for_account(recipient, authority, state_transaction)?;
-        let authenticated =
-            authenticate_registered_kagemusha_v2_device(authorization, asset, state_transaction)?;
+        let authenticated = authenticate_registered_kagemusha_v2_device_against_policy(
+            authorization,
+            asset,
+            release_policy,
+            state_transaction,
+        )?;
         let replay = kagemusha_v4_replay_status(authorization, state_transaction)?;
         Ok((authenticated, replay))
     }
@@ -4198,8 +4062,8 @@ pub mod isi {
             invalid_attestation("iOS App Attest report is missing certificate chain")
         })?;
         reject_invalid_attestation!(
-            x5c.len() < 2,
-            "iOS App Attest report must include a certificate chain",
+            !(2..=OFFLINE_ATTESTATION_MAX_IOS_X509_CHAIN_CERTIFICATES).contains(&x5c.len()),
+            "iOS App Attest report must include a bounded certificate chain",
         );
         let mut certificates = Vec::with_capacity(x5c.len());
         for value in x5c {
@@ -4210,8 +4074,9 @@ pub mod isi {
                 .into());
             };
             reject_invalid_attestation!(
-                certificate.is_empty(),
-                "iOS App Attest certificate chain entries must be non-empty",
+                certificate.is_empty()
+                    || certificate.len() > OFFLINE_ATTESTATION_MAX_X509_CERTIFICATE_BYTES,
+                "iOS App Attest certificate chain entry size is outside protocol bounds",
             );
             certificates.push(certificate.clone());
         }
@@ -4691,12 +4556,12 @@ pub mod isi {
         validate_app_attest_cose_p256_key(&auth_data.cose_key, &registration.assertion_public_key)?;
         let trusted_roots =
             trusted_root_der_for_platform(policy, &registration.platform, block_unix_timestamp_ms)?;
-        let revoked_certificate_sha256 = policy_revoked_certificate_hashes(policy)?;
+        let revoked_certificate_tbs_sha256 = policy_revoked_certificate_tbs_hashes(policy)?;
         let evaluation_time = x509_evaluation_time(block_unix_timestamp_ms)?;
         validate_attestation_certificate_chain(
             &report.certificates,
             &trusted_roots,
-            &revoked_certificate_sha256,
+            &revoked_certificate_tbs_sha256,
             evaluation_time,
         )?;
         let leaf = parse_x509_certificate_der(&report.certificates[0])?;
@@ -4769,10 +4634,10 @@ pub mod isi {
             )
             .into());
         };
-        if certificates.is_empty() {
+        if !(1..=OFFLINE_ATTESTATION_MAX_X509_CHAIN_CERTIFICATES).contains(&certificates.len()) {
             return Err(labeled_invariant(
                 "invalid_attestation",
-                "Android KeyMint report must include certificate bytes",
+                "Android KeyMint report must include a bounded certificate chain",
             )
             .into());
         }
@@ -4785,10 +4650,12 @@ pub mod isi {
                 )
                 .into());
             };
-            if certificate.is_empty() {
+            if certificate.is_empty()
+                || certificate.len() > OFFLINE_ATTESTATION_MAX_X509_CERTIFICATE_BYTES
+            {
                 return Err(labeled_invariant(
                     "invalid_attestation",
-                    "Android KeyMint certificate entries must be non-empty",
+                    "Android KeyMint certificate entry size is outside protocol bounds",
                 )
                 .into());
             }
@@ -4824,187 +4691,7 @@ pub mod isi {
         }
         Ok(value)
     }
-    fn validate_der_set_element_order<'a>(
-        previous: &mut Option<&'a [u8]>,
-        current: &'a [u8],
-        message: &str,
-    ) -> Result<(), Error> {
-        if previous.is_some_and(|previous| previous > current) {
-            return Err(labeled_invariant("invalid_attestation", message.to_owned()).into());
-        }
-        *previous = Some(current);
-        Ok(())
-    }
-    fn parse_android_attestation_application_id(
-        input: &[u8],
-    ) -> Result<AndroidAttestationApplicationId, Error> {
-        let mut reader = DerReader::sequence(input)?;
-        let package_set = reader.read_expected(0x31)?;
-        let signature_set = reader.read_expected(0x31)?;
-        if reader.has_remaining() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint attestation application id has trailing bytes",
-            )
-            .into());
-        }
-        let mut packages = Vec::new();
-        let mut seen_packages = HashSet::new();
-        let mut package_reader = DerReader::new(package_set);
-        let mut previous_package_der = None;
-        while package_reader.has_remaining() {
-            let (tag, package_der, raw_package_der) = package_reader.read_tlv_full_with_raw()?;
-            if tag.first_byte != 0x30 {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER has an unexpected DER tag",
-                )
-                .into());
-            }
-            validate_der_set_element_order(
-                &mut previous_package_der,
-                raw_package_der,
-                "Android KeyMint attestation package SET elements are not DER sorted",
-            )?;
-            let mut info_reader = DerReader::new(package_der);
-            let package_name_bytes = info_reader.read_octet_string()?;
-            let _version = info_reader.read_integer()?;
-            if info_reader.has_remaining() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation package info has trailing bytes",
-                )
-                .into());
-            }
-            let package_name = String::from_utf8(package_name_bytes).map_err(|_| {
-                labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation package name must be UTF-8",
-                )
-            })?;
-            if package_name.trim().is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation package name must be non-empty",
-                )
-                .into());
-            }
-            if !seen_packages.insert(package_name.clone()) {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation application id duplicates a package name",
-                )
-                .into());
-            }
-            packages.push(AndroidAttestationPackageInfo { package_name });
-        }
-        let mut signature_digests = Vec::new();
-        let mut seen_signature_digests = HashSet::new();
-        let mut signature_reader = DerReader::new(signature_set);
-        let mut previous_signature_der = None;
-        while signature_reader.has_remaining() {
-            let (tag, digest, raw_signature_der) = signature_reader.read_tlv_full_with_raw()?;
-            if tag.first_byte != 0x04 {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "attestation extension DER has an unexpected DER tag",
-                )
-                .into());
-            }
-            validate_der_set_element_order(
-                &mut previous_signature_der,
-                raw_signature_der,
-                "Android KeyMint attestation signing-digest SET elements are not DER sorted",
-            )?;
-            if digest.len() != 32 {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation signing digest must be 32 bytes",
-                )
-                .into());
-            }
-            let mut digest_array = [0u8; 32];
-            digest_array.copy_from_slice(&digest);
-            if !seen_signature_digests.insert(digest_array) {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint attestation application id duplicates a signing digest",
-                )
-                .into());
-            }
-            signature_digests.push(digest.to_vec());
-        }
-        if packages.is_empty() || signature_digests.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint attestation application id must include packages and signing digests",
-            )
-            .into());
-        }
-        Ok(AndroidAttestationApplicationId {
-            packages,
-            signature_digests,
-        })
-    }
-    fn parse_android_authorization_list(
-        input: &[u8],
-    ) -> Result<(Option<i64>, bool, Option<AndroidAttestationApplicationId>), Error> {
-        let mut reader = DerReader::new(input);
-        let mut usage_count_limit = None;
-        let mut all_applications = false;
-        let mut application_id = None;
-        while reader.has_remaining() {
-            let (tag, value) = reader.read_tlv_full()?;
-            if tag.class_bits != 0x80 || !tag.constructed {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "Android KeyMint authorization list contains an invalid tag",
-                )
-                .into());
-            }
-            match tag.number {
-                OFFLINE_ATTESTATION_ANDROID_TAG_USAGE_COUNT_LIMIT => {
-                    if usage_count_limit
-                        .replace(der_single_integer(value)?)
-                        .is_some()
-                    {
-                        return Err(labeled_invariant(
-                            "invalid_attestation",
-                            "Android KeyMint authorization list duplicates usageCountLimit",
-                        )
-                        .into());
-                    }
-                }
-                OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS => {
-                    if all_applications {
-                        return Err(labeled_invariant(
-                            "invalid_attestation",
-                            "Android KeyMint authorization list duplicates allApplications",
-                        )
-                        .into());
-                    }
-                    let mut null_reader = DerReader::new(value);
-                    null_reader.read_null()?;
-                    all_applications = true;
-                }
-                OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_APPLICATION_ID => {
-                    let app_id_der = der_single_octet_string(value)?;
-                    if application_id
-                        .replace(parse_android_attestation_application_id(&app_id_der)?)
-                        .is_some()
-                    {
-                        return Err(labeled_invariant(
-                            "invalid_attestation",
-                            "Android KeyMint authorization list duplicates attestationApplicationId",
-                        )
-                        .into());
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok((usage_count_limit, all_applications, application_id))
-    }
+    include!("offline/android_attestation_authorization_validation.rs");
     fn parse_android_key_description(
         extension_value: &[u8],
     ) -> Result<AndroidKeyDescription, Error> {
@@ -5019,10 +4706,10 @@ pub mod isi {
         }
         let attestation_security_level = reader.read_enumerated()?;
         let keymint_version = reader.read_integer()?;
-        if keymint_version < 0 {
+        if keymint_version <= 0 {
             return Err(labeled_invariant(
                 "invalid_attestation",
-                "Android KeyMint version must be non-negative",
+                "Android KeyMint version must be positive",
             )
             .into());
         }
@@ -5038,10 +4725,14 @@ pub mod isi {
             )
             .into());
         }
-        let (software_usage_count_limit, software_all_applications, software_application_id) =
-            parse_android_authorization_list(&software_enforced)?;
-        let (hardware_usage_count_limit, hardware_all_applications, hardware_application_id) =
-            parse_android_authorization_list(&hardware_enforced)?;
+        let (software_usage_count_limit, software_all_applications, software_application_id, _) =
+            parse_android_authorization_list(&software_enforced, false)?;
+        let (
+            hardware_usage_count_limit,
+            hardware_all_applications,
+            hardware_application_id,
+            hardware_root_of_trust,
+        ) = parse_android_authorization_list(&hardware_enforced, true)?;
         if software_usage_count_limit.is_some() {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -5060,6 +4751,13 @@ pub mod isi {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "Android KeyMint authorization lists duplicate attestationApplicationId",
+            )
+            .into());
+        }
+        if !hardware_root_of_trust {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint attestation must contain exactly one hardware rootOfTrust",
             )
             .into());
         }
@@ -5084,13 +4782,34 @@ pub mod isi {
         let report = parse_android_keymint_report(registration)?;
         let trusted_roots =
             trusted_root_der_for_platform(policy, &registration.platform, block_unix_timestamp_ms)?;
-        let revoked_certificate_sha256 = policy_revoked_certificate_hashes(policy)?;
+        let revoked_certificate_tbs_sha256 = policy_revoked_certificate_tbs_hashes(policy)?;
+        let status_snapshot = policy.android_status_snapshot.as_ref().ok_or_else(|| {
+            labeled_invariant(
+                "invalid_attestation_policy",
+                "Android attestation requires a governed status snapshot",
+            )
+        })?;
+        let non_valid_certificate_serials = status_snapshot
+            .non_valid_serials
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
         let evaluation_time = x509_evaluation_time(block_unix_timestamp_ms)?;
-        validate_attestation_certificate_chain(
+        // Registrations are valid on `[admitted_at_ms, expires_at_ms)`, so the
+        // final certificate-validity point is the preceding millisecond.
+        let registration_last_valid_time = x509_evaluation_time(
+            registration
+                .expires_at_ms
+                .checked_sub(1)
+                .ok_or_else(|| invalid_attestation("Android registration expiry underflows"))?,
+        )?;
+        validate_android_key_attestation_certificate_chain(
             &report.certificates,
             &trusted_roots,
-            &revoked_certificate_sha256,
+            &revoked_certificate_tbs_sha256,
+            &non_valid_certificate_serials,
             evaluation_time,
+            registration_last_valid_time,
         )?;
         let attested_certificate_der = report.certificates.first().ok_or_else(|| {
             labeled_invariant(
@@ -5099,17 +4818,7 @@ pub mod isi {
             )
         })?;
         let attested_certificate = parse_x509_certificate_der(attested_certificate_der)?;
-        let extension_value = x509_unique_extension_value(
-            &attested_certificate,
-            OFFLINE_ATTESTATION_ANDROID_KEY_OID,
-            "Android KeyMint leaf certificate contains duplicate attestation extensions",
-        )?
-        .ok_or_else(|| {
-            labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint leaf certificate is missing the attestation extension",
-            )
-        })?;
+        let extension_value = android_keymint_leaf_attestation_extension(&report.certificates)?;
         let key_description = parse_android_key_description(&extension_value)?;
         if key_description.attestation_challenge != registration.challenge_hash.as_ref() {
             return Err(labeled_invariant(
@@ -5149,28 +4858,11 @@ pub mod isi {
                 "Android KeyMint attestation is missing attestationApplicationId",
             )
         })?;
-        if !application_id
-            .packages
-            .iter()
-            .any(|package| package.package_name == package_name)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint attestation package name does not match registration",
-            )
-            .into());
-        }
-        if !application_id
-            .signature_digests
-            .iter()
-            .any(|digest| digest.as_slice() == signing_digest)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "Android KeyMint attestation signing digest does not match registration",
-            )
-            .into());
-        }
+        validate_android_attestation_application_id_matches(
+            &application_id,
+            &package_name,
+            &signing_digest,
+        )?;
         let subject_public_key = x509_subject_public_key_bytes(&attested_certificate);
         if subject_public_key != registration.assertion_public_key {
             return Err(labeled_invariant(
@@ -5368,6 +5060,7 @@ pub mod isi {
                 &policy,
                 state_transaction.block_unix_timestamp_ms(),
             )?;
+            validate_offline_attestation_policy_transition_from_state(&policy, state_transaction)?;
             let bytes = norito::encode_canonical(&policy).map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation_policy",
@@ -5550,6 +5243,7 @@ pub mod isi {
     }
     struct KagemushaResolvedTransactionReleaseV4 {
         cached: std::sync::Arc<kagemusha_terminal_registry_v4::KagemushaCachedReleaseV4>,
+        issuance_active: bool,
     }
     fn resolve_kagemusha_v4_transaction_release(
         binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
@@ -5559,7 +5253,7 @@ pub mod isi {
         asset_scale: u32,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaResolvedTransactionReleaseV4, Error> {
-        super::resolve_kagemusha_recursive_transaction_release_v4(
+        let release = super::resolve_kagemusha_recursive_transaction_release_v4(
             &state_transaction.world,
             &state_transaction.kagemusha_release_catalog,
             binding,
@@ -5575,7 +5269,10 @@ pub mod isi {
             .resolve_binding(binding)
             .map_err(|error| labeled_invariant("verifier_key_invalid", error))?
             .clone();
-        Ok(KagemushaResolvedTransactionReleaseV4 { cached })
+        Ok(KagemushaResolvedTransactionReleaseV4 {
+            cached,
+            issuance_active: release.issuance_active,
+        })
     }
     fn verify_kagemusha_v4_recursive_bundle(
         bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
@@ -6027,10 +5724,7 @@ pub mod isi {
                 live_scale,
                 state_transaction,
             )?;
-            if !release
-                .cached
-                .issuance_active_at(state_transaction.block_height())
-            {
+            if !release.issuance_active {
                 return Err(labeled_invariant(
                     "recursive_release_withdrawn",
                     "Kagemusha V4 top-up is outside the authenticated issuance window",
@@ -6200,12 +5894,18 @@ pub mod isi {
                 .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
                 .map_err(|err| labeled_invariant("invalid_authorization", err.to_string()))?;
             let statement = &request.bundle.statement;
+            let release_policy = kagemusha_release_lifecycle::redemption_policy(
+                &state_transaction.world,
+                &statement.artifact_binding,
+            )
+            .map_err(|error| labeled_invariant("recursive_release_mismatch", error))?;
             let (authenticated_device, replay_status) =
                 authenticate_kagemusha_v4_redeem_submission_before_replay(
                     &request.recipient,
                     &statement.asset,
                     authority,
                     &request.authorization,
+                    &release_policy,
                     state_transaction,
                 )?;
             let replay_markers = match replay_status {
@@ -6267,11 +5967,10 @@ pub mod isi {
                     )
                 })
                 .transpose()?;
-            if change_release.as_ref().is_some_and(|release| {
-                !release
-                    .cached
-                    .issuance_active_at(state_transaction.block_height())
-            }) {
+            if change_release
+                .as_ref()
+                .is_some_and(|release| !release.issuance_active)
+            {
                 return Err(labeled_invariant(
                     "recursive_release_withdrawn",
                     "Kagemusha V4 partial redemption with offline change is outside the issuance window",
@@ -6419,5 +6118,3 @@ pub mod isi {
     include!("offline/kagemusha_taira_canary.rs");
     include!("offline/isi_tests.rs");
 }
-
-pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;

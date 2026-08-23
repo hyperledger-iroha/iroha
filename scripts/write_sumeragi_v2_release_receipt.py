@@ -58,16 +58,16 @@ _RELEASE_RECEIPT_COMPONENT_FILES = (
 )
 _RELEASE_RECEIPT_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
+        "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
+        "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
+        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
     ),
 }
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -241,21 +241,21 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
+        "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
+        "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
+        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
+        "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -291,6 +291,10 @@ _BOOTSTRAP_RUNNER_ENV_ALLOWLIST = {
     "CARGO_NET_OFFLINE",
     "IROHA_RELEASE_APALACHE_BIN",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+    "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
@@ -3831,6 +3835,10 @@ def _validate_bootstrap_evidence(
     expected_scaling_configuration_sha256: str,
     expected_scaling_irohad_sha256: str,
     expected_scaling_iroha_cli_sha256: str,
+    expected_formal_replay_source_receipt_path: Path,
+    expected_formal_replay_release_root_path: Path,
+    expected_formal_replay_signature_sha256: str,
+    expected_formal_replay_principal: str,
     bootstrap_private_inputs_available: bool,
 ) -> tuple[
     dict[str, Any],
@@ -4652,6 +4660,27 @@ def _validate_bootstrap_evidence(
     ):
         raise ReceiptError(
             "bootstrap runner G-SCALE trust anchors are not the receipt trust anchors"
+        )
+    expected_formal_replay_environment = {
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+            expected_formal_replay_source_receipt_path
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+            expected_formal_replay_release_root_path
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": (
+            expected_formal_replay_signature_sha256
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": (
+            expected_formal_replay_principal
+        ),
+    }
+    if any(
+        environment.get(name) != value
+        for name, value in expected_formal_replay_environment.items()
+    ):
+        raise ReceiptError(
+            "bootstrap runner signed formal replay inputs are not the receipt inputs"
         )
     for child_name in ("home", "tmp"):
         child, _ = _private_evidence_directory(

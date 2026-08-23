@@ -16,6 +16,7 @@ use soranet_relay::{
 };
 use std::{
     error::Error,
+    fmt,
     path::{Path, PathBuf},
     str::FromStr as _,
     time::{SystemTime, UNIX_EPOCH},
@@ -184,17 +185,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     };
     validate_canonical_request_inputs(RECEIPT_METHOD, RECEIPT_PATH, "", &cli.account_id, &nonce)?;
     validate_request_freshness(timestamp_ms, &nonce)?;
-    let mut seed = read_seed_file(&cli.private_key_seed_file)?;
+    let seed = read_seed_file(&cli.private_key_seed_file)?;
     let signed_result = sign_artifact(
         &artifact,
         &cli.account_id,
         &cli.network_id,
-        &seed,
+        seed.expose(),
         torii_root.as_deref(),
         timestamp_ms,
         nonce.as_str(),
     );
-    seed.fill(0);
     let signed = signed_result?;
     match cli.output {
         OutputFormat::Json => {
@@ -301,17 +301,42 @@ fn default_nonce(
     String::from_utf8(nonce).map_err(Into::into)
 }
 
-fn decode_seed(raw: &str) -> Result<[u8; 32], Box<dyn Error>> {
+struct SecretSeed([u8; 32]);
+
+impl fmt::Debug for SecretSeed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretSeed(<redacted>)")
+    }
+}
+
+impl SecretSeed {
+    fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    fn clear(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+
+impl Drop for SecretSeed {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+fn decode_seed(raw: &str) -> Result<SecretSeed, Box<dyn Error>> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
     if normalized.len() != 64 {
         return Err("private key seed must contain exactly 64 hex characters".into());
     }
-    let mut seed = [0_u8; 32];
-    hex::decode_to_slice(normalized, &mut seed)?;
+    let mut seed = SecretSeed([0_u8; 32]);
+    hex::decode_to_slice(normalized, &mut seed.0)?;
     Ok(seed)
 }
 
-fn read_seed_file(path: &Path) -> Result<[u8; 32], Box<dyn Error>> {
+fn read_seed_file(path: &Path) -> Result<SecretSeed, Box<dyn Error>> {
     if !path.is_absolute() {
         return Err("private key seed file must use an absolute runtime-only path".into());
     }
@@ -325,6 +350,7 @@ fn read_seed_file(path: &Path) -> Result<[u8; 32], Box<dyn Error>> {
         Err(error) => Err(format!("private key seed file is not UTF-8: {error}").into()),
     };
     bytes.fill(0);
+    std::hint::black_box(bytes.as_mut_slice());
     result
 }
 fn request_body(record: &VpnSettlementSpoolRecord) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -1112,10 +1138,11 @@ mod tests {
     }
     #[test]
     fn seed_decode_rejects_length_before_hex_allocation() {
-        assert_eq!(
-            decode_seed(&"ab".repeat(32)).expect("valid seed"),
-            [0xab; 32]
-        );
+        let mut seed = decode_seed(&"ab".repeat(32)).expect("valid seed");
+        assert_eq!(seed.expose(), &[0xab; 32]);
+        assert_eq!(format!("{seed:?}"), "SecretSeed(<redacted>)");
+        seed.clear();
+        assert_eq!(seed.expose(), &[0; 32]);
         let error = decode_seed(&"ab".repeat(33)).expect_err("max+1 seed must fail");
         assert!(error.to_string().contains("exactly 64"), "{error}");
     }
@@ -1130,7 +1157,10 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
                 .expect("restrict seed permissions");
         }
-        assert_eq!(read_seed_file(&path).expect("read seed"), [0xab; 32]);
+        assert_eq!(
+            read_seed_file(&path).expect("read seed").expose(),
+            &[0xab; 32]
+        );
         read_seed_file(Path::new("relative-seed.hex"))
             .expect_err("relative secret path must fail before file access");
     }

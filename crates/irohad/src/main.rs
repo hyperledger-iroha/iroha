@@ -3,12 +3,15 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-/// Fail-closed local seam for one Kagemusha validator qualification seal.
-#[path = "main/kagemusha_validator_qualification.rs"]
-mod kagemusha_validator_qualification;
 /// Secret-free protocol-effective configuration capture for validator seals.
 #[path = "main/kagemusha_runtime_effective_config_projection.rs"]
 mod kagemusha_runtime_effective_config_projection;
+/// Catalog and runtime-projection gates shared by normal and snapshot startup.
+#[path = "main/kagemusha_startup.rs"]
+mod kagemusha_startup;
+/// Fail-closed local seam for one Kagemusha validator qualification seal.
+#[path = "main/kagemusha_validator_qualification.rs"]
+mod kagemusha_validator_qualification;
 /// Root-custodied inputs and no-replace output for validator qualification.
 #[path = "main/kagemusha_validator_qualification_command.rs"]
 mod kagemusha_validator_qualification_command;
@@ -26,12 +29,7 @@ pub mod runtime_provider_registry;
 /// Exact external credential boundary for authenticated Hugging Face inference.
 pub mod soracloud_hf_credential;
 /// Embedded Soracloud runtime-manager reconciliation.
-#[cfg(feature = "embedded-soracloud-runtime")]
 #[path = "soracloud_runtime.rs"]
-mod soracloud_runtime;
-/// No-op Soracloud runtime used when the full embedded runtime is disabled.
-#[cfg(not(feature = "embedded-soracloud-runtime"))]
-#[path = "soracloud_runtime_stub.rs"]
 mod soracloud_runtime;
 /// Exact external signer boundary for Soracloud runtime mutations.
 pub mod soracloud_runtime_signer;
@@ -59,6 +57,9 @@ mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
+/// Fixed-descriptor Taira runtime signer and deployment launcher.
+#[cfg(unix)]
+pub mod taira_runtime_signer;
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -131,6 +132,11 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
+use kagemusha_startup::{
+    install_configured_kagemusha_release_catalog,
+    load_and_build_configured_kagemusha_validator_qualification_capture,
+    load_configured_kagemusha_release_catalog,
+};
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
 use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
@@ -6857,9 +6863,11 @@ mod snapshot_read_error_tests {
             vec![governed_lane],
         )
         .expect("single governed lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.lane_catalog = catalog.clone();
-        nexus.configured_lane_catalog = catalog;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            lane_catalog: catalog.clone(),
+            configured_lane_catalog: catalog,
+            ..Default::default()
+        };
         let error = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect_err("governed replay lane without a frozen manifest must reject startup");
         assert_eq!(error.reason(), GovernanceGuardReason::MissingManifest);
@@ -7926,10 +7934,6 @@ impl Iroha {
             lane_compliance.clone(),
         ));
         state.install_lane_compliance_engine(lane_compliance.clone());
-        #[cfg(feature = "telemetry")]
-        let mut lane_manifest_task = None;
-        #[cfg(not(feature = "telemetry"))]
-        let mut lane_manifest_task = None;
         // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
         // snapshot used by replay to the effective catalog, rather than rescanning mutable files
         // at a second startup boundary.
@@ -7952,25 +7956,25 @@ impl Iroha {
             );
         }
         #[cfg(feature = "telemetry")]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let telemetry_task = state.telemetry.clone();
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((
+            Some((
                 queue_task,
                 telemetry_task,
                 governance_task,
                 registry_cfg_task,
-            ));
-        }
+            ))
+        };
         #[cfg(not(feature = "telemetry"))]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
-        }
+            Some((queue_task, governance_task, registry_cfg_task))
+        };
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
         // journal before the mandatory ordinary queue-plan journal can reinsert pending transactions.
@@ -8106,6 +8110,14 @@ impl Iroha {
                 authenticated_block_cadence,
             )));
         }
+        kagemusha_startup::install_runtime_effective_config(
+            &config,
+            &state,
+            authenticated_snapshot_bootstrap.as_ref(),
+            authenticated_block_cadence,
+            effective_genesis,
+        )
+        .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         iroha_logger::info!(
             mode=%consensus_caps.mode.tag(),
             proto=%consensus_caps.proto_version,
@@ -8924,6 +8936,21 @@ impl Iroha {
         }
         let sorafs_storage_config =
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
+        let soracloud_operator_preseed_store = if config.soracloud_runtime.inrou.enabled
+            && !sorafs_storage_config.enabled()
+        {
+            Some(Arc::new(
+                sorafs_node::store::StorageBackend::new(sorafs_storage_config.clone()).map_err(
+                    |error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to open the local operator-preseed SoraFS store for Inrou hydration: {error}"
+                        ))
+                    },
+                )?,
+            ))
+        } else {
+            None
+        };
         let sorafs_repair_config =
             sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
@@ -9552,20 +9579,17 @@ impl Iroha {
         )
         .with_sorafs_node(sorafs_node.clone())
         .with_remote_stream_token_operator_from_config(&config);
+        let runtime_manager = if let Some(store) = soracloud_operator_preseed_store {
+            runtime_manager.with_operator_preseed_store(store)
+        } else {
+            runtime_manager
+        };
         let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
             runtime_manager.with_hf_inference_credential_provider(provider)
         } else {
             runtime_manager
         };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
-            #[cfg(feature = "embedded-soracloud-runtime")]
-            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
-                Arc::clone(&queue),
-                Arc::clone(&state),
-                signer,
-                config.soracloud_runtime.submission.clone(),
-            );
-            #[cfg(not(feature = "embedded-soracloud-runtime"))]
             let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
                 Arc::clone(&queue),
                 Arc::clone(&state),
@@ -10683,9 +10707,6 @@ pub enum ConfigError {
     },
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
-    #[cfg(not(feature = "embedded-soracloud-runtime"))]
-    /// Production Soracloud runtime was requested from a binary lacking support.
-    SoracloudRuntimeFeatureRequired,
     /// Embedded `SoraFS` storage was enabled without governed gateway compliance.
     SorafsStorageComplianceRequired,
     /// `SoraFS` gateway automation was enabled while embedded storage was disabled.
@@ -10746,11 +10767,6 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `iroha3d --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
-            #[cfg(not(feature = "embedded-soracloud-runtime"))]
-            Self::SoracloudRuntimeFeatureRequired => write!(
-                f,
-                "`soracloud_runtime.production_mode = true` requires building iroha3d with the `embedded-soracloud-runtime` feature"
-            ),
             Self::SorafsStorageComplianceRequired => write!(
                 f,
                 "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
@@ -11886,14 +11902,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("minimal config")
     }
     pub fn multilane_config_table() -> Table {
-        toml::from_str(&format!(
+        toml::from_str(
             r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
 soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
 soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
-  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -11911,13 +11927,13 @@ lane_count = 2
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
-metadata = {{}}
+metadata = {}
 [[nexus.lane_catalog]]
 index = 1
 alias = "zk"
-metadata = {{}}
+metadata = {}
 "#
-        ))
+        )
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
@@ -12545,10 +12561,6 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
     }
 }
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
-    #[cfg(not(feature = "embedded-soracloud-runtime"))]
-    if config.soracloud_runtime.production_mode {
-        emitter.emit(Report::new(ConfigError::SoracloudRuntimeFeatureRequired));
-    }
     let sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
     let sorafs_gateway_compliance_enabled = config.torii.sorafs_gateway.compliance.is_some();
     if sorafs_storage_enabled && !sorafs_gateway_compliance_enabled {
@@ -12678,6 +12690,31 @@ pub fn run_with_runtime_provider_registry(
     registry: &dyn IrohaRuntimeProviderRegistryV1,
 ) -> ReportResult<(), MainError> {
     run_main(Some(registry), None)
+}
+/// Deployment-launcher guard evaluated over the parsed daemon configuration.
+type IrohaLauncherConfigGuardV1 = fn(&Config) -> Result<(), String>;
+/// Run the standard CLI launcher with a deployment-owned configuration guard.
+///
+/// The guard runs after the complete configuration is parsed and before
+/// offline validation, runtime-provider resolution, Tokio construction, or
+/// node startup. This entrypoint is used by deployment launchers whose
+/// `--check-config` operation must enforce a pinned public network profile
+/// without opening runtime-only credentials.
+pub(crate) fn run_with_config_guard(
+    guard: IrohaLauncherConfigGuardV1,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(None, None, Some(guard))
+}
+/// Run the standard CLI launcher with a deployment-owned provider registry and
+/// configuration guard.
+///
+/// The guard remains authoritative over the parsed public network profile,
+/// while the registry remains authoritative over runtime-only providers.
+pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
+    registry: &dyn IrohaRuntimeProviderRegistryV1,
+    guard: IrohaLauncherConfigGuardV1,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(Some(registry), None, Some(guard))
 }
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
@@ -12940,12 +12977,21 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
-#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
 fn run_main(
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
         Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
     >,
+) -> ReportResult<(), MainError> {
+    run_main_with_config_guard(runtime_provider_registry, musubi_publication_factory, None)
+}
+#[expect(clippy::too_many_lines, reason = "ordered process startup boundary")]
+fn run_main_with_config_guard(
+    runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
+    musubi_publication_factory: Option<
+        Box<dyn musubi_publication_service::MusubiPublicationPrivateServiceFactoryV1>,
+    >,
+    launcher_config_guard: Option<IrohaLauncherConfigGuardV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
     let lang = i18n::detect_language(args.language.as_deref());
@@ -12970,6 +13016,13 @@ fn run_main(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    if let Some(guard) = launcher_config_guard {
+        guard(&config).map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "deployment launcher rejected parsed configuration: {error}"
+            ))
+        })?;
+    }
     if args
         .startup
         .write_kagemusha_validator_qualification_seal
@@ -13322,6 +13375,7 @@ fn validate_qualification_seal_directory_separation(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
 enum KagemushaCheckQualificationMode<'a> {
     None,
     CatalogSeal,
@@ -13340,6 +13394,7 @@ struct KagemushaCheckQualificationArtifacts {
     validator_seal: Option<iroha_data_model::offline::KagemushaV4ValidatorQualificationSealV1>,
 }
 
+#[cfg(test)]
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
@@ -13575,70 +13630,6 @@ fn validate_available_genesis_for_check(
         catalog,
     )
     .map(|validated_genesis| (validated_genesis, block_cadence_ms))
-}
-fn load_configured_kagemusha_release_catalog(
-    config: &Config,
-) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
-    let offline = &config.settlement.offline;
-    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
-        offline,
-    )
-    .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
-}
-fn load_and_build_configured_kagemusha_catalog_qualification_seal(
-    config: &Config,
-) -> Result<
-    (
-        iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-        iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
-    ),
-    String,
-> {
-    let capture = load_and_build_configured_kagemusha_validator_qualification_capture(config)?;
-    let seal = capture.catalog_qualification_seal().clone();
-    Ok((capture.into_catalog(), seal))
-}
-
-fn load_and_build_configured_kagemusha_validator_qualification_capture(
-    config: &Config,
-) -> Result<
-    iroha_core::smartcontracts::isi::offline::KagemushaValidatorQualificationCatalogCaptureV1,
-    String,
-> {
-    match (
-        config
-            .settlement
-            .offline
-            .kagemusha_release_policy_path
-            .as_deref(),
-        config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-    ) {
-        (Some(policy_path), Some(artifact_dir)) => {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_and_build_validator_qualification_capture(
-                policy_path,
-                artifact_dir,
-                config.settlement.offline.kagemusha_max_decoded_bytes,
-            )
-            .map_err(|error| {
-                format!("failed to authenticate the complete Kagemusha V4 release catalog: {error}")
-            })
-        }
-        (None, None) => Err(
-            "cannot qualify a Kagemusha V4 catalog without a release policy and artifact directory"
-                .to_owned(),
-        ),
-        _ => Err(
-            "Kagemusha V4 release policy and artifact directory must be configured together"
-                .to_owned(),
-        ),
-    }
-}
-fn install_configured_kagemusha_release_catalog(
-    state: &mut State,
-    config: &Config,
-) -> Result<(), String> {
-    state.set_kagemusha_release_catalog(load_configured_kagemusha_release_catalog(config)?);
-    Ok(())
 }
 struct DisposableValidationRoot {
     path: PathBuf,
@@ -18213,7 +18204,8 @@ mod tests {
                 load_configured_kagemusha_release_catalog(&fixture.config)
                     .expect("an omitted release cache uses an empty catalog"),
             )
-            .expect_err("duplicate genesis registration must fail semantic execution");
+            .err()
+            .expect("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("genesis instruction execution failed"),

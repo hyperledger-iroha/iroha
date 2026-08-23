@@ -63,7 +63,7 @@ secp256k1-msm-batch = []
 # - Ed25519 uses ed25519-dalek's MSM-based batch verify with a deterministic transcript
 # - Secp256k1 remains per-signature (no secure MSM batch included); kept for symmetry
 ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
-pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq"]
+pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq", "dep:subtle"]
 
 [dependencies]
 iroha_primitives = { workspace = true }

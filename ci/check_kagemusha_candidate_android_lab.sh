@@ -172,48 +172,126 @@ for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bri
 
 jni_prefix = "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_"
 rust = text["rust"]
-jni_module_marker = "\nmod kagemusha_candidate_lab_jni {"
-jni_reexport_marker = f'''\n}}
-#[cfg(all(
-    feature = "{feature}",'''
-jni_module_start = rust.rfind(jni_module_marker)
-jni_module_end = (
-    rust.find(jni_reexport_marker, jni_module_start + len(jni_module_marker))
-    if jni_module_start >= 0
-    else -1
-)
-jni_module = ""
-if jni_module_start < 0 or jni_module_end < 0:
-    errors.append("Rust bridge is missing the bounded candidate-lab JNI module")
+
+def immediate_cfg_before(declaration_start: int):
+    """Return the cfg immediately attached to a Rust declaration, if any."""
+    prefix_start = max(0, declaration_start - 1_000)
+    prefix = rust[prefix_start:declaration_start]
+    cfgs = list(re.finditer(r'#\[cfg\((?P<cfg>[^\]]+)\)\]', prefix, re.DOTALL))
+    if not cfgs:
+        return None
+    cfg = cfgs[-1]
+    attributes_after_cfg = prefix[cfg.end():]
+    if re.fullmatch(r'\s*(?:#\[[^\]]+\]\s*)*', attributes_after_cfg) is None:
+        return None
+    return cfg.group("cfg"), prefix_start + cfg.start()
+
+def cfg_enables_feature(cfg: str, expected_feature: str) -> bool:
+    compact = re.sub(r"\s+", "", cfg)
+    feature_clause = f'feature="{expected_feature}"'
+    return compact == feature_clause or compact.startswith(f"all({feature_clause},")
+
+jni_module_declarations = list(re.finditer(
+    r'^mod\s+kagemusha_candidate_lab_jni\s*\{',
+    rust,
+    re.MULTILINE,
+))
+jni_module_body = ""
+jni_module_start = -1
+jni_module_end = -1
+if len(jni_module_declarations) != 1:
+    errors.append("candidate-lab JNI module declaration is missing its compile-time guard")
 else:
-    jni_module = rust[jni_module_start:jni_module_end]
-    module_guard = rust[max(0, jni_module_start - 600):jni_module_start]
-    if f'feature = "{feature}"' not in module_guard:
-        errors.append("candidate-lab JNI module is not feature-gated")
-    reexport = rust[jni_module_end:jni_module_end + 600]
-    if (
-        f'feature = "{feature}"' not in reexport
-        or "pub use kagemusha_candidate_lab_jni::*;" not in reexport
-    ):
-        errors.append("candidate-lab JNI re-export is not feature-gated")
-    if (
-        jni_module.count("#[unsafe(no_mangle)]") != 2
-        or jni_module.count('pub unsafe extern "system" fn $name(') != 2
-    ):
-        errors.append("candidate-lab JNI export macros must retain no-mangle system exports")
-    actual_rust_jni_methods = set(
-        re.findall(
-            rf'^\s*{re.escape(jni_prefix)}(native[A-Za-z0-9]+)\s*\(',
-            jni_module,
-            re.MULTILINE,
-        )
+    jni_module_declaration = jni_module_declarations[0]
+    module_guard = immediate_cfg_before(jni_module_declaration.start())
+if len(jni_module_declarations) == 1 and (
+    module_guard is None or not cfg_enables_feature(module_guard[0], feature)
+):
+    errors.append("candidate-lab JNI module is not feature-gated")
+elif len(jni_module_declarations) == 1:
+    jni_module_start = jni_module_declaration.end()
+    reexports = list(re.finditer(
+        r'^pub\s+use\s+kagemusha_candidate_lab_jni::\*\s*;',
+        rust[jni_module_start:],
+        re.MULTILINE,
+    ))
+    if len(reexports) != 1:
+        errors.append("candidate-lab JNI re-export is missing its compile-time guard")
+    else:
+        reexport = reexports[0]
+        absolute_reexport_start = jni_module_start + reexport.start()
+        reexport_guard = immediate_cfg_before(absolute_reexport_start)
+        if reexport_guard is None or not cfg_enables_feature(reexport_guard[0], feature):
+            errors.append("candidate-lab JNI re-export is not feature-gated")
+        else:
+            guarded_module = rust[jni_module_start:reexport_guard[1]].rstrip()
+            if not guarded_module.endswith("}"):
+                errors.append("candidate-lab JNI module does not close before its re-export")
+            else:
+                jni_module_body = guarded_module[:-1]
+                jni_module_end = jni_module_start + len(guarded_module)
+
+for macro_name, end_marker in (
+    ("candidate_lab_jni_export", "macro_rules! candidate_lab_jni_forwarders"),
+    ("candidate_lab_jni_forwarders", "candidate_lab_jni_export!"),
+):
+    start_marker = f"macro_rules! {macro_name}"
+    if start_marker not in jni_module_body or end_marker not in jni_module_body:
+        errors.append(f"candidate-lab JNI generator {macro_name} is missing")
+        continue
+    generator = jni_module_body.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    if "#[unsafe(no_mangle)]" not in generator:
+        errors.append(f"candidate-lab JNI generator {macro_name} does not export its symbols")
+    if 'pub unsafe extern "system" fn $name(' not in generator:
+        errors.append(f"candidate-lab JNI generator {macro_name} is not a JNI function generator")
+
+generated_jni_exports = {}
+generated_jni_pattern = re.compile(
+    rf'(?P<symbol>{re.escape(jni_prefix)}native[A-Za-z0-9]+)\s*'
+    rf'\((?P<params>.*?)\)\s*->\s*'
+    rf'(?P<return>\(\)|[A-Za-z_][A-Za-z0-9_:<>\'\?]*)\s*(?:\{{|=>)',
+    re.DOTALL,
+)
+for match in generated_jni_pattern.finditer(jni_module_body):
+    symbol = match.group("symbol")
+    if symbol in generated_jni_exports:
+        errors.append(f"candidate-lab JNI export is generated more than once: {symbol}")
+    generated_jni_exports[symbol] = (match.group("params"), match.group("return"))
+
+direct_jni_pattern = re.compile(
+    rf'pub\s+unsafe\s+extern\s+"system"\s+fn\s+'
+    rf'(?P<symbol>{re.escape(jni_prefix)}native[A-Za-z0-9]+)\s*'
+    rf'\((?P<params>.*?)\)\s*->\s*(?P<return>[^\s{{]+)',
+    re.DOTALL,
+)
+direct_jni_exports = {}
+for match in direct_jni_pattern.finditer(rust):
+    symbol = match.group("symbol")
+    if symbol in direct_jni_exports:
+        errors.append(f"candidate-lab JNI export is defined more than once: {symbol}")
+    direct_jni_exports[symbol] = (match.group("params"), match.group("return"), match.start())
+    inside_guarded_module = jni_module_start <= match.start() < jni_module_end
+    if not inside_guarded_module:
+        guard = immediate_cfg_before(match.start())
+        if guard is None or not cfg_enables_feature(guard[0], feature):
+            errors.append(f"candidate-lab JNI export {symbol} is not feature-gated")
+
+duplicate_jni_exports = set(generated_jni_exports) & set(direct_jni_exports)
+if duplicate_jni_exports:
+    errors.append(
+        "candidate-lab JNI exports are both direct and macro-generated: "
+        f"{sorted(duplicate_jni_exports)}"
     )
-    if actual_rust_jni_methods != kotlin_methods:
-        errors.append(
-            "candidate-lab Rust JNI surface drifted: "
-            f"missing={sorted(kotlin_methods - actual_rust_jni_methods)} "
-            f"extra={sorted(actual_rust_jni_methods - kotlin_methods)}"
-        )
+actual_rust_jni_methods = {
+    symbol.removeprefix(jni_prefix)
+    for symbol in set(generated_jni_exports) | set(direct_jni_exports)
+}
+if actual_rust_jni_methods != kotlin_methods:
+    errors.append(
+        "candidate-lab Rust JNI surface drifted: "
+        f"missing={sorted(kotlin_methods - actual_rust_jni_methods)} "
+        f"extra={sorted(actual_rust_jni_methods - kotlin_methods)}"
+    )
 
 continuity_signatures = {
     "nativeValidateBranchV4": (
@@ -271,22 +349,22 @@ for method, (expected_params, expected_return) in continuity_signatures.items():
         continue
 
     symbol = jni_prefix + method
-    export = re.search(
-        rf'^\s*{re.escape(symbol)}\s*\((?P<params>.*?)^\s*\)\s*->\s*(?P<return>[^\s{{=]+)',
-        jni_module,
-        re.DOTALL | re.MULTILINE,
-    )
-    if export is None:
-        errors.append(f"Rust continuity JNI declaration is missing for {method}")
+    if symbol in generated_jni_exports:
+        params, rust_return = generated_jni_exports[symbol]
+        rust_types = ["JNIEnv", "JClass"]
+    elif symbol in direct_jni_exports:
+        params, rust_return, _ = direct_jni_exports[symbol]
+        rust_types = []
+    else:
         continue
-    rust_types = re.findall(
+    rust_types.extend(re.findall(
         r'^\s*(?:mut\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:\s*([^,\n]+),',
-        export.group("params"),
+        params,
         re.MULTILINE,
-    )
+    ))
     rust_types = [value.rsplit("::", 1)[-1].replace("<'_>", "") for value in rust_types]
-    expected_rust = [kotlin_to_jni[value] for value in expected_params]
-    rust_return = export.group("return").rsplit("::", 1)[-1]
+    expected_rust = ["JNIEnv", "JClass"] + [kotlin_to_jni[value] for value in expected_params]
+    rust_return = rust_return.rsplit("::", 1)[-1]
     if rust_types != expected_rust or rust_return != "jbyteArray":
         errors.append(
             f"Rust continuity JNI signature drifted for {method}: "
@@ -308,40 +386,69 @@ c_suffixes = (
     "redeem_v4",
 )
 c_prefix = "connect_norito_kagemusha_recursive_spend_candidate_lab_"
-lifecycle_suffixes = {"init_v4", "append_v4", "verify_v4", "redeem_v4"}
-lifecycle_match = re.search(
-    rf'#\[cfg\(feature = "{re.escape(feature)}"\)\]\s*'
-    r'kagemusha_recursive_spend_lifecycle_exports!\s*\{(?P<body>.*?)\n\}',
-    rust,
-    re.DOTALL,
+c_lifecycle_generator_start = rust.find("macro_rules! kagemusha_recursive_spend_lifecycle_exports")
+c_lifecycle_first_invocation = rust.find(
+    "kagemusha_recursive_spend_lifecycle_exports! {",
+    c_lifecycle_generator_start,
 )
-actual_lifecycle_suffixes = set()
-if lifecycle_match is None:
-    errors.append("Rust bridge is missing the feature-gated candidate-lab lifecycle export macro")
+if c_lifecycle_generator_start < 0 or c_lifecycle_first_invocation < 0:
+    errors.append("candidate-lab C lifecycle export generator is missing")
 else:
-    actual_lifecycle_suffixes = set(
-        re.findall(
-            rf'=>\s*{re.escape(c_prefix)}([a-z0-9_]+)\s*,',
-            lifecycle_match.group("body"),
-        )
-    )
-    if actual_lifecycle_suffixes != lifecycle_suffixes:
+    c_lifecycle_generator = rust[
+        c_lifecycle_generator_start:c_lifecycle_first_invocation
+    ]
+    for role in ("init", "append", "verify", "redeem"):
+        if re.search(
+            rf'#\[unsafe\(no_mangle\)\]\s*'
+            rf'pub\s+unsafe\s+extern\s+"C"\s+fn\s+\${role}_name\s*\(',
+            c_lifecycle_generator,
+        ) is None:
+            errors.append(
+                f"candidate-lab C lifecycle generator is missing exported {role} function"
+            )
+
+c_lifecycle_invocation = re.search(
+    rf'#\[cfg\(feature\s*=\s*"{re.escape(feature)}"\)\]\s*'
+    rf'kagemusha_recursive_spend_lifecycle_exports!\s*\{{(?P<body>.*?)^\}}',
+    rust,
+    re.MULTILINE | re.DOTALL,
+)
+generated_c_exports = set()
+if c_lifecycle_invocation is None:
+    errors.append("candidate-lab C lifecycle inventory is missing its exact feature guard")
+else:
+    c_lifecycle_body = c_lifecycle_invocation.group("body")
+    if "resolver = require_kagemusha_candidate_evidence_lab_artifact_binding_v4;" not in c_lifecycle_body:
+        errors.append("candidate-lab C lifecycle inventory does not use the candidate registry")
+    if "verify_precheck = false;" not in c_lifecycle_body:
+        errors.append("candidate-lab C lifecycle inventory has drifted from its reviewed precheck policy")
+    generated_c_exports = set(re.findall(
+        rf'=>\s*({re.escape(c_prefix)}(?:init|append|verify|redeem)_v4)\s*,',
+        c_lifecycle_body,
+    ))
+    expected_generated_c_exports = {
+        c_prefix + role + "_v4" for role in ("init", "append", "verify", "redeem")
+    }
+    if generated_c_exports != expected_generated_c_exports:
         errors.append(
-            "candidate-lab Rust C lifecycle surface drifted: "
-            f"missing={sorted(lifecycle_suffixes - actual_lifecycle_suffixes)} "
-            f"extra={sorted(actual_lifecycle_suffixes - lifecycle_suffixes)}"
+            "candidate-lab generated C lifecycle surface drifted: "
+            f"missing={sorted(expected_generated_c_exports - generated_c_exports)} "
+            f"extra={sorted(generated_c_exports - expected_generated_c_exports)}"
         )
+
 for suffix in c_suffixes:
     symbol = c_prefix + suffix
     match = re.search(rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(symbol)}\s*\(', rust)
-    if match is None:
-        if suffix in actual_lifecycle_suffixes:
-            continue
+    if match is not None and symbol in generated_c_exports:
+        errors.append(f"candidate-lab C export is both direct and macro-generated: {symbol}")
+        continue
+    if match is None and symbol not in generated_c_exports:
         errors.append(f"Rust bridge is missing candidate-lab C export {symbol}")
         continue
-    guard = rust[max(0, match.start() - 350):match.start()]
-    if f'feature = "{feature}"' not in guard:
-        errors.append(f"candidate-lab C export {symbol} is not feature-gated")
+    if match is not None:
+        guard = immediate_cfg_before(match.start())
+        if guard is None or not cfg_enables_feature(guard[0], feature):
+            errors.append(f"candidate-lab C export {symbol} is not feature-gated")
 
 if f'{feature} = ["iroha_core/{feature}"]' not in text["cargo"]:
     errors.append("bridge candidate-lab Cargo feature must forward only to iroha_core")
@@ -477,6 +584,8 @@ for needle in (
     "--trusted-signer-public-key",
     "--android-attestation-trust-root-sha256",
     "--android-attestation-revocation-status-sha256",
+    "--android-attestation-status-capture-receipt",
+    "--android-attestation-status-capture-receipt-sha256",
     "--java-sha256",
     "--apksigner-jar-sha256",
     "--openssl-sha256",
@@ -500,6 +609,10 @@ for needle in (
     '"confirmation_semantic_comparison"',
     '"confirmation_comparator"',
     '"executed_commands"',
+    '"android_attestation_status_capture_receipt"',
+    '"android_status_snapshot"',
+    '"attestation_status_capture_receipt_sha256"',
+    '"<pinned-status-capture-receipt>"',
     "cleanup_device_state",
 ):
     if needle not in runner:
@@ -508,6 +621,32 @@ if runner.index('"$LIFECYCLE_CLASS"') > runner.index('"$EXPORT_CLASS"'):
     errors.append("candidate lifecycle instrumentation must run before restart/export")
 if "kagemushaCandidateCompileOnly" in runner:
     errors.append("physical evidence runner must never enable the compile-only fixture contract")
+for corridor_marker in (
+    'AUTHORITY_STATUS_CAPTURE_RECEIPT=""',
+    'AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256=""',
+    '|| -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT"',
+    '&& -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256"',
+    'verify_pinned_file \\\n    "$AUTHORITY_STATUS_CAPTURE_RECEIPT"',
+    '--android-attestation-status-capture-receipt "$AUTHORITY_STATUS_CAPTURE_RECEIPT"',
+    '--android-attestation-status-capture-receipt-sha256 "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256"',
+    'kagemusha.get("authority_tools") != expected_authority',
+    'summary_kagemusha.get("authority_tools") != expected_authority',
+    'report.get("authority_tools") != expected_authority',
+):
+    if corridor_marker not in runner:
+        errors.append(
+            "candidate status-capture authority corridor is missing "
+            f"{corridor_marker!r}"
+        )
+if runner.count("--android-attestation-status-capture-receipt-sha256") < 6:
+    errors.append(
+        "candidate status-capture receipt pin must reach usage, parsing, validation, "
+        "both validator calls, and both redacted command templates"
+    )
+if runner.count('"${AUTHORITY_VALIDATOR_ARGS[@]}"') != 2:
+    errors.append(
+        "the complete pinned authority corridor must reach validation and confirmation"
+    )
 for label in ("runner", "validator"):
     if '"--apksigner-sha256"' in text[label]:
         errors.append(
@@ -554,6 +693,10 @@ for needle in (
     "--trusted-signer-public-key",
     "--android-attestation-trust-root-sha256",
     "--android-attestation-revocation-status-sha256",
+    "--android-attestation-status-capture-receipt",
+    "--android-attestation-status-capture-receipt-sha256",
+    '"attestation_status_capture_receipt_sha256"',
+    '"android_status_snapshot"',
     "--confirmation-reference-slot",
     "--confirmation-binding",
     "--confirmation-lifecycle",

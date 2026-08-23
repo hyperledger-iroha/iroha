@@ -64,6 +64,21 @@ enum RetiredTupleDecision {
     Accepted(u32),
 }
 
+#[derive(Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum DecisionMode {
+    #[default]
+    Automatic,
+    Manual,
+}
+
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum DefaultedDecisionMode {
+    Accepted {
+        #[norito(default)]
+        mode: DecisionMode,
+    },
+}
+
 fn binary_layouts() -> [u8; 3] {
     let ordinary = default_encode_flags();
     let packed = ordinary | header_flags::PACKED_STRUCT;
@@ -160,6 +175,28 @@ fn enum_default_fields_roundtrip_and_fallback_in_all_layouts() {
             decode_bare_with_flags::<TupleDecision>(&tuple, flags),
             TupleDecision::Accepted(5, None, custom_default()),
             "tuple default fallback with flags {flags:#04x}",
+        );
+    }
+}
+
+#[test]
+fn malformed_present_default_field_is_rejected_in_all_layouts() {
+    let value = DefaultedDecisionMode::Accepted {
+        mode: DecisionMode::Manual,
+    };
+    for flags in binary_layouts() {
+        let mut payload = encode_bare_with_flags(&value, flags);
+        let nested_tag = payload
+            .len()
+            .checked_sub(core::mem::size_of::<u32>())
+            .expect("outer and nested enum discriminants");
+        assert_eq!(&payload[nested_tag..], &1_u32.to_le_bytes());
+        payload[nested_tag..].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let _flags = DecodeFlagsGuard::enter(flags);
+        assert!(
+            decode_field_canonical::<DefaultedDecisionMode>(&payload).is_err(),
+            "malformed present default field must be rejected with flags {flags:#04x}",
         );
     }
 }

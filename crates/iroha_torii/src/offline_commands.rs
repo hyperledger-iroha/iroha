@@ -1511,7 +1511,10 @@ pub(crate) fn handle_operation_status(
     operation_id: &str,
 ) -> Result<AxResponse, Error> {
     let operation_id = parse_operation_id(operation_id)?;
-    let issuer = require_issuer(app)?;
+    // Polling an already-submitted operation must not depend on the authority
+    // still being funded or retaining permission to sign a new command.  The
+    // configured identity is sufficient to recover queue and Kura provenance.
+    let issuer = require_configured_issuer(app)?;
     let admitted = {
         let mut admission = issuer.admission.lock();
         admission.prune_expired(now_ms());
@@ -1765,7 +1768,7 @@ fn offline_topup_finality_proof_unavailable() -> Error {
         message: "The finalized top-up proof is not available yet.".to_owned(),
     }
 }
-fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
+fn require_configured_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
     let issuer = app
         .offline_commands
         .clone()
@@ -1773,6 +1776,11 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
             code: "offline_service_unavailable",
             message: "Offline operation signing is not configured on this Torii node.".to_owned(),
         })?;
+    Ok(issuer)
+}
+
+fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
+    let issuer = require_configured_issuer(app)?;
     ensure_offline_command_authority_ready(app, &issuer)?;
     Ok(issuer)
 }
@@ -2031,6 +2039,23 @@ mod tests {
         .expect_err("balance below the configured XOR floor must stay unavailable");
         assert_offline_readiness_code(error, "offline_command_authority_unfunded");
     }
+
+    #[test]
+    fn configured_issuer_lookup_remains_available_without_write_readiness() {
+        let issuer = submission_test_issuer();
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("fresh test AppState must be uniquely owned")
+            .offline_commands = Some(Arc::clone(&issuer));
+
+        let configured = require_configured_issuer(&app)
+            .expect("status lookup only requires the configured issuer identity");
+        assert!(Arc::ptr_eq(&configured, &issuer));
+        let readiness_error =
+            require_issuer(&app).expect_err("fresh world has no command-authority account");
+        assert_offline_readiness_code(readiness_error, "offline_command_authority_not_ready");
+    }
+
     fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {
         let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
             .expect("derive offline submission request fixture key");
@@ -2728,8 +2753,11 @@ mod tests {
             finality.outcome,
             KagemushaV2TerminalOutcome::Rejected(_)
         ));
+        let readiness_error = ensure_offline_command_authority_ready(&app, &restarted_issuer)
+            .expect_err("history fixture deliberately has no live command-authority account");
+        assert_offline_readiness_code(readiness_error, "offline_command_authority_not_ready");
         let response = handle_operation_status(&app, &hex::encode(operation_id))
-            .expect("restart status must reconstruct the operation from canonical history");
+            .expect("historical status must not require authority readiness to reconstruct");
         match decode_offline_operation_status(response).await {
             OfflineOperationStatus::Rejected {
                 operation_id: actual_operation_id,

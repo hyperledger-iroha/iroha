@@ -315,6 +315,14 @@ impl std::error::Error for OperatorSignatureConfigError {}
 /// Public key whose request signature was authenticated by the operator middleware.
 #[derive(Clone, Debug)]
 pub(crate) struct AuthenticatedOperatorPublicKey(pub PublicKey);
+/// Route-local operator authentication state with an exact body limit.
+#[derive(Clone)]
+pub(crate) struct BoundedOperatorAccessState {
+    /// Shared Torii state used for operator authentication and replay protection.
+    pub(crate) app: SharedAppState,
+    /// Maximum body bytes authentication may buffer for this route.
+    pub(crate) max_body_bytes: usize,
+}
 impl OperatorSignatures {
     /// Build operator-signature authentication with a replay-safe freshness window.
     ///
@@ -874,6 +882,26 @@ pub async fn enforce_operator_access(
     req: Request,
     next: Next,
 ) -> Response {
+    let max_body_bytes = app.operator_signatures.max_body_bytes;
+    enforce_operator_access_inner(app, req, next, max_body_bytes).await
+}
+/// Enforce operator authentication while buffering no more than the route-specific body limit.
+pub(crate) async fn enforce_bounded_operator_access(
+    State(state): State<BoundedOperatorAccessState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let max_body_bytes = state
+        .max_body_bytes
+        .min(state.app.operator_signatures.max_body_bytes);
+    enforce_operator_access_inner(state.app, req, next, max_body_bytes).await
+}
+async fn enforce_operator_access_inner(
+    app: SharedAppState,
+    req: Request,
+    next: Next,
+    max_body_bytes: usize,
+) -> Response {
     if !app.operator_signatures.is_enabled() {
         return OperatorSignatureError::new(
             StatusCode::FORBIDDEN,
@@ -901,7 +929,7 @@ pub async fn enforce_operator_access(
     let (parts, body) = req.into_parts();
     let body_bytes = match collect_operator_signature_body(
         body,
-        app.operator_signatures.max_body_bytes,
+        max_body_bytes,
         app.operator_signatures.body_read_timeout,
     )
     .await

@@ -89,7 +89,7 @@ fn emit_git_rerun_hints() {
     }
 }
 fn should_emit_git_filesystem_rerun_hints(git_sha_override: Option<&str>) -> bool {
-    !git_sha_override.is_some_and(|sha| sha.trim() == LOCAL_FAST_BUILD_GIT_SHA)
+    git_sha_override.is_none_or(|sha| sha.trim() != LOCAL_FAST_BUILD_GIT_SHA)
 }
 fn resolve_git_directories() -> Option<GitDirectories> {
     let worktree = resolve_git_dir()?;

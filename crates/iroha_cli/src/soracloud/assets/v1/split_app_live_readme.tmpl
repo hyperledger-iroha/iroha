@@ -55,7 +55,10 @@ immutable artifact refs in the submitted Inrou manifest, and hydrates hosts
 according to the guest-image distribution policy: global by default, or
 explicit geography tags with latency fallback when geography is unknown.
 
-Replace the placeholder SSH key in `services/live/container_manifest.json`.
+SSH access is disabled by default with `ssh_authorized_keys: []`. Add a real,
+trusted public key only when SSH access is intentionally required. Outbound
+network access is isolated by default; use a nonempty public-endpoint allowlist
+when the live service intentionally needs egress.
 
 The generated app manifest references that tarball through `bundle_file`, so:
 

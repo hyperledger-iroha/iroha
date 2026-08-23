@@ -71,6 +71,14 @@ fn release_bound_verifier_record(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::similar_names,
+    reason = "StepEq and StepEp are distinct protocol-defined Pasta-cycle parity labels that the fixture must bind explicitly"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the activation fixture binds both verifier parities and every release identity in one coherent object"
+)]
 fn valid_release_activation_fixture() -> (
     KagemushaRecursiveSpendReleaseActivationV4,
     OfflineDeviceAttestationPolicy,
@@ -79,17 +87,17 @@ fn valid_release_activation_fixture() -> (
     let mut activation = release_activation_wire_fixture();
     let policy = device_attestation_policy_wire_fixture();
     let release_policy_source = b"wire-bound release policy".to_vec();
-    let eq_key = VerifyingKeyBox::new(
+    let step_eq_key = VerifyingKeyBox::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
         b"receipt Eq verifier key".to_vec(),
     );
-    let ep_key = VerifyingKeyBox::new(
+    let step_ep_key = VerifyingKeyBox::new(
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
         b"receipt Ep verifier key".to_vec(),
     );
     for (parity, key) in [
-        (KagemushaPastaCycleParityV1::StepEq, &eq_key),
-        (KagemushaPastaCycleParityV1::StepEp, &ep_key),
+        (KagemushaPastaCycleParityV1::StepEq, &step_eq_key),
+        (KagemushaPastaCycleParityV1::StepEp, &step_ep_key),
     ] {
         let profile = activation
             .release_record
@@ -120,6 +128,13 @@ fn valid_release_activation_fixture() -> (
             .manifest
             .qualification_receipt_sha256,
     );
+    activation.release_record.internal_validation_receipt =
+        internal_validation_receipt_bytes(&candidate, &activation.release_record.manifest);
+    activation
+        .release_record
+        .manifest
+        .internal_validation_receipt_sha256 =
+        digest(&activation.release_record.internal_validation_receipt);
     let reviewer = KeyPair::from_seed(vec![0x79; 32], Algorithm::Ed25519);
     activation.release_record.cryptographic_review_summary =
         signed_review_bytes(&candidate, &[&reviewer]);
@@ -150,6 +165,13 @@ fn valid_release_activation_fixture() -> (
         .release_record
         .manifest
         .qualified_candidate_sha256;
+    activation
+        .release_record
+        .promotion_record
+        .internal_validation_receipt_sha256 = activation
+        .release_record
+        .manifest
+        .internal_validation_receipt_sha256;
     activation.release_record.promotion_record.manifest_sha256 = activation
         .release_record
         .manifest
@@ -167,20 +189,20 @@ fn valid_release_activation_fixture() -> (
         .promotion_record
         .release_policy_sha256 = digest(&release_policy_source);
     activation.configured_policy_sha256 = digest(&release_policy_source);
-    let (eq_id, eq_record) = release_bound_verifier_record(
+    let (step_eq_id, step_eq_record) = release_bound_verifier_record(
         &activation.release_record.manifest,
         KagemushaPastaCycleParityV1::StepEq,
-        eq_key,
+        step_eq_key,
     );
-    let (ep_id, ep_record) = release_bound_verifier_record(
+    let (step_ep_id, step_ep_record) = release_bound_verifier_record(
         &activation.release_record.manifest,
         KagemushaPastaCycleParityV1::StepEp,
-        ep_key,
+        step_ep_key,
     );
-    activation.step_eq_verifier_key_id = eq_id;
-    activation.step_eq_verifier_record = eq_record;
-    activation.step_ep_verifier_key_id = ep_id;
-    activation.step_ep_verifier_record = ep_record;
+    activation.step_eq_verifier_key_id = step_eq_id;
+    activation.step_eq_verifier_record = step_eq_record;
+    activation.step_ep_verifier_key_id = step_ep_id;
+    activation.step_ep_verifier_record = step_ep_record;
     activation
         .validate_structure()
         .expect("complete release activation fixture");
@@ -511,11 +533,13 @@ fn receipt_anchor_block(block_signer: &KeyPair) -> SignedBlock {
 }
 
 #[cfg(feature = "transparent_api")]
+#[derive(Clone, Copy)]
 struct CompleteReceiptOptions {
     direct_activation: bool,
     alternate_authorization: bool,
     failed_result: bool,
     instruction_promotion_id: Option<[u8; 32]>,
+    instruction_runtime_effective_config_sha256: Option<[u8; 32]>,
     expires_at_height: Option<u64>,
     catalog_revalidation_receipt_json: &'static [u8],
 }
@@ -528,6 +552,7 @@ impl Default for CompleteReceiptOptions {
             alternate_authorization: false,
             failed_result: false,
             instruction_promotion_id: None,
+            instruction_runtime_effective_config_sha256: None,
             expires_at_height: Some(3),
             catalog_revalidation_receipt_json:
                 b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true}\n",
@@ -551,6 +576,10 @@ fn sign_expectations_body_unchecked(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixture assembles the complete reservation, authorization, transaction, block, and finality receipt chain"
+)]
 fn complete_receipt_fixture_with_options(
     options: CompleteReceiptOptions,
 ) -> CompleteReceiptFixture {
@@ -613,7 +642,11 @@ fn complete_receipt_fixture_with_options(
     let promotion_reservation_bytes = norito::encode_canonical(&promotion_reservation)
         .expect("canonical signed promotion reservation");
     binding.promotion_reservation = exact_receipt_bytes(&promotion_reservation_bytes);
-    let (_validator_bodies, validator_seals, validator_keys) = qualified_receipt_hosts(&binding);
+    let (validator_bodies, validator_seals, validator_keys) = qualified_receipt_hosts(&binding);
+    let runtime_effective_config_sha256 = validator_bodies[0]
+        .runtime_effective_config
+        .consensus_sha256()
+        .expect("valid runtime-effective config digest");
     let (governance_keys, governance_policy, governance_authority) = governance_receipt_fixture();
     let mut metadata = Metadata::default();
     if let Some(expiry) = options.expires_at_height {
@@ -640,6 +673,9 @@ fn complete_receipt_fixture_with_options(
             },
             activation,
             policy,
+            options
+                .instruction_runtime_effective_config_sha256
+                .unwrap_or(runtime_effective_config_sha256),
         )])
     } else {
         TransactionBuilder::new(
@@ -905,6 +941,10 @@ fn validator_seals_reject_mixed_exact_reservation_generations() {
 
 #[cfg(feature = "transparent_api")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the root expectation audit keeps every signature, provenance, finality, role, and digest splice together"
+)]
 fn root_expectations_authenticate_key_domain_provenance_seals_transaction_anchor_and_digests() {
     let fixture = complete_receipt_fixture(true);
     let verified = KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
@@ -1162,6 +1202,19 @@ fn root_expectations_authenticate_key_domain_provenance_seals_transaction_anchor
             &promotion_splice.expectations_artifact_bytes,
             promotion_splice.promotion_controller.public_key(),
             &promotion_splice.promotion_reservation_bytes,
+        ),
+        Err(KagemushaPromotionReceiptValidationError::ActivationPayload),
+    );
+
+    let runtime_splice = complete_receipt_fixture_with_options(CompleteReceiptOptions {
+        instruction_runtime_effective_config_sha256: Some([0xEF; 32]),
+        ..CompleteReceiptOptions::default()
+    });
+    assert_eq!(
+        KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
+            &runtime_splice.expectations_artifact_bytes,
+            runtime_splice.promotion_controller.public_key(),
+            &runtime_splice.promotion_reservation_bytes,
         ),
         Err(KagemushaPromotionReceiptValidationError::ActivationPayload),
     );
@@ -1569,7 +1622,7 @@ fn canary_transaction_fixture(
         body.expires_at_height,
     );
     let mut builder = TransactionBuilder::new(
-        body.binding.network_id.clone(),
+        body.binding.network_id,
         body.canary_authority.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1582,6 +1635,10 @@ fn canary_transaction_fixture(
 }
 
 #[cfg(feature = "transparent_api")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canary fixture assembles the complete authorization, transaction, evidence, and signed receipt chain"
+)]
 fn complete_canary_fixture() -> CompleteCanaryFixture {
     let receipt = complete_receipt_fixture(true);
     let receipt_bytes = norito::encode_canonical(&receipt.receipt).expect("canonical receipt");
@@ -1777,6 +1834,33 @@ fn canary_permit_expiry_matches_the_bounded_finality_corridor() {
 
 #[cfg(feature = "transparent_api")]
 #[test]
+fn canary_query_rejects_reversed_node_status_observation_times() {
+    let fixture = complete_canary_fixture();
+    let receipt_bytes =
+        norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
+    let mut body = fixture.evidence.body.clone();
+    let query = &mut body.query;
+    core::mem::swap(
+        &mut query.node_status_before_observed_at_ms,
+        &mut query.node_status_after_observed_at_ms,
+    );
+
+    assert_eq!(
+        KagemushaV4TairaCanaryEvidenceV1::try_sign(
+            body,
+            &fixture.receipt.issuer,
+            &fixture.authorization,
+            &fixture.authorization_bytes,
+            &fixture.receipt.expectations,
+            &fixture.receipt.receipt,
+            &receipt_bytes,
+        ),
+        Err(KagemushaV4TairaCanaryEvidenceValidationError::QueryEvidence),
+    );
+}
+
+#[cfg(feature = "transparent_api")]
+#[test]
 fn production_canary_authorization_and_finality_evidence_verify_exactly() {
     let fixture = complete_canary_fixture();
     let receipt_bytes =
@@ -1849,6 +1933,51 @@ fn production_canary_evidence_rejects_a_sealed_reveal_entrypoint() {
         ),
         Err(KagemushaV4TairaCanaryEvidenceValidationError::CommittedTransaction),
     );
+}
+
+#[cfg(feature = "transparent_api")]
+fn assert_liveness_anchor_digest_splices_rejected(
+    fixture: &CompleteCanaryFixture,
+    verified: &KagemushaV4VerifiedTairaCanaryEvidenceV1,
+    canary_proof: &BridgeFinalityProof,
+    challenge_body: &KagemushaV4PostCanaryValidatorLivenessChallengeBodyV1,
+) {
+    for (case, tampered_digest) in [
+        (
+            "activation receipt",
+            exact_receipt_bytes(b"spliced receipt"),
+        ),
+        (
+            "canary transaction wire",
+            exact_receipt_bytes(b"spliced transaction wire"),
+        ),
+    ] {
+        let mut tampered = challenge_body.clone();
+        match case {
+            "activation receipt" => {
+                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
+            }
+            "canary transaction wire" => {
+                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
+            }
+            _ => unreachable!("closed hostile anchor table"),
+        }
+        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+            tampered.clone(),
+            &fixture.receipt.issuer,
+        )
+        .expect("issuer can sign hostile anchor fixture");
+        assert_eq!(
+            challenge.verify_bound(
+                &fixture.receipt.expectations,
+                verified,
+                &tampered.canary_anchor,
+                canary_proof,
+            ),
+            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
+            "{case} splice must fail against the verified canary capability",
+        );
+    }
 }
 
 #[cfg(feature = "transparent_api")]
@@ -1936,42 +2065,12 @@ fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
         "a canary capability cannot move across exact expectations artifacts",
     );
 
-    for (case, tampered_digest) in [
-        (
-            "activation receipt",
-            exact_receipt_bytes(b"spliced receipt"),
-        ),
-        (
-            "canary transaction wire",
-            exact_receipt_bytes(b"spliced transaction wire"),
-        ),
-    ] {
-        let mut tampered = challenge_body.clone();
-        match case {
-            "activation receipt" => {
-                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
-            }
-            "canary transaction wire" => {
-                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
-            }
-            _ => unreachable!("closed hostile anchor table"),
-        }
-        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
-            tampered.clone(),
-            &fixture.receipt.issuer,
-        )
-        .expect("issuer can sign hostile anchor fixture");
-        assert_eq!(
-            challenge.verify_bound(
-                &fixture.receipt.expectations,
-                &verified,
-                &tampered.canary_anchor,
-                canary_proof,
-            ),
-            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
-            "{case} splice must fail against the verified canary capability",
-        );
-    }
+    assert_liveness_anchor_digest_splices_rejected(
+        &fixture,
+        &verified,
+        canary_proof,
+        &challenge_body,
+    );
 }
 
 #[cfg(feature = "transparent_api")]

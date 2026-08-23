@@ -454,10 +454,6 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         .store_v2_finality_artifact(&carrier_finality)
         .expect("persist exact merge-carrier finality");
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixture builds one fully certified autonomous execution carrier"
-)]
 fn autonomous_merge_commit_authorization_fixture(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,

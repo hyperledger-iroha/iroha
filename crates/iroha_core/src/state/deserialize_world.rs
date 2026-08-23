@@ -2135,6 +2135,7 @@ fn build_state(
         kagemusha_release_catalog: Arc::new(
             crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
         ),
+        kagemusha_runtime_effective_config_sha256: SyncOnceCell::new(),
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
         network_id,

@@ -136,7 +136,7 @@ pub async fn handle_get_content(
                     "content chunk size must be greater than zero".to_string(),
                 ));
             }
-            let range_spec = apply_range(entry.length, headers.get(header::RANGE))?;
+            let range_spec = apply_range(entry.length, single_range_header(&headers)?)?;
             // Keep the potentially large file/chunk projection borrowed until
             // authentication, authorization, PoW, and range validation have
             // succeeded. Anonymous callers must not make Torii clone a
@@ -568,6 +568,16 @@ fn apply_range(
         end,
     })
 }
+fn single_range_header(headers: &HeaderMap) -> Result<Option<&HeaderValue>, ContentError> {
+    let mut values = headers.get_all(header::RANGE).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(ContentError::BadRequest(
+            "range header must occur at most once".to_owned(),
+        ));
+    }
+    Ok(value)
+}
 fn encode_receipt_header(
     bundle: &ContentBundleRecord,
     entry: &iroha_data_model::content::ContentFileEntry,
@@ -928,6 +938,15 @@ mod tests {
             err,
             ContentError::RangeNotSatisfiable { total_len: 0 }
         ));
+    }
+    #[test]
+    fn duplicate_range_header_lines_fail_closed() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::RANGE, HeaderValue::from_static("bytes=0-3"));
+        headers.append(header::RANGE, HeaderValue::from_static("bytes=4-7"));
+
+        let error = single_range_header(&headers).expect_err("duplicate Range must be rejected");
+        assert!(matches!(error, ContentError::BadRequest(_)));
     }
     #[test]
     fn range_not_satisfiable_sets_content_range_header() {

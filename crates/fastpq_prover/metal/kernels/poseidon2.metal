@@ -49,11 +49,11 @@ inline ulong3 add_mod_vec(ulong3 lhs, ulong3 rhs) {
         add_mod(lhs.z, rhs.z));
 }
 
-inline ulong3 pow5_vec(ulong3 value) {
+inline ulong3 pow7_vec(ulong3 value) {
     return make_ulong3(
-        pow5(value.x),
-        pow5(value.y),
-        pow5(value.z));
+        pow7(value.x),
+        pow7(value.y),
+        pow7(value.z));
 }
 constant ulong ROUND_CONSTANTS[TOTAL_ROUNDS][STATE_WIDTH] = {
     {0x0355DEFB099BED96UL, 0xFCC55FB9681355E6UL, 0x931368D725F8720AUL},
@@ -165,7 +165,7 @@ inline void full_round_chunk(
 ) {
     ulong3 rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
-        chunk[i] = pow5_vec(add_mod_vec(chunk[i], rc));
+        chunk[i] = pow7_vec(add_mod_vec(chunk[i], rc));
         apply_mds(chunk[i], mds);
     }
 }
@@ -180,7 +180,7 @@ inline void partial_round_chunk(
     ulong3 rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
         chunk[i] = add_mod_vec(chunk[i], rc);
-        chunk[i].x = pow5(chunk[i].x);
+        chunk[i].x = pow7(chunk[i].x);
         apply_mds(chunk[i], mds);
     }
 }

@@ -3,8 +3,21 @@
 //! The proof system follows Microsoft `vega-prover` commit
 //! `c0ee259053cd12eaf43ed71b5cde375452b3ee4d` (MIT). The application relation
 //! is the paper's Figure 9 mDL circuit, closed to one first-release profile.
+mod artifacts;
 mod cbor;
 mod mdl;
+pub use artifacts::{
+    VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_V1,
+    VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1,
+    VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1, VegaMdlFigure9ArtifactBindingV1,
+    VegaMdlFigure9ArtifactLengthMismatchV1, VegaMdlFigure9ArtifactManifestV1,
+    VegaMdlFigure9ArtifactQualificationErrorV1, VegaMdlFigure9ArtifactRoleV1,
+    VegaMdlFigure9ArtifactSourceErrorV1, VegaMdlFigure9ProverArtifactInstallReceiptV1,
+    VegaMdlFigure9ProverArtifactSourceV1, VegaMdlFigure9VerifierArtifactInstallReceiptV1,
+    VegaMdlFigure9VerifierArtifactSourceV1,
+    qualify_and_install_vega_mdl_figure9_prover_artifacts_v1,
+    qualify_and_install_vega_mdl_figure9_verifier_artifact_v1,
+};
 use core::{fmt, num::NonZeroU32, time::Duration};
 use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
 use iroha_data_model::{

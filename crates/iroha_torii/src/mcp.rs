@@ -17,7 +17,6 @@ use axum::{
 };
 use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
-use http_body_util::BodyExt as _;
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountAddress;
 use iroha_torii_shared::route_catalog::{
@@ -48,10 +47,27 @@ const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 const MCP_TOOL_EXECUTION_ERROR: i64 = -32001;
+const MCP_RESPONSE_TOO_LARGE: i64 = -32002;
+const MCP_REQUEST_TIMEOUT: i64 = -32003;
 const MCP_RATE_LIMITED: i64 = -32029;
+/// First-release ceiling shared by outer JSON-RPC batches and `tools/call_batch`.
+///
+/// An outer batch containing nested tool batches is charged for every nested
+/// call, so the two batching layers cannot multiply this limit.
+pub(crate) const MAX_JSONRPC_BATCH_DISPATCHES: usize = 64;
+/// Absolute deadline for collecting one MCP request or nested-route response body.
+pub(crate) const MCP_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const MCP_TOOL_NOT_ALLOWED: &str = "tool_not_allowed";
 const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
+const MCP_BATCH_TOO_LARGE_CODE: &str = "batch_too_large";
+const MCP_RESPONSE_TOO_LARGE_CODE: &str = "response_too_large";
+const MCP_RESPONSE_READ_FAILED_CODE: &str = "response_read_failed";
+const MCP_RESPONSE_TIMEOUT_CODE: &str = "response_timeout";
+const TARGET_RESPONSE_TOO_LARGE_MESSAGE: &str =
+    "target response body exceeds the configured MCP envelope byte limit";
+const TARGET_RESPONSE_READ_FAILED_MESSAGE: &str = "target response body could not be read";
+const TARGET_RESPONSE_TIMEOUT_MESSAGE: &str = "target response body read timed out";
 const MCP_STRICT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-strict-body";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
@@ -1025,6 +1041,68 @@ pub(crate) fn jsonrpc_allocation_failed(message: &str) -> Value {
         JSONRPC_INTERNAL_ERROR,
         message,
         Some(norito::json!({ "error_code": "allocation_failed" })),
+    )
+}
+/// Return a typed rejection when one outer batch would exceed the shared
+/// first-release dispatch ceiling.
+pub(crate) fn jsonrpc_batch_too_large() -> Value {
+    jsonrpc_error_response(
+        None,
+        JSONRPC_INVALID_REQUEST,
+        "mcp batch exceeds the first-release dispatch limit",
+        Some(norito::json!({
+            "error_code": MCP_BATCH_TOO_LARGE_CODE,
+            "max_batch_dispatches": MAX_JSONRPC_BATCH_DISPATCHES
+        })),
+    )
+}
+/// Count all work represented by an outer JSON-RPC batch without executing it.
+///
+/// Ordinary requests cost one dispatch. A `tools/call_batch` request costs the
+/// number of nested calls (or one for an empty/malformed call list). Returning
+/// `true` as soon as the limit is crossed avoids arithmetic overflow and makes
+/// the check independent of attacker-controlled aggregate lengths.
+pub(crate) fn jsonrpc_batch_exceeds_dispatch_limit(batch: &[Value]) -> bool {
+    let mut dispatches = 0_usize;
+    for request in batch {
+        let nested_dispatches = request
+            .as_object()
+            .filter(|request| {
+                request.get("method").and_then(Value::as_str) == Some("tools/call_batch")
+            })
+            .and_then(|request| request.get("params"))
+            .and_then(Value::as_object)
+            .and_then(|params| params.get("calls"))
+            .and_then(Value::as_array)
+            .map_or(1, |calls| calls.len().max(1));
+        dispatches = dispatches.saturating_add(nested_dispatches);
+        if dispatches > MAX_JSONRPC_BATCH_DISPATCHES {
+            return true;
+        }
+    }
+    false
+}
+/// Return a typed JSON-RPC payload for a request body that stalled while being
+/// collected.
+pub(crate) fn jsonrpc_request_timeout() -> Value {
+    let timeout_ms = u64::try_from(MCP_BODY_READ_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
+    jsonrpc_error_response(
+        None,
+        MCP_REQUEST_TIMEOUT,
+        "mcp request body read timed out",
+        Some(norito::json!({
+            "error_code": "request_timeout",
+            "timeout_ms": (timeout_ms)
+        })),
+    )
+}
+/// Return a typed JSON-RPC payload for a request-body transport failure.
+pub(crate) fn jsonrpc_request_body_read_failed() -> Value {
+    jsonrpc_error_response(
+        None,
+        JSONRPC_INVALID_REQUEST,
+        "mcp request body could not be read",
+        Some(norito::json!({ "error_code": "request_body_read_failed" })),
     )
 }
 pub(crate) fn jsonrpc_rate_limited() -> Value {
@@ -2097,68 +2175,94 @@ async fn handle_tools_call_batch(
             None,
         );
     };
-    let mut results = Vec::new();
-    if results.try_reserve_exact(calls.len()).is_err() {
+    if calls.len() > MAX_JSONRPC_BATCH_DISPATCHES {
         return jsonrpc_error_response(
             id,
-            JSONRPC_INTERNAL_ERROR,
-            "failed to reserve MCP batch result storage",
-            Some(norito::json!({ "error_code": "allocation_failed" })),
+            JSONRPC_INVALID_PARAMS,
+            "tools/call_batch exceeds the first-release dispatch limit",
+            Some(norito::json!({
+                "error_code": MCP_BATCH_TOO_LARGE_CODE,
+                "max_batch_dispatches": MAX_JSONRPC_BATCH_DISPATCHES
+            })),
         );
     }
+    let mut results = match BoundedJsonArray::new(calls.len(), app.mcp.max_request_bytes) {
+        Ok(results) => results,
+        Err(BoundedJsonError::BodyTooLarge) => {
+            return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
+        }
+        Err(_) => {
+            return jsonrpc_error_response(
+                id,
+                JSONRPC_INTERNAL_ERROR,
+                "failed to reserve MCP batch result storage",
+                Some(norito::json!({ "error_code": "allocation_failed" })),
+            );
+        }
+    };
     for call in calls {
-        let Some(call_obj) = call.as_object() else {
-            results.push(norito::json!({
+        let result = if let Some(call_obj) = call.as_object() {
+            let Some(name) = call_obj.get("name").and_then(Value::as_str) else {
+                let result = norito::json!({
+                    "error": {
+                        "code": JSONRPC_INVALID_PARAMS,
+                        "message": "batch item `name` must be a string",
+                        "data": { "error_code": "invalid_params" }
+                    }
+                });
+                if results.try_push(result).is_err() {
+                    return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
+                }
+                continue;
+            };
+            let empty_arguments = Map::new();
+            let arguments = call_obj
+                .get("arguments")
+                .and_then(Value::as_object)
+                .unwrap_or(&empty_arguments);
+            let response =
+                handle_named_tool_call(None, app.clone(), inbound_headers, name, arguments).await;
+            let Value::Object(mut response) = response else {
+                let result = norito::json!({
+                    "error": {
+                        "code": JSONRPC_INTERNAL_ERROR,
+                        "message": "batch item returned malformed response",
+                        "data": { "error_code": "internal_error" }
+                    }
+                });
+                if results.try_push(result).is_err() {
+                    return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
+                }
+                continue;
+            };
+            if let Some(result) = response.remove("result") {
+                norito::json!({ "result": result })
+            } else if let Some(error) = response.remove("error") {
+                norito::json!({ "error": error })
+            } else {
+                norito::json!({
+                    "error": {
+                        "code": JSONRPC_INTERNAL_ERROR,
+                        "message": "batch item returned malformed response",
+                        "data": { "error_code": "internal_error" }
+                    }
+                })
+            }
+        } else {
+            norito::json!({
                 "error": {
                     "code": JSONRPC_INVALID_PARAMS,
                     "message": "batch item must be an object",
                     "data": { "error_code": "invalid_params" }
                 }
-            }));
-            continue;
+            })
         };
-        let Some(name) = call_obj.get("name").and_then(Value::as_str) else {
-            results.push(norito::json!({
-                "error": {
-                    "code": JSONRPC_INVALID_PARAMS,
-                    "message": "batch item `name` must be a string",
-                    "data": { "error_code": "invalid_params" }
-                }
-            }));
-            continue;
-        };
-        let empty_arguments = Map::new();
-        let arguments = call_obj
-            .get("arguments")
-            .and_then(Value::as_object)
-            .unwrap_or(&empty_arguments);
-        let response =
-            handle_named_tool_call(None, app.clone(), inbound_headers, name, arguments).await;
-        let Value::Object(mut response) = response else {
-            results.push(norito::json!({
-                "error": {
-                    "code": JSONRPC_INTERNAL_ERROR,
-                    "message": "batch item returned malformed response",
-                    "data": { "error_code": "internal_error" }
-                }
-            }));
-            continue;
-        };
-        if let Some(result) = response.remove("result") {
-            results.push(norito::json!({ "result": result }));
-        } else if let Some(error) = response.remove("error") {
-            results.push(norito::json!({ "error": error }));
-        } else {
-            results.push(norito::json!({
-                "error": {
-                    "code": JSONRPC_INTERNAL_ERROR,
-                    "message": "batch item returned malformed response",
-                    "data": { "error_code": "internal_error" }
-                }
-            }));
+        if results.try_push(result).is_err() {
+            return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
         }
     }
-    jsonrpc_result_response(id, norito::json!({ "results": results }))
+    let results = results.into_values();
+    jsonrpc_result_response(id, norito::json!({ "results": (results) }))
 }
 fn mcp_tool_success(structured: Value) -> Value {
     let status = structured.get("status").and_then(Value::as_u64);
@@ -2190,8 +2294,14 @@ fn mcp_tool_success(structured: Value) -> Value {
 }
 fn mcp_tool_error(message: String) -> Value {
     let error_message = message.clone();
+    let error_code = match message.as_str() {
+        TARGET_RESPONSE_TOO_LARGE_MESSAGE => MCP_RESPONSE_TOO_LARGE_CODE,
+        TARGET_RESPONSE_READ_FAILED_MESSAGE => MCP_RESPONSE_READ_FAILED_CODE,
+        TARGET_RESPONSE_TIMEOUT_MESSAGE => MCP_RESPONSE_TIMEOUT_CODE,
+        _ => MCP_TOOL_EXECUTION_ERROR_CODE,
+    };
     let envelope = error_envelope_value(
-        MCP_TOOL_EXECUTION_ERROR_CODE,
+        error_code,
         error_message.as_str(),
         Some(norito::json!({
             "layer": "mcp"
@@ -2217,6 +2327,117 @@ fn error_envelope_value(code: &str, message: &str, details: Option<Value>) -> Va
     }
     Value::Object(envelope)
 }
+
+struct BoundedJsonSizeCounter {
+    encoded_bytes: usize,
+    max_bytes: usize,
+    depth: usize,
+}
+
+impl BoundedJsonSizeCounter {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            encoded_bytes: 0,
+            max_bytes,
+            depth: 0,
+        }
+    }
+
+    fn admit(&mut self, additional: usize) -> Result<(), BoundedJsonError> {
+        let next = self
+            .encoded_bytes
+            .checked_add(additional)
+            .ok_or(BoundedJsonError::BodyTooLarge)?;
+        if next > self.max_bytes {
+            return Err(BoundedJsonError::BodyTooLarge);
+        }
+        self.encoded_bytes = next;
+        Ok(())
+    }
+}
+
+impl JsonWriteSink for BoundedJsonSizeCounter {
+    fn push(&mut self, value: char) -> Result<(), BoundedJsonError> {
+        self.admit(value.len_utf8())
+    }
+
+    fn push_str(&mut self, value: &str) -> Result<(), BoundedJsonError> {
+        self.admit(value.len())
+    }
+
+    fn begin_container(&mut self) -> Result<(), BoundedJsonError> {
+        let next = self
+            .depth
+            .checked_add(1)
+            .ok_or(BoundedJsonError::Unsupported)?;
+        if next >= json::MAX_JSON_VALUE_NESTING_DEPTH {
+            return Err(BoundedJsonError::Unsupported);
+        }
+        self.depth = next;
+        Ok(())
+    }
+
+    fn end_container(&mut self) {
+        debug_assert!(self.depth > 0);
+        self.depth = self.depth.saturating_sub(1);
+    }
+}
+
+fn bounded_json_value_len(value: &Value, max_bytes: usize) -> Result<usize, BoundedJsonError> {
+    let mut counter = BoundedJsonSizeCounter::new(max_bytes);
+    value.write_json_to(&mut counter)?;
+    Ok(counter.encoded_bytes)
+}
+
+/// Accumulate one JSON array without allowing retained response values to grow
+/// past the final MCP envelope budget.
+pub(crate) struct BoundedJsonArray {
+    values: Vec<Value>,
+    encoded_bytes: usize,
+    max_bytes: usize,
+}
+
+impl BoundedJsonArray {
+    /// Reserve the bounded item count and account for the surrounding `[]`.
+    pub(crate) fn new(capacity: usize, max_bytes: usize) -> Result<Self, BoundedJsonError> {
+        if max_bytes < 2 {
+            return Err(BoundedJsonError::BodyTooLarge);
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| BoundedJsonError::AllocationFailed)?;
+        Ok(Self {
+            values,
+            encoded_bytes: 2,
+            max_bytes,
+        })
+    }
+
+    /// Retain one value only if its exact compact JSON representation fits.
+    pub(crate) fn try_push(&mut self, value: Value) -> Result<(), BoundedJsonError> {
+        let separator_bytes = usize::from(!self.values.is_empty());
+        let remaining = self
+            .max_bytes
+            .checked_sub(self.encoded_bytes)
+            .and_then(|remaining| remaining.checked_sub(separator_bytes))
+            .ok_or(BoundedJsonError::BodyTooLarge)?;
+        let value_bytes = bounded_json_value_len(&value, remaining)?;
+        self.encoded_bytes = self
+            .encoded_bytes
+            .checked_add(separator_bytes)
+            .and_then(|bytes| bytes.checked_add(value_bytes))
+            .ok_or(BoundedJsonError::BodyTooLarge)?;
+        self.values.push(value);
+        Ok(())
+    }
+
+    /// Finish the array after every retained value has been admitted.
+    pub(crate) fn into_values(self) -> Vec<Value> {
+        self.values
+    }
+}
+
 fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
     let mut obj = Map::new();
     obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
@@ -2224,6 +2445,50 @@ fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
     obj.insert("result".into(), result);
     Value::Object(obj)
 }
+pub(crate) fn jsonrpc_response_too_large(id: Option<Value>, max_response_bytes: usize) -> Value {
+    jsonrpc_error_response(
+        id,
+        MCP_RESPONSE_TOO_LARGE,
+        "mcp response exceeds the configured envelope byte limit",
+        Some(norito::json!({
+            "error_code": MCP_RESPONSE_TOO_LARGE_CODE,
+            "max_response_bytes": max_response_bytes
+        })),
+    )
+}
+
+/// Serialize the final JSON-RPC value behind the same byte budget used for the
+/// accepted request. This prevents both route output and batch metadata from
+/// turning a small MCP request into an unbounded response allocation.
+pub(crate) fn bounded_jsonrpc_http_response(payload: Value, max_response_bytes: usize) -> Response {
+    let encoded = match json::to_json_bounded_boxed(&payload, max_response_bytes) {
+        Ok(encoded) => encoded.into_vec(),
+        Err(BoundedJsonError::BodyTooLarge) => {
+            let error = jsonrpc_response_too_large(None, max_response_bytes);
+            return private_no_store_response((StatusCode::OK, crate::utils::JsonBody(error)));
+        }
+        Err(BoundedJsonError::AllocationFailed) => {
+            let error = jsonrpc_allocation_failed("failed to allocate MCP response storage");
+            return private_no_store_response((StatusCode::OK, crate::utils::JsonBody(error)));
+        }
+        Err(BoundedJsonError::Unsupported | BoundedJsonError::LengthMismatch) => {
+            let error = jsonrpc_error_response(
+                None,
+                JSONRPC_INTERNAL_ERROR,
+                "failed to serialize MCP response",
+                Some(norito::json!({ "error_code": "response_serialization_failed" })),
+            );
+            return private_no_store_response((StatusCode::OK, crate::utils::JsonBody(error)));
+        }
+    };
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(encoded))
+        .expect("build bounded MCP JSON response");
+    private_no_store_response(response)
+}
+
 fn jsonrpc_error_response(
     id: Option<Value>,
     code: i64,
@@ -2283,6 +2548,8 @@ fn jsonrpc_error_code_label(code: i64) -> &'static str {
         JSONRPC_INVALID_PARAMS => "invalid_params",
         JSONRPC_INTERNAL_ERROR => "internal_error",
         MCP_TOOL_EXECUTION_ERROR => MCP_TOOL_EXECUTION_ERROR_CODE,
+        MCP_RESPONSE_TOO_LARGE => MCP_RESPONSE_TOO_LARGE_CODE,
+        MCP_REQUEST_TIMEOUT => "request_timeout",
         MCP_RATE_LIMITED => "rate_limited",
         _ => "unknown_error",
     }
@@ -7049,7 +7316,9 @@ async fn dispatch_route_with_borrowed_headers(
         .oneshot(request)
         .await
         .map_err(|err| format!("dispatch failed: {err}"))?;
-    response_to_value(response).await
+    response_to_value(response, app.mcp.max_request_bytes)
+        .await
+        .map_err(|error| error.to_owned())
 }
 fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
     inbound_headers
@@ -7515,15 +7784,38 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
         || lowered == limits::REMOTE_ADDR_HEADER
         || lowered.starts_with("x-iroha-internal-")
 }
-async fn response_to_value(response: Response) -> Result<Value, String> {
+/// Return true when an HTTP body error was caused by the configured byte cap.
+pub(crate) fn body_error_is_length_limit(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is::<http_body_util::LengthLimitError>() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+async fn response_to_value(
+    response: Response,
+    max_body_bytes: usize,
+) -> Result<Value, &'static str> {
     let (parts, body) = response.into_parts();
     let status = parts.status;
     let headers = parts.headers;
-    let body_bytes = body
-        .collect()
-        .await
-        .map_err(|err| format!("read response body: {err}"))?
-        .to_bytes();
+    let body_bytes = match tokio::time::timeout(
+        MCP_BODY_READ_TIMEOUT,
+        axum::body::to_bytes(body, max_body_bytes),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(error)) if body_error_is_length_limit(&error) => {
+            return Err(TARGET_RESPONSE_TOO_LARGE_MESSAGE);
+        }
+        Ok(Err(_)) => return Err(TARGET_RESPONSE_READ_FAILED_MESSAGE),
+        Err(_) => return Err(TARGET_RESPONSE_TIMEOUT_MESSAGE),
+    };
     let headers_value = headers_to_value(&headers);
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -9230,6 +9522,7 @@ mod tests {
     include!("mcp/dispatch_and_argument_tests.rs");
     include!("mcp/iso20022_operator_auth_tests.rs");
     include!("mcp/body_builder_tests.rs");
+    include!("mcp/bounds_tests.rs");
 
     #[test]
     fn simple_manual_get_tools_share_the_exact_read_contract() {

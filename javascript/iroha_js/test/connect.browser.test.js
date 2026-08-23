@@ -11,6 +11,7 @@ import {
   ConnectApprovalRejectedError,
   ConnectSessionClosedError,
   ConnectSignRequestError,
+  NetworkId,
   TORII_CANONICAL_REQUEST_DOMAIN_TAG,
   buildConnectTokenProtocol,
   buildConnectWebSocketUrl,
@@ -32,7 +33,6 @@ import {
   canonicalRequestSignatureMessage,
 } from "../src/canonicalRequest.js";
 import { NexusAppClient } from "../src/nexusApp.js";
-import { NetworkId } from "../src/networkId.js";
 
 const connectVectors = JSON.parse(
   readFileSync(new URL("../../../fixtures/connect/session_vectors.json", import.meta.url), "utf8"),
@@ -803,10 +803,12 @@ test("createConnectAppSession handles approval and sign success", async () => {
 
   const approval = await session.waitForApproval();
   assert.equal(approval.accountId, account.accountId);
+  assert.deepEqual(Buffer.from(approval.signingPublicKey), Buffer.from(account.publicKey));
   assert.deepEqual(Buffer.from(approval.walletPublicKey), Buffer.from(walletPublicKey));
   assert.deepEqual(Buffer.from(approval.signature), Buffer.from(approvalSignature));
   assert.equal(Object.isFrozen(approval), true);
 
+  approval.signingPublicKey.fill(0);
   approval.walletPublicKey.fill(0);
   approval.signature.fill(0);
   assert.throws(() => {
@@ -814,9 +816,14 @@ test("createConnectAppSession handles approval and sign success", async () => {
   }, TypeError);
   const secondApproval = await session.waitForApproval();
   assert.notStrictEqual(secondApproval, approval);
+  assert.notStrictEqual(secondApproval.signingPublicKey, approval.signingPublicKey);
   assert.notStrictEqual(secondApproval.walletPublicKey, approval.walletPublicKey);
   assert.notStrictEqual(secondApproval.signature, approval.signature);
   assert.equal(secondApproval.accountId, account.accountId);
+  assert.deepEqual(
+    Buffer.from(secondApproval.signingPublicKey),
+    Buffer.from(account.publicKey),
+  );
   assert.deepEqual(
     Buffer.from(secondApproval.walletPublicKey),
     Buffer.from(walletPublicKey),

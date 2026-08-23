@@ -246,6 +246,15 @@ inline Bn254 bn254_pow_u64(Bn254 base, ulong exponent) {
     return result;
 }
 
+inline ulong bn254_bit_reverse_index(ulong index, uint log_size) {
+    ulong reversed = 0UL;
+    for (uint bit = 0U; bit < log_size; ++bit) {
+        reversed = (reversed << 1UL) | (index & 1UL);
+        index >>= 1UL;
+    }
+    return reversed;
+}
+
 kernel void bn254_fft_columns(
     device Bn254 *columns [[buffer(0)]],
     constant uint &log_size [[buffer(1)]],
@@ -261,7 +270,17 @@ kernel void bn254_fft_columns(
     for (ulong idx = tid; idx < n; idx += threads_per_group) {
         columns[idx] = bn254_from_canonical_value(columns[idx]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
+
+    for (ulong idx = tid; idx < n; idx += threads_per_group) {
+        ulong reversed = bn254_bit_reverse_index(idx, log_size);
+        if (idx < reversed) {
+            Bn254 value = columns[idx];
+            columns[idx] = columns[reversed];
+            columns[reversed] = value;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_device);
 
     ulong stage_span = n >> 1UL;
     for (uint stage = 0U; stage < log_size; ++stage) {
@@ -281,7 +300,7 @@ kernel void bn254_fft_columns(
             columns[idx] = bn254_add(u, v);
             columns[idx + half_len] = bn254_sub(u, v);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_device);
     }
 
     for (ulong idx = tid; idx < n; idx += threads_per_group) {
@@ -311,7 +330,7 @@ kernel void bn254_lde_columns(
     for (ulong idx = tid + trace_len; idx < eval_len; idx += threads_per_group) {
         out[idx] = bn254_zero();
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
 
     uint log_len = trace_log + blowup_log;
     ulong stage_span = eval_len >> 1UL;
@@ -323,7 +342,17 @@ kernel void bn254_lde_columns(
         out[idx] = bn254_montgomery_mul(out[idx], coset_power);
         coset_power = bn254_montgomery_mul(coset_power, coset_stride);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_device);
+
+    for (ulong idx = tid; idx < eval_len; idx += threads_per_group) {
+        ulong reversed = bn254_bit_reverse_index(idx, log_len);
+        if (idx < reversed) {
+            Bn254 value = out[idx];
+            out[idx] = out[reversed];
+            out[reversed] = value;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_device);
 
     for (uint stage = 0U; stage < log_len; ++stage) {
         ulong len = 1UL << (stage + 1U);
@@ -342,7 +371,7 @@ kernel void bn254_lde_columns(
             out[idx] = bn254_add(u, v);
             out[idx + half_len] = bn254_sub(u, v);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_device);
     }
 
     for (ulong idx = tid; idx < eval_len; idx += threads_per_group) {

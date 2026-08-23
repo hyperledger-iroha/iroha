@@ -9,10 +9,46 @@
 //! payloads for long-term storage and operator dashboards.
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
+/// Domain separator for collector identities derived from authenticated operator keys.
+pub const SORANET_PRIVACY_COLLECTOR_ID_DOMAIN_V1: &[u8] =
+    b"iroha.soranet.privacy.collector-id.v1\0";
+/// Collision-resistant identity of one privacy collector.
+pub type SoranetPrivacyCollectorIdV1 = [u8; 32];
+/// Derive the canonical collector identity for an authenticated operator key.
+#[must_use]
+pub fn derive_soranet_privacy_collector_id(public_key: &PublicKey) -> SoranetPrivacyCollectorIdV1 {
+    let (algorithm, payload) = public_key.to_bytes();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(SORANET_PRIVACY_COLLECTOR_ID_DOMAIN_V1);
+    hasher.update(&[algorithm as u8]);
+    hasher.update(payload);
+    *hasher.finalize().as_bytes()
+}
+#[cfg(test)]
+mod collector_id_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    #[test]
+    fn collector_id_is_stable_and_key_bound() {
+        let first = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+        let second = KeyPair::from_seed(vec![0x32; 32], Algorithm::Ed25519);
+        let first_id = derive_soranet_privacy_collector_id(first.public_key());
+        assert_eq!(
+            first_id,
+            derive_soranet_privacy_collector_id(first.public_key())
+        );
+        assert_ne!(
+            first_id,
+            derive_soranet_privacy_collector_id(second.public_key())
+        );
+    }
+}
 /// Aggregated GAR abuse report counts keyed by the truncated category hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -36,6 +72,7 @@ impl SoranetGarAbuseCountV1 {
 /// Secret-shared GAR abuse counter contribution emitted by a Prio collector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetGarAbuseShareV1 {
     /// First eight bytes of the BLAKE3 hash for the GAR abuse category label.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -106,9 +143,17 @@ impl json::JsonDeserialize for SoranetPrivacyModeV1 {
 /// Secret-shared Prio contribution covering a privacy telemetry bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyPrioShareV1 {
     /// Identifier for the collector emitting the share (stable across restarts).
-    pub collector_id: u16,
+    ///
+    /// Authenticated Torii ingress binds this value to the operator public key using the
+    /// domain-separated derivation documented in `specs/soranet/privacy_metrics_pipeline.md`.
+    #[cfg_attr(
+        feature = "json",
+        norito(json = "crate::json_helpers::soranet_privacy_collector_id")
+    )]
+    pub collector_id: SoranetPrivacyCollectorIdV1,
     /// Bucket start timestamp (seconds since UNIX epoch).
     pub bucket_start_unix: u64,
     /// Bucket width in seconds.
@@ -159,7 +204,11 @@ pub struct SoranetPrivacyPrioShareV1 {
 impl SoranetPrivacyPrioShareV1 {
     /// Construct a new Prio share with empty histogram and GAR counters.
     #[must_use]
-    pub fn new(collector_id: u16, bucket_start_unix: u64, bucket_duration_secs: u32) -> Self {
+    pub fn new(
+        collector_id: SoranetPrivacyCollectorIdV1,
+        bucket_start_unix: u64,
+        bucket_duration_secs: u32,
+    ) -> Self {
         Self {
             collector_id,
             bucket_start_unix,
@@ -376,8 +425,9 @@ impl norito::json::JsonDeserialize for SoranetPrivacySuppressionReasonV1 {
     }
 }
 /// Privacy-preserving telemetry event ingested by the secure aggregator.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventV1 {
     /// UNIX timestamp (seconds) indicating when the observation occurred.
     pub timestamp_unix: u64,
@@ -387,11 +437,11 @@ pub struct SoranetPrivacyEventV1 {
     pub kind: SoranetPrivacyEventKindV1,
 }
 /// Enumeration of privacy telemetry event kinds.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(DeriveJsonSerialize, DeriveJsonDeserialize),
-    norito(tag = "kind", content = "payload")
+    norito(tag = "kind", content = "payload", deny_unknown_fields)
 )]
 pub enum SoranetPrivacyEventKindV1 {
     /// Successful anonymous circuit establishment.
@@ -410,6 +460,7 @@ pub enum SoranetPrivacyEventKindV1 {
 /// Payload describing a successful anonymous circuit establishment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventHandshakeSuccessV1 {
     /// Optional RTT measurement captured for the handshake (milliseconds).
     #[norito(default)]
@@ -418,23 +469,42 @@ pub struct SoranetPrivacyEventHandshakeSuccessV1 {
     #[norito(default)]
     pub active_circuits_after: Option<u64>,
 }
-/// Payload describing a failed handshake event. This struct is intentionally
-/// `Clone`-only because the detail slug remains an owned `String`.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+/// Payload describing a failed handshake event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventHandshakeFailureV1 {
     /// Reason explaining why the handshake failed.
     pub reason: SoranetPrivacyHandshakeFailureV1,
-    /// Optional downgrade detail slug (e.g., `suite_no_overlap`).
+    /// Typed proof-of-work failure reason. This must be present exactly when
+    /// [`Self::reason`] is [`SoranetPrivacyHandshakeFailureV1::Pow`].
     #[norito(default)]
-    pub detail: Option<String>,
+    pub pow_reason: Option<SoranetPowFailureReasonV1>,
     /// Optional RTT measurement captured for the failed handshake (milliseconds).
     #[norito(default)]
     pub rtt_ms: Option<u64>,
 }
+impl SoranetPrivacyEventHandshakeFailureV1 {
+    /// Return whether the reason and typed proof-of-work classification form a
+    /// canonical first-release event.
+    #[must_use]
+    pub const fn has_canonical_reason(self) -> bool {
+        matches!(
+            (self.reason, self.pow_reason),
+            (SoranetPrivacyHandshakeFailureV1::Pow, Some(_))
+                | (
+                    SoranetPrivacyHandshakeFailureV1::Timeout
+                        | SoranetPrivacyHandshakeFailureV1::Downgrade
+                        | SoranetPrivacyHandshakeFailureV1::Other,
+                    None,
+                )
+        )
+    }
+}
 /// Payload describing a throttling decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventThrottleV1 {
     /// Scope of the throttle.
     pub scope: SoranetPrivacyThrottleScopeV1,
@@ -442,6 +512,7 @@ pub struct SoranetPrivacyEventThrottleV1 {
 /// Payload describing an active circuits sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventActiveSampleV1 {
     /// Number of active circuits observed.
     pub active_circuits: u64,
@@ -449,16 +520,19 @@ pub struct SoranetPrivacyEventActiveSampleV1 {
 /// Payload describing a verified bandwidth contribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventVerifiedBytesV1 {
     /// Total verified bytes relayed during the observation window.
     pub bytes: u128,
 }
 /// Payload describing a GAR abuse category report.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoranetPrivacyEventGarAbuseCategoryV1 {
-    /// Raw GAR category label (hashed before aggregation).
-    pub label: String,
+    /// Truncated BLAKE3 digest of the canonical GAR category label.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub category_hash: [u8; 8],
 }
 /// Handshake failure classification surfaced by telemetry events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -662,6 +736,71 @@ impl norito::json::JsonDeserialize for SoranetPrivacyHandshakeFailureV1 {
             "other" => Ok(Self::Other),
             other => Err(norito::json::Error::unknown_field(other)),
         }
+    }
+}
+#[cfg(test)]
+mod handshake_failure_tests {
+    use super::*;
+
+    #[test]
+    fn typed_pow_reason_is_present_exactly_for_pow_failures() {
+        let canonical_pow = SoranetPrivacyEventHandshakeFailureV1 {
+            reason: SoranetPrivacyHandshakeFailureV1::Pow,
+            pow_reason: Some(SoranetPowFailureReasonV1::Replay),
+            rtt_ms: None,
+        };
+        assert!(canonical_pow.has_canonical_reason());
+
+        let missing_pow_reason = SoranetPrivacyEventHandshakeFailureV1 {
+            pow_reason: None,
+            ..canonical_pow
+        };
+        assert!(!missing_pow_reason.has_canonical_reason());
+
+        for reason in [
+            SoranetPrivacyHandshakeFailureV1::Timeout,
+            SoranetPrivacyHandshakeFailureV1::Downgrade,
+            SoranetPrivacyHandshakeFailureV1::Other,
+        ] {
+            assert!(
+                SoranetPrivacyEventHandshakeFailureV1 {
+                    reason,
+                    pow_reason: None,
+                    rtt_ms: None,
+                }
+                .has_canonical_reason()
+            );
+            assert!(
+                !SoranetPrivacyEventHandshakeFailureV1 {
+                    reason,
+                    pow_reason: Some(SoranetPowFailureReasonV1::InvalidSolution),
+                    rtt_ms: None,
+                }
+                .has_canonical_reason()
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod gar_event_tests {
+    use super::*;
+    use norito::codec::DecodeAll as _;
+
+    #[test]
+    fn fixed_gar_category_hash_roundtrips_through_norito() {
+        let event = SoranetPrivacyEventV1 {
+            timestamp_unix: 1_723_456_789,
+            mode: SoranetPrivacyModeV1::Exit,
+            kind: SoranetPrivacyEventKindV1::GarAbuseCategory(
+                SoranetPrivacyEventGarAbuseCategoryV1 {
+                    category_hash: [0xA5; 8],
+                },
+            ),
+        };
+        let encoded = event.encode();
+        let decoded = SoranetPrivacyEventV1::decode_all(&mut encoded.as_slice())
+            .expect("fixed-hash GAR event must decode");
+        assert_eq!(decoded, event);
     }
 }
 #[cfg(all(test, feature = "json"))]

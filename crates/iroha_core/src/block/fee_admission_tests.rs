@@ -1358,7 +1358,7 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
     );
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
+    let state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
     install_test_lane_manifests(&state);
     let mut metadata = Metadata::default();
     metadata.insert(

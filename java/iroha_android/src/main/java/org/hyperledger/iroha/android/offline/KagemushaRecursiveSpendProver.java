@@ -87,8 +87,9 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
   public static final int MAX_PROMOTION_RECORD_BYTES = 1024 * 1024;
-  public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 32_774;
-  public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 24_576;
+  public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
+  public static final int MAX_PEER_TEXT_ARCHIVE_BYTES =
+      (MAX_PEER_TEXT_ENVELOPE_BYTES - 6) * 3 / 4;
   public static final int MAX_PEER_ARCHIVE_BYTES_V2 = 32 * 1024;
   public static final int MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2 = 24_576;
   public static final int MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1 = 2 * 1024;

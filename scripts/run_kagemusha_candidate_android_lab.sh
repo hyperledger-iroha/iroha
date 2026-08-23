@@ -21,6 +21,8 @@ Usage:
      --android-attestation-trust-root-sha256 <hex>]... \
     [--android-attestation-revocation-status <JSON> \
      --android-attestation-revocation-status-sha256 <hex>] \
+    [--android-attestation-status-capture-receipt <JSON> \
+     --android-attestation-status-capture-receipt-sha256 <hex>] \
     [--serial <adb-serial>]
 
 The required physical-evidence sequence is:
@@ -62,6 +64,8 @@ AUTHORITY_OPENSSL=""
 AUTHORITY_OPENSSL_SHA256=""
 AUTHORITY_REVOCATION_STATUS=""
 AUTHORITY_REVOCATION_STATUS_SHA256=""
+AUTHORITY_STATUS_CAPTURE_RECEIPT=""
+AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256=""
 AUTHORITY_TRUST_ROOTS=()
 AUTHORITY_TRUST_ROOT_SHA256=()
 SERIAL=""
@@ -161,6 +165,18 @@ while [[ $# -gt 0 ]]; do
       AUTHORITY_REVOCATION_STATUS_SHA256="${2:-}"
       shift 2
       ;;
+    --android-attestation-status-capture-receipt)
+      [[ -z "$AUTHORITY_STATUS_CAPTURE_RECEIPT" ]] || fail \
+        "--android-attestation-status-capture-receipt may be provided exactly once"
+      AUTHORITY_STATUS_CAPTURE_RECEIPT="${2:-}"
+      shift 2
+      ;;
+    --android-attestation-status-capture-receipt-sha256)
+      [[ -z "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" ]] || fail \
+        "--android-attestation-status-capture-receipt-sha256 may be provided exactly once"
+      AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256="${2:-}"
+      shift 2
+      ;;
     --serial)
       SERIAL="${2:-}"
       shift 2
@@ -203,6 +219,8 @@ if [[ "$BUILD_ONLY" == true && ( -n "$AUTHORITY_JAVA" \
     || -n "$AUTHORITY_APKSIGNER_JAR_SHA256" || -n "$AUTHORITY_OPENSSL" \
     || -n "$AUTHORITY_OPENSSL_SHA256" || -n "$AUTHORITY_REVOCATION_STATUS" \
     || -n "$AUTHORITY_REVOCATION_STATUS_SHA256" \
+    || -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT" \
+    || -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
     || ${#AUTHORITY_TRUST_ROOTS[@]} -ne 0 \
     || ${#AUTHORITY_TRUST_ROOT_SHA256[@]} -ne 0 ) ]]; then
   fail "--build-only does not consume attestation authority inputs"
@@ -224,6 +242,9 @@ if [[ "$BUILD_ONLY" == false ]]; then
   [[ -n "$AUTHORITY_REVOCATION_STATUS" \
       && -n "$AUTHORITY_REVOCATION_STATUS_SHA256" ]] || fail \
     "the full run requires a pinned Android attestation revocation-status JSON"
+  [[ -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT" \
+      && -n "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" ]] || fail \
+    "the full run requires a pinned Android attestation status capture receipt"
   [[ ${#AUTHORITY_TRUST_ROOTS[@]} -ge 1 \
       && ${#AUTHORITY_TRUST_ROOTS[@]} -eq ${#AUTHORITY_TRUST_ROOT_SHA256[@]} ]] || fail \
     "the full run requires aligned pinned Android attestation trust roots"
@@ -267,6 +288,7 @@ if [[ "$BUILD_ONLY" == false ]]; then
     "$AUTHORITY_APKSIGNER_JAR" \
     "$AUTHORITY_OPENSSL" \
     "$AUTHORITY_REVOCATION_STATUS" \
+    "$AUTHORITY_STATUS_CAPTURE_RECEIPT" \
     "${AUTHORITY_TRUST_ROOTS[@]}"; do
     [[ "$authority_path" == /* && "$authority_path" != */./* \
         && "$authority_path" != */../* && "$authority_path" != */ \
@@ -282,6 +304,7 @@ if [[ "$BUILD_ONLY" == false ]]; then
     "$AUTHORITY_APKSIGNER_JAR_SHA256" \
     "$AUTHORITY_OPENSSL_SHA256" \
     "$AUTHORITY_REVOCATION_STATUS_SHA256" \
+    "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
     "${AUTHORITY_TRUST_ROOT_SHA256[@]}"; do
     [[ "$authority_digest" =~ ^[0-9a-f]{64}$ \
         && "$authority_digest" != "$(printf '0%.0s' {1..64})" ]] || fail \
@@ -329,6 +352,10 @@ verify_attestation_authority_inputs() {
     "$AUTHORITY_REVOCATION_STATUS" \
     "$AUTHORITY_REVOCATION_STATUS_SHA256" \
     android-attestation-revocation-status
+  verify_pinned_file \
+    "$AUTHORITY_STATUS_CAPTURE_RECEIPT" \
+    "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
+    android-attestation-status-capture-receipt
   local index
   for ((index = 0; index < ${#AUTHORITY_TRUST_ROOTS[@]}; index++)); do
     verify_pinned_file \
@@ -656,13 +683,19 @@ write_run_receipt() {
   local authority_apksigner_jar_sha256="${10:-}"
   local authority_openssl_sha256="${11:-}"
   local authority_revocation_sha256="${12:-}"
-  local authority_trust_root_sha256_csv="${13:-}"
-  local confirmation_binding="${14:-}"
-  local confirmation_transcript="${15:-}"
-  local confirmation_report="${16:-}"
-  local confirmation_binding_sha256="${17:-}"
-  local confirmation_transcript_sha256="${18:-}"
-  local confirmation_report_sha256="${19:-}"
+  local authority_status_capture_receipt_sha256="${13:-}"
+  local authority_android_status_payload_sha256="${14:-}"
+  local authority_android_status_response_date_ms="${15:-}"
+  local authority_android_status_last_modified_ms="${16:-}"
+  local authority_android_status_cache_max_age_seconds="${17:-}"
+  local authority_android_status_non_valid_serial_count="${18:-}"
+  local authority_trust_root_sha256_csv="${19:-}"
+  local confirmation_binding="${20:-}"
+  local confirmation_transcript="${21:-}"
+  local confirmation_report="${22:-}"
+  local confirmation_binding_sha256="${23:-}"
+  local confirmation_transcript_sha256="${24:-}"
+  local confirmation_report_sha256="${25:-}"
   local output
   if [[ "$mode" == "build_only" ]]; then
     output="$EVIDENCE_ROOT/evidence/candidate-build-only-receipt-v1.json"
@@ -687,7 +720,14 @@ write_run_receipt() {
     "$attestation_root" "$PYTHON3_BINARY" \
     "$authority_java_sha256" "$authority_apksigner_jar_sha256" \
     "$authority_openssl_sha256" \
-    "$authority_revocation_sha256" "$authority_trust_root_sha256_csv" \
+    "$authority_revocation_sha256" \
+    "$authority_status_capture_receipt_sha256" \
+    "$authority_android_status_payload_sha256" \
+    "$authority_android_status_response_date_ms" \
+    "$authority_android_status_last_modified_ms" \
+    "$authority_android_status_cache_max_age_seconds" \
+    "$authority_android_status_non_valid_serial_count" \
+    "$authority_trust_root_sha256_csv" \
     "$confirmation_binding" "$confirmation_transcript" "$confirmation_report" \
     "$confirmation_binding_sha256" "$confirmation_transcript_sha256" \
     "$confirmation_report_sha256" <<'PY'
@@ -710,6 +750,9 @@ import sys
     java_path, apksigner_java_path, apksigner_jar_path, attestation_root,
     python_path, authority_java_sha, authority_apksigner_jar_sha,
     authority_openssl_sha, authority_revocation_sha,
+    authority_status_capture_receipt_sha, android_status_payload_sha,
+    android_status_response_date_ms, android_status_last_modified_ms,
+    android_status_cache_max_age_seconds, android_status_non_valid_serial_count,
     authority_trust_root_sha_csv,
     confirmation_binding_path, confirmation_transcript_path,
     confirmation_report_path,
@@ -870,6 +913,9 @@ if validated:
         "--openssl-sha256", authority_openssl_sha,
         "--android-attestation-revocation-status", "<pinned-revocation-status>",
         "--android-attestation-revocation-status-sha256", authority_revocation_sha,
+        "--android-attestation-status-capture-receipt", "<pinned-status-capture-receipt>",
+        "--android-attestation-status-capture-receipt-sha256",
+        authority_status_capture_receipt_sha,
     ]
     for digest in authority_root_digests:
         validator_command += [
@@ -892,6 +938,9 @@ if validated:
         "--openssl-sha256", authority_openssl_sha,
         "--android-attestation-revocation-status", "<pinned-revocation-status>",
         "--android-attestation-revocation-status-sha256", authority_revocation_sha,
+        "--android-attestation-status-capture-receipt", "<pinned-status-capture-receipt>",
+        "--android-attestation-status-capture-receipt-sha256",
+        authority_status_capture_receipt_sha,
     ]
     for digest in authority_root_digests:
         confirmation_command += [
@@ -941,9 +990,26 @@ payload = {
         "apksigner_jar": authority_apksigner_jar_sha or None,
         "openssl": authority_openssl_sha or None,
         "android_attestation_revocation_status": authority_revocation_sha or None,
+        "android_attestation_status_capture_receipt": (
+            authority_status_capture_receipt_sha or None
+        ),
         "android_attestation_trust_roots": (
             sorted(digest for digest in authority_trust_root_sha_csv.split(",") if digest)
             if authority_trust_root_sha_csv else []
+        ),
+        "android_status_snapshot": (
+            {
+                "payload_sha256": android_status_payload_sha,
+                "response_date_ms": int(android_status_response_date_ms),
+                "last_modified_ms": (
+                    None
+                    if android_status_last_modified_ms == "null"
+                    else int(android_status_last_modified_ms)
+                ),
+                "cache_max_age_seconds": int(android_status_cache_max_age_seconds),
+                "non_valid_serial_count": int(android_status_non_valid_serial_count),
+            }
+            if validated else None
         ),
     },
     "confirmation_candidate_binding": confirmation_binding,
@@ -1140,6 +1206,8 @@ AUTHORITY_VALIDATOR_ARGS=(
   --openssl-sha256 "$AUTHORITY_OPENSSL_SHA256"
   --android-attestation-revocation-status "$AUTHORITY_REVOCATION_STATUS"
   --android-attestation-revocation-status-sha256 "$AUTHORITY_REVOCATION_STATUS_SHA256"
+  --android-attestation-status-capture-receipt "$AUTHORITY_STATUS_CAPTURE_RECEIPT"
+  --android-attestation-status-capture-receipt-sha256 "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256"
 )
 for ((authority_index = 0; authority_index < ${#AUTHORITY_TRUST_ROOTS[@]}; authority_index++)); do
   AUTHORITY_VALIDATOR_ARGS+=(
@@ -1171,10 +1239,18 @@ ATTESTATION_VALUES="$("$PYTHON3_BINARY" -I - "$TRUSTED_SLOT_SUMMARY" "$SLOT_ID" 
   "$(sha256_file "$EVIDENCE_ROOT/evidence/candidate/manifest-v4.norito")" \
   "$STAGE_SHA256" "$LAB_APK_SHA256" "$TEST_APK_SHA256" \
   "$(sha256_file "$NATIVE_LIBRARY")" "$SOURCE_COMMIT" \
-  "$SOURCE_TREE_SHA256" "$LAB_APK_CERT_SHA256" "$TEST_APK_CERT_SHA256" <<'PY'
+  "$SOURCE_TREE_SHA256" "$LAB_APK_CERT_SHA256" "$TEST_APK_CERT_SHA256" \
+  "$AUTHORITY_JAVA_SHA256" "$AUTHORITY_APKSIGNER_JAR_SHA256" \
+  "$AUTHORITY_OPENSSL_SHA256" "$AUTHORITY_REVOCATION_STATUS_SHA256" \
+  "$AUTHORITY_STATUS_CAPTURE_RECEIPT" \
+  "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
+  "$(IFS=,; printf '%s' "${AUTHORITY_TRUST_ROOT_SHA256[*]}")" <<'PY'
 from pathlib import Path
+import hashlib
 import json
+import os
 import re
+import stat
 import sys
 
 summary_path = Path(sys.argv[1])
@@ -1217,6 +1293,169 @@ expected = {
 for key, value in expected.items():
     if kagemusha.get(key) != value:
         raise SystemExit(f"trusted validator summary {key} differs from the exact candidate run")
+
+
+def strict_object(raw, label):
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate JSON field {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=object_pairs,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"{label} contains non-finite number {token}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise SystemExit(f"{label} is not strict JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} must be a JSON object")
+    return value
+
+
+capture_receipt_path = Path(sys.argv[18])
+try:
+    capture_receipt_canonical = capture_receipt_path.resolve(strict=True)
+    capture_receipt_metadata = capture_receipt_path.lstat()
+except OSError as error:
+    raise SystemExit(
+        "Android attestation status capture receipt could not be inspected"
+    ) from error
+if (
+    not capture_receipt_path.is_absolute()
+    or capture_receipt_canonical != capture_receipt_path
+    or stat.S_ISLNK(capture_receipt_metadata.st_mode)
+    or not stat.S_ISREG(capture_receipt_metadata.st_mode)
+    or capture_receipt_metadata.st_nlink != 1
+    or capture_receipt_metadata.st_uid not in {0, os.geteuid()}
+    or capture_receipt_metadata.st_mode & 0o022
+    or not 1 <= capture_receipt_metadata.st_size <= 256 * 1024
+):
+    raise SystemExit(
+        "Android attestation status capture receipt is not one canonical governed file"
+    )
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+capture_receipt_digest = hashlib.sha256()
+capture_receipt_chunks = []
+try:
+    descriptor = os.open(capture_receipt_path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        identity = (
+            capture_receipt_metadata.st_dev,
+            capture_receipt_metadata.st_ino,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != identity
+            or opened.st_nlink != 1
+            or opened.st_size != capture_receipt_metadata.st_size
+        ):
+            raise SystemExit(
+                "Android attestation status capture receipt changed while opening"
+            )
+        size = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, 256 * 1024 + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > 256 * 1024:
+                raise SystemExit(
+                    "Android attestation status capture receipt exceeds 256 KiB"
+                )
+            capture_receipt_chunks.append(chunk)
+            capture_receipt_digest.update(chunk)
+        final = capture_receipt_path.lstat()
+        if (
+            (final.st_dev, final.st_ino) != identity
+            or final.st_size != size
+            or final.st_mtime_ns != capture_receipt_metadata.st_mtime_ns
+            or final.st_ctime_ns != capture_receipt_metadata.st_ctime_ns
+        ):
+            raise SystemExit(
+                "Android attestation status capture receipt changed while reading"
+            )
+    finally:
+        os.close(descriptor)
+except OSError as error:
+    raise SystemExit(
+        "Android attestation status capture receipt could not be read"
+    ) from error
+if capture_receipt_digest.hexdigest() != sys.argv[19]:
+    raise SystemExit("Android attestation status capture receipt pin changed")
+capture_receipt_bytes = b"".join(capture_receipt_chunks)
+capture_receipt = strict_object(
+    capture_receipt_bytes, "Android attestation status capture receipt"
+)
+snapshot = capture_receipt.get("snapshot")
+if not isinstance(snapshot, dict) or set(snapshot) != {
+    "version",
+    "payload_sha256",
+    "response_date_ms",
+    "last_modified_ms",
+    "cache_max_age_seconds",
+    "non_valid_serials",
+}:
+    raise SystemExit("Android attestation status snapshot projection is not exact")
+payload_sha256 = snapshot.get("payload_sha256")
+non_valid_serials = snapshot.get("non_valid_serials")
+if (
+    snapshot.get("version") != 1
+    or not isinstance(payload_sha256, list)
+    or len(payload_sha256) != 32
+    or any(
+        not isinstance(byte, int)
+        or isinstance(byte, bool)
+        or not 0 <= byte <= 255
+        for byte in payload_sha256
+    )
+    or not isinstance(snapshot.get("response_date_ms"), int)
+    or isinstance(snapshot.get("response_date_ms"), bool)
+    or (
+        snapshot.get("last_modified_ms") is not None
+        and (
+            not isinstance(snapshot.get("last_modified_ms"), int)
+            or isinstance(snapshot.get("last_modified_ms"), bool)
+        )
+    )
+    or not isinstance(snapshot.get("cache_max_age_seconds"), int)
+    or isinstance(snapshot.get("cache_max_age_seconds"), bool)
+    or not isinstance(non_valid_serials, list)
+):
+    raise SystemExit("Android attestation status snapshot projection is malformed")
+status_projection = {
+    "payload_sha256": bytes(payload_sha256).hex(),
+    "response_date_ms": snapshot["response_date_ms"],
+    "last_modified_ms": snapshot["last_modified_ms"],
+    "cache_max_age_seconds": snapshot["cache_max_age_seconds"],
+    "non_valid_serial_count": len(non_valid_serials),
+}
+expected_authority = {
+    "java_sha256": sys.argv[14],
+    "apksigner_jar_sha256": sys.argv[15],
+    "openssl_sha256": sys.argv[16],
+    "attestation_trust_root_sha256": sorted(sys.argv[20].split(",")),
+    "attestation_revocation_status_sha256": sys.argv[17],
+    "attestation_status_capture_receipt_sha256": sys.argv[19],
+    "android_status_snapshot": status_projection,
+}
+if kagemusha.get("authority_tools") != expected_authority:
+    raise SystemExit("trusted validator slot authority projection differs")
+summary_kagemusha = summary.get("kagemusha")
+if (
+    not isinstance(summary_kagemusha, dict)
+    or summary_kagemusha.get("authority_tools") != expected_authority
+):
+    raise SystemExit("trusted validator summary authority projection differs")
 outputs = []
 for key in (
     "app_signing_certificate_sha256",
@@ -1228,12 +1467,37 @@ for key in (
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
         raise SystemExit(f"trusted validator summary {key} is invalid")
     outputs.append(value)
+outputs.extend(
+    (
+        status_projection["payload_sha256"],
+        str(status_projection["response_date_ms"]),
+        (
+            "null"
+            if status_projection["last_modified_ms"] is None
+            else str(status_projection["last_modified_ms"])
+        ),
+        str(status_projection["cache_max_age_seconds"]),
+        str(status_projection["non_valid_serial_count"]),
+    )
+)
 print("|".join(outputs))
 PY
 )"
 IFS='|' read -r APP_SIGNING_CERTIFICATE_SHA256 ATTESTATION_CERTIFICATE_CHAIN_SHA256 \
   TRUSTED_SIGNER_PUBLIC_KEY_SHA256 SIGNED_EVIDENCE_ARTIFACT_SHA256 \
+  ANDROID_STATUS_PAYLOAD_SHA256 ANDROID_STATUS_RESPONSE_DATE_MS \
+  ANDROID_STATUS_LAST_MODIFIED_MS ANDROID_STATUS_CACHE_MAX_AGE_SECONDS \
+  ANDROID_STATUS_NON_VALID_SERIAL_COUNT \
   <<<"$ATTESTATION_VALUES"
+[[ "$ANDROID_STATUS_PAYLOAD_SHA256" =~ ^[0-9a-f]{64}$ \
+    && "$ANDROID_STATUS_PAYLOAD_SHA256" != "$(printf '0%.0s' {1..64})" ]] || fail \
+  "trusted validator produced an invalid Android status payload digest"
+[[ "$ANDROID_STATUS_RESPONSE_DATE_MS" =~ ^[1-9][0-9]*$ \
+    && ( "$ANDROID_STATUS_LAST_MODIFIED_MS" == "null" \
+      || "$ANDROID_STATUS_LAST_MODIFIED_MS" =~ ^[1-9][0-9]*$ ) \
+    && "$ANDROID_STATUS_CACHE_MAX_AGE_SECONDS" =~ ^[1-9][0-9]*$ \
+    && "$ANDROID_STATUS_NON_VALID_SERIAL_COUNT" =~ ^(0|[1-9][0-9]*)$ ]] || fail \
+  "trusted validator produced an invalid Android status snapshot projection"
 [[ "$APP_SIGNING_CERTIFICATE_SHA256" != "$LAB_APK_CERT_SHA256" ]] || fail \
   "non-shipping lab APK signer must differ from the attested wallet signer"
 
@@ -1424,6 +1688,12 @@ CONFIRMATION_VALUES="$("$PYTHON3_BINARY" -I - \
   "$AUTHORITY_JAVA_SHA256" "$AUTHORITY_APKSIGNER_JAR_SHA256" \
   "$AUTHORITY_OPENSSL_SHA256" \
   "$AUTHORITY_REVOCATION_STATUS_SHA256" \
+  "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
+  "$ANDROID_STATUS_PAYLOAD_SHA256" \
+  "$ANDROID_STATUS_RESPONSE_DATE_MS" \
+  "$ANDROID_STATUS_LAST_MODIFIED_MS" \
+  "$ANDROID_STATUS_CACHE_MAX_AGE_SECONDS" \
+  "$ANDROID_STATUS_NON_VALID_SERIAL_COUNT" \
   "$(IFS=,; printf '%s' "${AUTHORITY_TRUST_ROOT_SHA256[*]}")" <<'PY'
 from pathlib import Path
 import hashlib
@@ -1441,6 +1711,12 @@ import sys
     apksigner_jar_sha256,
     openssl_sha256,
     revocation_sha256,
+    status_capture_receipt_sha256,
+    android_status_payload_sha256,
+    android_status_response_date_ms,
+    android_status_last_modified_ms,
+    android_status_cache_max_age_seconds,
+    android_status_non_valid_serial_count,
     root_sha256_csv,
 ) = sys.argv[1:]
 
@@ -1553,6 +1829,18 @@ expected_authority = {
     "openssl_sha256": openssl_sha256,
     "attestation_trust_root_sha256": sorted(root_sha256_csv.split(",")),
     "attestation_revocation_status_sha256": revocation_sha256,
+    "attestation_status_capture_receipt_sha256": status_capture_receipt_sha256,
+    "android_status_snapshot": {
+        "payload_sha256": android_status_payload_sha256,
+        "response_date_ms": int(android_status_response_date_ms),
+        "last_modified_ms": (
+            None
+            if android_status_last_modified_ms == "null"
+            else int(android_status_last_modified_ms)
+        ),
+        "cache_max_age_seconds": int(android_status_cache_max_age_seconds),
+        "non_valid_serial_count": int(android_status_non_valid_serial_count),
+    },
 }
 if report.get("authority_tools") != expected_authority:
     raise SystemExit("candidate confirmation report authority projection differs")
@@ -1637,6 +1925,12 @@ write_run_receipt \
   "$AUTHORITY_APKSIGNER_JAR_SHA256" \
   "$AUTHORITY_OPENSSL_SHA256" \
   "$AUTHORITY_REVOCATION_STATUS_SHA256" \
+  "$AUTHORITY_STATUS_CAPTURE_RECEIPT_SHA256" \
+  "$ANDROID_STATUS_PAYLOAD_SHA256" \
+  "$ANDROID_STATUS_RESPONSE_DATE_MS" \
+  "$ANDROID_STATUS_LAST_MODIFIED_MS" \
+  "$ANDROID_STATUS_CACHE_MAX_AGE_SECONDS" \
+  "$ANDROID_STATUS_NON_VALID_SERIAL_COUNT" \
   "$AUTHORITY_TRUST_ROOT_SHA256_CSV" \
   "$BINDING" \
   "$TRANSCRIPT" \

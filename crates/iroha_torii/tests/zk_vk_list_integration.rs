@@ -87,4 +87,25 @@ async fn vk_list_filters_by_backend_and_status() {
             .unwrap();
     let arr_prop = v_prop.as_array().unwrap();
     assert_eq!(arr_prop.len(), 1);
+
+    for uri in [
+        "/v1/zk/vk?status=Unknown",
+        "/v1/zk/vk?order=sideways",
+        "/v1/zk/vk?limit=0",
+        "/v1/zk/vk?limit=1001",
+        "/v1/zk/vk?offset=4294967295",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                http::Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST, "{uri}");
+    }
 }

@@ -6,13 +6,23 @@ use soranet_relay::{
     config::{VpnConfig, VpnCoverTrafficConfig},
     metrics::Metrics,
     vpn::{
-        CoverFrameMeta, VpnFrameIoError, VpnOverlay, VpnSession, read_frame, schedule_frames,
-        send_scheduled_frames_with_adapter, write_frame,
+        CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay as RelayVpnOverlay,
+        VpnSession, read_frame, schedule_frames, send_scheduled_frames_with_adapter, write_frame,
     },
     vpn_adapter::{VpnAdapter, VpnBridge, VpnDataFrameBatch},
 };
 use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+
+/// Build a framing-only overlay without activating the privileged VPN control plane.
+struct VpnOverlay;
+
+impl VpnOverlay {
+    fn from_config(mut config: VpnConfig) -> RelayVpnOverlay {
+        config.enabled = false;
+        RelayVpnOverlay::from_config(config)
+    }
+}
 #[test]
 fn vpn_adapter_records_ingress_and_egress() {
     let metrics = Arc::new(Metrics::new());
@@ -74,11 +84,13 @@ async fn overlay_creates_bridge_and_increments_sessions() {
         enabled: true,
         ..Default::default()
     });
-    let mut bridge = overlay.start_bridge(
-        Arc::clone(&metrics),
-        [0xAB; 16],
-        VpnFlowLabelV1::from_u32(6).unwrap(),
-    );
+    let mut bridge = overlay
+        .start_bridge(
+            Arc::clone(&metrics),
+            [0xAB; 16],
+            VpnFlowLabelV1::from_u32(6).unwrap(),
+        )
+        .expect("cover scheduler seed");
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 2);
     let outcome = bridge
         .send_payloads(&mut writer, &[vec![0x01, 0x02, 0x03]])
@@ -563,6 +575,34 @@ async fn adapter_sends_data_frames_with_accounting() {
     assert_eq!(snapshot.vpn_data_egress_bytes, 10);
     assert_eq!(snapshot.vpn_data_frames, 2);
 }
+
+#[tokio::test]
+async fn adapter_rejects_data_sequence_wrap_before_writing() {
+    let metrics = Arc::new(Metrics::new());
+    let overlay = VpnOverlay::from_config(Default::default());
+    let adapter = overlay.start_adapter(metrics);
+    let payloads = [vec![0xAA]];
+    let batch = VpnDataFrameBatch {
+        circuit_id: [0xAC; 16],
+        flow_label: VpnFlowLabelV1::from_u32(9).expect("flow"),
+        start_sequence: u64::MAX,
+        ack: 0,
+        flags: VpnCellFlagsV1::new(false, false, false, false),
+        payloads: &payloads,
+    };
+    let (mut writer, mut reader) = duplex(VPN_CELL_LEN);
+    let error = adapter
+        .send_data_frames(&mut writer, batch)
+        .await
+        .expect_err("sequence wrap must fail");
+    assert!(matches!(
+        error,
+        VpnFrameIoError::Build(VpnFrameBuildError::SequenceExhausted)
+    ));
+    drop(writer);
+    let mut byte = [0u8; 1];
+    assert_eq!(0, reader.read(&mut byte).await.expect("read closed writer"));
+}
 #[tokio::test]
 async fn adapter_paces_data_frames_and_cover() {
     let metrics = Arc::new(Metrics::new());
@@ -622,13 +662,11 @@ async fn adapter_paces_data_frames_and_cover() {
             .iter()
             .any(|f| f.header.class == VpnCellClassV1::Cover)
     );
-    let data_sequences: Vec<u64> = frames
-        .iter()
-        .filter(|f| f.header.class == VpnCellClassV1::Data)
-        .map(|f| f.header.sequence)
-        .collect();
-    assert!(data_sequences.contains(&10));
-    assert!(data_sequences.contains(&11));
+    let sequences: Vec<u64> = frames.iter().map(|frame| frame.header.sequence).collect();
+    assert_eq!(
+        (50..50 + u64::try_from(frames.len()).expect("frame count fits u64")).collect::<Vec<_>>(),
+        sequences
+    );
     let snapshot = metrics.snapshot();
     let cover_frames = schedule.iter().filter(|frame| frame.is_cover).count() as u64;
     let data_frames = schedule.len() as u64 - cover_frames;
@@ -651,7 +689,8 @@ async fn bridge_sends_data_without_cover() {
         ..Default::default()
     });
     let adapter = overlay.start_adapter(Arc::clone(&metrics));
-    let mut bridge = VpnBridge::new(adapter, [0x10; 16], VpnFlowLabelV1::from_u32(1).unwrap());
+    let mut bridge = VpnBridge::new(adapter, [0x10; 16], VpnFlowLabelV1::from_u32(1).unwrap())
+        .expect("cover scheduler seed");
     let payloads = vec![vec![0xAA; 3], vec![0xBB; 2]];
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 4);
     let outcome = bridge
@@ -699,9 +738,10 @@ async fn bridge_injects_cover_when_enabled() {
         ..Default::default()
     });
     let adapter = overlay.start_adapter(Arc::clone(&metrics));
-    let mut bridge = VpnBridge::new(adapter, [0x21; 16], VpnFlowLabelV1::from_u32(2).unwrap());
+    let mut bridge = VpnBridge::new(adapter, [0x21; 16], VpnFlowLabelV1::from_u32(2).unwrap())
+        .expect("cover scheduler seed");
     bridge.set_ack(7);
-    bridge.set_cover_seed([0x55; 32]);
+    bridge.set_cover_seed([0x55; 32]).expect("valid cover seed");
     let payloads = vec![vec![0xCA; 4], vec![0xFE; 5]];
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 6);
     let outcome = bridge
@@ -714,20 +754,11 @@ async fn bridge_injects_cover_when_enabled() {
     for _ in 0..(outcome.data_frames + outcome.cover_frames) {
         frames.push(read_frame(&overlay, &mut reader).await.expect("frame"));
     }
-    let data_sequences: Vec<u64> = frames
-        .iter()
-        .filter(|f| f.header.class == VpnCellClassV1::Data)
-        .map(|f| f.header.sequence)
-        .collect();
-    assert_eq!(vec![0, 1], data_sequences);
-    let cover_sequences: Vec<u64> = frames
-        .iter()
-        .filter(|f| f.header.class == VpnCellClassV1::Cover)
-        .map(|f| f.header.sequence)
-        .collect();
-    assert!(
-        cover_sequences.windows(2).all(|pair| pair[1] > pair[0]),
-        "cover sequences should increase"
+    let sequences: Vec<u64> = frames.iter().map(|frame| frame.header.sequence).collect();
+    assert_eq!(
+        (0..u64::try_from(frames.len()).expect("frame count fits u64")).collect::<Vec<_>>(),
+        sequences,
+        "cover and data frames must share one monotonic sequence space"
     );
     assert!(
         frames
@@ -762,7 +793,7 @@ async fn relay_metrics_cover_and_data_end_to_end() {
             cover_to_data_per_mille: 700,
             heartbeat_ms: 5,
             max_cover_burst: 1,
-            max_jitter_millis: 0,
+            max_jitter_millis: 1,
         },
         pacing_millis: 5,
         ..Default::default()
@@ -772,8 +803,9 @@ async fn relay_metrics_cover_and_data_end_to_end() {
         adapter.clone(),
         [0x99; 16],
         VpnFlowLabelV1::from_u32(13).unwrap(),
-    );
-    bridge.set_cover_seed([0xEE; 32]);
+    )
+    .expect("cover scheduler seed");
+    bridge.set_cover_seed([0xEE; 32]).expect("valid cover seed");
     let payloads = vec![vec![0xAB; 5], vec![0xCD; 7]];
     let (mut relay_io, mut exit_io) = duplex(VPN_CELL_LEN * 8);
     let outcome = bridge
@@ -862,7 +894,8 @@ async fn bridge_fragments_large_payload() {
         ..Default::default()
     });
     let adapter = overlay.start_adapter(Arc::clone(&metrics));
-    let mut bridge = VpnBridge::new(adapter, [0x33; 16], VpnFlowLabelV1::from_u32(3).unwrap());
+    let mut bridge = VpnBridge::new(adapter, [0x33; 16], VpnFlowLabelV1::from_u32(3).unwrap())
+        .expect("cover scheduler seed");
     let max_payload = VpnCellV1::max_payload_len();
     let buffer = vec![0xDE; max_payload + 5];
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 4);
@@ -900,11 +933,13 @@ async fn bridge_pumps_tun_to_vpn() {
         },
         ..Default::default()
     });
-    let mut bridge = overlay.start_bridge(
-        Arc::clone(&metrics),
-        [0x44; 16],
-        VpnFlowLabelV1::from_u32(4).unwrap(),
-    );
+    let mut bridge = overlay
+        .start_bridge(
+            Arc::clone(&metrics),
+            [0x44; 16],
+            VpnFlowLabelV1::from_u32(4).unwrap(),
+        )
+        .expect("cover scheduler seed");
     let (mut tun_writer, mut tun_reader) = duplex(2048);
     let (mut vpn_writer, mut vpn_reader) = duplex(VPN_CELL_LEN * 4);
     let pump = tokio::spawn(async move {
@@ -934,11 +969,13 @@ async fn bridge_forwards_vpn_to_tun() {
         enabled: true,
         ..Default::default()
     });
-    let bridge = overlay.start_bridge(
-        Arc::clone(&metrics),
-        [0x55; 16],
-        VpnFlowLabelV1::from_u32(5).unwrap(),
-    );
+    let bridge = overlay
+        .start_bridge(
+            Arc::clone(&metrics),
+            [0x55; 16],
+            VpnFlowLabelV1::from_u32(5).unwrap(),
+        )
+        .expect("cover scheduler seed");
     let payload = vec![0xBC; 12];
     let padded = overlay
         .pad_cell(VpnCellV1 {
@@ -990,11 +1027,13 @@ async fn bridge_drops_cover_frames_on_tun_forward() {
         enabled: true,
         ..Default::default()
     });
-    let bridge = overlay.start_bridge(
-        Arc::clone(&metrics),
-        [0x77; 16],
-        VpnFlowLabelV1::from_u32(9).unwrap(),
-    );
+    let bridge = overlay
+        .start_bridge(
+            Arc::clone(&metrics),
+            [0x77; 16],
+            VpnFlowLabelV1::from_u32(9).unwrap(),
+        )
+        .expect("cover scheduler seed");
     let payload = vec![0xAD; 7];
     let padded = overlay
         .pad_cell(VpnCellV1 {
@@ -1060,12 +1099,14 @@ async fn bridge_and_adapter_end_to_end_record_metrics() {
     };
     let overlay_entry = VpnOverlay::from_config(make_cfg());
     let overlay_exit = VpnOverlay::from_config(make_cfg());
-    let mut bridge = overlay_entry.start_bridge(
-        Arc::clone(&entry_metrics),
-        [0xCD; 16],
-        VpnFlowLabelV1::from_u32(12).expect("flow"),
-    );
-    bridge.set_cover_seed([0x11; 32]);
+    let mut bridge = overlay_entry
+        .start_bridge(
+            Arc::clone(&entry_metrics),
+            [0xCD; 16],
+            VpnFlowLabelV1::from_u32(12).expect("flow"),
+        )
+        .expect("cover scheduler seed");
+    bridge.set_cover_seed([0x11; 32]).expect("valid cover seed");
     let adapter_exit = overlay_exit.start_adapter(Arc::clone(&exit_metrics));
     let payloads = vec![vec![0x01; 4], vec![0xAA; 6]];
     let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 8);

@@ -1,4 +1,4 @@
-//! Process-wide admission for memory-hard SoraNet handshake work.
+//! Process-wide admission for memory-hard `SoraNet` handshake work.
 
 use std::{
     num::NonZeroUsize,
@@ -11,15 +11,15 @@ use tokio::sync::Semaphore;
 use crate::Error;
 
 /// Default number of concurrent outbound puzzle mints.
-pub(crate) const DEFAULT_OUTBOUND_MINT_CAPACITY: NonZeroUsize =
+pub const DEFAULT_OUTBOUND_MINT_CAPACITY: NonZeroUsize =
     ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 /// Default number of concurrent inbound puzzle verifications.
-pub(crate) const DEFAULT_INBOUND_VERIFY_CAPACITY: NonZeroUsize =
+pub const DEFAULT_INBOUND_VERIFY_CAPACITY: NonZeroUsize =
     ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 
 /// Direction-aware process admission for Argon2 handshake jobs.
 #[derive(Debug)]
-pub(crate) struct SoranetPuzzleWorkAdmission {
+pub struct SoranetPuzzleWorkAdmission {
     outbound_mint: Arc<Semaphore>,
     inbound_verify: Arc<Semaphore>,
     outbound_mint_capacity: NonZeroUsize,
@@ -58,7 +58,7 @@ static PROCESS_WIDE_ADMISSION: LazyLock<Mutex<Weak<SoranetPuzzleWorkAdmission>>>
 /// Acquire the one admission authority shared by every production network in
 /// this process. Changing its capacities requires a restart so old and new
 /// gates can never overlap and exceed the configured memory bound.
-pub(crate) fn process_wide_admission(
+pub fn process_wide_admission(
     outbound_mint_capacity: NonZeroUsize,
     inbound_verify_capacity: NonZeroUsize,
 ) -> Result<Arc<SoranetPuzzleWorkAdmission>, String> {
@@ -87,7 +87,7 @@ pub(crate) fn process_wide_admission(
 
 /// Execute one blocking Argon2 job while retaining its permit even if the
 /// surrounding async handshake is cancelled.
-pub(crate) async fn run_soranet_puzzle_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
+pub async fn run_soranet_puzzle_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, Error> + Send + 'static,

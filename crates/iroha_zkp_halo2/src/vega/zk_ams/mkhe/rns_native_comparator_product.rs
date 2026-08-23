@@ -24,11 +24,13 @@
 use core::marker::PhantomData;
 
 use super::{
-    rns_native_claimed_successor::{
-        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1, RnsNativeClaimedSuccessorV1,
+    rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
+    rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_cross_field_rlwe_direct::{
+        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
         RnsNativeCrossFieldRlweClaimedInventoryParentV1,
     },
-    rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
@@ -612,7 +614,8 @@ fn append_frame_v1(
     Ok(())
 }
 
-fn initial_transcript_state_v1(
+#[derive(Clone, Copy)]
+struct ComparatorTranscriptContextV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
     group: usize,
@@ -621,7 +624,21 @@ fn initial_transcript_state_v1(
     coordinates: usize,
     padded_gates: usize,
     generator_basis_digest: [u8; DIGEST_BYTES_V1],
+}
+
+fn initial_transcript_state_v1(
+    context: ComparatorTranscriptContextV1,
 ) -> Result<Vec<u8>, RnsNativeComparatorProductErrorV1> {
+    let ComparatorTranscriptContextV1 {
+        prior_context_digest,
+        inventory_root,
+        group,
+        difference,
+        sum,
+        coordinates,
+        padded_gates,
+        generator_basis_digest,
+    } = context;
     if prior_context_digest == [0; DIGEST_BYTES_V1]
         || inventory_root == [0; DIGEST_BYTES_V1]
         || group >= GROUPS_V1
@@ -712,27 +729,11 @@ where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
     fn new_v1(
-        prior_context_digest: [u8; DIGEST_BYTES_V1],
-        inventory_root: [u8; DIGEST_BYTES_V1],
-        group: usize,
-        difference: Point,
-        sum: Point,
-        coordinates: usize,
-        padded_gates: usize,
-        generator_basis_digest: [u8; DIGEST_BYTES_V1],
+        context: ComparatorTranscriptContextV1,
         core: ExactCoreViewV1<'a>,
     ) -> Result<Self, RnsNativeComparatorProductErrorV1> {
         Ok(Self {
-            state: initial_transcript_state_v1(
-                prior_context_digest,
-                inventory_root,
-                group,
-                difference,
-                sum,
-                coordinates,
-                padded_gates,
-                generator_basis_digest,
-            )?,
+            state: initial_transcript_state_v1(context)?,
             core,
             cursor: 0,
             challenge_ordinal: 0,
@@ -904,6 +905,24 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
+
+    /// Consume statement-3 evidence and recover the exact claimed direct
+    /// successor carrier. This is the only ownership path back to the direct
+    /// frame retained by the comparator chain.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeClaimedSuccessorV1<
+        'proof,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    > {
+        self._parent
+    }
+
+    pub(super) fn take_existing_radix_validation_permit_v1(
+        &mut self,
+    ) -> Option<RnsNativeExistingRadixValidationPermitV1> {
+        self._parent.take_existing_radix_validation_permit_v1()
+    }
 }
 
 struct VerifiedComparatorProductPartsV1<'proof> {
@@ -938,15 +957,18 @@ where
             .comparator_top_commitments(group)
             .ok_or(RnsNativeComparatorProductErrorV1::InvalidContext)?;
         let core = view.core_v1(group)?;
-        let mut transcript = ComparatorVerifierTranscriptV1::<ZkAmsT256BulletproofSuiteV1>::new_v1(
-            inventory.prior_context_digest(),
-            inventory.inventory_root(),
+        let transcript_context = ComparatorTranscriptContextV1 {
+            prior_context_digest: inventory.prior_context_digest(),
+            inventory_root: inventory.inventory_root(),
             group,
             difference,
             sum,
-            COORDINATES_V1,
-            PADDED_GATES_V1,
-            ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            coordinates: COORDINATES_V1,
+            padded_gates: PADDED_GATES_V1,
+            generator_basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+        };
+        let mut transcript = ComparatorVerifierTranscriptV1::<ZkAmsT256BulletproofSuiteV1>::new_v1(
+            transcript_context,
             core,
         )?;
         build_comparator_statement_v1::<ZkAmsT256BulletproofSuiteV1>(
@@ -974,9 +996,10 @@ where
     })
 }
 
-/// Consume the sealed successor carrier and verify all 344 comparator
-/// boolean/disjoint product proofs sequentially. The carrier has no production
-/// constructor, and raw inventory continuation bytes cannot enter this stage.
+/// Consume the exact-preflighted direct successor claim and verify all 344
+/// comparator boolean/disjoint product proofs sequentially. This does not
+/// assert the retained direct algebra. A production caller cannot enter this
+/// stage from raw `inventory.continuation()` bytes.
 #[allow(
     dead_code,
     reason = "the sound private statement-3 entry awaits the remaining statement-5, statement-8, and lookup consumers"

@@ -1182,37 +1182,19 @@ fn overlay_v2_effect_status(
         overlay_pending_tip_recovery_work(status, stage);
     }
 }
-/// Replace reducer-queued startup work with the exact closed-ingress recovery stage.
+/// Replace reducer-queued startup work with the exact closed-ingress Apply stage.
 ///
 /// A durable Decision keeps the public phase/body pair at `PendingApply`.
-/// These local-work fields identify whether the node is still replaying body
-/// availability, storage, validation, or application without presenting a
-/// decided block as an ordinary live-view reconstruction.
+/// Owner-open already revalidated the body and storage marker, so these fields
+/// expose only the canonical lifecycle Apply without presenting the decided
+/// block as an ordinary live-view reconstruction.
 fn overlay_pending_tip_recovery_work(
     status: &mut SumeragiV2Status,
     stage: PendingKuraApplyRecoveryStage,
 ) {
-    use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
+    use SumeragiV2LocalWorkStage::{Complete, Queued, Running};
     let work = &mut status.liveness.work;
     match stage {
-        PendingKuraApplyRecoveryStage::CertifiedFetch => {
-            work.body_recovery = Queued;
-            work.body_store = Idle;
-            work.validation = Idle;
-            work.application = Queued;
-        }
-        PendingKuraApplyRecoveryStage::DurableStore => {
-            work.body_recovery = Complete;
-            work.body_store = Queued;
-            work.validation = Idle;
-            work.application = Queued;
-        }
-        PendingKuraApplyRecoveryStage::DeterministicValidation => {
-            work.body_recovery = Complete;
-            work.body_store = Complete;
-            work.validation = Queued;
-            work.application = Queued;
-        }
         PendingKuraApplyRecoveryStage::Apply => {
             work.body_recovery = Complete;
             work.body_store = Complete;
@@ -2260,24 +2242,12 @@ mod v2_liveness_watchdog_tests {
     }
     #[test]
     fn pending_tip_recovery_overlay_reports_the_exact_local_stage() {
-        use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
+        use SumeragiV2LocalWorkStage::{Complete, Queued, Running};
         let captured_at = Instant::now();
         let mut baseline = status();
         baseline.phase = SumeragiV2StatusPhase::PendingApply;
         baseline.body_state = SumeragiV2BodyState::PendingApply;
         let cases = [
-            (
-                PendingKuraApplyRecoveryStage::CertifiedFetch,
-                (Queued, Idle, Idle, Queued),
-            ),
-            (
-                PendingKuraApplyRecoveryStage::DurableStore,
-                (Complete, Queued, Idle, Queued),
-            ),
-            (
-                PendingKuraApplyRecoveryStage::DeterministicValidation,
-                (Complete, Complete, Queued, Queued),
-            ),
             (
                 PendingKuraApplyRecoveryStage::Apply,
                 (Complete, Complete, Complete, Queued),
@@ -2310,21 +2280,9 @@ mod v2_liveness_watchdog_tests {
             );
             assert_eq!(observed.phase, phase_before);
             assert_eq!(observed.body_state, body_state_before);
-            let expected_blocker = match stage {
-                PendingKuraApplyRecoveryStage::CertifiedFetch
-                | PendingKuraApplyRecoveryStage::DurableStore
-                | PendingKuraApplyRecoveryStage::DeterministicValidation => {
-                    SumeragiV2LivenessBlocker::BodyUnavailable
-                }
-                PendingKuraApplyRecoveryStage::Apply
-                | PendingKuraApplyRecoveryStage::ApplicationDispatched
-                | PendingKuraApplyRecoveryStage::Completed => {
-                    SumeragiV2LivenessBlocker::ApplicationPending
-                }
-            };
             assert_eq!(
                 classify_v2_liveness_blocker(&observed, false),
-                expected_blocker,
+                SumeragiV2LivenessBlocker::ApplicationPending,
                 "closed-ingress recovery stage {stage:?} must expose its actual blocker"
             );
         }

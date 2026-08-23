@@ -845,7 +845,7 @@ impl LaneConfig {
             proof_scheme: self.proof_scheme,
             manifest_policy: self.manifest_policy,
             confidential_compute: self.confidential_compute.clone(),
-            scheduler: self.scheduler.clone(),
+            scheduler: self.scheduler,
             settlement_buffer: self.settlement_buffer.clone(),
             consensus_metadata: self
                 .metadata
@@ -1273,7 +1273,43 @@ impl norito::json::FastJsonWrite for LaneConfig {
     }
 }
 #[cfg(feature = "json")]
+fn ensure_lane_config_json_fields(
+    seen_fields: &BTreeSet<String>,
+) -> Result<(), norito::json::Error> {
+    const REQUIRED_FIELDS: [&str; 16] = [
+        "id",
+        "shard_id",
+        "dataspace_id",
+        "alias",
+        "description",
+        "visibility",
+        "lane_type",
+        "governance",
+        "settlement",
+        "storage",
+        "proof_scheme",
+        "manifest_policy",
+        "confidential_compute",
+        "scheduler",
+        "settlement_buffer",
+        "metadata",
+    ];
+    if let Some(missing_field) = REQUIRED_FIELDS
+        .into_iter()
+        .find(|field| !seen_fields.contains(*field))
+    {
+        return Err(norito::json::Error::Message(format!(
+            "missing required lane config field `{missing_field}`"
+        )));
+    }
+    Ok(())
+}
+#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneConfig {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the strict LaneConfig decoder keeps its complete required-field and rejection policy in one auditable implementation"
+    )]
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
@@ -1350,32 +1386,7 @@ impl norito::json::JsonDeserialize for LaneConfig {
             }
         }
         visitor.finish()?;
-        let required_fields = [
-            "id",
-            "shard_id",
-            "dataspace_id",
-            "alias",
-            "description",
-            "visibility",
-            "lane_type",
-            "governance",
-            "settlement",
-            "storage",
-            "proof_scheme",
-            "manifest_policy",
-            "confidential_compute",
-            "scheduler",
-            "settlement_buffer",
-            "metadata",
-        ];
-        if let Some(missing_field) = required_fields
-            .into_iter()
-            .find(|field| !seen_fields.contains(*field))
-        {
-            return Err(norito::json::Error::Message(format!(
-                "missing required lane config field `{missing_field}`"
-            )));
-        }
+        ensure_lane_config_json_fields(&seen_fields)?;
         lane.validate_policy_surface()
             .map_err(|error| norito::json::Error::Message(error.to_string()))?;
         Ok(lane)
@@ -2667,6 +2678,10 @@ mod tests {
         assert!(!restricted.is_autoscale_managed_elastic());
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the inheritance audit checks every identity, reserved-metadata, and operator field boundary together"
+    )]
     fn autoscale_profile_inheritance_ignores_identity_and_reserved_metadata_only() {
         let mut base = LaneConfig {
             id: LaneId::new(2),

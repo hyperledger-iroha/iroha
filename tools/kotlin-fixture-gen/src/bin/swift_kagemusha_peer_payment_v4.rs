@@ -246,14 +246,15 @@ fn write_output_atomically(path: &Path, contents: &[u8]) -> Result<bool, String>
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
     let ordinary_writes_root = Hash::new([seed, 3]);
     let topup_anchor_root = Hash::new([seed, 4]);
+    let executed_block_wire = [seed, 5];
     ExecutionCommitment::new_without_merge_carrier(
         Hash::new([seed, 1]),
         ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
         ordinary_writes_root,
         Some(topup_anchor_root),
         1,
-        1,
-        Hash::new([seed, 5]),
+        u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
+        Hash::new(executed_block_wire),
     )
     .expect("fixture execution commitment must be canonical")
 }
@@ -324,7 +325,9 @@ fn finality_evidence(
         },
         leader_seed: [seed.wrapping_add(12); 32],
     };
-    complete_context.validate().expect("fixture height context");
+    complete_context
+        .validate()
+        .expect("fixture height context must be canonical");
     let context_id = complete_context.id();
     let round = ConsensusRound {
         context_id,
@@ -685,31 +688,34 @@ mod tests {
         );
     }
     #[test]
-    fn peer_payment_fixture_uses_canonical_finality_quorum() {
+    fn fixture_uses_a_canonical_four_validator_commit_quorum() {
         let request_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
             "../../crates/connect_norito_bridge/tests/fixtures/\
              offline_recipient_payment_request_v2.hex",
         );
         let (_, request) = read_recipient_request(&request_path);
         let payment = fixture(&request);
-        let roster = &payment
+        payment
+            .validate_public_binding()
+            .expect("generated peer payment must remain canonical");
+
+        let window = &payment
             .topup_provenance
             .topup_finality_roster_artifact
             .windows[0];
-        roster.validate().expect("fixture roster");
-        assert_eq!(roster.validator_set.len(), 4);
-        assert_eq!(roster.validator_set_pops.len(), 4);
-
+        window.validate().expect("fixture roster");
+        assert_eq!(window.validator_set.len(), 4);
+        assert_eq!(window.validator_set_pops.len(), 4);
         let compact_qc = &payment.topup_provenance.topup_finality_evidence[0]
             .topup_finality_proof
             .commit_qc;
         let context = compact_qc
             .height_context
-            .reconstruct_for_roster_window(roster)
+            .reconstruct_for_roster_window(window)
             .expect("fixture height context");
-        assert_eq!(compact_qc.certificate.signers, [0, 1, 2]);
-        compact_qc
-            .certificate
+        let certificate = &compact_qc.certificate;
+        assert_eq!(certificate.signers, [0, 1, 2]);
+        certificate
             .validate(&context)
             .expect("fixture quorum certificate");
     }

@@ -214,10 +214,7 @@ impl Rule {
             if self.chunk_index != other.chunk_index {
                 return false;
             }
-            if let (
-                (Some(left_height), Some(left_view)),
-                (Some(right_height), Some(right_view)),
-            ) = (
+            if let ((Some(left_height), Some(left_view)), (Some(right_height), Some(right_view))) = (
                 (self.proposal_height, self.proposal_view),
                 (other.proposal_height, other.proposal_view),
             ) && (left_height, left_view) != (right_height, right_view)
@@ -1759,12 +1756,20 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     }
 }
 fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ControlError> {
-    read_stable_private_file_after_open(path, max_bytes, || {})
+    retry_file_identity_change_once(|| read_stable_private_file_after_open(path, max_bytes, || {}))
+}
+fn retry_file_identity_change_once(
+    mut read: impl FnMut() -> Result<Vec<u8>, ControlError>,
+) -> Result<Vec<u8>, ControlError> {
+    match read() {
+        Err(ControlError::FileIdentityChanged) => read(),
+        result => result,
+    }
 }
 fn read_stable_private_file_after_open(
     path: &Path,
     max_bytes: usize,
-    after_open: impl FnOnce(),
+    after_open_before_metadata: impl FnOnce(),
 ) -> Result<Vec<u8>, ControlError> {
     let named_before = fs::symlink_metadata(path).map_err(ControlError::Io)?;
     validate_private_file(&named_before)?;
@@ -1782,8 +1787,9 @@ fn read_stable_private_file_after_open(
         options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     }
     let mut file = options.open(path).map_err(ControlError::Io)?;
+    after_open_before_metadata();
     let opened_before = file.metadata().map_err(ControlError::Io)?;
-    validate_private_file(&opened_before)?;
+    validate_opened_private_file(&opened_before)?;
     if !same_file(&named_before, &opened_before) {
         return Err(ControlError::FileIdentityChanged);
     }
@@ -1793,7 +1799,6 @@ fn read_stable_private_file_after_open(
     {
         return Err(ControlError::CommandTooLarge);
     }
-    after_open();
     let mut bytes = Vec::with_capacity(
         usize::try_from(opened_before.len())
             .unwrap_or(max_bytes)
@@ -1826,7 +1831,7 @@ fn read_stable_private_file_after_open(
     {
         return Err(ControlError::FileIdentityChanged);
     }
-    validate_private_file(&opened_after)?;
+    validate_opened_private_file(&opened_after)?;
     Ok(bytes)
 }
 fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8]) -> Result<(), ControlError> {
@@ -1885,15 +1890,37 @@ fn validate_private_root(metadata: &fs::Metadata) -> Result<(), ControlError> {
     Ok(())
 }
 fn validate_private_file(metadata: &fs::Metadata) -> Result<(), ControlError> {
+    validate_private_file_without_link_count(metadata)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err(ControlError::UnsafePermissions);
+        }
+    }
+    Ok(())
+}
+fn validate_opened_private_file(metadata: &fs::Metadata) -> Result<(), ControlError> {
+    validate_private_file_without_link_count(metadata)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match metadata.nlink() {
+            0 => return Err(ControlError::FileIdentityChanged),
+            1 => {}
+            _ => return Err(ControlError::UnsafePermissions),
+        }
+    }
+    Ok(())
+}
+fn validate_private_file_without_link_count(metadata: &fs::Metadata) -> Result<(), ControlError> {
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         return Err(ControlError::UnsafeFile);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o777 != 0o600
-            || metadata.nlink() != 1
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o777 != 0o600
         {
             return Err(ControlError::UnsafePermissions);
         }
@@ -3318,6 +3345,51 @@ mod tests {
         assert!(
             matches!(error, ControlError::FileIdentityChanged),
             "safe replacement must be retryable identity churn, got {error:?}"
+        );
+    }
+    #[test]
+    fn stable_private_reader_retries_identity_churn_once_but_not_unsafe_permissions() {
+        use std::cell::Cell;
+
+        let attempts = Cell::new(0_u8);
+        let bytes = retry_file_identity_change_once(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                Err(ControlError::FileIdentityChanged)
+            } else {
+                Ok(b"stable".to_vec())
+            }
+        })
+        .expect("one identity replacement is retried");
+        assert_eq!(bytes.as_slice(), b"stable");
+        assert_eq!(attempts.get(), 2, "exactly one retry is permitted");
+
+        let repeated_attempts = Cell::new(0_u8);
+        assert!(matches!(
+            retry_file_identity_change_once(|| {
+                repeated_attempts.set(repeated_attempts.get() + 1);
+                Err(ControlError::FileIdentityChanged)
+            }),
+            Err(ControlError::FileIdentityChanged)
+        ));
+        assert_eq!(
+            repeated_attempts.get(),
+            2,
+            "a second identity change propagates instead of retrying again"
+        );
+
+        let unsafe_attempts = Cell::new(0_u8);
+        assert!(matches!(
+            retry_file_identity_change_once(|| {
+                unsafe_attempts.set(unsafe_attempts.get() + 1);
+                Err(ControlError::UnsafePermissions)
+            }),
+            Err(ControlError::UnsafePermissions)
+        ));
+        assert_eq!(
+            unsafe_attempts.get(),
+            1,
+            "unsafe metadata must fail closed without retry"
         );
     }
 }

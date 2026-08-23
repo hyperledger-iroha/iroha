@@ -655,6 +655,7 @@ fn run_lifecycle_active_height(
     let mut admitted_discovered_commit_qc = false;
     let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
     let mut canonical_lane_body_recovered = false;
+    let mut finalized_ingress_closed = false;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -677,9 +678,10 @@ fn run_lifecycle_active_height(
                     // In particular, do not reconcile or advance the reducer,
                     // wake generic deferred Apply work, or admit ordinary
                     // consensus ingress while the lane-only Completion barrier
-                    // owns the current cut. Once Apply is terminal, the decided-
-                    // lane recovery seam may consume one authenticated lane-local
-                    // carrier needed to persist the exact certified artifact.
+                    // owns the current cut. Once the exact decided Apply is
+                    // dispatched, the decided-lane recovery seam may consume one
+                    // authenticated carrier needed to serve or persist that
+                    // certified artifact, including while Apply completion waits.
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         drain_decided_lane_recovery_ingress(
                             receiver,
@@ -762,6 +764,10 @@ fn run_lifecycle_active_height(
                         directive.locked_subject(),
                         directive.decided_subject(),
                     )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )?;
                     drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
                     services
                         .replay_buffered_chunks(executor)
@@ -833,6 +839,10 @@ fn run_lifecycle_active_height(
                         directive.locked_subject(),
                         directive.decided_subject(),
                     )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )?;
                     drain_lane_relay_ingress(
                         lane_relay_rx,
                         &mut lane_work,
@@ -878,6 +888,10 @@ fn run_lifecycle_active_height(
                     lane_work.retain_merge_sidecars_for_global_view(
                         directive.tag().view(),
                         directive.locked_subject(),
+                        directive.decided_subject(),
+                    )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
                         directive.decided_subject(),
                     )?;
                     if directive.decided_subject().is_none()
@@ -1032,6 +1046,34 @@ fn run_lifecycle_active_height(
         }
 
         if rollover_ready {
+            if !finalized_ingress_closed {
+                activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
+                finalized_ingress_closed = true;
+            }
+            let drained_terminal_ingress = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    let drained = drain_decided_lane_recovery_ingress(
+                        receiver,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        executor.current_tag().view(),
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server,
+                    )?;
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+                    Ok::<_, V2RunnerError>(drained.is_some())
+                },
+            )?;
+            if drained_terminal_ingress {
+                continue;
+            }
+            receiver
+                .ensure_closed_drained_cut()
+                .map_err(V2RunnerError::Service)?;
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,

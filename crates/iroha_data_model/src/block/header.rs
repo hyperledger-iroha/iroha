@@ -135,7 +135,7 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Optional V1 commitment to the pin-intent tree version, leaf count, and Merkle root.
         pub Option<[u8; 32]>,
-        /// Optional hash of deterministic NPoS effects embedded in the block payload.
+        /// Optional hash of deterministic `NPoS` effects embedded in the block payload.
         pub Option<[u8; 32]>,
         /// Optional hash of durable execution context embedded in the block payload.
         pub Option<[u8; 32]>,

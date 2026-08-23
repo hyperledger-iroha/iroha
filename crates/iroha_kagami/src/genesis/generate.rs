@@ -2,8 +2,9 @@ use crate::{
     Outcome, RunArgs,
     genesis::profile::{
         GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
-        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+        TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE, known_chain_discriminant_for_chain_id,
+        parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
+        resolve_public_xor_asset_definition_id, resolve_vrf_seed,
     },
     tui,
 };
@@ -38,7 +39,7 @@ pub struct Args {
     /// Optional profile: picks Iroha3 chain, cadence, consensus, and VRF defaults for dev/taira/nexus.
     #[clap(long, value_enum, value_name = "PROFILE")]
     profile: Option<GenesisProfile>,
-    /// Optional explicit chain id (overrides profile default).
+    /// Optional explicit chain id. With a profile, it must equal that profile's pinned chain id.
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
     /// Optional VRF seed (hex, 32 bytes). Required for the public
@@ -367,7 +368,10 @@ fn append_public_xor_binding(
             .as_any()
             .downcast_ref::<Register<AssetDefinition>>()
         {
-            has_asset_definition |= register.object.id == *asset_definition_id;
+            if register.object.id == *asset_definition_id {
+                ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                has_asset_definition = true;
+            }
             continue;
         }
         if let Some(register) = instruction
@@ -379,7 +383,10 @@ fn append_public_xor_binding(
                     has_domain |= register.object.id == public_xor_domain;
                 }
                 iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
-                    has_asset_definition |= register.object.id == *asset_definition_id;
+                    if register.object.id == *asset_definition_id {
+                        ensure_public_xor_numeric_spec(&register.object, asset_definition_id)?;
+                        has_asset_definition = true;
+                    }
                 }
                 _ => {}
             }
@@ -410,7 +417,7 @@ fn append_public_xor_binding(
         let definition = AssetDefinition::new(
             asset_definition_id.clone(),
             "xor".to_owned(),
-            NumericSpec::default(),
+            public_xor_numeric_spec(asset_definition_id),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -427,6 +434,27 @@ fn append_public_xor_binding(
         );
     }
     Ok(builder.build_raw().with_consensus_meta())
+}
+fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
+    if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
+        NumericSpec::fractional(TAIRA_XOR_SCALE)
+    } else {
+        NumericSpec::default()
+    }
+}
+fn ensure_public_xor_numeric_spec(
+    definition: &NewAssetDefinition,
+    asset_definition_id: &AssetDefinitionId,
+) -> color_eyre::Result<()> {
+    let expected = public_xor_numeric_spec(asset_definition_id);
+    if definition.spec != expected {
+        return Err(color_eyre::eyre::eyre!(
+            "public XOR asset `{asset_definition_id}` uses numeric spec {:?}, expected {:?}",
+            definition.spec,
+            expected
+        ));
+    }
+    Ok(())
 }
 fn format_profile_summary(
     profile: GenesisProfile,
@@ -734,6 +762,37 @@ mod consensus_manifest_tests {
         .expect_err("unprofiled genesis generation must name its display chain");
         assert!(error.to_string().contains("--chain-id"));
     }
+
+    #[test]
+    fn taira_profile_rejects_every_noncanonical_chain_override() {
+        let profile = GenesisProfile::Iroha3Taira;
+        let defaults = profile_defaults(profile);
+        for noncanonical in ["iroha3-taira", "taira-shadow"] {
+            let chain = ChainId::from(noncanonical);
+            let error = resolve_profile_settings(
+                Some(profile),
+                Some(&chain),
+                Some(&defaults),
+                SumeragiConsensusMode::Npos,
+                Some([0xA5; 32]),
+                None,
+                None,
+            )
+            .expect_err("Taira profile must reject a substituted chain identity");
+            assert!(error.to_string().contains("expects chain id"));
+        }
+        let resolved = resolve_profile_settings(
+            Some(profile),
+            Some(&defaults.chain_id),
+            Some(&defaults),
+            SumeragiConsensusMode::Npos,
+            Some([0xA5; 32]),
+            None,
+            None,
+        )
+        .expect("canonical Taira chain override is an exact assertion");
+        assert_eq!(resolved.chain, defaults.chain_id);
+    }
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
@@ -896,6 +955,41 @@ mod consensus_manifest_tests {
                 "{relative_path} must grant global reads to its bootstrap parameter operator"
             );
         }
+    }
+    #[test]
+    fn shipped_taira_xor_uses_the_pinned_decimal_scale() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = RawGenesisTransaction::from_path(
+            repository_root.join("configs/soranexus/taira/genesis.json"),
+        )
+        .expect("parse shipped Taira genesis");
+        let asset_definition_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+                .expect("parse pinned Taira XOR id");
+        let spec = manifest.instructions().find_map(|instruction| {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<Register<AssetDefinition>>()
+                && register.object.id == asset_definition_id
+            {
+                return Some(register.object.spec);
+            }
+            if let Some(iroha_data_model::isi::register::RegisterBox::AssetDefinition(register)) =
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+                && register.object.id == asset_definition_id
+            {
+                return Some(register.object.spec);
+            }
+            None
+        });
+
+        assert_eq!(
+            spec,
+            Some(NumericSpec::fractional(TAIRA_XOR_SCALE)),
+            "shipped Taira XOR must expose the same decimal scale consumed by wallets"
+        );
     }
 }
 #[allow(clippy::too_many_arguments)]

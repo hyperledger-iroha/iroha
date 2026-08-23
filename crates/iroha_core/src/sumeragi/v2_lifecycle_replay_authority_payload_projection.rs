@@ -158,7 +158,7 @@ fn project_broadcast(
                     context,
                     certificate.round,
                     highest.map(|qc| qc.proposal_round),
-                    highest.map(|qc| block_subject(qc.subject)),
+                    Some(timeout_certificate_envelope_subject(certificate)),
                     LifecyclePhase::BroadcastTc,
                     highest.map(|qc| execution_commitment(qc.execution_commitment)),
                 ),

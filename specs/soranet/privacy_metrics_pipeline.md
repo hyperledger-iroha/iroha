@@ -15,9 +15,10 @@ unlinkable while giving operators actionable visibility.
   `PrivacyAggregator`.
 - Buckets are keyed by wall-clock minute (`bucket_secs`, default 60 seconds) and
   stored in a bounded ring (`max_completed_buckets`, default 120). Collector
-  shares keep their own bounded backlog (`max_share_lag_buckets`, default 12)
-  so stale Prio windows are flushed as suppressed buckets rather than leaking
-  memory or masking stuck collectors.
+  shares keep a time-bounded backlog (`max_share_lag_buckets`, default 12) that
+  is also capped at `max_completed_buckets` incomplete windows. Future windows
+  are rejected and stale Prio windows are flushed as suppressed buckets rather
+  than retaining attacker-selected timestamps or masking stuck collectors.
 - `RelayConfig::privacy` maps straight into `PrivacyConfig`, exposing tuning
   knobs (`bucket_secs`, `min_handshakes`, `flush_delay_buckets`,
   `force_flush_buckets`, `max_completed_buckets`, `max_share_lag_buckets`,
@@ -34,8 +35,11 @@ Operators can poll the relay's admin listener for raw observations via
 `GET /privacy/events`. The endpoint returns newline-delimited JSON
 (`application/x-ndjson`) containing `SoranetPrivacyEventV1` payloads mirrored
 from the internal `PrivacyEventBuffer`. The buffer retains the newest events up
-to `privacy.event_buffer_capacity` entries (default 4 096) and is drained on
-read, so scrapers should poll frequently enough to avoid gaps. Events cover the
+to `privacy.event_buffer_capacity` entries (default 4 096). GAR observations
+contain only a fixed eight-byte category hash; raw category labels are validated
+as canonical values of at most 64 bytes and are never retained in this queue.
+The buffer is drained on read, so scrapers should poll frequently enough to
+avoid gaps. Events cover the
 same handshake, throttle, verified bandwidth, active circuit, and GAR signals
 that power the Prometheus counters, allowing downstream collectors to archive
 privacy-safe breadcrumbs or feed secure aggregation workflows.
@@ -69,14 +73,21 @@ Field defaults match the SNNet-8 spec and are validated at load time:
 | `min_handshakes` | Minimum contributor count before a bucket can emit counters. | `12` |
 | `flush_delay_buckets` | Completed buckets to wait before attempting a flush. | `1` |
 | `force_flush_buckets` | Maximum age before we emit a suppressed bucket. | `6` |
-| `max_completed_buckets` | Retained bucket backlog (prevents unbounded memory). | `120` |
+| `max_completed_buckets` | Per-queue cap for completed, open-event, and incomplete-share bucket backlogs. | `120` |
 | `max_share_lag_buckets` | Retention window for collector shares before suppression. | `12` |
 | `expected_shares` | Prio collector shares required before combining. | `2` |
 | `event_buffer_capacity` | NDJSON event backlog for the admin stream. | `4096` |
 
-Setting `force_flush_buckets` lower than `flush_delay_buckets`, zeroing the
-thresholds, or disabling the retention guard now fails validation to avoid
-deployments that would leak per-relay telemetry.
+Setting `force_flush_buckets` to zero or lower than `flush_delay_buckets`, or
+zeroing the bucket width, contributor/share threshold, or retention capacity,
+fails validation to avoid deployments that would leak per-relay telemetry.
+`flush_delay_buckets = 0` still waits until the current bucket is closed; a
+bucket is never emitted and reopened within its own time window.
+
+First-release hard limits cap bucket queues and time windows at 256, collector
+shares per bucket at 16, the relay event buffer at 16,384 entries, and distinct
+GAR categories at 256 per event bucket/share. Configuration above these limits
+is rejected instead of being silently clamped or defaulted.
 
 The `event_buffer_capacity` limit also bounds `/admin/privacy/events`, ensuring
 scrapers cannot fall behind indefinitely.
@@ -89,7 +100,10 @@ orchestrator now parses the `/privacy/events` NDJSON stream for both
 forwarding them into `SoranetSecureAggregator::ingest_prio_share`. Buckets emit
 once `PrivacyBucketConfig::expected_shares` contributions arrive, mirroring the
 relay behaviour. Shares are validated for bucket alignment and histogram shape
-before being combined into `SoranetPrivacyBucketMetricsV1`. If the combined
+before being combined into `SoranetPrivacyBucketMetricsV1`. Live ingestion also
+rejects future and expired bucket indices, conflicting replacements from one
+collector ID, excess GAR category vectors, and any contribution to a bucket
+that already emitted. Exact retries before completion are idempotent. If the combined
 handshake count falls below `min_contributors`, the bucket is exported as
 `suppressed`, mirroring the behaviour of the in-relay aggregator. Suppressed
 windows now record a `suppression_reason` so operators can differentiate
@@ -106,9 +120,10 @@ can forward observations without embedding a bespoke transport:
 
 The route boundary classifies both endpoints as mutations admitted only to a
 configured collector. It checks the enabled flag, non-empty CIDR allow-list,
-optional dedicated token, and rate budget before any body extractor runs, and
-caps each body at 128 KiB. Malformed or oversized unauthenticated input can
-therefore never reach Norito decoding or the telemetry accumulator.
+exact NetworkId-bound operator request signature, and rate budget before any
+body extractor runs, and caps each body at 128 KiB. Retired bearer-token headers
+are rejected. Malformed or oversized unauthenticated input can therefore never
+reach Norito decoding or the telemetry accumulator.
 
 - `POST /v1/soranet/privacy/event` accepts a
   `RecordSoranetPrivacyEventDto` payload. The body wraps a
@@ -116,7 +131,8 @@ therefore never reach Norito decoding or the telemetry accumulator.
   request against the active telemetry profile, records the event, and responds
   with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
   computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
-  relay mode.
+  relay mode. Events outside the bounded live force-flush window are rejected;
+  offline evidence replay must opt into the explicitly named historical API.
 - `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
   payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
   `forwarded_by` hint so operators can audit collector flows. Successful
@@ -125,6 +141,26 @@ therefore never reach Norito decoding or the telemetry accumulator.
   a telemetry `Conversion` response to preserve deterministic error handling
   across collectors. The orchestrator’s event loop now emits these shares as it
   polls relays, keeping Torii’s Prio accumulator in sync with on-relay buckets.
+  At the authenticated route boundary, `collector_id` must equal the full
+  256-bit BLAKE3 digest over
+  `iroha.soranet.privacy.collector-id.v1\0 || algorithm_id || public_key_bytes`.
+  Torii derives this value from the verified operator key and rejects a mismatch,
+  so one allow-listed signer cannot claim multiple collector identities. Norito
+  JSON represents the digest as exactly 64 lowercase hexadecimal characters.
+
+Both request DTOs reject unknown fields. Optional `source` and `forwarded_by`
+labels are limited to 128 bytes and may not contain control characters, keeping
+operator logs and response envelopes bounded.
+The first accepted input form (direct events or collector shares) owns its
+mode/window pair until finalization; mixing forms for one bucket is rejected so
+the same observations cannot be emitted twice through parallel paths. Emitted
+event and share buckets are remembered for their live retention windows and
+cannot be reopened by late retries. Offline historical replay is ordered per
+mode: a new bucket must be newer than that mode's highest finalized bucket,
+though an already-open event bucket or pending share accumulator may finish.
+Recent exact tombstones preserve precise retry errors, while the fixed-size
+per-mode high-water map prevents older finalized buckets from being reopened
+after those tombstones rotate out.
 
 Both endpoints honour the telemetry profile: they emit `503 Service
 Unavailable` when metrics are disabled. Clients may send either Norito binary
@@ -134,20 +170,25 @@ extractors.
 
 ## Prometheus Metrics
 
-Each exported bucket carries `mode` (`entry`, `middle`, `exit`) and
-`bucket_start` labels. The following metric families are emitted:
+Prometheus export uses only fixed-cardinality labels: `mode` (`entry`,
+`middle`, `exit`) plus the closed `kind`, `reason`, `scope`, or `percentile`
+sets documented below. Bucket timestamps and GAR category hashes remain in the
+bounded structured bucket payload; neither is a Prometheus label. This keeps
+the in-process registry bounded even if an authenticated source rotates
+timestamps or GAR category labels. The following metric families are emitted:
 
 | Metric | Description |
 |--------|-------------|
 | `soranet_privacy_circuit_events_total{kind}` | Handshake taxonomy with `kind={accepted,pow_rejected,downgrade,timeout,other_failure,capacity_reject}`. |
-| `soranet_privacy_pow_rejects_total{reason}` | PoW validation failures keyed by `reason={invalid_solution,difficulty_mismatch,expired,future_skew_exceeded,ttl_too_short,unsupported_version,signature_invalid,post_quantum_error,clock_error}` to distinguish replay/mismatch issues from policy rejects. |
+| `soranet_privacy_pow_rejects_total{reason}` | PoW validation failures keyed by `reason={invalid_solution,difficulty_mismatch,expired,future_skew_exceeded,ttl_too_short,unsupported_version,signature_invalid,post_quantum_error,clock_error,relay_mismatch,replay,store_error}` to distinguish replay/mismatch issues from policy rejects. |
 | `soranet_privacy_throttles_total{scope}` | Throttle counters with `scope={congestion,cooldown,emergency,remote_quota,descriptor_quota,descriptor_replay}`. |
 | `soranet_privacy_throttle_cooldown_millis_{sum,count}` | Aggregated cooldown durations contributed by throttled handshakes. |
 | `soranet_privacy_verified_bytes_total` | Verified bandwidth from blinded measurement proofs. |
-| `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits per bucket. |
-| `soranet_privacy_rtt_millis{percentile}` | RTT percentile estimates (`p50`, `p90`, `p99`). |
-| `soranet_privacy_gar_reports_total{category_hash}` | Hashed Governance Action Report counters keyed by category digest. |
-| `soranet_privacy_bucket_suppressed` | Buckets withheld because the contributor threshold was not met. |
+| `soranet_privacy_active_circuits_{avg,max}` | Mean and peak active circuits in the latest emitted bucket for each mode. |
+| `soranet_privacy_rtt_millis{percentile}` | Latest RTT percentile estimates (`p50`, `p90`, `p99`) for each mode. |
+| `soranet_privacy_gar_reports_total` | Governance Action Report count aggregated by relay mode; per-category hashes remain in structured bucket output. |
+| `soranet_privacy_bucket_suppressed` | Whether the latest emitted bucket for a mode was withheld. |
+| `soranet_privacy_latest_bucket_start_unixtime` | Start timestamp of the latest emitted bucket for each mode. |
 | `soranet_privacy_pending_collectors{mode}` | Collector share accumulators pending combination, grouped by relay mode. |
 | `soranet_privacy_suppression_total{reason}` | Suppressed bucket counters with `reason={insufficient_contributors,collector_suppressed,collector_window_elapsed,forced_flush_window_elapsed}` so dashboards can attribute privacy gaps. |
 | `soranet_privacy_snapshot_suppression_ratio` | Last drain’s suppressed/drained ratio (0–1), useful for alert budgets. |
@@ -155,31 +196,33 @@ Each exported bucket carries `mode` (`entry`, `middle`, `exit`) and
 | `soranet_privacy_collector_enabled` | Gauge that flips to `0` when the privacy collector is disabled or fails to start (drives the collector-disabled alert). |
 | `soranet_privacy_poll_errors_total{provider}` | Polling failures grouped by relay alias (increments on decode errors, HTTP failures, or unexpected status codes). |
 
-Buckets without observations stay silent, keeping dashboards tidy without
-fabricating zero-filled windows.
+Counters accumulate for the process lifetime. Active-circuit, RTT,
+suppression, and latest-bucket-time gauges describe the newest bucket for each
+mode; missing RTT observations reset the fixed `p50`, `p90`, and `p99` gauges
+to zero.
 
 ## Operational Guidance
 
-1. **Dashboards** – chart the metrics above grouped by `mode` and `window_start`.
-   Highlight missing windows to surface collector or relay issues. Use
+1. **Dashboards** – chart the metrics above grouped by `mode` and use
+   `soranet_privacy_latest_bucket_start_unixtime` to detect missing windows. Use
    `soranet_privacy_suppression_total{reason}` to distinguish contributor
    shortfalls from collector-driven suppression when triaging gaps. The Grafana
    asset now ships a dedicated **“Suppression Reasons (5m)”** panel fed by those
-   counters plus a **“Suppressed Bucket %”** stat that computes
-   `sum(soranet_privacy_bucket_suppressed) / count(...)` per selection so
+   counters plus a **“Latest Buckets Suppressed %”** stat that computes
+   `sum(soranet_privacy_bucket_suppressed) / count(...)` per mode selection so
    operators can spot budget breaches at a glance. The **Collector Share
    Backlog** series (`soranet_privacy_pending_collectors`) and the **Snapshot
    Suppression Ratio** stat highlight stuck collectors and budget drift during
    automated runs.
 2. **Alerting** – drive alarms from privacy-safe counters: PoW reject spikes,
-   cooldown frequency, RTT drift, and capacity rejects. Because counters are
-   monotonic within each bucket, straightforward rate-based rules work well.
+   cooldown frequency, RTT drift, and capacity rejects. Counters are monotonic
+   for the process lifetime, so straightforward rate-based rules work well.
 3. **Incident response** – rely on aggregated data first. When deeper debugging
    is necessary, request relays to replay bucket snapshots or inspect blinded
    measurement proofs instead of harvesting raw traffic logs.
-4. **Retention** – scrape often enough to avoid exceeding
-   `max_completed_buckets`. Exporters should treat the Prometheus output as the
-   canonical source and drop local buckets once forwarded.
+4. **Retention** – structured exporters retain at most
+   `max_completed_buckets`; Prometheus series cardinality does not depend on
+   that retention window.
 
 ## Suppression Analytics & Automated Runs
 

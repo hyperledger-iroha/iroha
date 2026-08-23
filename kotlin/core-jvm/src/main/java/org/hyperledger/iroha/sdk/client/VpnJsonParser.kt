@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets
 /** Minimal JSON parser for Sora VPN Torii responses. */
 object VpnJsonParser {
 
-    private const val VPN_HELPER_TICKET_HEX_LENGTH = 1_328
+    private const val VPN_HELPER_TICKET_HEX_LENGTH = 1_392
     private const val U32_MAX = 4_294_967_295L
     private val EXIT_CLASSES = setOf("standard", "low-latency", "high-security")
     private val RECEIPT_STATUSES = setOf("disconnected", "expired", "replaced", "settled")

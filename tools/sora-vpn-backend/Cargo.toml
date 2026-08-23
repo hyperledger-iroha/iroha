@@ -18,4 +18,4 @@ hex = { workspace = true, features = ["alloc"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 nix = { version = "0.30.1", features = ["signal"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

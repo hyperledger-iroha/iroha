@@ -1673,8 +1673,9 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         .with_block_cadence(Duration::from_secs(8))
         .with_npos_consensus()
         .with_config_layer(|layer| {
+            // Nexus is selected by the canonical lane configuration; V1 has
+            // no runtime `nexus.enabled` switch.
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64)
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],

@@ -1,9 +1,10 @@
 //! Durable, namespace-bound replay ledgers for `SoraNet` admission credentials.
 //!
 //! Replay records are security state rather than cache entries. Active records are never evicted to
-//! make room, every accepted insertion is persisted before it returns, and a process-lifetime
-//! sidecar lock prevents concurrent writers from forking the ledger history. Snapshots use
-//! canonical, checksum-protected Norito frames and persist a monotonic wall-clock high-water mark.
+//! make room, and every credential-consumption decision or explicit prune durably advances a
+//! monotonic wall-clock high-water mark before it returns. A process-lifetime sidecar lock prevents
+//! concurrent writers from forking ledger history. Snapshots use canonical, checksum-protected
+//! Norito frames.
 //! Loading admits only a stable direct regular file under capacity-derived byte and
 //! decoder-allocation limits.
 use super::{
@@ -16,7 +17,9 @@ use super::{
 #[cfg(test)]
 use norito::encode_canonical;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_canonical_with_limits};
-use std::{collections::HashMap, fs, io, path::PathBuf};
+#[cfg(test)]
+use std::fs;
+use std::{collections::HashMap, io, path::PathBuf};
 use thiserror::Error;
 const SNAPSHOT_VERSION_V1: u8 = 1;
 const NAMESPACE_DOMAIN_V1: &[u8] = b"iroha.soranet.replay-ledger.namespace.v1";
@@ -158,8 +161,8 @@ pub struct PersistentReplayLedger {
     namespace_digest: [u8; 32],
     high_watermark_ms: u64,
     records: HashMap<[u8; 32], u64>,
-    path: Option<PathBuf>,
-    _ledger_lock: Option<ExclusiveLedgerLock>,
+    dirty: bool,
+    ledger_lock: Option<ExclusiveLedgerLock>,
 }
 impl PersistentReplayLedger {
     /// Create an in-memory ledger for tests or non-persistent tooling.
@@ -174,15 +177,17 @@ impl PersistentReplayLedger {
             namespace_digest: namespace_digest(namespace)?,
             high_watermark_ms: 0,
             records: HashMap::new(),
-            path: None,
-            _ledger_lock: None,
+            dirty: false,
+            ledger_lock: None,
         })
     }
     /// Load or create a durable replay ledger at `path`.
     ///
     /// Missing ledgers are materialized immediately, proving that replay state is writable before
     /// the caller begins accepting credentials. Existing ledgers are bound to `namespace`; a file
-    /// copied from another credential class is rejected.
+    /// copied from another credential class is rejected. `path` must be absolute and its parent
+    /// chain must be custodied by the process owner or root; snapshots and sidecar locks are
+    /// owner-private. Persistent custody is currently supported only on Unix.
     ///
     /// # Errors
     ///
@@ -207,8 +212,8 @@ impl PersistentReplayLedger {
             namespace_digest,
             high_watermark_ms: now_ms,
             records: HashMap::new(),
-            path: Some(path),
-            _ledger_lock: Some(ledger_lock),
+            dirty: true,
+            ledger_lock: Some(ledger_lock),
         };
         ledger.load_from_disk(now_ms)?;
         Ok(ledger)
@@ -231,23 +236,39 @@ impl PersistentReplayLedger {
     ) -> Result<ReplayInsertStatus, ReplayLedgerError> {
         let effective_now_ms = self.observe_now(now_ms);
         if expires_at_ms <= effective_now_ms {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(ReplayInsertStatus::Expired);
         }
         if expires_at_ms.saturating_sub(effective_now_ms) > self.limits.max_ttl_ms {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(ReplayInsertStatus::TtlExceeded);
         }
         if self.contains_active(&id, effective_now_ms) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(ReplayInsertStatus::Duplicate);
         }
         if self.active_len(effective_now_ms) >= self.limits.max_entries {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(ReplayInsertStatus::Capacity);
         }
         self.prune_expired_in_memory(effective_now_ms);
-        self.records
-            .try_reserve(1)
-            .map_err(|_| ReplayLedgerError::Allocation { entries: 1 })?;
+        if self.records.try_reserve(1).is_err() {
+            if self.dirty {
+                self.persist()?;
+            }
+            return Err(ReplayLedgerError::Allocation { entries: 1 });
+        }
         let replaced = self.records.insert(id, expires_at_ms);
         debug_assert!(replaced.is_none());
+        self.dirty = true;
         self.persist()?;
         Ok(ReplayInsertStatus::Accepted)
     }
@@ -270,28 +291,27 @@ impl PersistentReplayLedger {
     ///
     /// Returns [`ReplayLedgerError`] when a changed snapshot cannot be made durable.
     pub fn purge_expired(&mut self, now_ms: u64) -> Result<usize, ReplayLedgerError> {
-        let previous_high_watermark_ms = self.high_watermark_ms;
-        let effective_now_ms = self.observe_now(now_ms);
         let before = self.records.len();
+        let effective_now_ms = self.observe_now(now_ms);
         self.prune_expired_in_memory(effective_now_ms);
         let removed = before.saturating_sub(self.records.len());
-        if removed > 0 || self.high_watermark_ms != previous_high_watermark_ms {
+        if self.dirty {
             self.persist()?;
         }
         Ok(removed)
     }
     fn load_from_disk(&mut self, now_ms: u64) -> Result<(), ReplayLedgerError> {
-        let path = self.path.as_ref().expect("persistent ledger has a path");
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
-        }
+        let ledger_lock = self
+            .ledger_lock
+            .as_ref()
+            .expect("persistent ledger has a lock");
         let max_snapshot_bytes = self.limits.max_snapshot_bytes();
-        let Some(bytes) =
-            read_optional_bounded_regular_file(path, max_snapshot_bytes, "replay ledger snapshot")
-                .map_err(|error| ReplayLedgerError::Snapshot(error.to_string()))?
+        let Some(bytes) = read_optional_bounded_regular_file(
+            ledger_lock.custody(),
+            max_snapshot_bytes,
+            "replay ledger snapshot",
+        )
+        .map_err(|error| ReplayLedgerError::Snapshot(error.to_string()))?
         else {
             return self.persist();
         };
@@ -354,26 +374,26 @@ impl PersistentReplayLedger {
         self.persist()
     }
     fn prune_expired_in_memory(&mut self, now_ms: u64) {
+        let previous_len = self.records.len();
         self.records
             .retain(|_, expires_at_ms| *expires_at_ms > now_ms);
+        self.dirty |= self.records.len() != previous_len;
     }
     fn effective_now(&self, now_ms: u64) -> u64 {
         self.high_watermark_ms.max(now_ms)
     }
     fn observe_now(&mut self, now_ms: u64) -> u64 {
-        self.high_watermark_ms = self.high_watermark_ms.max(now_ms);
+        if now_ms > self.high_watermark_ms {
+            self.high_watermark_ms = now_ms;
+            self.dirty = true;
+        }
         self.high_watermark_ms
     }
-    fn persist(&self) -> Result<(), ReplayLedgerError> {
-        let Some(path) = self.path.as_ref() else {
+    fn persist(&mut self) -> Result<(), ReplayLedgerError> {
+        let Some(ledger_lock) = &self.ledger_lock else {
+            self.dirty = false;
             return Ok(());
         };
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).map_err(|error| io_error(&error))?;
-        }
         let mut entries = Vec::new();
         entries.try_reserve_exact(self.records.len()).map_err(|_| {
             ReplayLedgerError::Allocation {
@@ -393,9 +413,11 @@ impl PersistentReplayLedger {
             high_watermark_ms: self.high_watermark_ms,
             entries,
         };
-        let temporary =
-            create_temporary_direct_regular_file(path, "temporary replay ledger snapshot")
-                .map_err(|error| io_error(&error))?;
+        let temporary = create_temporary_direct_regular_file(
+            ledger_lock.custody(),
+            "temporary replay ledger snapshot",
+        )
+        .map_err(|error| io_error(&error))?;
         let mut bounded = BoundedWriter::new(
             temporary,
             self.limits.max_snapshot_bytes(),
@@ -408,16 +430,14 @@ impl PersistentReplayLedger {
             .as_file()
             .sync_all()
             .map_err(|error| io_error(&error))?;
-        persist_temporary_snapshot(temporary, path).map_err(|error| io_error(&error))?;
+        persist_temporary_snapshot(temporary, ledger_lock.custody(), "replay ledger snapshot")
+            .map_err(|error| io_error(&error))?;
         #[cfg(unix)]
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| io_error(&error))?;
-        }
+        ledger_lock
+            .custody()
+            .sync_parent()
+            .map_err(|error| io_error(&error))?;
+        self.dirty = false;
         Ok(())
     }
 }
@@ -451,6 +471,25 @@ mod tests {
     const NAMESPACE: &[u8] = b"test.soranet.replay-ledger.v1";
     fn limits(capacity: usize) -> ReplayLedgerLimits {
         ReplayLedgerLimits::new(capacity, 1_000).expect("valid limits")
+    }
+    fn write_private_test_file(path: &std::path::Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).expect("open private test file");
+        file.write_all(bytes).expect("write private test file");
+    }
+    fn persisted_high_watermark(path: &std::path::Path, limits: ReplayLedgerLimits) -> u64 {
+        let bytes = fs::read(path).expect("read replay snapshot");
+        let snapshot: ReplayLedgerSnapshotV1 =
+            decode_canonical_with_limits(&bytes, limits.decode_limits())
+                .expect("decode replay snapshot");
+        snapshot.high_watermark_ms
     }
     #[test]
     fn limits_and_namespace_reject_zero_or_excessive_bounds() {
@@ -573,10 +612,85 @@ mod tests {
         );
     }
     #[test]
+    fn rejected_inserts_durably_advance_clock_high_watermark() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("rejected-clock-high-water.norito");
+        let ledger_limits = limits(1);
+        let mut ledger =
+            PersistentReplayLedger::load(&path, NAMESPACE, ledger_limits, 100).expect("load");
+        assert_eq!(
+            ledger.insert([0x11; 32], 200, 200).expect("expired"),
+            ReplayInsertStatus::Expired
+        );
+        assert_eq!(persisted_high_watermark(&path, ledger_limits), 200);
+        assert_eq!(
+            ledger.insert([0x22; 32], 1_301, 300).expect("ttl exceeded"),
+            ReplayInsertStatus::TtlExceeded
+        );
+        assert_eq!(persisted_high_watermark(&path, ledger_limits), 300);
+        assert_eq!(
+            ledger.insert([0x33; 32], 900, 400).expect("accepted"),
+            ReplayInsertStatus::Accepted
+        );
+        assert_eq!(
+            ledger.insert([0x33; 32], 900, 500).expect("duplicate"),
+            ReplayInsertStatus::Duplicate
+        );
+        assert_eq!(persisted_high_watermark(&path, ledger_limits), 500);
+        assert_eq!(
+            ledger.insert([0x44; 32], 900, 600).expect("capacity"),
+            ReplayInsertStatus::Capacity
+        );
+        assert_eq!(persisted_high_watermark(&path, ledger_limits), 600);
+        drop(ledger);
+
+        let mut reloaded =
+            PersistentReplayLedger::load(&path, NAMESPACE, ledger_limits, 450).expect("reload");
+        assert_eq!(
+            reloaded
+                .insert([0x55; 32], 550, 450)
+                .expect("rollback insert"),
+            ReplayInsertStatus::Expired,
+            "the last rejected decision must survive restart and clock rollback"
+        );
+    }
+    #[test]
+    fn dirty_snapshot_is_retried_after_failed_write() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("dirty-retry.norito");
+        let ledger_limits = limits(4);
+        let mut ledger =
+            PersistentReplayLedger::load(&path, NAMESPACE, ledger_limits, 100).expect("load");
+        fs::remove_file(&path).expect("remove initial snapshot");
+        fs::create_dir(&path).expect("block snapshot destination");
+        let error = ledger
+            .insert([0xA5; 32], 500, 100)
+            .expect_err("the first snapshot write must fail");
+        assert!(matches!(error, ReplayLedgerError::Io(_)));
+        fs::remove_dir(&path).expect("remove snapshot blocker");
+
+        assert_eq!(
+            ledger
+                .insert([0xA5; 32], 500, 100)
+                .expect("duplicate decision must retry the dirty snapshot"),
+            ReplayInsertStatus::Duplicate
+        );
+        drop(ledger);
+
+        let mut reloaded =
+            PersistentReplayLedger::load(&path, NAMESPACE, ledger_limits, 100).expect("reload");
+        assert_eq!(
+            reloaded
+                .insert([0xA5; 32], 500, 100)
+                .expect("failed-write replay record must survive restart after retry"),
+            ReplayInsertStatus::Duplicate
+        );
+    }
+    #[test]
     fn durable_ledger_fails_closed_on_corruption_or_namespace_substitution() {
         let directory = tempdir().expect("temporary directory");
         let corrupt_path = directory.path().join("corrupt.norito");
-        fs::write(&corrupt_path, [0xFF, 0x00, 0xAA]).expect("write corruption");
+        write_private_test_file(&corrupt_path, &[0xFF, 0x00, 0xAA]);
         assert!(matches!(
             PersistentReplayLedger::load(&corrupt_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(_))
@@ -597,11 +711,10 @@ mod tests {
                 },
             ],
         };
-        fs::write(
+        write_private_test_file(
             &noncanonical_order_path,
-            encode_canonical(&noncanonical_order_snapshot).expect("encode unsorted snapshot"),
-        )
-        .expect("write unsorted snapshot");
+            &encode_canonical(&noncanonical_order_snapshot).expect("encode unsorted snapshot"),
+        );
         assert!(matches!(
             PersistentReplayLedger::load(&noncanonical_order_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("canonical order")
@@ -635,11 +748,10 @@ mod tests {
                 expires_at_ms: 1_011,
             }],
         };
-        fs::write(
+        write_private_test_file(
             &over_ttl_path,
-            encode_canonical(&over_ttl).expect("encode over-TTL snapshot"),
-        )
-        .expect("write over-TTL snapshot");
+            &encode_canonical(&over_ttl).expect("encode over-TTL snapshot"),
+        );
         assert!(matches!(
             PersistentReplayLedger::load(&over_ttl_path, NAMESPACE, limits(4), 10),
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("max_ttl_ms")
@@ -660,11 +772,10 @@ mod tests {
                 },
             ],
         };
-        fs::write(
+        write_private_test_file(
             &over_capacity_path,
-            encode_canonical(&over_capacity).expect("encode over-capacity snapshot"),
-        )
-        .expect("write over-capacity snapshot");
+            &encode_canonical(&over_capacity).expect("encode over-capacity snapshot"),
+        );
         assert!(matches!(
             PersistentReplayLedger::load(&over_capacity_path, NAMESPACE, limits(1), 10),
             Err(ReplayLedgerError::Snapshot(message)) if message.contains("capacity")

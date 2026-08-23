@@ -13,13 +13,6 @@ type ValidatedFixture = (
     Vec<Vec<Scalar>>,
     Vec<Scalar>,
 );
-#[path = "microsoft_mc/sha256.rs"]
-mod sha256;
-#[cfg(test)]
-/// Hash bounded test input with the crate-owned dependency-free implementation.
-pub(super) fn dependency_free_sha256_for_tests(input: &[u8]) -> [u8; 32] {
-    sha256::sha256(input).expect("bounded unit-test input")
-}
 #[path = "microsoft_mc/application_prep.rs"]
 mod application_prep;
 #[path = "microsoft_mc/final_opening.rs"]
@@ -34,6 +27,8 @@ mod relaxed_spartan;
 mod rng;
 #[path = "microsoft_mc/semantic_engine.rs"]
 mod semantic_engine;
+#[path = "microsoft_mc/sha256.rs"]
+mod sha256;
 #[path = "microsoft_mc/split_adapter.rs"]
 mod split_adapter;
 #[path = "microsoft_mc/verifier_key.rs"]

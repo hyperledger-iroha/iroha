@@ -101,6 +101,60 @@ fn v4_release_record_binds_promotion_build_provenance_to_manifest() {
 }
 
 #[test]
+fn v4_internal_validation_receipt_rejects_tracked_cargo_lock_substitution() {
+    use kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate_with_tracked_cargo_lock;
+
+    let finalized_manifest = manifest();
+    let candidate = unsigned_candidate(&finalized_manifest);
+    let expected_lock_sha256 = finalized_manifest
+        .reviewed_source_closure
+        .ignored_cargo_lock_sha256;
+    let expected_lock_size_bytes = finalized_manifest
+        .reviewed_source_closure
+        .ignored_cargo_lock_size_bytes;
+    let mut substituted_lock_sha256 = expected_lock_sha256;
+    substituted_lock_sha256[0] ^= 1;
+    for (case, lock_sha256, lock_size_bytes) in [
+        (
+            "lock digest",
+            substituted_lock_sha256,
+            expected_lock_size_bytes,
+        ),
+        (
+            "lock size",
+            expected_lock_sha256,
+            expected_lock_size_bytes + 1,
+        ),
+    ] {
+        let substituted_receipt = signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
+            &candidate,
+            &finalized_manifest,
+            lock_sha256,
+            lock_size_bytes,
+        );
+        let substituted_receipt_bytes = norito::encode_canonical(&substituted_receipt)
+            .expect("canonical substituted internal-validation receipt");
+        let mut manifest = finalized_manifest.clone();
+        manifest.internal_validation_receipt_sha256 = digest(&substituted_receipt_bytes);
+        manifest
+            .validate()
+            .expect("hostile receipt identity still forms a valid finalized manifest");
+
+        let validation = validate_internal_validation_receipt_v4(
+            &manifest,
+            &candidate,
+            &substituted_receipt_bytes,
+            None,
+        );
+        assert_eq!(
+            validation,
+            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt),
+            "{case} substitution must be rejected",
+        );
+    }
+}
+
+#[test]
 fn v4_artifact_binding_requires_the_supplied_manifest_bytes() {
     let manifest = manifest();
     let canonical = norito::encode_canonical(&manifest).expect("canonical V4 manifest");
@@ -405,6 +459,7 @@ fn release_policy_rejects_threshold_sum_above_attestation_cap() {
         schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
         policy_id: "threshold-cap-test".to_owned(),
+        internal_validation_runner_identity_sha256: [0x91; 32],
         roles: role_policies,
     };
     assert_eq!(

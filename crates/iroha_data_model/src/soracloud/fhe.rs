@@ -4222,19 +4222,6 @@ impl SoraDeploymentBundleV1 {
                                 .to_string(),
                     });
                 }
-                if self
-                    .container
-                    .inrou
-                    .as_ref()
-                    .is_some_and(|inrou| inrou.ssh_authorized_keys.is_empty())
-                {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "sora deployment bundle",
-                        field: "container.inrou.ssh_authorized_keys",
-                        reason: "Inrou runtimes require at least one SSH authorized key"
-                            .to_string(),
-                    });
-                }
             }
         }
         Ok(())

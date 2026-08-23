@@ -3039,6 +3039,58 @@ fn recovered_phase_broadcast_and_next_sign_records<'ledger>(
         && next_sign.exactly_matches_fresh_record(ledger.context(), next_sign_record))
     .then_some([validate, parent, broadcast_record, next_sign_record])
 }
+fn recovered_wal_exactly_owns_signed_broadcast(
+    ledger: &LifecycleLedgerV1,
+    recovered_wal: RecoveredWalStartupProjectionV1<'_>,
+    record: &LifecycleLedgerRecordV1,
+) -> bool {
+    match recovered_wal {
+        RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast) => {
+            projection.signed_broadcast_chain_is_exact(
+                ledger.context(),
+                ledger.records(),
+                broadcast,
+            ) && broadcast.exactly_matches_record(record, record.owner())
+        }
+        RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(
+            projection,
+            pair,
+            broadcast,
+            next_sign,
+        ) => recovered_phase_broadcast_and_next_sign_records(
+            ledger, projection, pair, broadcast, next_sign,
+        )
+        .is_some_and(|[_validate, _parent, broadcast_record, _next_sign]| {
+            broadcast_record.ordinal() == record.ordinal()
+        }),
+        RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast) => {
+            ledger.records().iter().any(|parent| {
+                let Some((_, child_ordinal)) = parent
+                    .continuation()
+                    .and_then(DurableContinuation::successor_parts)
+                else {
+                    return false;
+                };
+                child_ordinal == record.ordinal()
+                    && control.exactly_matches_advanced_record(parent, child_ordinal)
+                    && record.owner() == parent.owner()
+                    && broadcast.exactly_matches_record(record, parent.owner())
+            })
+        }
+        RecoveredWalStartupProjectionV1::ControlBroadcastAndSign(control, pair, combined) => {
+            recovered_control_broadcast_and_sign_records(ledger, control, pair, combined)
+                .is_some_and(|[_parent, broadcast_record, _next_sign]| {
+                    broadcast_record.ordinal() == record.ordinal()
+                })
+        }
+        RecoveredWalStartupProjectionV1::None
+        | RecoveredWalStartupProjectionV1::PhaseVote(_)
+        | RecoveredWalStartupProjectionV1::ControlSign(_)
+        | RecoveredWalStartupProjectionV1::DecisionFetch(_)
+        | RecoveredWalStartupProjectionV1::DecisionStore(_, _)
+        | RecoveredWalStartupProjectionV1::DecisionApply(_) => false,
+    }
+}
 fn assemble_storage_only_candidates_and_terminal_validate_claims(
     ledger: &LifecycleLedgerV1,
     serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
@@ -3169,7 +3221,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         _ => {}
     }
     let lifecycle_outputs = match body_pipeline.as_ref() {
-        Some(pipeline) => PreparedLifecycleOutputRecoveryV1::assemble(ledger, pipeline.verified())?,
+        Some(pipeline) => {
+            PreparedLifecycleOutputRecoveryV1::assemble(ledger, pipeline.verified(), recovered_wal)?
+        }
         None => PreparedLifecycleOutputRecoveryV1 {
             entries: BTreeMap::new(),
         },

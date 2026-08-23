@@ -290,28 +290,9 @@ impl<S> TestProverTranscriptV1<S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
-    fn new(
-        prior: [u8; DIGEST_BYTES_V1],
-        inventory: [u8; DIGEST_BYTES_V1],
-        group: usize,
-        difference: Point,
-        sum: Point,
-        coordinates: usize,
-        padded_gates: usize,
-        basis: [u8; DIGEST_BYTES_V1],
-    ) -> Self {
+    fn new(context: ComparatorTranscriptContextV1) -> Self {
         Self {
-            state: initial_transcript_state_v1(
-                prior,
-                inventory,
-                group,
-                difference,
-                sum,
-                coordinates,
-                padded_gates,
-                basis,
-            )
-            .expect("valid tiny transcript context"),
+            state: initial_transcript_state_v1(context).expect("valid tiny transcript context"),
             proof: Vec::new(),
             challenge_ordinal: 0,
             suite: PhantomData,
@@ -406,16 +387,17 @@ fn prove_tiny_v1(
     let inventory = [0xa2; DIGEST_BYTES_V1];
     let basis = hash_v1(b"tiny-comparator-product-basis");
     let witness = witness_v1(difference_values, sum_values, difference_mask, sum_mask);
-    let mut transcript = TestProverTranscriptV1::<TinyComparatorSuiteV1>::new(
-        prior,
-        inventory,
-        0,
+    let transcript_context = ComparatorTranscriptContextV1 {
+        prior_context_digest: prior,
+        inventory_root: inventory,
+        group: 0,
         difference,
         sum,
         coordinates,
         padded_gates,
-        basis,
-    );
+        generator_basis_digest: basis,
+    };
+    let mut transcript = TestProverTranscriptV1::<TinyComparatorSuiteV1>::new(transcript_context);
     build_comparator_statement_v1::<TinyComparatorSuiteV1>(
         coordinates,
         padded_gates,
@@ -456,8 +438,19 @@ fn tiny_real_product_proof_roundtrips_and_binds_every_axis() {
                   sum|
      -> Result<[u8; DIGEST_BYTES_V1], RnsNativeComparatorProductErrorV1> {
         let core = ExactCoreViewV1 { bytes: proof };
+        let transcript_context = ComparatorTranscriptContextV1 {
+            prior_context_digest: prior,
+            inventory_root: inventory,
+            group,
+            difference,
+            sum,
+            coordinates: 2,
+            padded_gates: 8,
+            generator_basis_digest: basis,
+        };
         let mut transcript = ComparatorVerifierTranscriptV1::<TinyComparatorSuiteV1>::new_v1(
-            prior, inventory, group, difference, sum, 2, 8, basis, core,
+            transcript_context,
+            core,
         )?;
         build_comparator_statement_v1::<TinyComparatorSuiteV1>(2, 8, difference, sum)?
             .verify(&mut transcript)?;
@@ -564,10 +557,16 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         parent.matches("mod rns_native_claimed_successor;").count(),
         1
     );
-    assert!(!parent.contains("mod rns_native_cross_field_rlwe_direct;"));
+    assert_eq!(
+        parent
+            .matches("mod rns_native_cross_field_rlwe_direct;")
+            .count(),
+        1
+    );
+    assert!(!parent.contains("pub mod rns_native_cross_field_rlwe_direct"));
     assert!(!parent.contains("pub use rns_native_comparator_product"));
     let claimed_facade = include_str!("rns_native_claimed_successor.rs");
-    assert!(!claimed_facade.contains("from_direct_claim_v1"));
+    assert!(claimed_facade.contains("from_direct_claim_v1"));
     assert!(!claimed_facade.contains("pub(super) fn new"));
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));

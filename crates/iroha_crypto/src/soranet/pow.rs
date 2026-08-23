@@ -14,7 +14,7 @@ use blake3::Hasher;
 use norito::to_bytes;
 use norito::{
     DecodeLimits,
-    codec::{decode_adaptive, encode_adaptive},
+    codec::{decode_exact_from_slice_with_limits, encode_adaptive},
     decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
@@ -22,10 +22,11 @@ use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
     collections::HashMap,
-    fmt, fs,
+    fmt,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use subtle::ConstantTimeEq as _;
 use thiserror::Error;
 /// Domain separator used when deriving `PoW` challenges.
 pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
@@ -37,15 +38,21 @@ pub const SIGNING_DOMAIN: &[u8; 28] = b"soranet.pow.signed_ticket.v1";
 pub const REVOCATION_DOMAIN: &[u8] = b"soranet.pow.revocation.v1";
 /// Domain separator used to bind admission credentials to an exact client hello.
 pub const ADMISSION_TRANSCRIPT_DOMAIN: &[u8] = b"soranet.pow.admission_transcript.v1";
+/// Domain separator for the exact relay/transcript commitment carried by a ticket.
+pub const TICKET_BINDING_DOMAIN: &[u8] = b"soranet.pow.ticket_binding.v1";
 /// Length of the serialized `PoW` ticket payload.
 pub const TICKET_LEN: usize = 74;
 const SIGNED_TICKET_PAYLOAD_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32 + 32;
+/// Maximum accepted bare Norito encoding for one signed ticket.
+pub const SIGNED_TICKET_MAX_ENCODED_BYTES_V1: usize = 8 * 1024;
+const SIGNED_TICKET_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
 /// Slack tolerated when validating the remaining TTL to account for second-level truncation.
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
 const REVOCATION_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
 const REVOCATION_SNAPSHOT_ENTRY_LIMIT_BYTES: usize = 128;
 const REVOCATION_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
+const REVOCATION_SNAPSHOT_VERSION_V1: u8 = 1;
 /// First-release hard ceiling for persistent ticket-revocation entries.
 pub const TICKET_REVOCATION_STORE_MAX_ENTRIES_V1: usize = 65_536;
 /// Derive the mandatory admission transcript commitment for a serialized client hello.
@@ -61,6 +68,20 @@ pub fn derive_admission_transcript(client_hello: &[u8]) -> [u8; 32] {
     hasher.update(client_hello);
     *hasher.finalize().as_bytes()
 }
+pub(super) fn ticket_binding_commitment(
+    descriptor_commit: &[u8],
+    relay_id: &[u8],
+    transcript_hash: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(TICKET_BINDING_DOMAIN);
+    for field in [descriptor_commit, relay_id, transcript_hash.as_slice()] {
+        let length = u64::try_from(field.len()).unwrap_or(u64::MAX);
+        hasher.update(&length.to_be_bytes());
+        hasher.update(field);
+    }
+    *hasher.finalize().as_bytes()
+}
 /// Hashcash-style ticket attached to `SoraNet` circuit establishment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct Ticket {
@@ -70,7 +91,10 @@ pub struct Ticket {
     pub difficulty: u8,
     /// UNIX timestamp (seconds) when the ticket expires.
     pub expires_at: u64,
-    /// Client-provided nonce mixed into the challenge hash.
+    /// Domain-separated commitment to the descriptor, relay, and admission transcript.
+    ///
+    /// Verifiers compare this field before performing proof work so a ticket
+    /// cannot be moved to another admission attempt by chance.
     pub client_nonce: [u8; 32],
     /// Solution nonce satisfying the difficulty predicate.
     pub solution: [u8; 32],
@@ -177,6 +201,7 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
 /// ticket bytes, the relay ID, and the mandatory transcript hash to prevent replay across different
 /// sessions or relays.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_from_slice)]
 pub struct SignedTicket {
     /// The underlying `PoW` ticket.
     pub ticket: Ticket,
@@ -227,8 +252,15 @@ impl SignedTicket {
     ///
     /// Returns [`Error::Malformed`] when the payload fails to parse.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let decoded: Self = decode_adaptive(bytes)
-            .map_err(|err| Error::Malformed(format!("signed ticket decode failed: {err}")))?;
+        if bytes.len() > SIGNED_TICKET_MAX_ENCODED_BYTES_V1 {
+            return Err(Error::Malformed(format!(
+                "signed ticket length {} exceeds first-release maximum {SIGNED_TICKET_MAX_ENCODED_BYTES_V1}",
+                bytes.len()
+            )));
+        }
+        let decoded: Self =
+            decode_exact_from_slice_with_limits(bytes, signed_ticket_decode_limits_v1())
+                .map_err(|err| Error::Malformed(format!("signed ticket decode failed: {err}")))?;
         Self::validate_ticket_format(&decoded.ticket)?;
         Self::validate_signature_material(&decoded.signature)?;
         Ok(decoded)
@@ -308,6 +340,15 @@ impl SignedTicket {
     pub fn revocation_fingerprint(&self) -> [u8; 32] {
         compute_revocation_fingerprint(&self.signature)
     }
+}
+fn signed_ticket_decode_limits_v1() -> DecodeLimits {
+    DecodeLimits::new(
+        SIGNED_TICKET_MAX_ENCODED_BYTES_V1,
+        SIGNED_TICKET_MAX_ENCODED_BYTES_V1,
+        SIGNED_TICKET_MAX_ENCODED_BYTES_V1,
+        SIGNED_TICKET_MAX_ENCODED_BYTES_V1.saturating_mul(2),
+        SIGNED_TICKET_DECODE_MAX_NESTING_DEPTH_V1,
+    )
 }
 /// Limits applied to the revocation store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,24 +476,33 @@ struct RevokedTicketRecord {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct TicketRevocationSnapshot {
+    version: u8,
+    high_watermark_secs: u64,
+    high_watermark_nanos: u32,
     entries: Vec<TicketRevocationSnapshotEntry>,
 }
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct TicketRevocationSnapshotEntry {
     fingerprint: [u8; 32],
     expires_at_secs: u64,
+    expires_at_nanos: u32,
 }
 /// Persistent store for revoked or consumed ticket fingerprints.
 ///
 /// Active entries are never evicted to admit newer entries: once the store is
 /// full, insertion fails closed until an entry expires. Persistent instances
 /// hold an exclusive sidecar lock so two processes cannot fork replay history.
+/// Mutating operations and rejected insertion decisions durably advance a
+/// monotonic clock high-water mark. Read-only queries retain expired records
+/// and do not write merely because wall time advanced; after clock rollback, a
+/// retained record becomes active again and therefore fails closed.
 #[derive(Debug)]
 pub struct TicketRevocationStore {
     limits: TicketRevocationStoreLimits,
+    high_watermark: SystemTime,
     records: HashMap<[u8; 32], RevokedTicketRecord>,
-    path: Option<PathBuf>,
-    _ledger_lock: Option<ExclusiveLedgerLock>,
+    dirty: bool,
+    ledger_lock: Option<ExclusiveLedgerLock>,
 }
 impl TicketRevocationStore {
     /// Create an in-memory store with the provided limits.
@@ -464,16 +514,22 @@ impl TicketRevocationStore {
     ) -> Result<Self, TicketRevocationStoreError> {
         Ok(Self {
             limits: TicketRevocationStoreLimits::new(limits.max_entries, limits.max_ttl)?,
+            high_watermark: UNIX_EPOCH,
             records: HashMap::new(),
-            path: None,
-            _ledger_lock: None,
+            dirty: false,
+            ledger_lock: None,
         })
     }
     /// Load or create a persistent store at `path`.
     ///
+    /// The path must be absolute and its parent chain must be custodied by the
+    /// process owner or root; snapshots and sidecar locks are owner-private.
+    /// Persistent custody is currently supported only on Unix; [`Self::in_memory`]
+    /// remains available on other targets.
+    ///
     /// # Errors
     /// Returns [`TicketRevocationStoreError`] if the limits are invalid or the on-disk
-    /// snapshot cannot be read or parsed.
+    /// snapshot cannot be safely custodied, read, or parsed.
     pub fn load(
         path: impl Into<PathBuf>,
         limits: TicketRevocationStoreLimits,
@@ -488,9 +544,10 @@ impl TicketRevocationStore {
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let mut store = Self {
             limits,
+            high_watermark: now.max(UNIX_EPOCH),
             records: HashMap::new(),
-            path: Some(path),
-            _ledger_lock: Some(ledger_lock),
+            dirty: true,
+            ledger_lock: Some(ledger_lock),
         };
         store.load_from_disk(now)?;
         Ok(store)
@@ -558,43 +615,74 @@ impl TicketRevocationStore {
         self.insert(fingerprint, expires_at, now)
     }
     /// Check if a signature has been revoked and is still within its TTL.
-    #[must_use]
-    pub fn is_revoked_signature(&self, signature: &[u8], now: SystemTime) -> bool {
-        if validate_signed_ticket_signature_material(signature).is_err() {
-            return false;
-        }
+    ///
+    /// # Errors
+    /// Returns [`TicketRevocationStoreError`] for malformed signature material
+    /// or when a previously failed mutation cannot be made durable.
+    pub fn is_revoked_signature(
+        &mut self,
+        signature: &[u8],
+        now: SystemTime,
+    ) -> Result<bool, TicketRevocationStoreError> {
+        validate_signed_ticket_signature_material(signature)
+            .map_err(TicketRevocationStoreError::MalformedSignature)?;
         let fingerprint = compute_revocation_fingerprint(signature);
         self.is_revoked_fingerprint(&fingerprint, now)
     }
     /// Check if a ticket payload has been revoked and is still within its TTL.
-    #[must_use]
-    pub fn is_ticket_payload_revoked(&self, ticket: &Ticket, now: SystemTime) -> bool {
+    ///
+    /// # Errors
+    /// Returns [`TicketRevocationStoreError`] when a previously failed mutation
+    /// cannot be made durable.
+    pub fn is_ticket_payload_revoked(
+        &mut self,
+        ticket: &Ticket,
+        now: SystemTime,
+    ) -> Result<bool, TicketRevocationStoreError> {
         let fingerprint = ticket.revocation_fingerprint();
         self.is_revoked_fingerprint(&fingerprint, now)
     }
     /// Check if a ticket has been revoked.
-    #[must_use]
-    pub fn is_ticket_revoked(&self, ticket: &SignedTicket, now: SystemTime) -> bool {
+    ///
+    /// # Errors
+    /// Returns [`TicketRevocationStoreError`] for malformed signature material
+    /// or when a previously failed mutation cannot be made durable.
+    pub fn is_ticket_revoked(
+        &mut self,
+        ticket: &SignedTicket,
+        now: SystemTime,
+    ) -> Result<bool, TicketRevocationStoreError> {
         self.is_revoked_signature(&ticket.signature, now)
     }
     /// Number of active (non-expired) fingerprints.
-    #[must_use]
-    pub fn len(&self, now: SystemTime) -> usize {
-        self.records
+    ///
+    /// # Errors
+    /// Returns [`TicketRevocationStoreError`] when a previously failed mutation
+    /// cannot be made durable.
+    pub fn len(&mut self, now: SystemTime) -> Result<usize, TicketRevocationStoreError> {
+        let effective_now = self.effective_now_for_read(now)?;
+        Ok(self
+            .records
             .values()
-            .filter(|record| !is_expired(record.expires_at, now))
-            .count()
+            .filter(|record| !is_expired(record.expires_at, effective_now))
+            .count())
     }
     /// Return the active fingerprints retained by the store.
     ///
     /// # Errors
     /// Returns [`TicketRevocationStoreError::Allocation`] if the bounded result
-    /// cannot reserve memory.
+    /// cannot reserve memory, or an IO error if a previously failed mutation
+    /// still cannot be made durable.
     pub fn active_fingerprints(
-        &self,
+        &mut self,
         now: SystemTime,
     ) -> Result<Vec<[u8; 32]>, TicketRevocationStoreError> {
-        let active_len = self.len(now);
+        let effective_now = self.effective_now_for_read(now)?;
+        let active_len = self
+            .records
+            .values()
+            .filter(|record| !is_expired(record.expires_at, effective_now))
+            .count();
         let mut fingerprints = Vec::new();
         fingerprints.try_reserve_exact(active_len).map_err(|_| {
             TicketRevocationStoreError::Allocation {
@@ -602,7 +690,7 @@ impl TicketRevocationStore {
             }
         })?;
         fingerprints.extend(self.records.iter().filter_map(|(fingerprint, record)| {
-            (!is_expired(record.expires_at, now)).then_some(*fingerprint)
+            (!is_expired(record.expires_at, effective_now)).then_some(*fingerprint)
         }));
         Ok(fingerprints)
     }
@@ -612,10 +700,10 @@ impl TicketRevocationStore {
     /// Returns [`TicketRevocationStoreError`] when the updated snapshot cannot be written.
     pub fn purge_expired(&mut self, now: SystemTime) -> Result<usize, TicketRevocationStoreError> {
         let before = self.records.len();
-        self.records
-            .retain(|_, record| !is_expired(record.expires_at, now));
+        let effective_now = self.observe_now(now);
+        self.prune_expired_in_memory(effective_now);
         let removed = before.saturating_sub(self.records.len());
-        if removed > 0 {
+        if self.dirty {
             self.persist()?;
         }
         Ok(removed)
@@ -626,19 +714,28 @@ impl TicketRevocationStore {
         expires_at: SystemTime,
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        self.records
-            .retain(|_, record| !is_expired(record.expires_at, now));
-        if is_expired(expires_at, now) {
+        let effective_now = self.observe_now(now);
+        self.prune_expired_in_memory(effective_now);
+        if is_expired(expires_at, effective_now) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TicketRevocationInsertOutcome::rejected(
                 TicketRevocationInsertStatus::Expired,
             ));
         }
-        if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+        if exceeds_ttl(expires_at, effective_now, self.limits.max_ttl) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TicketRevocationInsertOutcome::rejected(
                 TicketRevocationInsertStatus::TtlExceeded,
             ));
         }
         if self.records.contains_key(&fingerprint) {
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TicketRevocationInsertOutcome::rejected(
                 TicketRevocationInsertStatus::Duplicate,
             ));
@@ -647,36 +744,42 @@ impl TicketRevocationStore {
             // An unexpired consumption record is a security invariant, not a
             // cache entry. Forgetting one to admit a newer ticket would make
             // the forgotten ticket replayable for the rest of its lifetime.
+            if self.dirty {
+                self.persist()?;
+            }
             return Ok(TicketRevocationInsertOutcome::rejected(
                 TicketRevocationInsertStatus::Capacity,
             ));
         }
-        self.records
-            .try_reserve(1)
-            .map_err(|_| TicketRevocationStoreError::Allocation { entries: 1 })?;
+        if self.records.try_reserve(1).is_err() {
+            if self.dirty {
+                self.persist()?;
+            }
+            return Err(TicketRevocationStoreError::Allocation { entries: 1 });
+        }
         self.records
             .insert(fingerprint, RevokedTicketRecord { expires_at });
+        self.dirty = true;
         self.persist()?;
         Ok(TicketRevocationInsertOutcome::accepted())
     }
-    fn is_revoked_fingerprint(&self, fingerprint: &[u8; 32], now: SystemTime) -> bool {
-        self.records
+    fn is_revoked_fingerprint(
+        &mut self,
+        fingerprint: &[u8; 32],
+        now: SystemTime,
+    ) -> Result<bool, TicketRevocationStoreError> {
+        let effective_now = self.effective_now_for_read(now)?;
+        Ok(self
+            .records
             .get(fingerprint)
-            .is_some_and(|record| !is_expired(record.expires_at, now))
+            .is_some_and(|record| !is_expired(record.expires_at, effective_now)))
     }
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TicketRevocationStoreError> {
-        let Some(path) = &self.path else {
+        let Some(ledger_lock) = &self.ledger_lock else {
             return Ok(());
         };
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)
-                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        }
         let bytes = match read_optional_bounded_regular_file(
-            path,
+            ledger_lock.custody(),
             self.limits.max_snapshot_bytes(),
             "ticket revocation snapshot",
         ) {
@@ -695,6 +798,19 @@ impl TicketRevocationStore {
             decode_canonical_with_limits(&bytes, self.limits.decode_limits())
                 .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
         drop(bytes);
+        if snapshot.version != REVOCATION_SNAPSHOT_VERSION_V1 {
+            return Err(TicketRevocationStoreError::Parse(format!(
+                "unsupported revocation snapshot version {}",
+                snapshot.version
+            )));
+        }
+        let persisted_high_watermark = decode_revocation_timestamp(
+            snapshot.high_watermark_secs,
+            snapshot.high_watermark_nanos,
+            "revocation high-water timestamp",
+        )?;
+        self.high_watermark = self.high_watermark.max(persisted_high_watermark);
+        let effective_now = self.observe_now(now);
         if snapshot.entries.len() > self.limits.max_entries {
             return Err(TicketRevocationStoreError::Parse(
                 "revocation snapshot exceeds capacity".to_owned(),
@@ -713,14 +829,11 @@ impl TicketRevocationStore {
                 entries: snapshot.entries.len(),
             })?;
         for entry in snapshot.entries {
-            let expires_at = UNIX_EPOCH
-                .checked_add(Duration::from_secs(entry.expires_at_secs))
-                .ok_or_else(|| {
-                    TicketRevocationStoreError::Parse(format!(
-                        "revocation expiry timestamp {} overflows system time",
-                        entry.expires_at_secs
-                    ))
-                })?;
+            let expires_at = decode_revocation_timestamp(
+                entry.expires_at_secs,
+                entry.expires_at_nanos,
+                "revocation expiry timestamp",
+            )?;
             if self
                 .records
                 .insert(entry.fingerprint, RevokedTicketRecord { expires_at })
@@ -730,28 +843,49 @@ impl TicketRevocationStore {
                     "duplicate revocation fingerprint in snapshot".to_owned(),
                 ));
             }
-            if !is_expired(expires_at, now) && exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if !is_expired(expires_at, effective_now)
+                && exceeds_ttl(expires_at, effective_now, self.limits.max_ttl)
+            {
                 return Err(TicketRevocationStoreError::Parse(format!(
                     "active revocation expiry exceeds configured max_ttl of {:?}",
                     self.limits.max_ttl
                 )));
             }
         }
-        self.records
-            .retain(|_, record| !is_expired(record.expires_at, now));
+        self.prune_expired_in_memory(effective_now);
         self.persist()
     }
-    fn persist(&self) -> Result<(), TicketRevocationStoreError> {
-        let Some(path) = &self.path else {
+    fn prune_expired_in_memory(&mut self, now: SystemTime) {
+        let previous_len = self.records.len();
+        self.records
+            .retain(|_, record| !is_expired(record.expires_at, now));
+        self.dirty |= self.records.len() != previous_len;
+    }
+    fn observe_now(&mut self, now: SystemTime) -> SystemTime {
+        if now > self.high_watermark {
+            self.high_watermark = now;
+            self.dirty = true;
+        }
+        self.high_watermark
+    }
+    fn effective_now_for_read(
+        &mut self,
+        now: SystemTime,
+    ) -> Result<SystemTime, TicketRevocationStoreError> {
+        // Read-only observations never prune records or advance the durable
+        // clock. Retaining an entry makes a later clock rollback stricter: the
+        // entry becomes active again. A dirty mutation is different; no later
+        // successful decision may escape until its full snapshot is durable.
+        if self.dirty {
+            self.persist()?;
+        }
+        Ok(self.high_watermark.max(now))
+    }
+    fn persist(&mut self) -> Result<(), TicketRevocationStoreError> {
+        let Some(ledger_lock) = &self.ledger_lock else {
+            self.dirty = false;
             return Ok(());
         };
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)
-                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        }
         let mut entries = Vec::new();
         entries.try_reserve_exact(self.records.len()).map_err(|_| {
             TicketRevocationStoreError::Allocation {
@@ -759,25 +893,28 @@ impl TicketRevocationStore {
             }
         })?;
         for (fingerprint, record) in &self.records {
-            let expires_at_secs = record
-                .expires_at
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| {
-                    TicketRevocationStoreError::Parse(
-                        "revocation expiry predates the Unix epoch".to_owned(),
-                    )
-                })?
-                .as_secs();
+            let (expires_at_secs, expires_at_nanos) =
+                encode_revocation_timestamp(record.expires_at, "revocation expiry timestamp")?;
             entries.push(TicketRevocationSnapshotEntry {
                 fingerprint: *fingerprint,
                 expires_at_secs,
+                expires_at_nanos,
             });
         }
         entries.sort_by(revocation_snapshot_entry_order);
-        let snapshot = TicketRevocationSnapshot { entries };
-        let tmp =
-            create_temporary_direct_regular_file(path, "temporary ticket revocation snapshot")
-                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        let (high_watermark_secs, high_watermark_nanos) =
+            encode_revocation_timestamp(self.high_watermark, "revocation high-water timestamp")?;
+        let snapshot = TicketRevocationSnapshot {
+            version: REVOCATION_SNAPSHOT_VERSION_V1,
+            high_watermark_secs,
+            high_watermark_nanos,
+            entries,
+        };
+        let tmp = create_temporary_direct_regular_file(
+            ledger_lock.custody(),
+            "temporary ticket revocation snapshot",
+        )
+        .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let mut bounded = BoundedWriter::new(
             tmp,
             self.limits.max_snapshot_bytes(),
@@ -789,17 +926,14 @@ impl TicketRevocationStore {
         tmp.as_file()
             .sync_all()
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        persist_temporary_snapshot(tmp, path)
+        persist_temporary_snapshot(tmp, ledger_lock.custody(), "ticket revocation snapshot")
             .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         #[cfg(unix)]
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        }
+        ledger_lock
+            .custody()
+            .sync_parent()
+            .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        self.dirty = false;
         Ok(())
     }
 }
@@ -809,7 +943,31 @@ fn revocation_snapshot_entry_order(
 ) -> std::cmp::Ordering {
     left.expires_at_secs
         .cmp(&right.expires_at_secs)
+        .then_with(|| left.expires_at_nanos.cmp(&right.expires_at_nanos))
         .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+}
+fn decode_revocation_timestamp(
+    seconds: u64,
+    nanos: u32,
+    label: &str,
+) -> Result<SystemTime, TicketRevocationStoreError> {
+    if nanos >= 1_000_000_000 {
+        return Err(TicketRevocationStoreError::Parse(format!(
+            "{label} has noncanonical nanoseconds {nanos}"
+        )));
+    }
+    UNIX_EPOCH
+        .checked_add(Duration::new(seconds, nanos))
+        .ok_or_else(|| TicketRevocationStoreError::Parse(format!("{label} overflows system time")))
+}
+fn encode_revocation_timestamp(
+    timestamp: SystemTime,
+    label: &str,
+) -> Result<(u64, u32), TicketRevocationStoreError> {
+    let duration = timestamp.duration_since(UNIX_EPOCH).map_err(|_| {
+        TicketRevocationStoreError::Parse(format!("{label} predates the Unix epoch"))
+    })?;
+    Ok((duration.as_secs(), duration.subsec_nanos()))
 }
 /// Policy controlling `PoW` verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1042,6 +1200,28 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
+    Ok(())
+}
+fn reject_repeated_nonce_material(
+    operation: &'static str,
+    candidate: &[u8; 32],
+    prior: &[(&'static str, &[u8; 32])],
+) -> Result<(), MintError> {
+    if let Some((label, _)) = prior
+        .iter()
+        .find(|(_, bytes)| bool::from(candidate.ct_eq(*bytes)))
+    {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: format!("rng repeated {label} material"),
+        });
+    }
     Ok(())
 }
 /// Verify a ticket using the local `PoW` parameters.
@@ -1119,7 +1299,10 @@ pub fn verify_signed_ticket_at(
     signed_ticket.verify(public_key)?;
     verify_ticket_solution(&signed_ticket.ticket, binding, params)?;
     if let Some(store) = revocations {
-        if store.is_ticket_revoked(signed_ticket, now) {
+        if store
+            .is_ticket_revoked(signed_ticket, now)
+            .map_err(|err| Error::RevocationStore(err.to_string()))?
+        {
             return Err(Error::Replay);
         }
         let outcome = store
@@ -1165,6 +1348,14 @@ fn verify_ticket_solution(
     binding: &ChallengeBinding<'_>,
     params: &Parameters,
 ) -> Result<(), Error> {
+    let expected_binding = ticket_binding_commitment(
+        binding.descriptor_commit,
+        binding.relay_id,
+        binding.transcript_hash,
+    );
+    if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
+        return Err(Error::InvalidSolution);
+    }
     let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
     let digest = derive_solution_digest(&challenge, &ticket.solution);
     if !leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
@@ -1213,7 +1404,10 @@ pub fn record_revocation(
     let Some(store) = revocations else {
         return Ok(());
     };
-    if store.is_ticket_payload_revoked(ticket, now) {
+    if store
+        .is_ticket_payload_revoked(ticket, now)
+        .map_err(|err| Error::RevocationStore(err.to_string()))?
+    {
         return Err(Error::Replay);
     }
     let outcome = store
@@ -1273,6 +1467,12 @@ where
             max_skew: params.max_future_skew,
         });
     }
+    let client_nonce = ticket_binding_commitment(
+        binding.descriptor_commit,
+        binding.relay_id,
+        binding.transcript_hash,
+    );
+    let mut previous_solution = None;
     loop {
         let minted_at = now();
         let expires_at = minted_at
@@ -1281,11 +1481,16 @@ where
         let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
         let wire_expires_at =
             unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
-        let mut client_nonce = [0u8; 32];
-        fill_random(rng, "minting PoW client nonce", &mut client_nonce)?;
+        let mut prior = Vec::with_capacity(2);
+        prior.push(("ticket binding commitment", &client_nonce));
+        if let Some(previous) = previous_solution.as_ref() {
+            prior.push(("previous solution nonce", previous));
+        }
         let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
         let mut solution = [0u8; 32];
         fill_random(rng, "minting PoW solution nonce", &mut solution)?;
+        reject_repeated_nonce_material("minting PoW solution nonce", &solution, &prior)?;
+        previous_solution = Some(solution);
         let digest = derive_digest(&challenge, &solution);
         let solved_at = now();
         if solved_at < minted_at {
@@ -1505,9 +1710,26 @@ mod tests {
         mut entries: Vec<TicketRevocationSnapshotEntry>,
     ) {
         entries.sort_by(revocation_snapshot_entry_order);
-        let snapshot = TicketRevocationSnapshot { entries };
+        let snapshot = TicketRevocationSnapshot {
+            version: REVOCATION_SNAPSHOT_VERSION_V1,
+            high_watermark_secs: 0,
+            high_watermark_nanos: 0,
+            entries,
+        };
         let bytes = to_bytes(&snapshot).expect("encode revocation snapshot");
-        std::fs::write(path, bytes).expect("write revocation snapshot");
+        write_private_test_file(path, &bytes);
+    }
+    fn write_private_test_file(path: &std::path::Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).expect("open private test file");
+        file.write_all(bytes).expect("write private test file");
     }
     fn invalid_solution_for(
         binding: &ChallengeBinding<'_>,
@@ -1541,6 +1763,46 @@ mod tests {
         *substituted.last_mut().expect("non-empty client hello") ^= 1;
         assert_ne!(transcript, derive_admission_transcript(&substituted));
         assert_ne!(transcript, derive_admission_transcript(&[]));
+    }
+    #[test]
+    fn ticket_binding_commitment_is_domain_separated_and_binds_every_field() {
+        let descriptor = [0x11; 32];
+        let relay = [0x22; 32];
+        let transcript = [0x33; 32];
+        let binding = ChallengeBinding::new(&descriptor, &relay, &transcript);
+        let commitment = ticket_binding_commitment(
+            binding.descriptor_commit,
+            binding.relay_id,
+            binding.transcript_hash,
+        );
+
+        let mut expected = Hasher::new();
+        expected.update(TICKET_BINDING_DOMAIN);
+        for field in [
+            descriptor.as_slice(),
+            relay.as_slice(),
+            transcript.as_slice(),
+        ] {
+            expected.update(&(field.len() as u64).to_be_bytes());
+            expected.update(field);
+        }
+        assert_eq!(commitment, *expected.finalize().as_bytes());
+
+        let changed_descriptor = [0x12; 32];
+        let changed_relay = [0x23; 32];
+        let changed_transcript = [0x34; 32];
+        assert_ne!(
+            commitment,
+            ticket_binding_commitment(&changed_descriptor, &relay, &transcript)
+        );
+        assert_ne!(
+            commitment,
+            ticket_binding_commitment(&descriptor, &changed_relay, &transcript)
+        );
+        assert_ne!(
+            commitment,
+            ticket_binding_commitment(&descriptor, &relay, &changed_transcript)
+        );
     }
     #[test]
     fn challenge_hashes_match_canonical_contiguous_layout() {
@@ -1696,7 +1958,7 @@ mod tests {
             .expect_err("failing RNG must abort ticket minting");
         match err {
             MintError::RandomBytes { operation, message } => {
-                assert_eq!(operation, "minting PoW client nonce");
+                assert_eq!(operation, "minting PoW solution nonce");
                 assert!(
                     message.contains("failing PoW ticket RNG"),
                     "unexpected message: {message}"
@@ -1717,6 +1979,29 @@ mod tests {
                 assert!(message.contains("all-zero material"));
             }
             other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
+        }
+    }
+    #[test]
+    fn mint_ticket_rejects_repeated_nonzero_rng_material() {
+        let descriptor = [0xAB; 32];
+        let binding = binding(&descriptor);
+        let mut rng = FixedTryRng { byte: 0xA5 };
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let error = mint_ticket_with_clock_and_digest(
+            &params(),
+            &binding,
+            Duration::from_secs(30),
+            &mut rng,
+            || now,
+            |_, _| blake3::Hash::from_bytes([0xFF; 32]),
+        )
+        .expect_err("a stuck nonzero RNG must fail before repeated proof work");
+        match error {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting PoW solution nonce");
+                assert!(message.contains("all-identical-byte material"));
+            }
+            other => panic!("expected repeated nonce failure, got {other:?}"),
         }
     }
     #[test]
@@ -2036,15 +2321,19 @@ mod tests {
         let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
         let base = 1_700_000_000;
         let descriptor = [0u8; 32];
+        let binding = binding(&descriptor);
         let ticket = Ticket {
             version: 1,
             difficulty: params.difficulty(),
             expires_at: base + params.min_ticket_ttl().as_secs(),
-            client_nonce: [0x44; 32],
+            client_nonce: ticket_binding_commitment(
+                binding.descriptor_commit,
+                binding.relay_id,
+                binding.transcript_hash,
+            ),
             solution: [0x55; 32],
         };
         let now = UNIX_EPOCH + Duration::from_secs(base + 1);
-        let binding = binding(&descriptor);
         verify_at(&ticket, &binding, &params, now).expect("slack should accept ticket");
     }
     #[test]
@@ -2133,6 +2422,23 @@ mod tests {
         assert_eq!(decoded, signed);
         let err = SignedTicket::decode(&[]).expect_err("empty payload should fail");
         assert!(matches!(err, Error::Malformed(_)));
+    }
+    #[test]
+    fn signed_ticket_decode_rejects_trailing_and_oversized_input() {
+        let ticket = signed_ticket_with_expiry(1_700_000_600, 0xA5);
+        let mut trailing = ticket.encode();
+        trailing.push(0);
+        let error = SignedTicket::decode(&trailing)
+            .expect_err("bare signed-ticket decoding must consume every byte");
+        assert!(matches!(error, Error::Malformed(_)));
+
+        let oversized = vec![0_u8; SIGNED_TICKET_MAX_ENCODED_BYTES_V1 + 1];
+        let error = SignedTicket::decode(&oversized)
+            .expect_err("oversized input must fail before Norito decoding");
+        assert!(
+            matches!(&error, Error::Malformed(message) if message.contains("first-release maximum")),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn signed_ticket_decode_rejects_payload_without_transcript() {
@@ -2582,16 +2888,12 @@ mod tests {
         let descriptor = [0x24; 32];
         let binding = binding(&descriptor);
         let other = other_binding(&descriptor);
-        for _ in 0..8 {
-            let ticket =
-                mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
-            verify(&ticket, &binding, &params).expect("verify with original binding");
-            if let Err(err) = verify(&ticket, &other, &params) {
-                assert!(matches!(err, Error::InvalidSolution));
-                return;
-            }
-        }
-        panic!("mismatched relay should fail");
+        let ticket =
+            mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
+        verify(&ticket, &binding, &params).expect("verify with original binding");
+        let error = verify(&ticket, &other, &params)
+            .expect_err("an arbitrary mismatched relay must fail exactly");
+        assert!(matches!(error, Error::InvalidSolution));
     }
     #[test]
     fn rejects_mismatched_transcript_hash() {
@@ -2602,20 +2904,12 @@ mod tests {
         let transcript_b = [0x02; 32];
         let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_a);
         let mismatched = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_b);
-        let mut observed_failure = false;
-        for _ in 0..64 {
-            let ticket =
-                mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
-            verify(&ticket, &binding, &params).expect("expected transcript to verify");
-            if verify(&ticket, &mismatched, &params).is_err() {
-                observed_failure = true;
-                break;
-            }
-        }
-        assert!(
-            observed_failure,
-            "mismatched transcript should reject minted tickets"
-        );
+        let ticket =
+            mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng).expect("mint");
+        verify(&ticket, &binding, &params).expect("expected transcript to verify");
+        let error = verify(&ticket, &mismatched, &params)
+            .expect_err("an arbitrary mismatched transcript must fail exactly");
+        assert!(matches!(error, Error::InvalidSolution));
     }
     #[test]
     fn revocation_store_materializes_empty_ledger_on_load() {
@@ -2623,15 +2917,225 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("nested/revocations.norito");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
-        let store = TicketRevocationStore::load(&path, limits, now).expect("create ledger");
-        assert_eq!(store.len(now), 0);
+        let mut store = TicketRevocationStore::load(&path, limits, now).expect("create ledger");
+        assert_eq!(store.len(now).expect("len"), 0);
         assert!(
             std::fs::metadata(&path).expect("ledger metadata").len() > 0,
             "startup must materialize a parseable durable snapshot"
         );
         drop(store);
-        let reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload ledger");
-        assert_eq!(reloaded.len(now), 0);
+        let mut reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload ledger");
+        assert_eq!(reloaded.len(now).expect("len"), 0);
+    }
+    #[test]
+    fn revocation_store_high_watermark_prevents_clock_rollback_replay() {
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = UNIX_EPOCH + Duration::from_secs(1_100);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("clock-rollback.norito");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let ticket = signed_ticket_with_expiry(1_100, 0xA5);
+        {
+            let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .revoke_ticket(&ticket, initial)
+                    .expect("initial revocation")
+                    .status,
+                TicketRevocationInsertStatus::Accepted
+            );
+            assert_eq!(store.purge_expired(expiry).expect("purge at expiry"), 1);
+            assert_eq!(
+                store
+                    .revoke_ticket(&ticket, rollback)
+                    .expect("rollback insertion status")
+                    .status,
+                TicketRevocationInsertStatus::Expired,
+                "a regressed clock must not reopen a consumed ticket"
+            );
+        }
+        let mut reloaded =
+            TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
+        assert_eq!(
+            reloaded
+                .revoke_ticket(&ticket, rollback)
+                .expect("restart rollback insertion status")
+                .status,
+            TicketRevocationInsertStatus::Expired,
+            "the durable high-water mark must survive restart"
+        );
+    }
+    #[test]
+    fn revocation_queries_do_not_write_and_rollback_fails_closed() {
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = UNIX_EPOCH + Duration::from_secs(1_100);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("query-clock-high-water.norito");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let ticket = signed_ticket_with_expiry(1_100, 0xA5);
+        {
+            let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
+            store
+                .revoke_ticket(&ticket, initial)
+                .expect("initial revocation");
+            let snapshot_before_query = std::fs::read(&path).expect("read snapshot before query");
+            assert!(
+                !store
+                    .is_ticket_revoked(&ticket, expiry)
+                    .expect("expiry query")
+            );
+            assert_eq!(store.len(expiry).expect("active length at expiry"), 0);
+            assert!(
+                store
+                    .active_fingerprints(expiry)
+                    .expect("active fingerprints at expiry")
+                    .is_empty()
+            );
+            assert_eq!(
+                std::fs::read(&path).expect("read snapshot after query"),
+                snapshot_before_query,
+                "read-only queries must not force an atomic snapshot rewrite"
+            );
+        }
+        let mut reloaded =
+            TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
+        assert!(
+            reloaded
+                .is_ticket_revoked(&ticket, rollback)
+                .expect("rollback query"),
+            "the retained revocation must become active again after rollback"
+        );
+        assert_eq!(
+            reloaded
+                .revoke_ticket(&ticket, rollback)
+                .expect("rollback revocation")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
+    }
+    #[test]
+    fn revocation_store_durably_observes_rejected_insert_time() {
+        let initial = UNIX_EPOCH + Duration::from_secs(1_000);
+        let observed = UNIX_EPOCH + Duration::from_secs(1_200);
+        let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("rejected-clock-high-water.norito");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let ticket = signed_ticket_with_expiry(1_200, 0xA5);
+        {
+            let mut store = TicketRevocationStore::load(&path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .revoke_ticket(&ticket, observed)
+                    .expect("expired revocation")
+                    .status,
+                TicketRevocationInsertStatus::Expired
+            );
+        }
+        let mut reloaded =
+            TicketRevocationStore::load(&path, limits, rollback).expect("rollback reload");
+        assert_eq!(
+            reloaded
+                .revoke_ticket(&ticket, rollback)
+                .expect("rollback revocation")
+                .status,
+            TicketRevocationInsertStatus::Expired
+        );
+    }
+    #[test]
+    fn revocation_store_retries_dirty_snapshot_after_failed_write() {
+        let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let expiry = now + Duration::from_secs(120);
+        let signature = vec![0xA5; MlDsaSuite::MlDsa44.signature_len()];
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("dirty-retry.norito");
+        let mut store = TicketRevocationStore::load(&path, limits, now).expect("load");
+        std::fs::remove_file(&path).expect("remove initial snapshot");
+        std::fs::create_dir(&path).expect("block snapshot destination");
+        let error = store
+            .revoke_signature(&signature, expiry, now)
+            .expect_err("the first snapshot write must fail");
+        assert!(matches!(error, TicketRevocationStoreError::Io(_)));
+        std::fs::remove_dir(&path).expect("remove snapshot blocker");
+
+        assert!(
+            store
+                .is_revoked_signature(&signature, now)
+                .expect("a later query must retry the dirty snapshot")
+        );
+        drop(store);
+
+        let mut reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload");
+        assert!(
+            reloaded
+                .is_revoked_signature(&signature, now)
+                .expect("failed-write revocation must survive restart after retry")
+        );
+    }
+    #[test]
+    fn revocation_store_preserves_subsecond_expiry_and_high_watermark() {
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let initial = UNIX_EPOCH + Duration::new(1_000, 100_000_000);
+        let expiry = UNIX_EPOCH + Duration::new(1_100, 500_000_000);
+        let before_expiry = UNIX_EPOCH + Duration::new(1_100, 250_000_000);
+        let signature = vec![0xA5; MlDsaSuite::MlDsa44.signature_len()];
+        let dir = tempdir().expect("tempdir");
+        let expiry_path = dir.path().join("subsecond-expiry.norito");
+        {
+            let mut store =
+                TicketRevocationStore::load(&expiry_path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .revoke_signature(&signature, expiry, initial)
+                    .expect("revoke signature")
+                    .status,
+                TicketRevocationInsertStatus::Accepted
+            );
+        }
+        let mut reloaded = TicketRevocationStore::load(&expiry_path, limits, before_expiry)
+            .expect("reload before subsecond expiry");
+        assert!(
+            reloaded
+                .is_revoked_signature(&signature, before_expiry)
+                .expect("signature remains revoked")
+        );
+        assert_eq!(
+            reloaded
+                .revoke_signature(&signature, expiry, before_expiry)
+                .expect("duplicate revocation")
+                .status,
+            TicketRevocationInsertStatus::Duplicate
+        );
+        drop(reloaded);
+
+        let high_water_path = dir.path().join("subsecond-high-water.norito");
+        let observed = UNIX_EPOCH + Duration::new(1_200, 500_000_000);
+        let rollback = UNIX_EPOCH + Duration::new(1_200, 250_000_000);
+        let rollback_expiry = UNIX_EPOCH + Duration::new(1_200, 400_000_000);
+        let rollback_signature = vec![0x5A; MlDsaSuite::MlDsa44.signature_len()];
+        {
+            let mut store =
+                TicketRevocationStore::load(&high_water_path, limits, initial).expect("load");
+            assert_eq!(
+                store
+                    .revoke_signature(&signature, observed, observed)
+                    .expect("expired observation")
+                    .status,
+                TicketRevocationInsertStatus::Expired
+            );
+        }
+        let mut reloaded = TicketRevocationStore::load(&high_water_path, limits, rollback)
+            .expect("reload after subsecond rollback");
+        assert_eq!(
+            reloaded
+                .revoke_signature(&rollback_signature, rollback_expiry, rollback)
+                .expect("rollback revocation")
+                .status,
+            TicketRevocationInsertStatus::Expired
+        );
     }
     #[test]
     fn revocation_store_fails_closed_without_evicting_active_records() {
@@ -2653,9 +3157,9 @@ mod tests {
             TicketRevocationInsertStatus::Capacity,
             "a full store must reject new consumption records"
         );
-        assert!(store.is_ticket_revoked(&ticket_a, now));
-        assert!(store.is_ticket_revoked(&ticket_b, now));
-        assert!(!store.is_ticket_revoked(&ticket_c, now));
+        assert!(store.is_ticket_revoked(&ticket_a, now).expect("ticket a"));
+        assert!(store.is_ticket_revoked(&ticket_b, now).expect("ticket b"));
+        assert!(!store.is_ticket_revoked(&ticket_c, now).expect("ticket c"));
         let mut active = store
             .active_fingerprints(now)
             .expect("collect bounded active fingerprints");
@@ -2668,10 +3172,10 @@ mod tests {
         assert_eq!(active, expected);
         let reload_now = UNIX_EPOCH + Duration::from_secs(1_250);
         drop(store);
-        let reloaded =
+        let mut reloaded =
             TicketRevocationStore::load(&path, limits, reload_now).expect("reload from disk");
         assert_eq!(
-            reloaded.len(reload_now),
+            reloaded.len(reload_now).expect("reloaded len"),
             0,
             "expired entries must be pruned on load"
         );
@@ -2691,14 +3195,17 @@ mod tests {
                 TicketRevocationSnapshotEntry {
                     fingerprint: old,
                     expires_at_secs: 2_120,
+                    expires_at_nanos: 0,
                 },
                 TicketRevocationSnapshotEntry {
                     fingerprint: middle,
                     expires_at_secs: 2_160,
+                    expires_at_nanos: 0,
                 },
                 TicketRevocationSnapshotEntry {
                     fingerprint: newest,
                     expires_at_secs: 2_220,
+                    expires_at_nanos: 0,
                 },
             ],
         );
@@ -2714,7 +3221,7 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(2_000);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("revocations.norito");
-        fs::write(&path, b"").expect("write empty snapshot");
+        write_private_test_file(&path, b"");
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
         let err =
             TicketRevocationStore::load(&path, limits, now).expect_err("snapshot must fail closed");
@@ -2722,6 +3229,27 @@ mod tests {
             err,
             TicketRevocationStoreError::Parse("revocation snapshot is empty".to_owned())
         );
+    }
+    #[test]
+    fn revocation_store_rejects_noncanonical_snapshot_nanoseconds() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("noncanonical-nanoseconds.norito");
+        let snapshot = TicketRevocationSnapshot {
+            version: REVOCATION_SNAPSHOT_VERSION_V1,
+            high_watermark_secs: 2_000,
+            high_watermark_nanos: 1_000_000_000,
+            entries: Vec::new(),
+        };
+        write_private_test_file(&path, &to_bytes(&snapshot).expect("encode snapshot"));
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let error = TicketRevocationStore::load(&path, limits, now)
+            .expect_err("noncanonical nanoseconds must fail closed");
+        assert!(matches!(
+            error,
+            TicketRevocationStoreError::Parse(message)
+                if message.contains("noncanonical nanoseconds")
+        ));
     }
     #[test]
     fn revocation_store_load_rejects_active_entry_beyond_ttl() {
@@ -2733,6 +3261,7 @@ mod tests {
             vec![TicketRevocationSnapshotEntry {
                 fingerprint: [0x31; 32],
                 expires_at_secs: 2_120,
+                expires_at_nanos: 0,
             }],
         );
         let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(60)).expect("limits");
@@ -2755,10 +3284,12 @@ mod tests {
                 TicketRevocationSnapshotEntry {
                     fingerprint,
                     expires_at_secs: 2_120,
+                    expires_at_nanos: 0,
                 },
                 TicketRevocationSnapshotEntry {
                     fingerprint,
                     expires_at_secs: 2_160,
+                    expires_at_nanos: 0,
                 },
             ],
         );
@@ -2783,6 +3314,7 @@ mod tests {
             vec![TicketRevocationSnapshotEntry {
                 fingerprint: [0x55; 32],
                 expires_at_secs: u64::MAX,
+                expires_at_nanos: 0,
             }],
         );
         let err =
@@ -2804,10 +3336,10 @@ mod tests {
         let overdue = signed_ticket_with_expiry(4_900, 0x02);
         let too_long = store.revoke_ticket(&future, now).expect("insert");
         assert_eq!(too_long.status, TicketRevocationInsertStatus::TtlExceeded);
-        assert_eq!(store.len(now), 0);
+        assert_eq!(store.len(now).expect("len"), 0);
         let expired = store.revoke_ticket(&overdue, now).expect("insert overdue");
         assert_eq!(expired.status, TicketRevocationInsertStatus::Expired);
-        assert_eq!(store.len(now), 0);
+        assert_eq!(store.len(now).expect("len"), 0);
     }
     #[test]
     fn revocation_store_rejects_unrepresentable_ticket_expiry_without_panic() {
@@ -2848,7 +3380,7 @@ mod tests {
             err,
             TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
         ));
-        assert_eq!(store.len(now), 0);
+        assert_eq!(store.len(now).expect("len"), 0);
     }
     #[test]
     fn revocation_store_purges_and_persists() {
@@ -2864,13 +3396,21 @@ mod tests {
         let later = UNIX_EPOCH + Duration::from_secs(10_120);
         let removed = store.purge_expired(later).expect("purge");
         assert_eq!(removed, 1);
-        assert!(store.is_ticket_revoked(&long, later));
-        assert!(!store.is_ticket_revoked(&short, later));
+        assert!(store.is_ticket_revoked(&long, later).expect("long ticket"));
+        assert!(
+            !store
+                .is_ticket_revoked(&short, later)
+                .expect("short ticket")
+        );
         drop(store);
-        let reloaded =
+        let mut reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload after purge");
-        assert_eq!(reloaded.len(later), 1);
-        assert!(reloaded.is_ticket_revoked(&long, later));
+        assert_eq!(reloaded.len(later).expect("reloaded len"), 1);
+        assert!(
+            reloaded
+                .is_ticket_revoked(&long, later)
+                .expect("reloaded long ticket")
+        );
     }
     #[test]
     fn revocation_store_rejects_malformed_raw_signature_material() {
@@ -2899,9 +3439,15 @@ mod tests {
             }
             other => panic!("expected malformed all-zero raw signature, got {other:?}"),
         }
-        assert_eq!(store.len(now), 0);
-        assert!(!store.is_revoked_signature(&short, now));
-        assert!(!store.is_revoked_signature(&all_zero, now));
+        assert_eq!(store.len(now).expect("len"), 0);
+        assert!(matches!(
+            store.is_revoked_signature(&short, now),
+            Err(TicketRevocationStoreError::MalformedSignature(_))
+        ));
+        assert!(matches!(
+            store.is_revoked_signature(&all_zero, now),
+            Err(TicketRevocationStoreError::MalformedSignature(_))
+        ));
     }
     #[test]
     fn revocation_store_handles_raw_ticket_bytes() {
@@ -2943,7 +3489,11 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            client_nonce: [0x10; 32],
+            client_nonce: ticket_binding_commitment(
+                binding.descriptor_commit,
+                binding.relay_id,
+                binding.transcript_hash,
+            ),
             solution: [0x20; 32],
         };
         verify_with_revocations_at(&ticket, &binding, &params, Some(&mut store), now)
@@ -2968,11 +3518,16 @@ mod tests {
         let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(60));
         let descriptor = [0xBC; 32];
         let binding = binding(&descriptor);
+        let client_nonce = ticket_binding_commitment(
+            binding.descriptor_commit,
+            binding.relay_id,
+            binding.transcript_hash,
+        );
         let mk_ticket = |expires_at_secs: u64, nonce: u8| Ticket {
             version: 1,
             difficulty: params.difficulty(),
             expires_at: expires_at_secs,
-            client_nonce: [nonce; 32],
+            client_nonce,
             solution: [nonce.wrapping_add(1); 32],
         };
         let ticket_a = mk_ticket(8_120, 0x01);
@@ -2984,11 +3539,15 @@ mod tests {
                 .expect_err("full replay store must reject ticket b");
         assert!(matches!(capacity_err, Error::RevocationStore(_)));
         assert!(
-            store.is_ticket_payload_revoked(&ticket_a, now),
+            store
+                .is_ticket_payload_revoked(&ticket_a, now)
+                .expect("ticket a query"),
             "accepted ticket must remain consumed"
         );
         assert!(
-            !store.is_ticket_payload_revoked(&ticket_b, now),
+            !store
+                .is_ticket_payload_revoked(&ticket_b, now)
+                .expect("ticket b query"),
             "rejected ticket must not displace active consumption state"
         );
         let replay_err =
@@ -3007,15 +3566,19 @@ mod tests {
         let mut store = TicketRevocationStore::load(&path, limits, now).expect("store");
         let params = Parameters::new(0, Duration::from_secs(900), Duration::from_secs(60));
         let descriptor = [0xAA; 32];
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
         let expires_at = now.duration_since(UNIX_EPOCH).expect("epoch").as_secs() + 120;
         let ticket = Ticket {
             version: 1,
             difficulty: 0,
             expires_at,
-            client_nonce: [0u8; 32],
+            client_nonce: ticket_binding_commitment(
+                binding.descriptor_commit,
+                binding.relay_id,
+                binding.transcript_hash,
+            ),
             solution: [0u8; 32],
         };
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
         let signed =
             SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, keypair.secret_key()).expect("sign");
         verify_signed_ticket_at(

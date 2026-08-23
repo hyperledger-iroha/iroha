@@ -1,15 +1,18 @@
 //! Canonical Kagemusha offline cash: online top-up, recursive spend, and online redemption.
 mod kagemusha_canary_evidence;
+mod kagemusha_internal_validation_receipt;
 mod kagemusha_post_canary_validator_liveness;
 mod kagemusha_promotion_receipt;
+mod kagemusha_release_lifecycle;
 mod kagemusha_runtime_effective_config_projection;
 mod offline_cash_release_v1;
 mod offline_cash_v1;
 mod receiver_snapshot;
 mod status;
 pub use self::{
-    kagemusha_canary_evidence::*, kagemusha_post_canary_validator_liveness::*,
-    kagemusha_promotion_receipt::*, kagemusha_runtime_effective_config_projection::*, model::*,
+    kagemusha_canary_evidence::*, kagemusha_internal_validation_receipt::*,
+    kagemusha_post_canary_validator_liveness::*, kagemusha_promotion_receipt::*,
+    kagemusha_release_lifecycle::*, kagemusha_runtime_effective_config_projection::*, model::*,
     offline_cash_release_v1::*, offline_cash_v1::*,
 };
 #[cfg(feature = "json")]
@@ -659,6 +662,8 @@ pub enum KagemushaReleaseVerificationError {
     InvalidAttestation,
     /// The cryptographic review is non-canonical, incomplete, rejected, or mis-bound.
     InvalidCryptographicReview,
+    /// The runner-signed internal-validation receipt is absent, non-canonical, invalid, or mis-bound.
+    InvalidInternalValidationReceipt,
     /// A supplied evidence file is empty, oversized, or has the wrong digest.
     EvidenceMismatch {
         /// Evidence role with invalid content.
@@ -697,6 +702,7 @@ impl KagemushaReleaseVerificationError {
             Self::InvalidPolicy => "invalid_policy",
             Self::InvalidAttestation => "invalid_attestation",
             Self::InvalidCryptographicReview => "invalid_cryptographic_review",
+            Self::InvalidInternalValidationReceipt => "invalid_internal_validation_receipt",
             Self::EvidenceMismatch { .. } => "evidence_mismatch",
             Self::UnknownSigner { .. } => "unknown_signer",
             Self::DuplicateOrUnorderedSigner => "duplicate_or_unordered_signer",
@@ -716,6 +722,9 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
             }
             Self::InvalidCryptographicReview => {
                 f.write_str("invalid or mismatched Kagemusha cryptographic review")
+            }
+            Self::InvalidInternalValidationReceipt => {
+                f.write_str("invalid or mismatched Kagemusha internal-validation receipt")
             }
             Self::EvidenceMismatch { role } => {
                 write!(f, "Kagemusha release evidence mismatch for {role:?}")
@@ -950,75 +959,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     /// Registration validity limit in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-/// Governed Offline device-attestation verifier policy.
-///
-/// Nodes require this policy to be installed in chain state before accepting hardware-backed
-/// offline registration or transaction authorization. The first-release platform roots are accepted
-/// only when included in that explicit governed policy; absence of policy state fails closed.
-/// Operators can rotate roots, publish deterministic revocations, and restrict accepted app
-/// identities without relying on external middleware state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct OfflineDeviceAttestationPolicy {
-    /// Policy format marker.
-    pub version: u16,
-    /// Trusted platform roots accepted by the on-chain verifier.
-    pub trusted_roots: Vec<OfflineDeviceAttestationTrustedRoot>,
-    /// SHA-256 digests of revoked certificate DER payloads.
-    pub revoked_certificate_sha256: Vec<Vec<u8>>,
-    /// Accepted iOS App Attest app identities.
-    pub ios_apps: Vec<OfflineIosAppAttestationPolicy>,
-    /// Accepted Android `KeyMint` app identities.
-    pub android_apps: Vec<OfflineAndroidAppAttestationPolicy>,
-    /// Explicitly enables iOS registration and online assertions when a matching
-    /// entry exists in `ios_apps`.
-    ///
-    /// iOS App Attest is disabled when this is false; there is no implicit app
-    /// identity fallback.
-    pub require_ios_app_policy: bool,
-    /// Explicitly enables Android registration when a matching entry exists in `android_apps`.
-    ///
-    /// Android `KeyMint` is disabled when this is false; there is no implicit
-    /// unlisted-package or signing-certificate fallback.
-    pub require_android_app_policy: bool,
-}
-/// Trusted platform root certificate for Offline device attestation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct OfflineDeviceAttestationTrustedRoot {
-    /// Platform class, for example `ios-appattest` or `android-keymint`.
-    pub platform: String,
-    /// Root certificate DER bytes.
-    pub der: Vec<u8>,
-    /// Optional governance activation time in Unix milliseconds.
-    pub not_before_ms: Option<u64>,
-    /// Optional governance expiry time in Unix milliseconds.
-    pub not_after_ms: Option<u64>,
-}
-/// Allowed iOS App Attest app identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct OfflineIosAppAttestationPolicy {
-    /// Apple App ID prefix (normally the Apple Developer Team ID).
-    pub team_id: String,
-    /// iOS bundle identifier.
-    pub bundle_id: String,
-    /// App Attest environment, either `production` or `development`.
-    pub environment: String,
-    /// Allowed Apple validation categories from extension-bearing App Attest data.
-    pub allowed_validation_categories: Vec<u32>,
-    /// Allowed application bundle versions from extension-bearing App Attest data.
-    pub allowed_bundle_versions: Vec<String>,
-}
-/// Allowed Android `KeyMint` app identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct OfflineAndroidAppAttestationPolicy {
-    /// Android package name.
-    pub package_name: String,
-    /// Allowed Android signing certificate SHA-256 digests.
-    pub signing_certificate_sha256: Vec<Vec<u8>>,
-}
+include!("device_attestation_policy.rs");
 #[derive(Debug, Clone, Decode, Encode)]
 struct OfflineDeviceAttestationChallengePreimage {
     domain: String,
@@ -3091,7 +3032,10 @@ impl KagemushaReviewedSourceClosureV1 {
     }
     /// Return the exact canonical compact sorted-key ASCII JSON descriptor plus LF.
     ///
-    /// Returns [`KagemushaValidationError`] for an invalid closure or descriptor encoding failure.
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the closure is invalid or the generated descriptor
+    /// exceeds its protocol size bound.
     pub fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate()?;
         let mut out = String::new();
@@ -3825,6 +3769,7 @@ mod kagemusha_v4_artifact_contract_tests {
         isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
     };
     use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
+
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
@@ -4235,6 +4180,7 @@ mod kagemusha_v4_artifact_contract_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
             policy_id: "v5-artifact-test-policy".to_owned(),
+            internal_validation_runner_identity_sha256: [0x91; 32],
             roles: roles
                 .iter()
                 .zip(&key_pairs)
@@ -4468,6 +4414,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
             qualification_receipt_sha256: [0; 32],
             qualified_candidate_sha256: [0; 32],
+            internal_validation_receipt_sha256: [0; 32],
             profiles: vec![
                 profile(KagemushaPastaCycleParityV1::StepEq, &params, 1),
                 profile(KagemushaPastaCycleParityV1::StepEp, &params, 11),
@@ -4498,6 +4445,8 @@ mod kagemusha_v4_artifact_contract_tests {
                 candidate_sha256,
                 manifest.qualification_receipt_sha256,
             );
+        manifest.internal_validation_receipt_sha256 =
+            digest(&internal_validation_receipt_bytes(&candidate, &manifest));
         manifest.benchmark_evidence_sha256 = digest(b"v4 artifact test benchmark");
         manifest.cryptographic_review_sha256 = digest(b"v4 artifact test review");
         manifest.release_attestation_sha256 = digest(b"v4 artifact test attestation");
@@ -4506,12 +4455,25 @@ mod kagemusha_v4_artifact_contract_tests {
     fn qualification_receipt_sha256() -> [u8; 32] {
         digest(b"v4 artifact test qualification receipt")
     }
+    fn internal_validation_receipt_bytes(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    ) -> Vec<u8> {
+        norito::encode_canonical(
+            &kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate(
+                candidate,
+                finalized_manifest,
+            ),
+        )
+        .expect("canonical candidate-bound internal-validation receipt")
+    }
     fn unsigned_candidate(
         template: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendCandidateV4 {
         let mut manifest = template.clone();
         manifest.qualification_receipt_sha256 = [0; 32];
         manifest.qualified_candidate_sha256 = [0; 32];
+        manifest.internal_validation_receipt_sha256 = [0; 32];
         manifest.benchmark_evidence_sha256 = [0; 32];
         manifest.cryptographic_review_sha256 = [0; 32];
         manifest.release_attestation_sha256 = [0; 32];
@@ -4606,6 +4568,44 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect("release-attestation subject under alternate ambient layout"),
             expected_attestation_subject
         );
+    }
+    #[test]
+    fn v4_internal_validation_receipt_is_non_circular_and_required() {
+        let finalized_manifest = manifest();
+        let candidate = unsigned_candidate(&finalized_manifest);
+        assert_eq!(
+            candidate.manifest.internal_validation_receipt_sha256,
+            [0; 32]
+        );
+        assert_eq!(
+            finalized_manifest
+                .immutable_candidate()
+                .expect("recover pre-receipt candidate"),
+            candidate
+        );
+
+        let receipt_bytes = internal_validation_receipt_bytes(&candidate, &finalized_manifest);
+        assert_eq!(
+            digest(&receipt_bytes),
+            finalized_manifest.internal_validation_receipt_sha256
+        );
+        validate_internal_validation_receipt_v4(
+            &finalized_manifest,
+            &candidate,
+            &receipt_bytes,
+            None,
+        )
+        .expect("exact signed receipt binds candidate and finalized manifest");
+
+        let mut missing_receipt = finalized_manifest.clone();
+        missing_receipt.internal_validation_receipt_sha256 = [0; 32];
+        assert!(missing_receipt.validate().is_err());
+
+        let mut polluted_candidate = candidate;
+        polluted_candidate
+            .manifest
+            .internal_validation_receipt_sha256 = digest(b"premature receipt");
+        assert!(polluted_candidate.validate().is_err());
     }
     #[test]
     fn qualified_candidate_identity_has_a_fixed_domain_separated_preimage() {
@@ -4858,6 +4858,8 @@ mod kagemusha_v4_artifact_contract_tests {
             candidate_sha256,
             qualification_receipt_sha256: finalized_manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: finalized_manifest.qualified_candidate_sha256,
+            internal_validation_receipt_sha256: finalized_manifest
+                .internal_validation_receipt_sha256,
             manifest_sha256: digest(b"v4 promotion manifest"),
             release_attestation_sha256: digest(b"v4 promotion attestation"),
             release_policy_sha256: digest(b"v4 promotion policy"),
@@ -4872,6 +4874,8 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     fn release_activation_wire_fixture() -> KagemushaRecursiveSpendReleaseActivationV4 {
         let manifest = manifest();
+        let candidate = unsigned_candidate(&manifest);
+        let internal_validation_receipt = internal_validation_receipt_bytes(&candidate, &manifest);
         let release_attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
@@ -4884,6 +4888,7 @@ mod kagemusha_v4_artifact_contract_tests {
             release_record: KagemushaRecursiveSpendReleaseRecordV4 {
                 manifest,
                 release_attestation,
+                internal_validation_receipt,
                 physical_device_benchmark_summary: b"wire-bound benchmark evidence".to_vec(),
                 cryptographic_review_summary: b"wire-bound review evidence".to_vec(),
                 promotion_record: promoted_release(),
@@ -4918,7 +4923,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 not_before_ms: Some(1_700_000_000_000),
                 not_after_ms: Some(1_900_000_000_000),
             }],
-            revoked_certificate_sha256: vec![vec![0x51; 32]],
+            revoked_certificate_tbs_sha256: vec![vec![0x51; 32]],
             ios_apps: vec![OfflineIosAppAttestationPolicy {
                 team_id: "WIRETEAM1".to_owned(),
                 bundle_id: "com.example.wire".to_owned(),
@@ -4930,6 +4935,14 @@ mod kagemusha_v4_artifact_contract_tests {
                 package_name: "com.example.wire".to_owned(),
                 signing_certificate_sha256: vec![vec![0x61; 32]],
             }],
+            android_status_snapshot: Some(OfflineAndroidAttestationStatusSnapshotV1 {
+                version: OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: digest(b"wire-bound Android attestation status"),
+                response_date_ms: 1_800_000_000_000,
+                last_modified_ms: Some(1_799_999_000_000),
+                cache_max_age_seconds: 3_600,
+                non_valid_serials: vec!["1ab".to_owned(), "fe10".to_owned()],
+            }),
             require_ios_app_policy: true,
             require_android_app_policy: true,
         }
@@ -5109,143 +5122,7 @@ mod kagemusha_v4_artifact_contract_tests {
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         );
     }
-    #[test]
-    fn v4_profiles_bind_exact_four_role_inventory_and_inline_params() {
-        let manifest = manifest();
-        manifest.validate().expect("valid four-role V4 manifest");
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 8);
-        for profile in &manifest.profiles {
-            assert_eq!(profile.artifacts.len(), 4);
-            profile
-                .circuit_params
-                .validate()
-                .expect("valid inline circuit parameters");
-            assert_eq!(
-                profile
-                    .artifacts
-                    .iter()
-                    .map(|artifact| artifact.kind)
-                    .collect::<Vec<_>>(),
-                vec![
-                    KagemushaPastaCycleArtifactKindV4::ParamsIpa,
-                    KagemushaPastaCycleArtifactKindV4::ProvingKey,
-                    KagemushaPastaCycleArtifactKindV4::VerifyingKey,
-                    KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
-                ]
-            );
-            assert_eq!(
-                profile
-                    .bootstrap_artifact()
-                    .expect("bootstrap descriptor")
-                    .kind,
-                KagemushaPastaCycleArtifactKindV4::BootstrapWitness
-            );
-        }
-        let mut tampered = manifest.clone();
-        tampered.profiles[0].circuit_params.num_fixed = 0;
-        assert!(tampered.validate().is_err());
-        let mut separate_params_file = manifest.clone();
-        let mut rejected_artifact = separate_params_file.profiles[0].artifacts[0].clone();
-        rejected_artifact.file_name = ["step-eq.circuit-", "params.krv4"].concat();
-        rejected_artifact.sha256 = digest(b"rejected separate circuit parameters frame");
-        rejected_artifact.payload_sha256 = digest(b"rejected separate circuit parameters");
-        separate_params_file.profiles[0]
-            .artifacts
-            .insert(1, rejected_artifact);
-        assert!(
-            separate_params_file.validate().is_err(),
-            "a separate circuit-parameter file must not extend the exact inventory"
-        );
-        let mut reordered = manifest;
-        reordered.profiles[0].artifacts.swap(1, 2);
-        assert!(reordered.validate().is_err());
-    }
-    include!("kagemusha_release_validation_inline_tests.rs");
-    include!("kagemusha_promotion_receipt_inline_tests.rs");
-    #[test]
-    fn v4_artifact_contract_source_guard_is_exhaustive() {
-        fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {
-            match kind {
-                KagemushaPastaCycleArtifactKindV4::ParamsIpa => 0,
-                KagemushaPastaCycleArtifactKindV4::ProvingKey => 1,
-                KagemushaPastaCycleArtifactKindV4::VerifyingKey => 2,
-                KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 3,
-            }
-        }
-        let kinds = [
-            KagemushaPastaCycleArtifactKindV4::ParamsIpa,
-            KagemushaPastaCycleArtifactKindV4::ProvingKey,
-            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
-            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
-        ];
-        assert_eq!(kinds.map(canonical_index), [0, 1, 2, 3]);
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 8);
-        assert!(
-            manifest()
-                .profiles
-                .iter()
-                .all(|profile| profile.artifacts.len() == 4)
-        );
-        let source = concat!(
-            include_str!("mod.rs"),
-            include_str!("kagemusha_model.rs"),
-            include_str!("kagemusha_release_verifier.rs")
-        );
-        assert!(source.contains("KagemushaPastaCycleFramedArtifactHeaderV4"));
-        for forbidden in [
-            concat!("Circuit", "Params,"),
-            concat!("CIRCUIT_", "PARAMS_FILE_NAME_V4"),
-            concat!("circuit-", "params.krv4"),
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "rejected V4 artifact contract marker is present: {forbidden}"
-            );
-        }
-    }
-    #[test]
-    fn v4_envelope_uses_verifying_key_role_at_canonical_index() {
-        let manifest = manifest();
-        manifest.validate().expect("valid V4 manifest");
-        let [vesta_profile, pallas_profile] = manifest.profiles.as_slice() else {
-            panic!("test manifest must have Eq/Ep profiles");
-        };
-        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-        let mut envelope = KagemushaPastaCycleProofEnvelopeV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-            proof_backend: manifest.proof_backend.clone(),
-            transcript_profile: manifest.transcript_profile.clone(),
-            step_eq_circuit_id: vesta_profile.circuit_id.clone(),
-            step_ep_circuit_id: pallas_profile.circuit_id.clone(),
-            artifact_generation: manifest.generation.clone(),
-            manifest_sha256: digest(
-                &norito::encode_canonical(&manifest).expect("canonical manifest"),
-            ),
-            step_eq_parameter_generation: vesta_profile.parameter_generation.clone(),
-            step_ep_parameter_generation: pallas_profile.parameter_generation.clone(),
-            step_eq_circuit_params_sha256: vesta_profile
-                .circuit_params
-                .sha256()
-                .expect("Eq params identity"),
-            step_ep_circuit_params_sha256: pallas_profile
-                .circuit_params
-                .sha256()
-                .expect("Ep params identity"),
-            step_eq_verifier_key_sha256: vesta_profile.artifacts[2].payload_sha256,
-            step_ep_verifier_key_sha256: pallas_profile.artifacts[2].payload_sha256,
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV5 {
-                layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
-                state_limbs,
-            },
-            proof: ProofBox::new(manifest.proof_backend.clone(), vec![0xA5]),
-        };
-        envelope
-            .validate_against_manifest(&manifest)
-            .expect("V4 envelope binds verifying-key role at index two");
-        envelope.step_eq_verifier_key_sha256 = vesta_profile.artifacts[1].payload_sha256;
-        assert!(envelope.validate_against_manifest(&manifest).is_err());
-    }
+    include!("kagemusha_v4_release_tail_inline_tests.rs");
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -5266,6 +5143,11 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut manifest = manifest();
         let candidate = unsigned_candidate(&manifest);
         let review = signed_review_bytes(&candidate, &[&key_pairs[1]]);
+        let internal_validation_receipt = internal_validation_receipt_bytes(&candidate, &manifest);
+        assert_eq!(
+            digest(&internal_validation_receipt),
+            manifest.internal_validation_receipt_sha256
+        );
         manifest.benchmark_evidence_sha256 = digest(&benchmark);
         manifest.cryptographic_review_sha256 = digest(&review);
         manifest.release_attestation_sha256 = digest(b"first nonzero staging digest");
@@ -5288,6 +5170,10 @@ mod kagemusha_v4_artifact_contract_tests {
         assert_eq!(
             second_subject.reviewed_rustc_binary_sha256,
             manifest.reviewed_rustc_binary_sha256
+        );
+        assert_eq!(
+            second_subject.internal_validation_receipt_sha256,
+            manifest.internal_validation_receipt_sha256
         );
         let assert_subject_changes = |tampered: &mut _| {
             let candidate = unsigned_candidate(tampered);
@@ -5317,10 +5203,20 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut rustc_tamper = manifest.clone();
         rustc_tamper.reviewed_rustc_binary_sha256[0] ^= 1;
         assert_subject_changes(&mut rustc_tamper);
+        let mut internal_receipt_tamper = manifest.clone();
+        internal_receipt_tamper.internal_validation_receipt_sha256[0] ^= 1;
+        assert_subject_changes(&mut internal_receipt_tamper);
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
             policy_id: "v4-artifact-test-policy".to_owned(),
+            internal_validation_runner_identity_sha256:
+                KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+                    &internal_validation_receipt,
+                )
+                .expect("canonical internal-validation receipt")
+                .body
+                .validation_runner_identity_sha256,
             roles: roles
                 .iter()
                 .zip(&key_pairs)
@@ -5362,12 +5258,80 @@ mod kagemusha_v4_artifact_contract_tests {
             &manifest,
             &policy,
             &attestation,
+            &internal_validation_receipt,
             &benchmark,
             &review,
         )
         .expect("fully authenticated V4 release");
         assert_eq!(authenticated.manifest(), &manifest);
         assert_eq!(authenticated.approved_signers().len(), roles.len());
+        let mut wrong_runner_policy = policy.clone();
+        wrong_runner_policy.internal_validation_runner_identity_sha256[0] ^= 1;
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &manifest,
+                &wrong_runner_policy,
+                &attestation,
+                &internal_validation_receipt,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt),
+            "a valid self-declared runner signature is not an authorization root",
+        );
+        let mut unpinned_runner_policy = policy.clone();
+        unpinned_runner_policy.internal_validation_runner_identity_sha256 = [0; 32];
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &manifest,
+                &unpinned_runner_policy,
+                &attestation,
+                &internal_validation_receipt,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidPolicy),
+            "an authenticated V4 release policy must name a runner trust root",
+        );
+        let mut tampered_internal_validation_receipt = internal_validation_receipt.clone();
+        tampered_internal_validation_receipt[0] ^= 1;
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &manifest,
+                &policy,
+                &attestation,
+                &tampered_internal_validation_receipt,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)
+        );
+        let mismatched_lock_receipt = norito::encode_canonical(
+            &kagemusha_internal_validation_receipt::tests::
+                signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
+                    &candidate,
+                    &manifest,
+                    [0xD4; 32],
+                    manifest
+                        .reviewed_source_closure
+                        .ignored_cargo_lock_size_bytes
+                        + 1,
+                ),
+        )
+        .expect("canonical receipt with a mismatched tracked Cargo.lock");
+        let mut mismatched_lock_manifest = manifest.clone();
+        mismatched_lock_manifest.internal_validation_receipt_sha256 =
+            digest(&mismatched_lock_receipt);
+        assert_eq!(
+            validate_internal_validation_receipt_v4(
+                &mismatched_lock_manifest,
+                &candidate,
+                &mismatched_lock_receipt,
+                None,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt),
+            "a correctly signed receipt cannot substitute a different tracked Cargo.lock"
+        );
         let alternate_reviewer = KeyPair::from_seed(vec![24; 32], Algorithm::Ed25519);
         let mut mismatched_policy = policy.clone();
         mismatched_policy.roles[1]
@@ -5400,6 +5364,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &mismatched_manifest,
                 &mismatched_policy,
                 &mismatched_attestation,
+                &internal_validation_receipt,
                 &benchmark,
                 &review,
             ),
@@ -5414,6 +5379,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &signed_params_tamper,
                 &policy,
                 &attestation,
+                &internal_validation_receipt,
                 &benchmark,
                 &review,
             ),
@@ -5427,6 +5393,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &signed_bootstrap_tamper,
                 &policy,
                 &attestation,
+                &internal_validation_receipt,
                 &benchmark,
                 &review,
             ),
@@ -5614,24 +5581,15 @@ mod kagemusha_v4_artifact_contract_tests {
             finalized.validate_unsigned_candidate().is_err(),
             "a finalized manifest must not be accepted as an unsigned candidate"
         );
-        let mut candidate_manifest = finalized.clone();
-        candidate_manifest.qualification_receipt_sha256 = [0; 32];
-        candidate_manifest.qualified_candidate_sha256 = [0; 32];
-        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
-        candidate_manifest.cryptographic_review_sha256 = [0; 32];
-        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = unsigned_candidate(&finalized);
         assert!(
-            candidate_manifest.validate().is_err(),
+            candidate.manifest.validate().is_err(),
             "production manifest validation must reject a pre-evidence candidate"
         );
-        candidate_manifest
+        candidate
+            .manifest
             .validate_unsigned_candidate()
             .expect("valid unsigned V4 candidate");
-        let candidate = KagemushaRecursiveSpendCandidateV4 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
-            manifest: candidate_manifest,
-        };
         candidate.validate().expect("valid candidate record");
         assert_ne!(candidate.sha256().expect("candidate digest"), [0; 32]);
         let mut missing_projection = candidate.clone();
@@ -5771,6 +5729,8 @@ mod kagemusha_v4_artifact_contract_tests {
         );
     }
 }
+#[cfg(all(test, feature = "transparent_api"))]
+pub(crate) use kagemusha_v4_artifact_contract_tests::lifecycle_enable_witness_wire_fixture;
 include!("device_authority_p256_tests.rs");
 /// Derive the canonical public reference carried by a receiver payment request.
 ///

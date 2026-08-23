@@ -1,9 +1,100 @@
 # Roadmap
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Merged-candidate compile recovery
+
+- Type the two large Halo2 tail-publication ledger equations explicitly so the
+  normal lint policy accepts their values without wrapping or lint overrides.
+
+## ZK algorithm release qualification
+
+- Keep FASTPQ ledger qualification blocked until its proof boundary uses a
+  commitment and transcript with at least 128-bit security. Cross-check the
+  dense-MDS Goldilocks `x^7` permutation against an independent implementation
+  or replace it with a standardized commitment, and produce a quantitative
+  proof for the implemented quadratic-bound FRI schedule. The current catalogue
+  now honestly declares extension degree `1`, zero grinding, and a 32-bit
+  target; that is a diagnostic ceiling, not ledger release qualification.
+- Keep non-null IVM `AXT_VERIFY_DS_PROOF` admission fail closed until the exact
+  source roots and transaction set are matched to an authoritative finalized/QC
+  source-state statement. Before releasing handle-backed remote spend, either
+  make the issuer authentication cover the exact intent, proof, and effective
+  amount or give those facts an independently anchored binding with at least
+  128-bit security; the current handle signature plus roughly 32-bit FASTPQ
+  metadata is not a release authorization boundary.
+- Keep ZK-ACE proving, verification, and activation unavailable until its four
+  public commitment words come from independent domain-separated invocations
+  (or an equivalently strong replacement) with at least 128-bit collision
+  binding. Regenerate the wider AIR schedule, trace domain, masks, FRI profile,
+  profile digest, proof fixtures, and quantitative certificate before removing
+  the fail-closed engine flag.
+- Add an explicit degree bound and bounded-degree terminal polynomial check to
+  private generic native-STARK AIR profiles. `blowup_log2` must affect verified
+  geometry rather than only transcript metadata. Keep the exact-root public
+  Binding profile capped at `n_log2 = 12` in the meantime.
+- Keep BFV public-padding-only native verification disabled until commitments
+  and degree proofs for every hidden trace column are bound into the sampled AIR
+  relation. Continue using governed full-material replay, which reconstructs
+  and exactly matches the complete trace and composition roots.
+- Keep Kaigi `ZkRosterV1` join admission unavailable until a versioned roster
+  circuit binds the canonical signed participant authority (and, if required by
+  the final replay policy, the Kaigi action/session context) as authenticated
+  public input. Regenerate the deterministic verifier key, exact schema, JS/SDK
+  builders, registry fixtures, and front-run/cross-authority negative tests as
+  one profile change. Do not treat the existing arbitrary account witness or a
+  copied NIZK as bearer authorization. Usage proofs and host-signed lifecycle
+  operations are separate and remain valid.
+- Decide whether the currently unreachable
+  `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
+- Once the in-progress Halo2 tree compiles, run the focused native-STARK and
+  FASTPQ regressions, then the full workspace test and strict all-target Clippy
+  matrices from one settled candidate.
+- On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
+  and archive direct-evaluation, CPU/GPU parity, FFT/LDE, and benchmark evidence
+  from the same immutable source revision.
+
+## Inrou V1 secure launcher completion
+
+- Keep all first-release Inrou hosting and Taira capability advertisement
+  disabled until one mandatory internal launcher confines QEMU with private mount,
+  network, IPC, UTS, PID, and cgroup namespaces (or an equivalently strict
+  attested MAC profile). Give the child a minimal pivot root containing only
+  its KVM device, executable/runtime libraries, authenticated read-only inputs,
+  and exact writable disks; expose no host `/run`, Unix sockets, shared temp,
+  or unrelated proc/sys state. Package and digest the exact QEMU runtime
+  closure instead of exposing broad host library trees, and use fixed-path raw
+  root/lease disks so no qcow image embeds a host backing-file path.
+- Bridge Torii's supervisor-owned listener into the private network namespace
+  through an authenticated, bounded broker or inherited socket capability.
+  Keep the namespace without external interfaces, attest every namespace and
+  mount before advertisement, and prove that IPv4, IPv6, abstract/pathname Unix
+  sockets, DNS proxies, and descriptor passing cannot escape it.
+- Enforce KVM as the only release accelerator and add cgroup v2 CPU, memory,
+  pids, and I/O ceilings that account for QEMU overhead. TCG is not a release
+  isolation boundary. Re-enable shipping admission only after malicious
+  guest-root escape tests prove exact file, IPC, network, process, and resource
+  visibility.
+- Qualify the locked `iroha-inrou` identity, files-only NSS and subid policy,
+  `/dev/kvm` custody, write-lease disk reclaim, anonymous QMP, bounded teardown,
+  and fail-secure stale-firewall workflow on a same-revision four-validator
+  Linux/AArch64 deployment. Archive operator-approved stale-chain cleanup and
+  lease-capable local-filesystem evidence with the canary.
+
+## SoraNet first-release security qualification
+
+- Exercise the hardened relay, puzzle, DNS, VPN backend, and privileged helper
+  boundaries on Linux with real TUN devices, pidfds, owner-private runtime
+  secrets, DNS rollback, process replacement, partial writes, and hostile local
+  peers. Archive multi-relay loss/replay/rotation evidence and resource-limit
+  telemetry from the release build.
+- Run the full workspace test and strict all-target Clippy matrices, extended
+  handshake/record/FFI fuzzing, and independent cryptographic and deployment
+  review from the immutable release source. Focused security suites are green;
+  they do not substitute for this release qualification.
 
 ## MKHE, Figure 9, and offline-cash evidence-gated completion
 
@@ -74,37 +165,102 @@ to:
 
 ## Kagemusha production evidence closeout
 
-The authenticated V4 publisher and phase-separated rollout commands are now
-implemented and fail closed. The remaining work is external evidence and
-release execution:
+The source tree now contains the V4 publisher and a manifest-keyed staged,
+enable, cancel, and deactivate lifecycle. Its authenticated static source
+evaluator and hostile candidate self-test pass, but the lifecycle/runtime
+projection has not passed focused Cargo validation or the complete immutable
+candidate gate. Production readiness is not complete. The remaining work is
+internal release qualification plus external evidence and execution; the
+internal blockers below cannot be closed by collecting external evidence:
 
-- Restore the physical iPhone lane with the exact pinned Xcode 26.6 toolchain,
-  USB/CoreDevice tunnel and DDI readiness, and a provisioning profile for the
-  fixed App ID that authorizes production App Attest. Then capture and qualify
-  the real assertion against the authority-issued request, reviewed production
-  policy, prepared application root, and immutable candidate; development,
-  simulator, or synthetic evidence is not substitutable.
-- Freeze the exact sixteen-file candidate, install the signed promotion
-  reservation and runtime-only keys, publish the seventeenth promotion record
+- Replace the infeasible authenticated V5 k17 path with a feasible, reviewed
+  shipping recursion backend that meets the release device and memory limits.
+  V7 remains an unreviewed diagnostic experiment, not a fallback; keep
+  promotion hard-failing until a reviewed shipping backend is authenticated.
+- Produce the independently authenticated candidate-bound internal-validation
+  receipt. The locally trusted release policy now pins the exact
+  key-and-executable validation-runner identity, so a receipt's self-declared
+  signing key is no longer an authorization root. Production execution remains
+  fail-closed, however: the two mandatory Kagemusha fuzz targets are declared
+  in a standalone workspace but have no tracked reviewed lock, and pinned
+  `cargo-fuzz 0.13.2` cannot pass a locked/frozen constraint to its internal
+  Cargo invocation. The root lock also lacks the standalone fuzz package and
+  its `libfuzzer-sys`/`arbitrary` dependencies, so no conforming production
+  receipt exists without an explicitly authorized standalone-lock exception.
+  Static review covered all seven policy constructors and every receipt call
+  site; focused
+  `rustfmt --edition 2024 --config skip_children=true --check`,
+  `git diff --check`, and exhaustive `rg` inventory checks passed without
+  starting Cargo.
+- Run the now self-stacking liveness decoder regressions from the immutable
+  candidate and bind their result into the candidate validation receipt. Do
+  not rely on an ambient `RUST_MIN_STACK` override.
+
+- Configure an Apple developer account in Xcode and install a provisioning
+  profile for the fixed production App Attest App ID. `devicectl` sees iPhone
+  16 Pro Max `5BE53FB6-911D-54B5-9709-B44960E520CE`, and Xcode 26.2 build
+  `17C52` sees one Apple Development identity for team `6A4BK72ZFV`, but there
+  are zero profiles. The guarded prepare-only run failed with the exact
+  no-account and no-profile diagnostics, installed no app, and created no App
+  Attest key or evidence. Capture and qualify the real assertion only against
+  the release-bound authority request, reviewed policy, prepared application
+  root, and immutable candidate.
+- Provision the exact Xcode 26.6 candidate-lab toolchain and run native build
+  and both physical launches with the same full Xcode build identity and
+  `iphoneos` SDK. Rebuild a fresh same-source Connect artifact at ABI 22; the
+  ignored local ABI 19 bridge manifest is not candidate evidence.
+- Capture a fresh Android Key Attestation status response with the checked
+  fixed-endpoint helper, retain its exact payload and header-bound receipt, and
+  have the promotion controller/governance authority bind the derived snapshot
+  into the immutable candidate. The deterministic freshness, anti-rollback,
+  full-lifetime coverage, exact-root, and factory-versus-RKP rules are
+  implemented; an unsigned local capture or a static TBS revocation digest is
+  not production evidence.
+- Keep tagged and manually dispatched mobile production capability forced
+  false independently for Apple and Android until the workflow authenticates
+  a protected, source-bound receipt for that exact platform. Never let one
+  platform's receipt enable the other platform's artifacts.
+- Freeze a clean immutable source commit with exactly one accepted SSH
+  signature and no tracked or untracked changes. The current unsigned
+  development HEAD and dirty checkout are not candidate source. Qualify the
+  separate root-custodied Xcode 26.2 build `17C52` source-seal/Seatbelt
+  corridor, then run the focused Cargo suites, full workspace matrix, and
+  strict all-target Clippy from that same source.
+- Freeze the exact seventeen-file candidate, install the signed promotion
+  reservation and runtime-only keys, publish the eighteenth promotion record
   through the authenticated controller, and collect exactly four protected
   validator qualification seals carrying one identical canonical
   runtime-effective projection. The typed projection and post-genesis producer
   are implemented; only real protected-host artifacts can close this item.
   Mutable-tree or workflow-only checks are not release receipts.
-- With explicit write authorization, execute the journaled activation on the
-  qualified four-validator deployment, prove the exact transaction wire and
-  bounded finality chain, and issue the no-replace receipt. Then have the
-  promotion controller sign the bounded post-receipt canary's permit, minimal
-  non-disclosing exact-hash reservation, and complete private authorization.
-  Journal the complete canary before the separately authorized reservation and
-  canary writes; prove the exact reserved entrypoint committed successfully and
-  issuer-sign its canary evidence. Finally challenge all four qualified direct
-  HTTPS origins with one precommitted random issuer-signed nonce, verify each
-  node signature and one canary-anchored shared finality chain, and publish the
-  no-replace post-canary validator-liveness artifact. A three-of-four commit QC
-  alone is finality context, not evidence that every validator answered. Complete
-  the release-wide workspace tests and strict all-target Clippy from that same
-  immutable source before closing readiness.
+- Complete and validate the source-level two-phase lifecycle so staging leaves
+  public issuance disabled while only the exact controlled canary can run,
+  enable requires signed post-canary liveness from all four validators, and
+  authenticated replay-safe cancel/deactivate transitions close failed or
+  withdrawn releases. The activation wire now carries
+  `runtime_effective_config_sha256`; the static runtime-gate, validator-seal,
+  consensus/replay, state-install, bounded-scan, namespace, and signature-floor
+  invariants now pass their direct evaluator and hostile self-test. This
+  lifecycle/runtime projection is not yet Cargo- or immutable-candidate-
+  validated and remains an internal blocker. After that blocker is closed and
+  explicit write authorization is supplied, stage the qualified release on the
+  four-validator deployment, prove the exact transaction wire and bounded
+  finality chain, and issue the no-replace staging receipt. Have the promotion
+  controller sign the bounded post-receipt canary's
+  permit, minimal non-disclosing exact-hash reservation, and complete private
+  authorization. Journal the complete canary before the separately authorized
+  reservation and canary writes; prove the exact reserved entrypoint committed
+  successfully and issuer-sign its canary evidence. Finally challenge all four
+  qualified direct HTTPS origins with one precommitted random issuer-signed
+  nonce, verify each node signature and one canary-anchored shared finality
+  chain, publish the no-replace post-canary validator-liveness artifact, and
+  only then enable issuance through the second phase. A three-of-four commit QC
+  alone is finality context, not evidence that every validator answered. Cancel
+  or deactivate the staged release on any failed closeout. Complete the
+  release-wide workspace tests and strict all-target Clippy from that same
+  immutable source before closing readiness. Real device receipts, the
+  four-validator run, and live canaries remain external blockers; source wiring
+  alone cannot close them.
 
 ## Workspace review closure
 
@@ -115,6 +271,24 @@ release execution:
   accepted or migrated by relabelling; pre-transition-set block results and
   fixtures must be regenerated rather than defaulting the required set to
   empty.
+
+- TODO: extend Connect's P2P lifecycle wire with an authenticated session
+  incarnation (or durable tombstone) so role-consumed, termination, and dedupe
+  state cannot affect a later same-SID incarnation. Add an authenticated claim
+  renewal protocol, or make the local session ceiling identical to the
+  advertised absolute peer deadline, before supporting sessions longer than
+  the original claim.
+- TODO: define one workspace-wide global ordering/pagination contract for every
+  routed list fanout. Torii now fetches the exact admitted global prefix from
+  each shard and applies the requested page once for the repaired directory
+  path; add bounded multi-page shard retrieval before permitting a larger
+  offset window, and make every remaining fanout list prove the same property
+  with cross-shard fixtures.
+- Add a configured MCP in-flight dispatch budget before exposing expensive
+  operator tool sets on an untrusted ingress. Request bytes, nested response
+  bytes, body deadlines, and the shared 64-dispatch batch ceiling are bounded;
+  long-running handler execution intentionally remains outside the body-read
+  deadline and therefore needs independent concurrency admission.
 
 - TODO: add an authenticated cancellation/rebind protocol for an exact pending
   QueuePlan whose fresh dataspace/role topology changes (for example after an
@@ -214,8 +388,8 @@ release execution:
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
   4,500,000-line working target. The current mutable-tree checkpoint counts
-  4,964,649 lines, 424,649 above the hard ceiling, with all per-file ratchets
-  reconciled. Recompute the exact count and gap after source freeze; do not
+  4,975,825 lines, 435,825 above the hard ceiling, with 18 per-file findings
+  remaining. Recompute the exact count and gap after source freeze; do not
   redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
   security, consensus, SDK, or release-evidence behavior to close it. Keep
@@ -316,7 +490,7 @@ final-source enlarged-stack coordinator aggregate is 462/462. The production
 nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
 corridors, exact `iroha_core` test-target compile, reviewed include closure,
 and legacy-codec guard are green. Current merge reconciliation ratcheted five
-decreased-file baselines down and leaves 11 file-budget findings, including
+decreased-file baselines down and leaves 18 file-budget findings, including
 merged-tree Sumeragi growth; split work remains outstanding, and allowances
 must not increase. The include manifest contains 66 parents and 398 entries.
 The exact proof-ledger checker has only the separately
@@ -1179,10 +1353,12 @@ source validation.
   macOS hosts and under a Linux cgroup hard limit. Keep future reductions inside
   bounded modules and derive-family isolation rather than adding crates or
   feature fragmentation.
-- Move additional SDK/code-generation callers onto the focused
-  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
-  until every documented and CI caller has migrated, then remove only the
-  adapters whose replacement paths have parity evidence.
+- Keep Norito RPC fixture generation behind the sole create-only
+  `xtask norito-rpc-fixtures --output-root <absent-absolute-external-root>`
+  owner and its internal `norito_codegen_exporter` library, followed by the
+  sole `xtask norito-rpc-verify` checker. SDKs and CI are consumers of those
+  outputs; do not add SDK-local generators, generic exporter binaries,
+  compatibility commands, or migration adapters.
 
 ## Taira development networks
 
@@ -1489,9 +1665,9 @@ bounds passed after installing the checksum-pinned TLAPM standard library.
 That archived manifest does not attest the current generation-fencing source.
 `G-FORMAL` remains open pending strict TLAPS, pinned Verus, the remaining
 mutation matrices, and a clean aggregate release receipt. The current
-pinned-seed TLC witness and all eight
-production-reducer replay tests are fresh and green at exactly 100 normalized
-actions; that trace result alone does not promote a theorem. In particular,
+pinned-seed TLC witness contains exactly 100 normalized formal actions. It is a
+formal-only trace and does not claim production-reducer executions; that trace
+result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now have explicit
 source proof bodies. Their promoted target statuses are accepted for release
@@ -2672,9 +2848,9 @@ shape is not a fallback.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
-`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
-receive an operator-supplied canonical Base58 XOR id through
-`--xor-asset-definition-id`.
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw` with `NumericSpec::fractional(9)`, and Nexus
+deployable genesis generation must receive an operator-supplied canonical
+Base58 XOR id through `--xor-asset-definition-id`.
 
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now
@@ -3739,11 +3915,11 @@ excluded from the first release.
   package/signer/all-applications and ambiguous authorization-list rejection,
   and authorizes future certificates by attested certificate-payload hash. The
   on-chain verifier now has a governed policy instruction for deterministic
-  platform root rotation, certificate-DER revocation digests, and optional
-  iOS/Android app allowlists. Admission fails closed when that governed policy
-  is absent; built-in roots are not a no-policy fallback. Swift, Kotlin/JVM,
-  and Java Android SDK parity now
-  carries the registration model, canonical challenge-preimage hash, and
+  platform root rotation, exact raw-`TBSCertificate`-DER revocation digests,
+  and optional iOS/Android app allowlists. Admission fails closed when that
+  governed policy is absent; built-in roots are not a no-policy fallback.
+  Swift, Kotlin/JVM, and Java Android SDK parity now carries the registration
+  model, canonical challenge-preimage hash, and
   `RegisterOfflineDeviceAttestation` instruction bytes through the shared
   Offline Note V2 interop fixture. Core and the mobile SDKs also reject the
   retired certificate-only `ios-app-attest` /
@@ -25098,15 +25274,24 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
-- Recover the independently archived original `Cargo.lock` and toolchain
-  provenance for the source-evidenced predecessor
-  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, then run its 33 comparable native
-  workloads and the candidate on the same controlled runner. The predecessor
-  contains no `Cargo.lock`; its workload hashes bind benchmark source only and
-  cannot replace the missing provenance. Until it is recovered, no
-  reproducible locked 5% comparison is claimed.
-- Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
-  .NET 8 environment; `dotnet` is unavailable on this host.
+- Run the candidate and the approved, source-and-lock-authenticated benchmark
+  baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
+  pinned runner and retain the workflow evidence for the `<=5%` threshold. The
+  workflow now creates a source-, lockfile-, and Criterion-sample-bound JSON
+  receipt, checksums the complete base/candidate Criterion tree, and uploads it
+  with the runner/toolchain record; no accepted run exists yet. The
+  unauthenticated July predecessor is not a V1 input and must not be recovered,
+  rebuilt, or reintroduced as compatibility evidence. Until the controlled
+  workflow completes, no reproducible 5% comparison is claimed.
+- Execute `.github/workflows/numeric_v1_calibration.yml` for both mandatory
+  release profiles and retain its attested archives: Apple M1 Ultra
+  (`Mac13,2`, arm64) and AWS Graviton3 `c7g.4xlarge`. The general Kotodama
+  `<=5%` comparison is not a substitute for either Numeric V1 calibration
+  archive, and neither release-profile archive is currently available.
+- The current C# Numeric V1 and contract-manifest SDK gate is complete on
+  .NET SDK 8.0.419 (`80/80`); it is no longer an environment blocker. The
+  remaining release gates are the controlled performance/calibration evidence,
+  current-source native builds, and the cross-platform SDK qualification above.
 
 ## Privacy, ZK, and FHE
 

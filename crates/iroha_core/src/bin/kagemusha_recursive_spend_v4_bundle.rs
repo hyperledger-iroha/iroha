@@ -35,6 +35,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
@@ -66,6 +68,7 @@ use iroha_data_model::{
         KagemushaPastaCycleFramedArtifactHeaderV4, KagemushaPastaCycleParityV1,
         KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
         KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
+        KagemushaRecursiveSpendInternalValidationReceiptV1,
         KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
         KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
         KagemushaReviewedSourceClosureV1, KagemushaStepCircuitParamsV4,
@@ -110,6 +113,7 @@ Usage:
     --out-dir <new-final-directory> \\
     --release-policy <canonical-norito-file> \\
     --release-attestation <canonical-norito-file> \\
+    --internal-validation-receipt <canonical-norito-file> \\
     --benchmark-evidence <exact-file> \\
     --cryptographic-review <exact-file>
 
@@ -129,8 +133,8 @@ It also requires
 the requested commit to be the signed checkout HEAD, with an empty tracked diff
 and no untracked files, and the complete clean checkout to match the independently
 pinned source-closure descriptor.
-Finalization binds the two supplied evidence files into the release manifest,
-verifies signed attestation thresholds,
+Finalization binds the runner-signed internal-validation receipt and the two
+supplied external-evidence files into the release manifest, verifies signed attestation thresholds,
 requires canonical signed Norito cryptographic-review evidence bound to the exact
 candidate and policy reviewer identities, requires that same signed base commit
 and reviewed source closure, rechecks every staged
@@ -186,6 +190,7 @@ const FINALIZE_OPTIONS: &[&str] = &[
     "out-dir",
     "release-policy",
     "release-attestation",
+    "internal-validation-receipt",
     "benchmark-evidence",
     "cryptographic-review",
     OPTIONAL_MEMORY_LIMIT_OPTION,
@@ -3048,6 +3053,18 @@ fn finalize_release(
         let attestation_bytes = attestation_input.read_all()?;
         let attestation: KagemushaRecursiveSpendReleaseAttestationV4 =
             decode_canonical_norito(&attestation_bytes, "V4 release attestation")?;
+        let internal_validation_receipt_maximum =
+            u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1)?;
+        let mut internal_validation_receipt_input = open_input(
+            Path::new(required(options, "internal-validation-receipt")),
+            internal_validation_receipt_maximum,
+            "canonical signed V4 internal-validation receipt",
+        )?;
+        let internal_validation_receipt_bytes = internal_validation_receipt_input.read_all()?;
+        KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+            &internal_validation_receipt_bytes,
+        )
+        .map_err(|error| format!("invalid signed V4 internal-validation receipt: {error}"))?;
         let evidence_maximum =
             u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1)?;
         let mut benchmark_input = open_input(
@@ -3074,12 +3091,14 @@ fn finalize_release(
             let external_identities = BTreeSet::from([
                 policy_input.snapshot.identity(),
                 attestation_input.snapshot.identity(),
+                internal_validation_receipt_input.snapshot.identity(),
                 benchmark_input.snapshot.identity(),
                 review_input.snapshot.identity(),
             ]);
-            if external_identities.len() != 4 {
+            if external_identities.len() != 5 {
                 return Err(
-                    "V4 policy, attestation, and evidence inputs must be distinct files".into(),
+                    "V4 policy, attestation, internal-validation, and external-evidence inputs must be distinct files"
+                        .into(),
                 );
             }
         }
@@ -3091,6 +3110,7 @@ fn finalize_release(
         let mut manifest = candidate_manifest.clone();
         manifest.qualification_receipt_sha256 = qualification_receipt_sha256;
         manifest.qualified_candidate_sha256 = qualified_candidate_sha256;
+        manifest.internal_validation_receipt_sha256 = internal_validation_receipt_input.sha256;
         manifest.benchmark_evidence_sha256 = benchmark_evidence_sha256;
         manifest.cryptographic_review_sha256 = cryptographic_review_sha256;
         manifest.release_attestation_sha256 = Sha256::digest(&attestation_bytes).into();
@@ -3101,6 +3121,7 @@ fn finalize_release(
             &manifest,
             &policy,
             &attestation,
+            &internal_validation_receipt_bytes,
             &benchmark_bytes,
             &review_bytes,
         )
@@ -3198,6 +3219,10 @@ fn finalize_release(
         }
         for (name, input) in [
             (
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+                &mut internal_validation_receipt_input,
+            ),
+            (
                 KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
                 &mut benchmark_input,
             ),
@@ -3247,6 +3272,11 @@ fn finalize_release(
         ] {
             publication.verify_exact_file(name, bytes, maximum)?;
         }
+        publication.verify_exact_file(
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            &internal_validation_receipt_bytes,
+            internal_validation_receipt_maximum,
+        )?;
         publication.verify_exact_file(
             KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
             &benchmark_bytes,
@@ -3340,6 +3370,7 @@ fn finalize_release(
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
             qualification_receipt_sha256,
             qualified_candidate_sha256,
+            internal_validation_receipt_sha256: manifest.internal_validation_receipt_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -3371,6 +3402,7 @@ fn finalize_release(
         for input in [
             &mut policy_input,
             &mut attestation_input,
+            &mut internal_validation_receipt_input,
             &mut benchmark_input,
             &mut review_input,
         ] {
@@ -3389,6 +3421,7 @@ fn finalize_release(
         for input in [
             &mut policy_input,
             &mut attestation_input,
+            &mut internal_validation_receipt_input,
             &mut benchmark_input,
             &mut review_input,
         ] {
@@ -3542,6 +3575,7 @@ fn write_candidate(
         max_proof_bytes: metadata.max_proof_bytes,
         qualification_receipt_sha256: [0; 32],
         qualified_candidate_sha256: [0; 32],
+        internal_validation_receipt_sha256: [0; 32],
         profiles: vec![
             KagemushaPastaCycleProofProfileV4 {
                 parity: metadata.profiles[0].parity,
@@ -3868,7 +3902,7 @@ struct PublicationDirectory {
     path_bound: bool,
 }
 
-const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;
+const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 18;
 
 fn final_release_inventory_v4() -> BTreeSet<String> {
     INPUTS
@@ -3882,6 +3916,7 @@ fn final_release_inventory_v4() -> BTreeSet<String> {
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
             KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
             KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
             PROMOTION_RECORD_FILE_NAME_V4,
         ])
@@ -4290,7 +4325,7 @@ impl PublicationDirectory {
         let expected = final_release_inventory_v4();
         if expected.len() != FINAL_RELEASE_INVENTORY_COUNT_V4 {
             return Err(io::Error::other(
-                "final V4 release inventory does not contain exactly 17 distinct files",
+                "final V4 release inventory does not contain exactly 18 distinct files",
             ));
         }
         self.verify_inventory(&expected)
@@ -4390,7 +4425,7 @@ mod tests {
         }
     }
     #[test]
-    fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt() {
+    fn final_release_inventory_is_exact_and_includes_both_receipts() {
         let inventory = final_release_inventory_v4();
         let expected = INPUTS
             .iter()
@@ -4403,13 +4438,14 @@ mod tests {
                 KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
                 PROMOTION_RECORD_FILE_NAME_V4,
             ])
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         assert_eq!(inventory.len(), FINAL_RELEASE_INVENTORY_COUNT_V4);
-        assert_eq!(FINAL_RELEASE_INVENTORY_COUNT_V4, 17);
+        assert_eq!(FINAL_RELEASE_INVENTORY_COUNT_V4, 18);
         assert_eq!(inventory, expected);
     }
     #[test]
@@ -4771,6 +4807,8 @@ mod tests {
     }
     #[test]
     fn parser_rejects_unknown_duplicate_and_noncanonical_numbers() {
+        assert!(FINALIZE_OPTIONS.contains(&"internal-validation-receipt"));
+        assert!(!GENERATE_OPTIONS.contains(&"internal-validation-receipt"));
         assert!(
             parse_options(["--unknown".to_owned(), "x".to_owned()], GENERATE_OPTIONS,).is_err()
         );

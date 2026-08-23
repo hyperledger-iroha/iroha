@@ -190,9 +190,9 @@ mod model {
         deny_unknown_fields
     )]
     pub enum TransactionAdmissionIntent {
-        /// Ordinary queue admission without a globally certified QueuePlan owner.
+        /// Ordinary queue admission without a globally certified `QueuePlan` owner.
         Ordinary,
-        /// Require an exact quorum-certified QueuePlan registry owner before execution.
+        /// Require an exact quorum-certified `QueuePlan` registry owner before execution.
         QueuePlanSynced,
     }
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
@@ -2273,7 +2273,6 @@ impl TransactionBuilder {
         self
     }
     /// Select the signature-bound admission protocol for this transaction.
-    #[must_use]
     pub fn with_admission_intent(mut self, intent: TransactionAdmissionIntent) -> Self {
         self.payload.admission_intent = intent;
         self
@@ -2460,11 +2459,12 @@ impl TransactionEntrypoint {
     pub fn admission_intent(&self) -> TransactionAdmissionIntent {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.admission_intent(),
-            TransactionEntrypoint::SealedCommitment(_) => TransactionAdmissionIntent::Ordinary,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                TransactionAdmissionIntent::Ordinary
+            }
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().admission_intent()
             }
-            TransactionEntrypoint::Time(_) => TransactionAdmissionIntent::Ordinary,
         }
     }
     /// Account authorized to initiate this transaction when one exists.

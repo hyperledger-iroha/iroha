@@ -78,28 +78,28 @@ mod model {
     #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
     #[derive(thiserror::Error)]
     pub enum CanonicalHistoryError {
-        /// Canonical history height {height} is outside the committed snapshot ending at {committed_height}
+        /// Canonical history height {height} is outside the committed snapshot ending at `{committed_height}`
         HeightOutsideSnapshot {
             /// Requested one-based height.
             height: u64,
             /// Last height committed by the immutable query snapshot.
             committed_height: u64,
         },
-        /// Canonical history body at height {height} is unavailable because the authenticated snapshot retains only hash {expected_hash}
+        /// Canonical history body at height {height} is unavailable because the authenticated snapshot retains only hash `{expected_hash}`
         HashOnlyBodyUnavailable {
             /// One-based committed height.
             height: u64,
             /// Header hash authenticated by the snapshot lineage and WSV.
             expected_hash: HashOf<BlockHeader>,
         },
-        /// Canonical history body at height {height} is unavailable; expected hash {expected_hash}
+        /// Canonical history body at height {height} is unavailable; expected hash `{expected_hash}`
         BodyUnavailable {
             /// One-based committed height.
             height: u64,
             /// Header hash committed by the WSV.
             expected_hash: HashOf<BlockHeader>,
         },
-        /// Canonical history body at height {height} has hash {actual_hash}, expected {expected_hash}
+        /// Canonical history body at height {height} has hash `{actual_hash}`, expected `{expected_hash}`
         BlockHashMismatch {
             /// One-based committed height.
             height: u64,
@@ -108,7 +108,7 @@ mod model {
             /// Header hash decoded from the Kura body.
             actual_hash: HashOf<BlockHeader>,
         },
-        /// Canonical history slot {height} contains header height {actual_height}
+        /// Canonical history slot {height} contains header height `{actual_height}`
         BlockHeightMismatch {
             /// One-based committed slot.
             height: u64,

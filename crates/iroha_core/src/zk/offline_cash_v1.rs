@@ -12,6 +12,12 @@ mod helper_abi;
 mod helper_circuit;
 /// Private move-only GuardUse, PlatformBind, KeyCert, and bundle relation.
 mod helper_relation;
+/// Private, non-authorizing bounded affine P-256 child prototype.
+mod p256_affine_compact;
+/// Private, non-authorizing compact P-256 arithmetic prototype.
+mod p256_compact;
+/// Private, non-authorizing k=17 packed affine P-256 candidate.
+mod p256_packed_affine_v3;
 /// Exact Offline Cash V1 Halo2 profile and protocol identities.
 mod protocol;
 /// Exact 229-word / 33-cell field-neutral STATE public-instance ABI.
@@ -37,6 +43,84 @@ pub(crate) use protocol::{
     OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_profile_digest_v1,
     offline_cash_halo2_protocol_identity_v1,
 };
+
+/// Exact move-only statement source accepted by the private packed P-256 V3 bridge.
+///
+/// This outer trait is the only V3 source surface visible to sibling modules. The
+/// nested circuit, its raw constructor, and its diagnostic types remain private
+/// to this module.
+pub(super) trait P256PackedStatementSourceV3 {
+    /// Fill the complete `[SEC1 | SHA-256 prehash | P1363 signature]` frame once.
+    fn read_exact_statement(&mut self, destination: &mut [u8; 161]) -> Result<(), &'static str>;
+}
+
+struct P256PackedStatementSourceAdapterV3<S>(S);
+
+impl<S: P256PackedStatementSourceV3> p256_packed_affine_v3::P256PackedStatementSourceV3
+    for P256PackedStatementSourceAdapterV3<S>
+{
+    fn read_exact_statement(&mut self, destination: &mut [u8; 161]) -> Result<(), &'static str> {
+        self.0.read_exact_statement(destination)
+    }
+}
+
+/// Opaque, non-authorizing Eq/Fp packed P-256 V3 circuit candidate.
+#[must_use]
+pub(super) struct P256PackedAffineEqCircuitCandidateV3(
+    p256_packed_affine_v3::P256PackedAffineEcdsaCircuitV3<halo2_proofs::halo2curves::pasta::Fp>,
+);
+
+/// Opaque, non-authorizing Ep/Fq packed P-256 V3 circuit candidate.
+#[must_use]
+pub(super) struct P256PackedAffineEpCircuitCandidateV3(
+    p256_packed_affine_v3::P256PackedAffineEcdsaCircuitV3<halo2_proofs::halo2curves::pasta::Fq>,
+);
+
+/// Construct only the opaque Eq/Fp candidate through the nested exact-source path.
+pub(super) fn p256_packed_affine_eq_candidate_from_source_v3(
+    source: impl P256PackedStatementSourceV3,
+) -> Result<P256PackedAffineEqCircuitCandidateV3, halo2_proofs::plonk::Error> {
+    p256_packed_affine_v3::P256PackedAffineEcdsaCircuitV3::from_source(
+        P256PackedStatementSourceAdapterV3(source),
+    )
+    .map(P256PackedAffineEqCircuitCandidateV3)
+}
+
+/// Construct only the opaque Ep/Fq candidate through the nested exact-source path.
+pub(super) fn p256_packed_affine_ep_candidate_from_source_v3(
+    source: impl P256PackedStatementSourceV3,
+) -> Result<P256PackedAffineEpCircuitCandidateV3, halo2_proofs::plonk::Error> {
+    p256_packed_affine_v3::P256PackedAffineEcdsaCircuitV3::from_source(
+        P256PackedStatementSourceAdapterV3(source),
+    )
+    .map(P256PackedAffineEpCircuitCandidateV3)
+}
+
+#[cfg(test)]
+impl P256PackedAffineEqCircuitCandidateV3 {
+    pub(super) fn instances_for_test(
+        &self,
+    ) -> Result<Vec<halo2_proofs::halo2curves::pasta::Fp>, halo2_proofs::plonk::Error> {
+        self.0.instances()
+    }
+
+    pub(super) fn row_report_is_closed_for_test(&self) -> bool {
+        self.0.row_report().is_err()
+    }
+}
+
+#[cfg(test)]
+impl P256PackedAffineEpCircuitCandidateV3 {
+    pub(super) fn instances_for_test(
+        &self,
+    ) -> Result<Vec<halo2_proofs::halo2curves::pasta::Fq>, halo2_proofs::plonk::Error> {
+        self.0.instances()
+    }
+
+    pub(super) fn row_report_is_closed_for_test(&self) -> bool {
+        self.0.row_report().is_err()
+    }
+}
 
 use iroha_data_model::{
     NetworkId,

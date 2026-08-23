@@ -48,12 +48,12 @@ OPENING_LOC = 11_725
 OPENING_BYTES = 432_298
 OPENING_SHA256 = "cfcc8798b026b9c5a697a2c895a4df0aea6a08c565bcba5332c9733a00b3f377"
 OPENING_GIT_BLOB = "ec7f6f8a9565b6cee290769439f1c7b7fb267224"
-POST_LOC = 10_684
-POST_BYTES = 401_936
-POST_SHA256 = "12df30ba9079622f1026ac0b9eb8c0cdb198b598c32aa774ad318e00d40767d3"
-POST_GIT_BLOB = "47a07a3a834eee4585106b25e225004ce9b36636"
+POST_LOC = 10_663
+POST_BYTES = 401_534
+POST_SHA256 = "35d8e04cd862833684216d70c8ea093ab777089735f7d25f092e8b45abf756ab"
+POST_GIT_BLOB = "65a7c6740db45293bfd705bad17218a7126d8dd3"
 MINIMUM_RUST_LINE_REDUCTION = 1_000
-PRODUCTION_LOC = 7_597
+PRODUCTION_LOC = 7_576
 TEST_SUFFIX_LOC = 3_087
 TEST_SUFFIX_SHA256 = "30f4a813c3854998ab8c3d8356a15f5c1258d98c19be5329134a31bf77daed94"
 
@@ -113,18 +113,18 @@ HELPER_LEDGER = (
     ("emit_pointer_to_norito", 5, "bd9859bfd0c0be7da4b6caf2a3548f745f334720a9dc86b9c9f2ce2f1038d651", 3),
     ("emit_pointer_from_norito", 5, "b0966c2c33659d625bf45357bba146df0f6e07848c62b486ff529e3571c823d9", 4),
     ("append_value_word_types", 21, "b453c793ec4a43c19ef335fc30e832c9e689f3d39a539c46c4091fa695f6b4e9", 4),
-    ("lower_map_fallback", 105, "53a3fb6be09d45b9150f66934f17aa207d08e8743f28b7906825d192c8a1e87e", 3),
+    ("lower_map_fallback", 105, "3a50ad3b661e6a4b8ec0540ee9ec7d75c26f21dffa77f1721daab450fbf407c9", 3),
     ("lower_take2_pair", 19, "2486003cdf0185ac7ddc57ad41c6a372867748b05750dc4bb885c718412bf5ab", 2),
     ("seal_unreachable_continuation", 5, "2d13cb5e6ebdf434c6037a926a427cd4eb0c7531eaf01d8aa9bb24379527ccff", 2),
 )
-HELPER_LEDGER_SHA256 = "05fcf2e9523dc31be66b7f495c8103ddd7a0b51bbc040b853567ab18e9e18180"
+HELPER_LEDGER_SHA256 = "68f03c3bca2d96edd107303f86968c6efa61dff16c92b2e467fb4e60a1219916"
 HELPER_CALL_LEDGER_COUNT = 162
-HELPER_CALL_LEDGER_SHA256 = "0b4193a0d9da6939a7629a39bdd63b6ef2b4881494fe93fa7af9dc5c668abfc4"
+HELPER_CALL_LEDGER_SHA256 = "80bd617bf02f1c461adb4d3488dc44f2a9d45aac7681bc9cc7242f86ade6a47a"
 
 EXPECTED_MAP_FALLBACK_ROUTES = (
-    ("GetOrDefault", "ctx,&args[0],&args[1],&args[2],MapFallback::EagerDefault,vars,"),
-    ("GetOr", "ctx,&args[0],&args[1],&args[2],MapFallback::LazyDefault,vars,"),
-    ("Ensure", "ctx,&args[0],&args[1],&args[2],MapFallback::InsertDefault,vars,"),
+    ("GetOrDefault", "ctx,&args[0],&args[1],&args[2],MapFallback::Eager,vars"),
+    ("GetOr", "ctx,&args[0],&args[1],&args[2],MapFallback::Lazy,vars"),
+    ("Ensure", "ctx,&args[0],&args[1],&args[2],MapFallback::Insert,vars"),
 )
 TAKE2_ROUTING_SHA256 = "2d5f3d141b1f8fd640547ae19dba829cc68b8fd972c90d940831a0c2d742fa14"
 
@@ -352,7 +352,8 @@ def _helper_call_ledger(production: str) -> list[list[str]]:
 def _fallback_routes(production: str) -> tuple[tuple[str, str], ...]:
     surface = _function_region(production, "lower_surface_builtin_call")
     pattern = re.compile(
-        r"Builtin::(GetOrDefault|GetOr|Ensure)\s*=>\s*lower_map_fallback\s*\("
+        r"Builtin::(GetOrDefault|GetOr|Ensure)\s*=>\s*(?:\{\s*)?"
+        r"lower_map_fallback\s*\("
     )
     routes: list[tuple[str, str]] = []
     for match in pattern.finditer(surface):
@@ -601,7 +602,7 @@ def _validate_candidate(
 
     fallback = _item_region(production, "enum MapFallback")
     _require(
-        _sha256(fallback) == "3ed942d40cb7b2fc0e9ac5d33d80cc8975c9cd288ef0bf77179d095fd07d5da6",
+        _sha256(fallback) == "902f09143ea656a62778693e53165df3988a338f07242aa180c7e997b4acfc3c",
         "fallback variants changed",
     )
     _require(
@@ -609,11 +610,11 @@ def _validate_candidate(
         "fallback must remain a fixed typed enum",
     )
     _require(
-        production.count("fallback == MapFallback::InsertDefault") == 2,
+        production.count("fallback == MapFallback::Insert") == 2,
         "insert fallback tests changed",
     )
     _require("matches!(fallback" not in production, "fallback must remain macro-free")
-    for mode, count in (("EagerDefault", 2), ("LazyDefault", 2), ("InsertDefault", 4)):
+    for mode, count in (("Eager", 2), ("Lazy", 2), ("Insert", 4)):
         _require(production.count(f"MapFallback::{mode}") == count, f"{mode} fallback routing changed")
 
     _require(production.count("fn append_value_word_types(") == 1, "shared traversal definition changed")
@@ -702,8 +703,8 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
         )
         self.assert_source_mutation_fails(
             self.source.replace(
-                "MapFallback::EagerDefault,",
-                "MapFallback::InsertDefault,",
+                "MapFallback::Eager, vars)",
+                "MapFallback::Insert, vars)",
                 1,
             ),
             "helper call ledger",
@@ -718,36 +719,22 @@ class KotodamaIrCompactionMutationTest(unittest.TestCase):
         )
 
     def test_exact_helper_call_mutations_fail(self) -> None:
-        eager_anchor = """            MapFallback::EagerDefault,
-            vars,
-        ),
-        Builtin::GetOr => lower_map_fallback("""
-        lazy_replacement = """            MapFallback::LazyDefault,
-            vars,
-        ),
-        Builtin::GetOr => lower_map_fallback("""
-        lazy_anchor = """            MapFallback::LazyDefault,
-            vars,
-        ),
-        Builtin::Ensure => lower_map_fallback("""
-        eager_replacement = """            MapFallback::EagerDefault,
-            vars,
-        ),
-        Builtin::Ensure => lower_map_fallback("""
-        swapped_modes = self.source.replace(eager_anchor, lazy_replacement, 1)
-        swapped_modes = swapped_modes.replace(lazy_anchor, eager_replacement, 1)
+        eager_anchor = "MapFallback::Eager, vars)"
+        lazy_anchor = "MapFallback::Lazy, vars)"
+        temporary_anchor = "MapFallback::__SWAP__, vars)"
+        swapped_modes = self.source.replace(eager_anchor, temporary_anchor, 1)
+        swapped_modes = swapped_modes.replace(lazy_anchor, "MapFallback::Eager, vars)", 1)
+        swapped_modes = swapped_modes.replace(temporary_anchor, "MapFallback::Lazy, vars)", 1)
         self.assert_source_mutation_fails(swapped_modes, "helper call ledger")
 
-        map_key_anchor = """        Builtin::GetOrDefault => lower_map_fallback(
-            ctx,
-            &args[0],
-            &args[1],
-            &args[2],"""
-        map_key_replacement = """        Builtin::GetOrDefault => lower_map_fallback(
-            ctx,
-            &args[1],
-            &args[0],
-            &args[2],"""
+        map_key_anchor = (
+            "lower_map_fallback(ctx, &args[0], &args[1], &args[2], "
+            "MapFallback::Eager, vars)"
+        )
+        map_key_replacement = (
+            "lower_map_fallback(ctx, &args[1], &args[0], &args[2], "
+            "MapFallback::Eager, vars)"
+        )
         self.assert_source_mutation_fails(
             self.source.replace(map_key_anchor, map_key_replacement, 1),
             "helper call ledger",

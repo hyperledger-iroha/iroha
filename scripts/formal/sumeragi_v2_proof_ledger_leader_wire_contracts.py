@@ -847,31 +847,33 @@ activation.complete(); Ok(())""",
         errors)
 
     lane_ctor = method("lane", "V2LaneWorkAdapter", "new_with_output_guard_and_transport_inner")
-    lane_defer = method("lane", "V2LaneWorkAdapter", "defer_missing_recovered_decision_apply_sidecar")
+    lane_defer = method(
+        "lane", "V2LaneWorkAdapter", "defer_missing_lifecycle_decision_apply_sidecar"
+    )
     lane_accept = method("lane", "V2LaneWorkAdapter", "accept_certified_merge_sidecar_chunk")
     _require_rust_token_sequence(
         paths["lane"], lane_ctor,
-        """recovered_apply_sidecar_waits: BTreeSet::new(),
-rejected_recovered_apply_sidecars: BTreeMap::new(),""",
-        "lane construction must initialize distinct recovered Apply wait and rejection owners", errors)
+        """lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),
+rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),""",
+        "lane construction must initialize distinct lifecycle Apply wait and rejection owners", errors)
     _require_rust_token_sequence(
         paths["lane"], lane_defer,
         """MergeSidecarDeferralDisposition::Fetching
-| MergeSidecarDeferralDisposition::RetryLater => { self.recovered_apply_sidecar_waits.insert(entry_hash); }
+| MergeSidecarDeferralDisposition::RetryLater => { self.lifecycle_decision_apply_sidecar_waits.insert(entry_hash); }
 MergeSidecarDeferralDisposition::Available
-| MergeSidecarDeferralDisposition::Rejected(_) => { self.recovered_apply_sidecar_waits.remove(&entry_hash); }""",
-        "recovered Apply sidecar deferral must retain only live wait ownership", errors)
+| MergeSidecarDeferralDisposition::Rejected(_) => { self.lifecycle_decision_apply_sidecar_waits.remove(&entry_hash); }""",
+        "lifecycle Apply sidecar deferral must retain only live wait ownership", errors)
     _require_rust_token_sequence(
         paths["lane"], lane_accept,
-        """if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-self.rejected_recovered_apply_sidecars.entry(entry_hash).or_insert(error); }""",
-        "invalid recovered Apply sidecars must move their wait into the dedicated rejection owner",
+        """if self.lifecycle_decision_apply_sidecar_waits.remove(&entry_hash) {
+self.rejected_lifecycle_decision_apply_sidecars.entry(entry_hash).or_insert(error); }""",
+        "invalid lifecycle Apply sidecars must move their wait into the dedicated rejection owner",
         errors, count=1)
     _require_rust_token_sequence(
         paths["lane"], lane_accept,
-        """if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-self.rejected_recovered_apply_sidecars.entry(entry_hash).or_insert(reason); }""",
-        "globally invalid recovered Apply sidecars must move their wait into the dedicated rejection owner",
+        """if self.lifecycle_decision_apply_sidecar_waits.remove(&entry_hash) {
+self.rejected_lifecycle_decision_apply_sidecars.entry(entry_hash).or_insert(reason); }""",
+        "globally invalid lifecycle Apply sidecars must move their wait into the dedicated rejection owner",
         errors, count=1)
 
     ordinary = method("merge", "MergeSidecarTransport", "defer_decided_block")

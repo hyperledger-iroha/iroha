@@ -1,5 +1,7 @@
 import type { CanonicalJsonRequestSignerInput } from "./canonical-request.js";
-import type { NetworkId } from "./index.js";
+import { NetworkId } from "./index.js";
+
+export { NetworkId };
 
 /** Wallet policy domain for exact Torii canonical-request message bytes. */
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG: "iroha:torii:canonical-request:v1";
@@ -94,6 +96,9 @@ export interface BrowserConnectAppMeta {
 
 export interface BrowserConnectApproval {
   readonly accountId: string;
+  /** Ed25519 key cryptographically bound to `accountId` by wallet approval. */
+  readonly signingPublicKey: Uint8Array;
+  /** Ephemeral X25519 key used only for the encrypted Connect transport. */
   readonly walletPublicKey: Uint8Array;
   readonly signature: Uint8Array;
 }
@@ -171,9 +176,15 @@ export function resolveConnectLaunchUri(
 ): string;
 export function rewriteConnectUriProtocol(uri: string, protocol?: string): string;
 export function resolveConnectLaunchUriForProtocol(
-  role: "app" | "wallet",
-  preview?: Pick<BrowserConnectSessionPreview, "walletUri" | "appUri"> | null,
-  session?: Pick<BrowserConnectSessionResponse, "wallet_uri" | "app_uri"> | null,
+  role: "wallet",
+  preview?: Pick<BrowserConnectSessionPreview, "walletUri"> | null,
+  session?: Pick<BrowserConnectSessionResponse, "wallet_uri"> | null,
+  protocol?: string,
+): string;
+export function resolveConnectLaunchUriForProtocol(
+  role: "app",
+  preview?: Pick<BrowserConnectSessionPreview, "appUri"> | null,
+  session?: Pick<BrowserConnectSessionResponse, "app_uri"> | null,
   protocol?: string,
 ): string;
 export function openConnectWebSocket(

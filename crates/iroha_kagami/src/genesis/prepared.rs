@@ -80,6 +80,8 @@ struct ValidatorBinding {
     pop_hex: String,
 }
 
+type LoadedValidatorConfigs = (Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>);
+
 fn config_slug(path: &Path, index: usize) -> color_eyre::Result<String> {
     let slug = path
         .parent()
@@ -99,7 +101,7 @@ fn load_validator_configs(
     manifest: &RawGenesisTransaction,
     genesis_public_key: &PublicKey,
     expected_hash: HashOf<BlockHeader>,
-) -> color_eyre::Result<(Vec<Vec<u8>>, Vec<actual::Root>, Vec<ValidatorBinding>)> {
+) -> color_eyre::Result<LoadedValidatorConfigs> {
     ensure!(
         paths.len() == TAIRA_VALIDATOR_COUNT,
         "prepared Taira genesis requires exactly {TAIRA_VALIDATOR_COUNT} peer configs"
@@ -277,9 +279,26 @@ fn json_object(
     )
 }
 
+fn validator_topology_values(validators: &[ValidatorBinding]) -> Vec<norito::json::Value> {
+    validators
+        .iter()
+        .map(|validator| {
+            json_object([
+                (
+                    "peer",
+                    norito::json::Value::from(validator.public_key.to_string()),
+                ),
+                (
+                    "pop_hex",
+                    norito::json::Value::from(validator.pop_hex.clone()),
+                ),
+            ])
+        })
+        .collect()
+}
+
 fn expected_pre_sign_value(
     reviewed_bytes: &[u8],
-    _reviewed: &RawGenesisTransaction,
     validators: &[ValidatorBinding],
 ) -> color_eyre::Result<norito::json::Value> {
     let mut value: norito::json::Value = norito::json::from_slice(reviewed_bytes)
@@ -363,21 +382,7 @@ fn expected_pre_sign_value(
             )])
         })
         .collect::<Vec<_>>();
-    let topology = validators
-        .iter()
-        .map(|validator| {
-            json_object([
-                (
-                    "peer",
-                    norito::json::Value::from(validator.public_key.to_string()),
-                ),
-                (
-                    "pop_hex",
-                    norito::json::Value::from(validator.pop_hex.clone()),
-                ),
-            ])
-        })
-        .collect::<Vec<_>>();
+    let topology = validator_topology_values(validators);
     transactions.push(json_object([
         ("instructions", norito::json::Value::Array(instructions)),
         ("ivm_triggers", norito::json::Value::Array(Vec::new())),
@@ -393,6 +398,10 @@ fn config_set_sha256(digests: &[String]) -> String {
 }
 
 impl<T: Write> RunArgs<T> for Args {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the linear verifier keeps every authenticated input and digest check ordered before receipt emission"
+    )]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Verifying prepared signed genesis bundle");
         let reviewed_bytes = read_genesis_manifest_bytes(&self.reviewed_manifest)
@@ -420,8 +429,7 @@ impl<T: Write> RunArgs<T> for Args {
             &config_bindings,
             reviewed.chain_discriminant(),
         )?;
-        let expected_pre_sign =
-            expected_pre_sign_value(&reviewed_bytes, &reviewed, &validator_bindings)?;
+        let expected_pre_sign = expected_pre_sign_value(&reviewed_bytes, &validator_bindings)?;
         let observed_pre_sign: norito::json::Value = norito::json::from_slice(&pre_sign_bytes)
             .wrap_err("parse pre-sign manifest as a semantic JSON value")?;
         ensure!(
@@ -531,6 +539,10 @@ mod tests {
         expected_hash: HashOf<BlockHeader>,
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture constructs one internally consistent signed bundle whose identities must be derived in order"
+    )]
     fn fixture() -> Fixture {
         iroha_genesis::init_instruction_registry();
         let directory = tempfile::tempdir().expect("create prepared Kagami fixture directory");
@@ -612,9 +624,8 @@ mod tests {
             .with_consensus_meta();
         let reviewed_bytes =
             norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
-        let pre_sign_value =
-            expected_pre_sign_value(&reviewed_bytes, &reviewed, &validator_bindings)
-                .expect("render fixture validator transform");
+        let pre_sign_value = expected_pre_sign_value(&reviewed_bytes, &validator_bindings)
+            .expect("render fixture validator transform");
         let pre_sign_bytes =
             norito::json::to_vec_pretty(&pre_sign_value).expect("encode pre-sign fixture manifest");
         let pre_sign = RawGenesisTransaction::from_json_slice(&pre_sign_bytes)
@@ -624,7 +635,7 @@ mod tests {
         ));
         let confidential_policy_hash =
             iroha_core::state::compute_genesis_confidential_policy_hash(&configs[0].zk);
-        let (manifest, signed) = super::super::bind_and_sign_staged_sumeragi_v2_context(
+        let (manifest, sealed_genesis) = super::super::bind_and_sign_staged_sumeragi_v2_context(
             pre_sign.clone(),
             &signer,
             Some(&configs[0]),
@@ -633,8 +644,8 @@ mod tests {
             Some(1_700_000_000_000),
         )
         .expect("bind and sign prepared Kagami fixture");
-        let signed = signed.0;
-        let expected_hash = signed.hash();
+        let sealed_genesis = sealed_genesis.0;
+        let expected_hash = sealed_genesis.hash();
         for (table, path) in config_tables.iter_mut().zip(&config_paths) {
             table
                 .get_mut("genesis")
@@ -694,7 +705,9 @@ mod tests {
         std::fs::write(&pre_sign_path, pre_sign_bytes).expect("write pre-sign fixture manifest");
         std::fs::write(
             &signed_path,
-            signed.encode_wire().expect("encode signed fixture genesis"),
+            sealed_genesis
+                .encode_wire()
+                .expect("encode signed fixture genesis"),
         )
         .expect("write signed fixture genesis");
         Fixture {
@@ -710,43 +723,28 @@ mod tests {
         }
     }
 
-    fn run_fixture(
-        reviewed: PathBuf,
-        roster: PathBuf,
-        manifest: PathBuf,
-        pre_sign: PathBuf,
-        signed: PathBuf,
-        configs: Vec<PathBuf>,
-        signer: &KeyPair,
-        expected_hash: HashOf<BlockHeader>,
-    ) -> Outcome {
+    fn run_fixture(fixture: &Fixture) -> Outcome {
         Args {
-            reviewed_manifest: reviewed,
-            validator_roster: roster,
-            bound_manifest: manifest,
-            pre_sign_manifest: pre_sign,
-            signed_genesis: signed,
-            peer_configs: configs,
-            genesis_public_key: signer.public_key().clone(),
-            expected_hash,
+            reviewed_manifest: fixture.reviewed.clone(),
+            validator_roster: fixture.roster.clone(),
+            bound_manifest: fixture.manifest.clone(),
+            pre_sign_manifest: fixture.pre_sign.clone(),
+            signed_genesis: fixture.signed.clone(),
+            peer_configs: fixture.configs.clone(),
+            genesis_public_key: fixture.signer.public_key().clone(),
+            expected_hash: fixture.expected_hash,
         }
         .run(&mut BufWriter::new(Vec::<u8>::new()))
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered tamper matrix reuses and restores one exact bundle so each rejection remains causally isolated"
+    )]
     fn prepared_verifier_accepts_exact_bundle_and_rejects_signed_divergence() {
         let fixture = fixture();
-        run_fixture(
-            fixture.reviewed.clone(),
-            fixture.roster.clone(),
-            fixture.manifest.clone(),
-            fixture.pre_sign.clone(),
-            fixture.signed.clone(),
-            fixture.configs.clone(),
-            &fixture.signer,
-            fixture.expected_hash,
-        )
-        .expect("accept exact prepared genesis bundle");
+        run_fixture(&fixture).expect("accept exact prepared genesis bundle");
 
         let original_reviewed = std::fs::read(&fixture.reviewed).expect("read reviewed fixture");
         let mut generic_reviewed: norito::json::Value =
@@ -764,17 +762,8 @@ mod tests {
                 .expect("encode generic reviewed fixture"),
         )
         .expect("write generic reviewed fixture");
-        let transform_error = run_fixture(
-            fixture.reviewed.clone(),
-            fixture.roster.clone(),
-            fixture.manifest.clone(),
-            fixture.pre_sign.clone(),
-            fixture.signed.clone(),
-            fixture.configs.clone(),
-            &fixture.signer,
-            fixture.expected_hash,
-        )
-        .expect_err("reject generic reviewed-genesis substitution");
+        let transform_error =
+            run_fixture(&fixture).expect_err("reject generic reviewed-genesis substitution");
         assert!(transform_error.to_string().contains("renderer transform"));
         std::fs::write(&fixture.reviewed, original_reviewed).expect("restore reviewed fixture");
 
@@ -810,17 +799,8 @@ mod tests {
             toml::to_string_pretty(&spliced_roster).expect("encode spliced roster fixture"),
         )
         .expect("write spliced roster fixture");
-        let roster_error = run_fixture(
-            fixture.reviewed.clone(),
-            fixture.roster.clone(),
-            fixture.manifest.clone(),
-            fixture.pre_sign.clone(),
-            fixture.signed.clone(),
-            fixture.configs.clone(),
-            &fixture.signer,
-            fixture.expected_hash,
-        )
-        .expect_err("reject a payout-account splice in the public validator roster");
+        let roster_error = run_fixture(&fixture)
+            .expect_err("reject a payout-account splice in the public validator roster");
         assert!(roster_error.to_string().contains("renderer transform"));
         std::fs::write(&fixture.roster, original_roster).expect("restore roster fixture");
 
@@ -839,17 +819,8 @@ mod tests {
             norito::json::to_vec_pretty(&spliced_manifest).expect("encode spliced bound fixture"),
         )
         .expect("write spliced bound fixture");
-        let bound_error = run_fixture(
-            fixture.reviewed.clone(),
-            fixture.roster.clone(),
-            fixture.manifest.clone(),
-            fixture.pre_sign.clone(),
-            fixture.signed.clone(),
-            fixture.configs.clone(),
-            &fixture.signer,
-            fixture.expected_hash,
-        )
-        .expect_err("reject signer-spliced pre-sign/bound transform");
+        let bound_error =
+            run_fixture(&fixture).expect_err("reject signer-spliced pre-sign/bound transform");
         assert!(bound_error.to_string().contains("staged-context transform"));
         std::fs::write(&fixture.manifest, original_manifest).expect("restore bound fixture");
 
@@ -871,17 +842,8 @@ mod tests {
                 toml::to_string_pretty(&drifted_config).expect("render drifted peer config"),
             )
             .expect("write drifted peer config");
-            let context_error = run_fixture(
-                fixture.reviewed.clone(),
-                fixture.roster.clone(),
-                fixture.manifest.clone(),
-                fixture.pre_sign.clone(),
-                fixture.signed.clone(),
-                fixture.configs.clone(),
-                &fixture.signer,
-                fixture.expected_hash,
-            )
-            .expect_err("reject effective policy drift from signed context");
+            let context_error = run_fixture(&fixture)
+                .expect_err("reject effective policy drift from signed context");
             assert!(context_error.to_string().contains("context differs"));
             std::fs::write(config_path, original_config).expect("restore peer config");
         }
@@ -889,16 +851,7 @@ mod tests {
         let mut mutated = std::fs::read(&fixture.signed).expect("read signed fixture");
         mutated.push(0);
         std::fs::write(&fixture.signed, mutated).expect("mutate signed fixture");
-        let _error = run_fixture(
-            fixture.reviewed,
-            fixture.roster,
-            fixture.manifest,
-            fixture.pre_sign,
-            fixture.signed,
-            fixture.configs,
-            &fixture.signer,
-            fixture.expected_hash,
-        )
-        .expect_err("reject a non-canonical signed-genesis mutation");
+        let _error =
+            run_fixture(&fixture).expect_err("reject a non-canonical signed-genesis mutation");
     }
 }

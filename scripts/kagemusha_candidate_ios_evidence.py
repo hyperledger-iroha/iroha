@@ -28,6 +28,8 @@ REVIEWED_SOURCE_CLOSURE_SCHEMA = "iroha.reviewed-source-closure.v1"
 DEVICE_POLICY = "taira-testnet-physical-ios-xcode-paired-v1"
 RESOURCE_CEILING_BYTES = 6_442_450_944
 BRIDGE_ABI_VERSION = 22
+CANDIDATE_XCODE_VERSION = "Xcode 26.6"
+XCODE_BUILD_VERSION_RE = re.compile(r"Build version [A-Za-z0-9.]+")
 MAX_RAW_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_KEY_BYTES = 64 * 1024
@@ -557,6 +559,15 @@ REVIEWED_SOURCE_CLOSURE_ENTRY_FIELDS = frozenset(
 
 class EvidenceError(ValueError):
     """Raised when evidence construction cannot proceed safely."""
+
+
+class NewPrivateJsonPublicationUncertain(EvidenceError):
+    """A new JSON output reached its final name without a confirmed commit."""
+
+    def __init__(self, path: Path, inode_identity: tuple[int, int]) -> None:
+        super().__init__("JSON output publication commit state is uncertain")
+        self.path = path
+        self.inode_identity = inode_identity
 
 
 @dataclass(frozen=True)
@@ -1615,6 +1626,16 @@ def _validate_native_build_manifest(
             errors.append(
                 f"native build manifest {key} must be a non-empty canonical tool string"
             )
+    xcode_version = manifest.get("xcode_version")
+    xcode_lines = xcode_version.split("\n") if isinstance(xcode_version, str) else []
+    if (
+        len(xcode_lines) != 2
+        or xcode_lines[0] != CANDIDATE_XCODE_VERSION
+        or XCODE_BUILD_VERSION_RE.fullmatch(xcode_lines[1]) is None
+    ):
+        errors.append(
+            "native build manifest xcode_version must be exact Xcode 26.6 with one canonical build-version line"
+        )
     symbols = manifest.get("required_symbols")
     expected_symbols = [
         "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1",
@@ -2785,7 +2806,10 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
         os.fchmod(descriptor, 0o600)
         offset = 0
         while offset < len(payload):
-            offset += os.write(descriptor, payload[offset:])
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short signed evidence write")
+            offset += written
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
@@ -2808,3 +2832,94 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def write_new_private_json(path: Path, value: dict[str, Any]) -> FileSnapshot:
+    """Durably publish owner-private JSON without replacing any existing entry."""
+
+    parent = path.parent.absolute()
+    _validate_private_directory(parent, "JSON output parent")
+    target = parent / path.name
+    if path.name in {"", ".", ".."}:
+        raise EvidenceError("JSON output must name one file")
+    payload = canonical_json_bytes(value)
+    descriptor, temporary_text = tempfile.mkstemp(
+        prefix=f".{target.name}.", dir=os.fspath(parent)
+    )
+    temporary = Path(temporary_text)
+    inode_identity: tuple[int, int] | None = None
+    link_attempted = False
+    linked = False
+    published: FileSnapshot | None = None
+    operation_error: Exception | None = None
+    try:
+        os.fchmod(descriptor, 0o600)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short JSON output write")
+            offset += written
+        os.fsync(descriptor)
+        created = os.fstat(descriptor)
+        inode_identity = (created.st_dev, created.st_ino)
+        closing = descriptor
+        descriptor = -1
+        os.close(closing)
+        link_attempted = True
+        os.link(temporary, target, follow_symlinks=False)
+        linked = True
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        directory_descriptor = os.open(parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+            temporary.unlink()
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+        published = _snapshot_private_file(
+            target,
+            "published JSON output",
+            maximum=MAX_JSON_BYTES,
+            retain_payload=True,
+        )
+        if (
+            inode_identity is None
+            or published.identity[:2] != inode_identity
+            or published.payload != payload
+        ):
+            raise EvidenceError("published JSON output bytes changed")
+    except Exception as error:
+        operation_error = error
+
+    cleanup_error: OSError | None = None
+    if descriptor >= 0:
+        closing = descriptor
+        descriptor = -1
+        try:
+            os.close(closing)
+        except OSError as error:
+            cleanup_error = error
+    try:
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        if cleanup_error is None:
+            cleanup_error = error
+
+    error = operation_error if operation_error is not None else cleanup_error
+    if error is not None:
+        if inode_identity is not None and (
+            linked or (link_attempted and not isinstance(error, FileExistsError))
+        ):
+            raise NewPrivateJsonPublicationUncertain(target, inode_identity) from error
+        if isinstance(error, FileExistsError):
+            raise EvidenceError("JSON output already exists") from error
+        if isinstance(error, EvidenceError):
+            raise error
+        raise EvidenceError("JSON output could not be published") from error
+    assert published is not None
+    return published

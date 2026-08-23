@@ -1997,6 +1997,10 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert "machine_checked_completion" not in runner
     assert "SumeragiV2ChainEpoch.tla" in runner
     assert "SumeragiV2AsyncNetwork.tla" in runner
+    assert runner.count("SumeragiV2Inductive.tla") == 2
+    assert " SumeragiV2.tla" not in runner
+    assert not (module.FORMAL_DIR / "SumeragiV2.tla").exists()
+    assert "SumeragiV2" not in module.REQUIRED_MODEL_MODULES
     assert "SumeragiV2EffectiveLockAcquisition.tla" in runner
     assert "SumeragiV2ResumeVoteWitness.tla" in runner
     assert '[[ "$tlc_status" -ne 12 ]]' in runner
@@ -2098,6 +2102,29 @@ def test_locked_commit_resume_witness_is_pinned_as_expected_counterexample(
     assert "resume_locked_commit_witness.cfg" in module.REQUIRED_TLC_CONFIGS
     assert module._resume_vote_witness_errors(formal_dir) == []
 
+    retired_entry = formal_dir / "SumeragiV2.tla"
+    retired_entry.write_text(
+        "---- MODULE SumeragiV2 ----\nEXTENDS SumeragiV2Inductive\n",
+        encoding="utf-8",
+    )
+    errors = module._resume_vote_witness_errors(formal_dir)
+    assert any("retired compatibility model entry point" in error for error in errors)
+    retired_entry.unlink()
+
+    witness = formal_dir / "SumeragiV2ResumeVoteWitness.tla"
+    canonical_witness = witness.read_text(encoding="utf-8")
+    witness.write_text(
+        canonical_witness.replace(
+            "EXTENDS SumeragiV2Inductive",
+            "EXTENDS SumeragiV2",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._resume_vote_witness_errors(formal_dir)
+    assert any("extend the canonical inductive model directly" in error for error in errors)
+    witness.write_text(canonical_witness, encoding="utf-8")
+
     cfg = formal_dir / "resume_locked_commit_witness.cfg"
     cfg.write_text(
         cfg.read_text(encoding="utf-8").replace(
@@ -2114,7 +2141,6 @@ def test_locked_commit_resume_witness_is_pinned_as_expected_counterexample(
         module.FORMAL_DIR / "resume_locked_commit_witness.cfg",
         cfg,
     )
-    witness = formal_dir / "SumeragiV2ResumeVoteWitness.tla"
     witness.write_text(
         witness.read_text(encoding="utf-8").replace(
             "  ~RecoveredHistoricalLockedCommitSigning",

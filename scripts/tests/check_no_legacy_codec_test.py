@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -70,11 +71,14 @@ norito = "0.1"
     return repo
 
 
-def _run_guard(repo: Path) -> subprocess.CompletedProcess[str]:
+def _run_guard(
+    repo: Path, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "check_no_legacy_codec.sh"],
         cwd=repo,
         check=False,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -91,6 +95,28 @@ def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
     assert "No retired Native AMX V1 consensus codecs found." in result.stdout
     assert "No retired lane executable payload handoff codecs found." in result.stdout
     assert "No retired PK2 multilane compatibility paths found." in result.stdout
+
+
+def test_guard_uses_fail_closed_grep_fallback_without_ripgrep(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(RETIRED_NATIVE_AMX_V1_SOURCES[0], encoding="utf-8")
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir()
+    for tool in ("bash", "find", "git", "grep"):
+        executable = shutil.which(tool)
+        assert executable is not None
+        (tool_bin / tool).symlink_to(executable)
+    env = os.environ.copy()
+    env["PATH"] = str(tool_bin)
+
+    result = _run_guard(repo, env=env)
+
+    assert result.returncode == 1
+    assert "retired Native AMX V1 consensus codec detected in:" in result.stderr
+    assert str(source) in result.stderr
+    assert "command not found" not in result.stderr
 
 
 def test_guard_rejects_root_manifest_dependency(tmp_path: Path) -> None:

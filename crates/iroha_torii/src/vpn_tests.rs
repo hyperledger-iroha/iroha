@@ -972,6 +972,16 @@ fn helper_ticket_uses_versioned_ticket_when_secret_is_present() {
     assert_eq!(record.relay_id, parsed.relay_id);
     assert_eq!(record.metering_public_key, parsed.metering_public_key);
     assert_eq!(record.tariff, parsed.tariff);
+    assert_eq!(
+        vpn_helper_network_policy_hash_v1(
+            &record.route_pushes,
+            &record.excluded_routes,
+            &record.dns_servers,
+            &record.tunnel_addresses,
+            record.mtu_bytes,
+        ),
+        parsed.network_policy_hash
+    );
     assert_eq!(expires_at_ms, parsed.expires_at_ms);
 }
 #[test]

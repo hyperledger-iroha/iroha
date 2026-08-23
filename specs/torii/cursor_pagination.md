@@ -110,6 +110,10 @@ continuation. Replaying that old position after the server advanced returns a
 cursor mismatch; continuation is not an idempotent operation. A failed attempt
 that did not advance state may be retried. The server removes the entry
 immediately after the terminal batch, and later reuse is reported as expired.
+If a response carrying a continuation cursor cannot be encoded within the
+negotiated representation and body limit, Torii deletes that stored query
+before returning the finite error. The client never received a usable next
+position and must restart the query.
 
 ## Errors and information disclosure
 

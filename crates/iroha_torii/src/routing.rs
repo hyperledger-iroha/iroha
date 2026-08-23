@@ -156,7 +156,7 @@ use iroha_sccp::{
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
+use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -257,6 +257,8 @@ pub(crate) fn conversion_error(message: String) -> Error {
 pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
+#[cfg(feature = "telemetry")]
+const SORANET_PRIVACY_LABEL_MAX_BYTES: usize = 128;
 pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
     Response::builder()
         .status(StatusCode::OK)
@@ -667,6 +669,35 @@ where
         }
     }
 }
+fn collect_ordered_page_bounded<K, T, I>(
+    mut iter: I,
+    offset: u64,
+    limit: u64,
+) -> (Vec<T>, usize, bool)
+where
+    I: Iterator<Item = (K, T)>,
+{
+    let mut observed = 0_usize;
+    for _ in 0..offset {
+        if iter.next().is_none() {
+            return (Vec::new(), observed, false);
+        }
+        observed = observed.saturating_add(1);
+    }
+    let mut items = Vec::new();
+    for _ in 0..limit {
+        let Some((_, item)) = iter.next() else {
+            return (items, observed, false);
+        };
+        observed = observed.saturating_add(1);
+        items.push(item);
+    }
+    let has_more = iter.next().is_some();
+    if has_more {
+        observed = observed.saturating_add(1);
+    }
+    (items, observed, has_more)
+}
 #[derive(Copy, Clone)]
 struct EffectivePagination {
     limit: Option<u64>,
@@ -837,6 +868,50 @@ fn enforce_app_pagination(
         cap: max_cap,
     })
 }
+/// Resolve the effective page requested by the space-directory manifest route.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_pagination(
+    limit: Option<u64>,
+    offset: u64,
+) -> Result<(u64, u64)> {
+    let pagination = enforce_app_pagination(
+        limit,
+        offset,
+        app_query_limits().max_page_limit,
+        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+    )?;
+    let limit = pagination
+        .limit
+        .expect("app pagination always resolves an effective page limit");
+    Ok((pagination.offset, limit))
+}
+/// Return the prefix each shard must expose before global manifest pagination.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_fanout_window(
+    offset: u64,
+    limit: u64,
+) -> Result<u64> {
+    let window = offset
+        .checked_add(limit)
+        .ok_or_else(|| Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "pagination window overflows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
+            ),
+        })?;
+    let max_page_limit = app_query_limits().max_page_limit;
+    if window > max_page_limit {
+        // TODO: fetch bounded multi-page prefixes from each shard before admitting wider fanout
+        // windows; a single shard page cannot currently prove the global prefix.
+        return Err(Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "fanout offset plus limit must not exceed {max_page_limit} rows for {ENDPOINT_SPACE_DIRECTORY_MANIFESTS}"
+            ),
+        });
+    }
+    Ok(window)
+}
 fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -> Error {
     match err {
         crate::filter::ValidateError::UnsupportedField(field) => Error::AppQueryValidation {
@@ -848,6 +923,20 @@ fn map_filter_error(err: crate::filter::ValidateError, endpoint: &'static str) -
             message: format!("type mismatch at field `{field}` for {endpoint}"),
         },
     }
+}
+fn parse_app_list_filter(
+    raw: Option<&str>,
+    endpoint: &'static str,
+) -> Result<Option<FilterExpr>> {
+    raw.map(|raw| {
+        norito::json::from_str::<FilterExpr>(raw).map_err(|error| Error::AppQueryValidation {
+            code: "invalid_filter",
+            message: format!(
+                "filter must be a valid JSON filter expression for {endpoint}: {error}"
+            ),
+        })
+    })
+    .transpose()
 }
 fn collect_page_linear<T, I>(
     iter: I,
@@ -991,7 +1080,8 @@ fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResul
 mod streaming_pager_tests {
     use super::{
         AppCountMode, MultiSortKey, SortKeyComponent, app_query_limits, app_transaction_count_mode,
-        collect_page_linear, collect_page_streaming, enforce_app_pagination,
+        collect_ordered_page_bounded, collect_page_linear, collect_page_streaming,
+        enforce_app_pagination,
     };
     use std::{cell::Cell, rc::Rc};
     routing_test! { sync omitted_count_mode_is_bounded
@@ -1037,6 +1127,27 @@ mod streaming_pager_tests {
         let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 1, None, None);
         assert_eq!(total, 3);
         assert_eq!(items, vec![1, 2]);
+    }
+    routing_test! { sync omitted_limit_respects_page_cap
+        let (items, total) = collect_page_streaming((0..10).map(|i| (i, i)), 2, None, Some(3));
+        assert_eq!(total, 10);
+        assert_eq!(items, vec![2, 3, 4]);
+    }
+    routing_test! { sync explicit_zero_limit_returns_empty_page
+        let (items, total) = collect_page_streaming((0..3).map(|i| (i, i)), 0, Some(0), Some(3));
+        assert_eq!(total, 3);
+        assert!(items.is_empty());
+    }
+    routing_test! { sync ordered_bounded_page_stops_after_one_probe
+        let visited = Cell::new(0_usize);
+        let iter = (0..100)
+            .inspect(|_| visited.set(visited.get() + 1))
+            .map(|item| (item, item));
+        let (items, total, has_more) = collect_ordered_page_bounded(iter, 2, 3);
+        assert_eq!(items, vec![2, 3, 4]);
+        assert_eq!(total, 6, "bounded total is the observed lower bound");
+        assert!(has_more);
+        assert_eq!(visited.get(), 6, "only offset + limit + one probe may be read");
     }
     routing_test! { sync orders_multi_key_with_mixed_directions
         let data = vec![
@@ -1153,13 +1264,17 @@ where
     }
     #[cfg(feature = "telemetry")]
     /// Forward a SoraNet privacy telemetry event to the underlying aggregator when metrics are enabled.
-    pub fn record_soranet_privacy_event(&self, event: &SoranetPrivacyEventV1) {
+    pub fn record_soranet_privacy_event(
+        &self,
+        event: &SoranetPrivacyEventV1,
+    ) -> Result<(), PrivacyEventError> {
         if !self.allows_metrics() {
-            return;
+            return Ok(());
         }
         if let Some(telemetry) = self.telemetry() {
-            telemetry.record_soranet_privacy_event(event);
+            telemetry.record_soranet_privacy_event(event)?;
         }
+        Ok(())
     }
     #[cfg(feature = "telemetry")]
     #[allow(clippy::future_not_send)]
@@ -1238,6 +1353,7 @@ where
 derived_items! {
 #[cfg(feature = "telemetry")]
 (Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
+#[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/event`.
 pub struct RecordSoranetPrivacyEventDto {
     /// Privacy telemetry event emitted by a relay component.
@@ -1248,6 +1364,7 @@ pub struct RecordSoranetPrivacyEventDto {
 }
 #[cfg(feature = "telemetry")]
 (Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)
+#[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/share`.
 pub struct RecordSoranetPrivacyShareDto {
     /// Secret-shared Prio contribution emitted by a collector.
@@ -3557,7 +3674,7 @@ pub struct ProofListQuery {
     pub bridge_start_from_height: Option<u64>,
     /// Maximum bridge range end height (inclusive).
     pub bridge_end_until_height: Option<u64>,
-    /// Require ZK1 TLV tag to be present (requires `zk-proof-tags` feature)
+    /// Require an exact four-character ASCII graphic ZK1 TLV tag.
     pub has_tag: Option<String>,
     /// Minimum verification height (inclusive).
     pub verified_from_height: Option<u64>,
@@ -3572,13 +3689,83 @@ pub struct ProofListQuery {
     /// If true, return only ids as objects { backend, hash }
     pub ids_only: Option<bool>,
 }
-fn parse_status_opt(s: Option<&str>) -> Option<iroha_data_model::proof::ProofStatus> {
+fn parse_status_opt(
+    s: Option<&str>,
+) -> core::result::Result<Option<iroha_data_model::proof::ProofStatus>, &'static str> {
     use iroha_data_model::proof::ProofStatus as PS;
     match s {
-        Some("Submitted") => Some(PS::Submitted),
-        Some("Verified") => Some(PS::Verified),
-        Some("Rejected") => Some(PS::Rejected),
-        _ => None,
+        None => Ok(None),
+        Some("Submitted") => Ok(Some(PS::Submitted)),
+        Some("Verified") => Ok(Some(PS::Verified)),
+        Some("Rejected") => Ok(Some(PS::Rejected)),
+        Some(_) => Err("status must be one of Submitted, Verified, or Rejected"),
+    }
+}
+fn parse_proof_tag_opt(s: Option<&str>) -> core::result::Result<Option<[u8; 4]>, &'static str> {
+    let Some(tag) = s else {
+        return Ok(None);
+    };
+    let bytes = tag.as_bytes();
+    if bytes.len() != 4 || !bytes.iter().all(u8::is_ascii_graphic) {
+        return Err("has_tag must be exactly 4 ASCII graphic characters");
+    }
+    let mut tag = [0_u8; 4];
+    tag.copy_from_slice(bytes);
+    Ok(Some(tag))
+}
+fn parse_list_order(order: Option<&str>) -> core::result::Result<bool, &'static str> {
+    match order {
+        None => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("asc") => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("desc") => Ok(true),
+        Some(_) => Err("order must be asc or desc"),
+    }
+}
+fn parse_vk_status_opt(
+    status: Option<&str>,
+) -> core::result::Result<
+    Option<iroha_data_model::confidential::ConfidentialStatus>,
+    &'static str,
+> {
+    use iroha_data_model::confidential::ConfidentialStatus;
+    match status {
+        None => Ok(None),
+        Some("Active") => Ok(Some(ConfidentialStatus::Active)),
+        Some("Proposed") => Ok(Some(ConfidentialStatus::Proposed)),
+        Some("Withdrawn") => Ok(Some(ConfidentialStatus::Withdrawn)),
+        Some(_) => Err("status must be one of Active, Proposed, or Withdrawn"),
+    }
+}
+#[cfg(test)]
+mod zk_list_query_validation_tests {
+    use super::{parse_list_order, parse_proof_tag_opt, parse_status_opt, parse_vk_status_opt};
+    use iroha_data_model::{confidential::ConfidentialStatus, proof::ProofStatus};
+
+    routing_test! { sync proof_status_filter_rejects_unknown_values
+        assert_eq!(parse_status_opt(None), Ok(None));
+        assert_eq!(parse_status_opt(Some("Verified")), Ok(Some(ProofStatus::Verified)));
+        assert!(parse_status_opt(Some("verified")).is_err());
+    }
+
+    routing_test! { sync proof_tag_filter_requires_four_ascii_graphic_bytes
+        assert_eq!(parse_proof_tag_opt(Some("PROF")), Ok(Some(*b"PROF")));
+        assert!(parse_proof_tag_opt(Some("éé")).is_err());
+        assert!(parse_proof_tag_opt(Some("AB C")).is_err());
+    }
+
+    routing_test! { sync list_order_rejects_unknown_values
+        assert_eq!(parse_list_order(None), Ok(false));
+        assert_eq!(parse_list_order(Some("ASC")), Ok(false));
+        assert_eq!(parse_list_order(Some("dEsC")), Ok(true));
+        assert!(parse_list_order(Some("sideways")).is_err());
+    }
+
+    routing_test! { sync vk_status_filter_rejects_unknown_values
+        assert_eq!(
+            parse_vk_status_opt(Some("Active")),
+            Ok(Some(ConfidentialStatus::Active))
+        );
+        assert!(parse_vk_status_opt(Some("active")).is_err());
     }
 }
 fn bridge_record_to_json(
@@ -3720,24 +3907,28 @@ pub async fn handle_list_proofs(
         )));
     }
     q.limit = Some(requested_limit);
-    let status_req = parse_status_opt(q.status.as_deref());
-    let has_tag = if let Some(tag) = &q.has_tag {
-        if tag.len() != 4 {
+    let status_req = parse_status_opt(q.status.as_deref()).map_err(|message| {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request("v1/zk/proofs", "bad_request", 0, start.elapsed())
+        });
+        conversion_error(message.to_owned())
+    })?;
+    let has_tag = parse_proof_tag_opt(q.has_tag.as_deref()).map_err(|message| {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request("v1/zk/proofs", "bad_request", 0, start.elapsed())
+        });
+        conversion_error(message.to_owned())
+    })?;
+    if let (Some(from), Some(until)) = (q.verified_from_height, q.verified_until_height) {
+        if from > until {
             telemetry.with_metrics(|tel| {
                 tel.observe_torii_proof_request("v1/zk/proofs", "bad_request", 0, start.elapsed())
             });
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "has_tag must be 4 ASCII chars".into(),
-                ),
-            )));
+            return Err(conversion_error(
+                "verified_from_height must be <= verified_until_height".to_owned(),
+            ));
         }
-        let mut bytes = [0u8; 4];
-        bytes.copy_from_slice(tag.as_bytes());
-        Some(bytes)
-    } else {
-        None
-    };
+    }
     if let (Some(from), Some(until)) = (q.bridge_start_from_height, q.bridge_end_until_height) {
         if from > until {
             telemetry.with_metrics(|tel| {
@@ -3750,6 +3941,12 @@ pub async fn handle_list_proofs(
             )));
         }
     }
+    let descending = parse_list_order(q.order.as_deref()).map_err(|message| {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request("v1/zk/proofs", "bad_request", 0, start.elapsed())
+        });
+        conversion_error(message.to_owned())
+    })?;
     let bridge_only = q.bridge_only.unwrap_or(false);
     let filters = CoreProofFilters {
         backend: q.backend.as_deref(),
@@ -3763,7 +3960,7 @@ pub async fn handle_list_proofs(
     };
     let params = CoreProofListParams {
         filters,
-        descending: matches!(q.order.as_deref(), Some("desc" | "DESC" | "Desc")),
+        descending,
         offset: q.offset,
         limit: q.limit,
     };
@@ -3862,11 +4059,10 @@ pub async fn handle_list_proofs(
         })?
     };
     let bytes = body.len() as u64;
-    let mut resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs", "ok", bytes, start.elapsed())
     });
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 /// GET /v1/zk/proofs/count — return count for filters
 pub async fn handle_count_proofs(
@@ -3876,29 +4072,41 @@ pub async fn handle_count_proofs(
     crate::NoritoQuery(q): crate::NoritoQuery<ProofListQuery>,
 ) -> Result<impl IntoResponse> {
     let start = std::time::Instant::now();
-    let status_req = parse_status_opt(q.status.as_deref());
-    let has_tag = if let Some(tag) = &q.has_tag {
-        if tag.len() != 4 {
-            telemetry.with_metrics(|tel| {
-                tel.observe_torii_proof_request(
-                    "v1/zk/proofs/count",
-                    "bad_request",
-                    0,
-                    start.elapsed(),
-                )
-            });
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "has_tag must be 4 ASCII chars".into(),
-                ),
-            )));
-        }
-        let mut bytes = [0u8; 4];
-        bytes.copy_from_slice(tag.as_bytes());
-        Some(bytes)
-    } else {
-        None
-    };
+    if q.limit.is_some() || q.offset.is_some() || q.order.is_some() || q.ids_only.is_some() {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request(
+                "v1/zk/proofs/count",
+                "bad_request",
+                0,
+                start.elapsed(),
+            )
+        });
+        return Err(conversion_error(
+            "proof count does not accept limit, offset, order, or ids_only".to_owned(),
+        ));
+    }
+    let status_req = parse_status_opt(q.status.as_deref()).map_err(|message| {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request(
+                "v1/zk/proofs/count",
+                "bad_request",
+                0,
+                start.elapsed(),
+            )
+        });
+        conversion_error(message.to_owned())
+    })?;
+    let has_tag = parse_proof_tag_opt(q.has_tag.as_deref()).map_err(|message| {
+        telemetry.with_metrics(|tel| {
+            tel.observe_torii_proof_request(
+                "v1/zk/proofs/count",
+                "bad_request",
+                0,
+                start.elapsed(),
+            )
+        });
+        conversion_error(message.to_owned())
+    })?;
     let min_height = q.verified_from_height;
     let max_height = q.verified_until_height;
     if let (Some(from), Some(until)) = (min_height, max_height) {
@@ -3966,11 +4174,10 @@ pub async fn handle_count_proofs(
         norito_internal_error(e)
     })?;
     let bytes = body.len() as u64;
-    let mut resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs/count", "ok", bytes, start.elapsed())
     });
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
@@ -3983,7 +4190,7 @@ pub struct VkListQuery {
     pub status: Option<String>,
     /// Optional name substring match
     pub name_contains: Option<String>,
-    /// Result limit (max 1000)
+    /// Result limit (bounded by the configured app-query page cap, at most 1000).
     pub limit: Option<u32>,
     /// Offset after sorting
     pub offset: Option<u32>,
@@ -3997,34 +4204,39 @@ pub async fn handle_list_vk(
     state: Arc<CoreState>,
     crate::NoritoQuery(q): crate::NoritoQuery<VkListQuery>,
 ) -> Result<impl IntoResponse> {
+    const ENDPOINT: &str = "/v1/zk/vk";
+    let pagination = enforce_app_pagination(
+        q.limit.map(u64::from),
+        q.offset.map(u64::from).unwrap_or(0),
+        1_000,
+        ENDPOINT,
+    )?;
+    let order_desc = parse_list_order(q.order.as_deref())
+        .map_err(|message| conversion_error(message.to_owned()))?;
+    let status_filter = parse_vk_status_opt(q.status.as_deref())
+        .map_err(|message| conversion_error(message.to_owned()))?;
     let world = state.world_view();
     use iroha_data_model::confidential::ConfidentialStatus;
-    let offset = q.offset.map(u64::from).unwrap_or(0);
-    let limit = q.limit.map(u64::from);
-    let order_desc = matches!(q.order.as_deref(), Some("desc" | "DESC" | "Desc"));
+    let offset = pagination.offset;
+    let limit = pagination.limit;
     let backend_filter = q.backend.clone();
-    let status_filter = q.status.clone();
     let name_contains = q.name_contains.clone();
     fn matches_vk_filters(
         id: &VerifyingKeyId,
         rec: &iroha_data_model::proof::VerifyingKeyRecord,
         backend_filter: Option<&String>,
-        status_filter: Option<&String>,
+        status_filter: Option<ConfidentialStatus>,
         name_contains: Option<&String>,
     ) -> bool {
-        use iroha_data_model::confidential::ConfidentialStatus;
         if let Some(b) = backend_filter {
             if &id.backend != b {
                 return false;
             }
         }
-        if let Some(s) = status_filter {
-            match s.as_str() {
-                "Active" if rec.status != ConfidentialStatus::Active => return false,
-                "Proposed" if rec.status != ConfidentialStatus::Proposed => return false,
-                "Withdrawn" if rec.status != ConfidentialStatus::Withdrawn => return false,
-                _ => {}
-            }
+        if let Some(status) = status_filter
+            && rec.status != status
+        {
+            return false;
         }
         if let Some(sub) = name_contains {
             if !id.name.contains(sub) {
@@ -4042,7 +4254,7 @@ pub async fn handle_list_vk(
                     id,
                     rec,
                     backend_filter.as_ref(),
-                    status_filter.as_ref(),
+                    status_filter,
                     name_contains.as_ref(),
                 )
             })
@@ -4052,7 +4264,7 @@ pub async fn handle_list_vk(
                     (id.clone(), rec.clone()),
                 )
             });
-        collect_page_streaming(iter, offset, limit, Some(1_000))
+        collect_page_streaming(iter, offset, limit, Some(pagination.cap))
     } else {
         let iter = world
             .verifying_keys()
@@ -4062,7 +4274,7 @@ pub async fn handle_list_vk(
                     id,
                     rec,
                     backend_filter.as_ref(),
-                    status_filter.as_ref(),
+                    status_filter,
                     name_contains.as_ref(),
                 )
             })
@@ -4072,7 +4284,7 @@ pub async fn handle_list_vk(
                     (id.clone(), rec.clone()),
                 )
             });
-        collect_page_streaming(iter, offset, limit, Some(1_000))
+        collect_page_streaming(iter, offset, limit, Some(pagination.cap))
     };
     // Build JSON
     let body = if q.ids_only.unwrap_or(false) {
@@ -4221,10 +4433,12 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let app_pk_b64 = B64.encode(app_pk);
     let nonce_b64 = B64.encode(nonce);
     let node = req.node.unwrap_or_default();
+    let network_id_literal =
+        norito::literal::format("hash", &hex::encode_upper(network_id.as_bytes()));
     let wallet_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id.to_string()),
+        urlencoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
         urlencoding::encode(&node),
@@ -4234,7 +4448,7 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let app_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=app&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id.to_string()),
+        urlencoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
         urlencoding::encode(&node),
@@ -4353,8 +4567,17 @@ mod connect_session_tests {
         assert!(resp.0.app_uri.contains(&sid_str));
         assert!(resp.0.wallet_uri.contains("&relay="));
         assert!(resp.0.app_uri.contains("&relay="));
-        assert!(resp.0.wallet_uri.contains("network_id="));
-        assert!(!resp.0.wallet_uri.contains("chain_id="));
+        const CANONICAL_NETWORK_ID: &str =
+            "hash:445E0F6E4B393BFB5FA7688DA17D509A9B4F8DFC9032DE25C65C83DD7C7FBF7D#6120";
+        for uri in [&resp.0.wallet_uri, &resp.0.app_uri] {
+            let parsed = url::Url::parse(uri).expect("valid Connect URI");
+            let network_ids = parsed
+                .query_pairs()
+                .filter_map(|(key, value)| (key == "network_id").then(|| value.into_owned()))
+                .collect::<Vec<_>>();
+            assert_eq!(network_ids, vec![CANONICAL_NETWORK_ID.to_owned()]);
+            assert!(!parsed.query_pairs().any(|(key, _)| key == "chain_id"));
+        }
     }
     routing_test! { async connect_session_rejects_hex_sid
         let network_id = network_id(b"connect-session-genesis");
@@ -4572,46 +4795,33 @@ pub async fn handle_get_proof(
     })?;
     let etag_value = format!("\"{}\"", hex::encode(rec.id.proof_hash));
     let cache_control_value = format!("public, max-age={}", limits.cache_max_age.as_secs().max(1));
-    if let Some(hdrs) = headers {
-        if let Some(if_none_match) = hdrs
-            .get(axum::http::header::IF_NONE_MATCH)
-            .and_then(|v| v.to_str().ok())
-        {
-            let token = if_none_match
-                .trim()
-                .trim_start_matches("W/")
-                .trim_matches('"');
-            if token.eq_ignore_ascii_case(etag_value.trim_matches('"')) {
-                let mut resp = axum::response::Response::builder()
-                    .status(axum::http::StatusCode::NOT_MODIFIED)
-                    .body(axum::body::Body::empty())
-                    .map_err(|err| {
-                        Error::Query(iroha_data_model::ValidationFail::InternalError(
-                            err.to_string(),
-                        ))
-                    })?;
-                let headers_mut = resp.headers_mut();
-                if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
-                    headers_mut.insert(axum::http::header::ETAG, etag);
-                }
-                if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
-                    headers_mut.insert(axum::http::header::CACHE_CONTROL, cache_header);
-                }
-                telemetry.with_metrics(|tel| {
-                    tel.inc_torii_proof_cache_hit("v1/zk/proof");
-                    tel.observe_torii_proof_request(
-                        "v1/zk/proof",
-                        "not_modified",
-                        0,
-                        start.elapsed(),
-                    );
-                });
-                return Ok(ProofHttpResponse {
-                    response: resp,
-                    bytes: 0,
-                });
-            }
+    if headers.is_some_and(|headers| crate::utils::if_none_match_matches(headers, &etag_value)) {
+        let mut resp = axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_MODIFIED)
+            .body(axum::body::Body::empty())
+            .map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(err.to_string()))
+            })?;
+        let headers_mut = resp.headers_mut();
+        if let Ok(etag) = axum::http::HeaderValue::from_str(&etag_value) {
+            headers_mut.insert(axum::http::header::ETAG, etag);
         }
+        if let Ok(cache_header) = axum::http::HeaderValue::from_str(&cache_control_value) {
+            headers_mut.insert(axum::http::header::CACHE_CONTROL, cache_header);
+        }
+        telemetry.with_metrics(|tel| {
+            tel.inc_torii_proof_cache_hit("v1/zk/proof");
+            tel.observe_torii_proof_request(
+                "v1/zk/proof",
+                "not_modified",
+                0,
+                start.elapsed(),
+            );
+        });
+        return Ok(ProofHttpResponse {
+            response: resp,
+            bytes: 0,
+        });
     }
     // Build JSON response
     let mut m = norito::json::Map::new();
@@ -11606,8 +11816,7 @@ pub async fn handle_get_contract_code(
             "failed to serialize the complete contract manifest: {error}"
         )))
     })?;
-    let mut resp = application_json_response(body);
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 #[cfg(test)]
 mod contract_manifest_response_tests {
@@ -14623,8 +14832,7 @@ pub async fn handle_get_contract_code_bytes(
     );
     let body = norito::json::to_vec(&obj)
         .map_err(|error| conversion_error(format!("failed to serialize code bytes: {error}")))?;
-    let mut resp = application_json_response(body);
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 fn explicit_contract_entrypoint(raw: &str) -> Result<&str> {
     let entrypoint = raw.trim();
@@ -15342,7 +15550,11 @@ mod asset_transfer_request_tests {
         network_id: NetworkId,
         creation_time_ms: u64,
         transaction_ttl_ms: u64,
-    ) -> (AssetTransferRequestDto, HashOf<SignedTransaction>) {
+    ) -> (
+        AssetTransferRequestDto,
+        HashOf<SignedTransaction>,
+        HashOf<TransactionEntrypoint>,
+    ) {
         use base64::Engine as _;
         let chain_id = ChainId::from("asset-transfer-test");
         let mut request = fixture_request(authority_keypair);
@@ -15365,11 +15577,15 @@ mod asset_transfer_request_tests {
         request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
         request.signature_base64 =
             Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
-        (request, transaction.hash())
+        (
+            request,
+            transaction.hash(),
+            transaction.hash_as_entrypoint(),
+        )
     }
     fn mark_asset_transfer_committed(
         state: &CoreState,
-        transaction_hash: HashOf<SignedTransaction>,
+        transaction_hash: HashOf<TransactionEntrypoint>,
         height: u64,
     ) {
         let height = height.max(1);
@@ -15820,7 +16036,7 @@ mod asset_transfer_request_tests {
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x43);
         let now_ms = current_time_millis();
-        let (request, transaction_hash) =
+        let (request, transaction_hash, _) =
             signed_fixture_request(&authority_keypair, *state.network_id_ref(), now_ms, 60_000);
         let first = submit_asset_transfer_request(
             Arc::clone(&chain_id),
@@ -15874,7 +16090,7 @@ mod asset_transfer_request_tests {
     routing_test! { async concurrent_exact_replays_converge_on_one_queue_entry
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x46);
-        let (request, transaction_hash) = signed_fixture_request(
+        let (request, transaction_hash, _) = signed_fixture_request(
             &authority_keypair,
             *state.network_id_ref(),
             current_time_millis(),
@@ -15920,13 +16136,13 @@ mod asset_transfer_request_tests {
         let (state, queue, chain_id, telemetry) = submission_components();
         let now_ms = current_time_millis();
         let creation_time_ms = now_ms.saturating_sub(ASSET_TRANSFER_MAX_TTL_MS + 1);
-        let (request, transaction_hash) = signed_fixture_request(
+        let (request, transaction_hash, transaction_entrypoint_hash) = signed_fixture_request(
             &fixture_keypair(0x44),
             *state.network_id_ref(),
             creation_time_ms,
             ASSET_TRANSFER_MAX_TTL_MS,
         );
-        mark_asset_transfer_committed(state.as_ref(), transaction_hash, 1);
+        mark_asset_transfer_committed(state.as_ref(), transaction_entrypoint_hash, 1);
         let replay = submit_asset_transfer_request(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -15945,7 +16161,7 @@ mod asset_transfer_request_tests {
         assert_eq!(replay_status.resolved_from, "state");
         assert_eq!(replay.receipt.status, "applied");
         assert_eq!(queue.active_len(), 0);
-        let (unknown_request, unknown_hash) = signed_fixture_request(
+        let (unknown_request, unknown_hash, _) = signed_fixture_request(
             &fixture_keypair(0x45),
             *state.network_id_ref(),
             creation_time_ms,
@@ -16955,8 +17171,7 @@ pub(crate) async fn handle_post_bridge_proof_submit(
                 true,
             ),
         };
-        let mut response = application_json_response(body);
-        Ok((response, charge_prepare_egress))
+        Ok((application_json_response(body), charge_prepare_egress))
     })
     .await
 }
@@ -17197,8 +17412,7 @@ pub(crate) async fn handle_post_bridge_message_submit(
                 true,
             ),
         };
-        let mut response = application_json_response(body);
-        Ok((response, charge_prepare_egress))
+        Ok((application_json_response(body), charge_prepare_egress))
     })
     .await
 }
@@ -40842,9 +41056,14 @@ fn explorer_stream(
             pending: None,
             kind,
             keepalive_interval,
+            last_block_height: None,
+            terminal: false,
         },
         |mut state| async move {
             use tokio::sync::broadcast::error::RecvError;
+            if state.terminal {
+                return None;
+            }
             loop {
                 if let Some(pending) = state.pending.as_mut() {
                     if let Some(payload) = pending.next_payload(state.kind) {
@@ -40858,11 +41077,23 @@ fn explorer_stream(
                         match recv {
                             Ok(event) => {
                                 if let Some(height) = committed_block_height(&event) {
-                                    state.pending = explorer_pending_block(&state.kura, height);
+                                    if !explorer_height_is_new(state.last_block_height, height) {
+                                        continue;
+                                    }
+                                    if let Some(pending) = explorer_pending_block(&state.kura, height) {
+                                        state.last_block_height = Some(height);
+                                        state.pending = Some(pending);
+                                    }
                                 }
                             }
-                            Err(RecvError::Lagged(_)) => {
-                                let ev = SseEvent::default().comment("lagged");
+                            Err(RecvError::Lagged(dropped_messages)) => {
+                                state.pending = None;
+                                state.terminal = true;
+                                let ev = stream_error_event(
+                                    "stream_lagged",
+                                    "The Explorer stream lost buffered blocks and cannot replay them.",
+                                    Some(dropped_messages),
+                                );
                                 return Some((Ok(ev), state));
                             }
                             Err(RecvError::Closed) => return None,
@@ -40884,6 +41115,11 @@ struct ExplorerStreamState {
     pending: Option<ExplorerPendingBlock>,
     kind: ExplorerStreamKind,
     keepalive_interval: tokio::time::Interval,
+    last_block_height: Option<u64>,
+    terminal: bool,
+}
+fn explorer_height_is_new(last_block_height: Option<u64>, height: u64) -> bool {
+    last_block_height.is_none_or(|last_height| height > last_height)
 }
 struct ExplorerPendingBlock {
     block: Arc<SignedBlock>,
@@ -42829,8 +43065,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = application_json_response(body);
-        Ok(resp)
+        Ok(application_json_response(body))
     } else {
         // 404-like empty JSON (stable shape)
         let payload = crate::json_object(vec![
@@ -42848,8 +43083,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = application_json_response(body);
-        Ok(resp)
+        Ok(application_json_response(body))
     }
 }
 /// GET /v1/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
@@ -43749,6 +43983,33 @@ mod sse_stream_tests {
             .await
             .expect("terminal stream should not hang");
         assert!(terminal.is_none());
+    }
+    routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_explorer_blocks_stream(Kura::blank_kura_for_testing(), events.clone());
+        let mut body = sse.into_response().into_body();
+        events
+            .send(queued_transaction_event(0x51))
+            .expect("send first");
+        events
+            .send(queued_transaction_event(0x52))
+            .expect("send second");
+        let mut error_frame = next_sse_chunk(&mut body).await;
+        if !error_frame.contains("event: stream_error") {
+            error_frame = next_sse_chunk(&mut body).await;
+        }
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_lagged\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal Explorer stream should not hang");
+        assert!(terminal.is_none());
+    }
+    routing_test! { sync explorer_stream_deduplicates_committed_and_applied_heights
+        assert!(explorer_height_is_new(None, 7));
+        assert!(!explorer_height_is_new(Some(7), 7));
+        assert!(!explorer_height_is_new(Some(8), 7));
+        assert!(explorer_height_is_new(Some(7), 8));
     }
     routing_test! { async resume_rejection_uses_native_sse_error_contract
         let response = stream_resume_unsupported_response();
@@ -50366,10 +50627,8 @@ pub async fn handle_v1_repo_agreements(
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let mut filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let mut filter_expr =
+        parse_app_list_filter(p.filter.as_deref(), ENDPOINT_REPO_AGREEMENTS_LIST)?;
     if let Some(expr) = filter_expr.as_mut() {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -51272,6 +51531,15 @@ mod pagination_enforcement_tests {
             count_mode: None,
         }
     }
+    fn malformed_list_filter_params() -> ListFilterParams {
+        ListFilterParams {
+            filter: Some("not-json".to_owned()),
+            limit: Some(1),
+            offset: 0,
+            sort: None,
+            count_mode: None,
+        }
+    }
     fn zero_query_envelope() -> crate::filter::QueryEnvelope {
         crate::filter::QueryEnvelope {
             query: None,
@@ -51293,6 +51561,26 @@ mod pagination_enforcement_tests {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected pagination error"),
         }
+    }
+    fn assert_invalid_filter<T>(result: Result<T>, endpoint: &'static str) {
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("malformed filter must not be treated as absent for {endpoint}"),
+        };
+        let Error::AppQueryValidation { code, message } = &error else {
+            panic!("unexpected malformed-filter error for {endpoint}: {error:?}");
+        };
+        assert_eq!(*code, "invalid_filter");
+        assert!(message.contains(endpoint));
+        let response = error.into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_filter")
+        );
     }
     routing_test! { async account_permissions_rejects_limit_zero
         assert_invalid_pagination(
@@ -51401,6 +51689,16 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
+    routing_test! { async assets_definitions_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_assets_definitions(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_ASSET_DEFINITIONS_LIST,
+        );
+    }
     routing_test! { async assets_definitions_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_assets_definitions_query(test_state(), NoritoJson(zero_query_envelope()))
@@ -51417,6 +51715,17 @@ mod pagination_enforcement_tests {
             .await,
         );
     }
+    routing_test! { async repo_agreements_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_repo_agreements(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+                MaybeTelemetry::disabled(),
+            )
+            .await,
+            ENDPOINT_REPO_AGREEMENTS_LIST,
+        );
+    }
     routing_test! { async repo_agreements_query_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_repo_agreements_query(
@@ -51430,6 +51739,26 @@ mod pagination_enforcement_tests {
     routing_test! { async nfts_list_rejects_limit_zero
         assert_invalid_pagination(
             handle_v1_nfts(test_state(), crate::NoritoQuery(zero_list_filter_params())).await,
+        );
+    }
+    routing_test! { async nfts_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_nfts(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_NFTS_LIST,
+        );
+    }
+    routing_test! { async rwas_list_rejects_malformed_filter
+        assert_invalid_filter(
+            handle_v1_rwas(
+                test_state(),
+                crate::NoritoQuery(malformed_list_filter_params()),
+            )
+            .await,
+            ENDPOINT_RWAS_LIST,
         );
     }
     routing_test! { async nfts_query_rejects_limit_zero
@@ -51967,6 +52296,11 @@ fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
     let canonical_hex = canonicalize_uaid_literal(raw)?;
     let hash = Hash::from_str(&canonical_hex).map_err(|_| uaid_parse_error("hash_decode"))?;
     Ok(UniversalAccountId::from_hash(hash))
+}
+/// Normalize a UAID before routing an account or space-directory read to another Torii peer.
+#[cfg(feature = "app_api")]
+pub(crate) fn canonical_routed_uaid_literal(raw: &str) -> Result<String> {
+    parse_uaid_literal(raw).map(|uaid| uaid.to_string())
 }
 #[cfg(all(test, feature = "app_api"))]
 mod uaid_parsing_tests {
@@ -53269,8 +53603,7 @@ pub async fn handle_v1_accounts_onboard_plan(
             context: "account onboarding plan receipt",
             source: Box::new(error),
         })?;
-    let mut response = application_json_response(body);
-    Ok(response)
+    Ok(application_json_response(body))
 }
 /// Revalidate and atomically submit a stateless sponsored onboarding receipt.
 #[iroha_futures::telemetry_future]
@@ -53750,10 +54083,7 @@ pub async fn handle_v1_accounts(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ACCOUNTS_LIST);
-    let mut filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let mut filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_ACCOUNTS_LIST)?;
     if let Some(expr) = filter_expr.as_mut() {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -54545,6 +54875,19 @@ impl core::str::FromStr for SpaceDirectoryManifestStatus {
         }
     }
 }
+/// Parse and validate the optional manifest lifecycle filter before fanout.
+#[cfg(feature = "app_api")]
+pub(crate) fn space_directory_manifest_status_filter(
+    raw: Option<&str>,
+) -> Result<SpaceDirectoryManifestStatus> {
+    raw.map_or(Ok(SpaceDirectoryManifestStatus::default()), |raw| {
+        raw.parse().map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
+            ))
+        })
+    })
+}
 struct DataspaceAliasLookup {
     aliases: BTreeMap<DataSpaceId, String>,
 }
@@ -54619,37 +54962,17 @@ pub async fn handle_v1_space_directory_manifests(
     let bindings = world.uaid_dataspaces().get(&uaid);
     record_account_literal_selection(&telemetry, ENDPOINT_SPACE_DIRECTORY_MANIFESTS);
     let mut manifests = Vec::new();
-    let status_filter = match query.status.as_deref() {
-        Some(raw) => raw.parse().map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
-            ))
-        })?,
-        None => SpaceDirectoryManifestStatus::default(),
-    };
-    let pagination = enforce_app_pagination(
-        query.limit,
-        query.offset.unwrap_or(0),
-        app_query_limits().max_page_limit,
-        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
-    )?;
-    let offset = pagination.offset;
-    let limit = pagination.limit;
+    let status_filter = space_directory_manifest_status_filter(query.status.as_deref())?;
+    let (offset, limit) =
+        space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
     let count_mode = app_count_mode(
         query.count_mode.as_deref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
     );
-    let (projections, total, filtered_total) = if let Some(set) =
+    let (projections, total, has_more) = if let Some(set) =
         world.space_directory_manifests().get(&uaid)
     {
         let dataspace_filter = filter;
-        let total = set
-            .iter()
-            .filter(|&(dataspace_id, _)| match dataspace_filter {
-                Some(target) => *dataspace_id == target,
-                None => true,
-            })
-            .count();
         let status_filter = status_filter;
         let iter_filter = dataspace_filter;
         let iter = set.iter().filter_map(move |(dataspace_id, record)| {
@@ -54669,11 +54992,26 @@ pub async fn handle_v1_space_directory_manifests(
                 },
             ))
         });
-        let (items, filtered_total) =
-            collect_page_streaming(iter, offset, limit, Some(app_query_limits().max_fetch_size));
-        (items, total, filtered_total)
+        match count_mode {
+            AppCountMode::Exact => {
+                let (items, total) = collect_page_streaming(
+                    iter,
+                    offset,
+                    Some(limit),
+                    Some(app_query_limits().max_fetch_size),
+                );
+                let has_more = u64::try_from(total).unwrap_or(u64::MAX)
+                    > offset.saturating_add(u64::try_from(items.len()).unwrap_or(u64::MAX));
+                (items, total, has_more)
+            }
+            AppCountMode::Bounded => {
+                // `SpaceDirectoryManifestSet` is keyed by dataspace, so filtering preserves the
+                // canonical order and a prefix plus one probe is sufficient.
+                collect_ordered_page_bounded(iter, offset, limit)
+            }
+        }
     } else {
-        (Vec::new(), 0, 0)
+        (Vec::new(), 0, false)
     };
     for projection in projections {
         let entry = manifest_entry_to_json(
@@ -54687,13 +55025,7 @@ pub async fn handle_v1_space_directory_manifests(
     let mut root = Map::new();
     root.insert("uaid".into(), Value::from(uaid.to_string()));
     root.insert("total".into(), Value::from(total as u64));
-    root.insert(
-        "has_more".into(),
-        Value::from(
-            u64::try_from(filtered_total).unwrap_or(u64::MAX)
-                > offset.saturating_add(u64::try_from(manifests.len()).unwrap_or(u64::MAX)),
-        ),
-    );
+    root.insert("has_more".into(), Value::from(has_more));
     root.insert("count_mode".into(), Value::from(count_mode.label()));
     root.insert("manifests".into(), Value::Array(manifests));
     pretty_json_response(&Value::Object(root))
@@ -55454,7 +55786,7 @@ mod space_directory_manifest_helper_tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["total"].as_u64(), Some(2));
         let manifests = json["manifests"].as_array().expect("manifests array");
         assert_eq!(manifests.len(), 2);
         assert_eq!(
@@ -55482,8 +55814,7 @@ mod space_directory_manifest_helper_tests {
         );
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_applies_dataspace_filter_and_treats_zero_limit_as_unbounded()
-     {
+    async fn handle_v1_space_directory_manifests_rejects_zero_limit() {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x58; Hash::LENGTH]));
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -55516,7 +55847,7 @@ mod space_directory_manifest_helper_tests {
             .space_directory_manifests_mut_for_testing()
             .insert(uaid, set);
         let state = manifest_state(world, None);
-        let response = handle_v1_space_directory_manifests(
+        let error = handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(uaid.to_string()),
             crate::NoritoQuery(SpaceDirectoryManifestQuery {
@@ -55527,29 +55858,18 @@ mod space_directory_manifest_helper_tests {
             MaybeTelemetry::disabled(),
         )
         .await
-        .expect("dataspace-filtered manifest query should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(1));
-        let manifests = json["manifests"].as_array().expect("manifests array");
-        assert_eq!(
-            manifests.len(),
-            1,
-            "limit=0 should be treated as an unbounded page for the filtered result",
-        );
-        assert_eq!(
-            manifests[0]["dataspace_id"].as_u64(),
-            Some(second_dataspace.as_u64())
-        );
-        assert_eq!(manifests[0]["status"].as_str(), Some("Active"));
-        assert_eq!(
-            manifests[0]["accounts"][0].as_str(),
-            Some(crate::account_literal::display_literal(&account).as_str())
-        );
+        .err()
+        .expect("limit=0 must not bypass the app pagination cap");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "invalid_pagination",
+                ..
+            }
+        ));
     }
     #[tokio::test]
-    async fn handle_v1_space_directory_manifests_keeps_prefilter_total_when_status_and_offset_clear_page()
+    async fn handle_v1_space_directory_manifests_reports_filtered_total_when_offset_clears_page()
      {
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x57; Hash::LENGTH]));
         let active_dataspace = DataSpaceId::new(7);
@@ -55616,12 +55936,53 @@ mod space_directory_manifest_helper_tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let json = response_json(response).await;
-        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(json["total"].as_u64(), Some(1));
         assert_eq!(
             json["manifests"].as_array().expect("manifests array").len(),
             0,
-            "offset is applied after status filtering, but total stays pre-filter",
+            "offset is applied after status filtering and total counts matching rows",
         );
+    }
+    #[tokio::test]
+    async fn handle_v1_space_directory_manifests_bounded_mode_stops_after_one_probe() {
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5E; Hash::LENGTH]));
+        let mut set = SpaceDirectoryManifestSet::default();
+        for dataspace_id in 7_u64..=10 {
+            let mut manifest = AssetPermissionManifest {
+                dataspace: DataSpaceId::new(dataspace_id),
+                ..sample_manifest_record().manifest
+            };
+            manifest.uaid = uaid;
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(13);
+            set.upsert(record);
+        }
+        let mut world = World::default();
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+        let response = handle_v1_space_directory_manifests(
+            manifest_state(world, None),
+            axum::extract::Path(uaid.to_string()),
+            crate::NoritoQuery(SpaceDirectoryManifestQuery {
+                limit: Some(1),
+                offset: Some(1),
+                count_mode: Some("bounded".to_owned()),
+                ..SpaceDirectoryManifestQuery::default()
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("bounded manifest query should succeed")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
+        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["has_more"].as_bool(), Some(true));
+        let manifests = json["manifests"].as_array().expect("manifests array");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0]["dataspace_id"].as_u64(), Some(8));
     }
 }
 }
@@ -59347,10 +59708,8 @@ pub async fn handle_v1_assets_definitions(
     let pagination =
         enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_DEFINITIONS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ASSET_DEFINITIONS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr =
+        parse_app_list_filter(p.filter.as_deref(), ENDPOINT_ASSET_DEFINITIONS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -60630,10 +60989,7 @@ pub async fn handle_v1_nfts(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_NFTS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_NFTS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_NFTS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -60868,10 +61224,7 @@ pub async fn handle_v1_rwas(
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_RWAS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_RWAS_LIST);
-    let filter_expr = p
-        .filter
-        .as_ref()
-        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    let filter_expr = parse_app_list_filter(p.filter.as_deref(), ENDPOINT_RWAS_LIST)?;
     if let Some(ref expr) = filter_expr {
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
@@ -64587,6 +64940,21 @@ pub mod event {
 }
 include!("routing/version_and_status_visibility.rs");
 #[cfg(feature = "telemetry")]
+fn validate_soranet_privacy_label(label: Option<&str>, field: &'static str) -> Result<()> {
+    let Some(label) = label else {
+        return Ok(());
+    };
+    if label.is_empty()
+        || label.len() > SORANET_PRIVACY_LABEL_MAX_BYTES
+        || label.chars().any(char::is_control)
+    {
+        return Err(conversion_error(format!(
+            "{field} must contain 1..={SORANET_PRIVACY_LABEL_MAX_BYTES} bytes without control characters"
+        )));
+    }
+    Ok(())
+}
+#[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 /// Handle POST `/v1/soranet/privacy/event`, forwarding relay observations into the secure aggregator.
 pub async fn handle_post_soranet_privacy_event(
@@ -64600,6 +64968,7 @@ pub async fn handle_post_soranet_privacy_event(
         ));
     }
     let RecordSoranetPrivacyEventDto { event, source } = req;
+    validate_soranet_privacy_label(source.as_deref(), "source")?;
     let bucket_secs = telemetry
         .telemetry()
         .map(|handle| handle.soranet_privacy().config().bucket_secs)
@@ -64609,7 +64978,17 @@ pub async fn handle_post_soranet_privacy_event(
     } else {
         None
     };
-    telemetry.record_soranet_privacy_event(&event);
+    if let Err(err) = telemetry.record_soranet_privacy_event(&event) {
+        iroha_logger::warn!(
+            ?err,
+            mode = %event.mode,
+            timestamp = event.timestamp_unix,
+            "rejected SoraNet privacy event"
+        );
+        return Err(conversion_error(format!(
+            "invalid SoraNet privacy event: {err}"
+        )));
+    }
     iroha_logger::trace!(
         mode = %event.mode,
         timestamp = event.timestamp_unix,
@@ -64650,6 +65029,7 @@ pub async fn handle_post_soranet_privacy_share(
         share,
         forwarded_by,
     } = req;
+    validate_soranet_privacy_label(forwarded_by.as_deref(), "forwarded_by")?;
     let collector_id = share.collector_id;
     let bucket_start_unix = share.bucket_start_unix;
     let bucket_duration_secs = share.bucket_duration_secs;
@@ -64658,7 +65038,7 @@ pub async fn handle_post_soranet_privacy_share(
     if let Err(err) = telemetry.ingest_soranet_privacy_share(share) {
         iroha_logger::warn!(
             ?err,
-            collector_id,
+            collector_id = %hex::encode(collector_id),
             bucket_start_unix,
             bucket_duration_secs,
             mode = %mode,
@@ -64669,7 +65049,7 @@ pub async fn handle_post_soranet_privacy_share(
         )));
     }
     iroha_logger::trace!(
-        collector_id,
+        collector_id = %hex::encode(collector_id),
         bucket_start_unix,
         bucket_duration_secs,
         mode = %mode,
@@ -64679,7 +65059,7 @@ pub async fn handle_post_soranet_privacy_share(
     );
     let mut entries = vec![
         json_entry("status", "accepted"),
-        json_entry("collector_id", collector_id),
+        json_entry("collector_id", hex::encode(collector_id)),
         json_entry("bucket_start_unix", bucket_start_unix),
         json_entry("bucket_duration_secs", bucket_duration_secs),
         json_entry("mode", mode),

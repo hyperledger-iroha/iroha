@@ -83,13 +83,25 @@ the exact 9+3 invocation inventory without treating the fake tools as execution 
 
 ## Blocked Top-Level Fuzz Targets
 
-`fuzz/Cargo.toml` declares five additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
-`da_ingest_schema`, `soranet_handshake`, and `lane_relay_envelope`. They are not release-wired and must not be
-reported as executed. The manifest is outside the root workspace member list while inheriting root workspace
-dependencies, is not configured as a standalone cargo-fuzz workspace, and has no settled lockfile policy that can
-preserve the repository's root `Cargo.lock` exactly. A direct manifest invocation currently fails before compiling.
+`fuzz/Cargo.toml` declares seven additional libFuzzer binaries: `da_replay_cache`, `proof_stream_transport`,
+`da_ingest_schema`, `soranet_handshake`, `lane_relay_envelope`, `kagemusha_v4_release_bundle_parser`, and
+`kagemusha_v4_recursive_topology`. The manifest is an explicit standalone cargo-fuzz workspace, but these targets are
+not release-wired and must not be reported as executed. There is no tracked `fuzz/Cargo.lock`: the repository ignores
+nested lockfiles, and the root lock does not contain the standalone fuzz package, `libfuzzer-sys`, or `arbitrary`.
+Moving the package into the root workspace would therefore require changing the signed root `Cargo.lock`.
 
-This is a source/gate blocker, not an execution-only gap. Before these five targets can enter the release gate, the
-repository must define a supported workspace boundary, cargo-fuzz metadata, dependency inheritance, and an explicit
-lockfile strategy; then add pinned strict execution, resource bounds, crash artifact collection, and static target
-inventory tests. Until that work lands, no workflow should simulate or claim these targets.
+The pinned `cargo-fuzz 0.13.2` implementation invokes Cargo internally against `fuzz/Cargo.toml` and exposes no
+`--locked`, `--frozen`, or generic Cargo-argument pass-through. The two exact internal-validation receipt commands
+also invoke `cargo fuzz run` from the source root. Without a separately reviewed lock contract, either invocation may
+create or resolve `fuzz/Cargo.lock`; it cannot be evidence for an immutable source snapshot.
+
+This is a source/gate blocker, not an execution-only gap. Before these seven targets can enter the release gate, the
+release owner must explicitly authorize a tracked standalone fuzz lock (including the required `.gitignore`
+exception), generate and review it with the pinned toolchain from the exact clean source, and commit it in a newly
+signed source tree. The runner must bind that exact lock, force offline/no-update use, prove it unchanged before and
+after both campaigns, and only then add pinned strict execution, resource bounds, crash artifact collection, and
+static target-inventory tests. Until that work lands, no workflow should simulate or claim these targets.
+
+TODO: obtain explicit authorization for the standalone fuzz-lock exception without modifying the repository's root
+`Cargo.lock`, then wire the two Kagemusha targets into the candidate-bound validation receipt with at least
+10,000,000 executions each and zero crashes, timeouts, or out-of-memory exits.

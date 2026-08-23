@@ -79,8 +79,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
         const val MAX_PROMOTION_RECORD_BYTES: Int = 1024 * 1024
-        const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 32_774
-        const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 24_576
+        const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
+        const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int =
+            (MAX_PEER_TEXT_ENVELOPE_BYTES - 6) * 3 / 4
         const val MAX_PEER_ARCHIVE_BYTES_V2: Int = 32 * 1024
         const val MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2: Int = 24_576
         const val MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1: Int = 2 * 1024

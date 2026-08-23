@@ -32,7 +32,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     block::BlockHeader,
     confidential::ConfidentialStatus,
-    isi::{CreateKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage},
+    isi::{CreateKaigi, JoinKaigi, RecordKaigiUsage},
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
         KaigiRecord, NewKaigi, kaigi_metadata_key,
@@ -46,11 +46,12 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K,
-    KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit, compute_commitment,
-    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, compute_roster_root_hash,
-    compute_usage_commitment, compute_usage_commitment_bytes, empty_roster_root_hash,
-    roster_root_limbs,
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID, KAIGI_ROSTER_CIRCUIT_K,
+    KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1, KAIGI_USAGE_BACKEND, KAIGI_USAGE_CANONICAL_CIRCUIT_ID,
+    KAIGI_USAGE_CIRCUIT_K, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1, KaigiRosterJoinCircuit,
+    KaigiUsageCommitmentCircuit, compute_commitment, compute_commitment_bytes, compute_nullifier,
+    compute_nullifier_bytes, compute_usage_commitment, compute_usage_commitment_bytes,
+    empty_roster_root_hash, roster_root_limbs,
 };
 use rand_core_06::OsRng;
 use std::{str::FromStr, time::Duration};
@@ -58,9 +59,6 @@ use std::{str::FromStr, time::Duration};
 mod test_world;
 const ROSTER_VK_NAME: &str = "kaigi_roster_current";
 const USAGE_VK_NAME: &str = "kaigi_usage_current";
-const ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
-const USAGE_PUBLIC_INPUTS_DESC: &[u8] =
-    br#"{"schema":"kaigi_usage_current","inputs":["usage_commitment"]}"#;
 struct RosterArtifacts {
     vk_id: VerifyingKeyId,
     vk_record: VerifyingKeyRecord,
@@ -69,9 +67,6 @@ struct RosterArtifacts {
     join_nullifier: KaigiParticipantNullifier,
     join_proof: Vec<u8>,
     join_roster_root: Hash,
-    leave_nullifier: KaigiParticipantNullifier,
-    leave_proof: Vec<u8>,
-    leave_roster_root: Hash,
 }
 struct UsageArtifacts {
     vk_id: VerifyingKeyId,
@@ -87,10 +82,11 @@ fn build_roster_artifacts() -> RosterArtifacts {
     let vk_base = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).expect("vk");
     let mut vk_env = zk1_envelope_start();
     zk1_append_ipa_k(&mut vk_env, KAIGI_ROSTER_CIRCUIT_K);
+    zk1_append_circuit_id(&mut vk_env, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID);
     zk1_append_vk_pasta(&mut vk_env, &vk_base);
     let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vk_env.clone());
     let vk_commitment = hash_vk(&vk_box);
-    let schema_hash: [u8; 32] = Hash::new(ROSTER_PUBLIC_INPUTS_DESC).into();
+    let schema_hash: [u8; 32] = Hash::new(KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1).into();
     let mut vk_record = VerifyingKeyRecord::new(
         1,
         KAIGI_ROSTER_BACKEND,
@@ -111,12 +107,9 @@ fn build_roster_artifacts() -> RosterArtifacts {
     let account_idx = 11u64;
     let domain_salt = 31u64;
     let join_nullifier_seed = 57u64;
-    let leave_nullifier_seed = 99u64;
     let commitment_hash = Hash::prehashed(compute_commitment_bytes(account_idx, domain_salt));
     let join_nullifier_hash =
         Hash::prehashed(compute_nullifier_bytes(account_idx, join_nullifier_seed));
-    let leave_nullifier_hash =
-        Hash::prehashed(compute_nullifier_bytes(account_idx, leave_nullifier_seed));
     let join_commitment = KaigiParticipantCommitment {
         commitment: commitment_hash,
         alias_tag: Some("participant".to_string()),
@@ -125,12 +118,7 @@ fn build_roster_artifacts() -> RosterArtifacts {
         digest: join_nullifier_hash,
         issued_at_ms: 1,
     };
-    let leave_nullifier = KaigiParticipantNullifier {
-        digest: leave_nullifier_hash,
-        issued_at_ms: 2,
-    };
     let initial_root = empty_roster_root_hash();
-    let post_join_root = compute_roster_root_hash(&[commitment_hash]);
     let join_proof = build_roster_envelope(
         &params,
         &vk_base,
@@ -140,18 +128,8 @@ fn build_roster_artifacts() -> RosterArtifacts {
         &initial_root,
         vk_commitment,
     );
-    let leave_proof = build_roster_envelope(
-        &params,
-        &vk_base,
-        account_idx,
-        domain_salt,
-        leave_nullifier_seed,
-        &post_join_root,
-        vk_commitment,
-    );
     vk_record.max_proof_bytes = join_proof
         .len()
-        .max(leave_proof.len())
         .try_into()
         .expect("proof size fits into u32");
     RosterArtifacts {
@@ -162,9 +140,6 @@ fn build_roster_artifacts() -> RosterArtifacts {
         join_nullifier,
         join_proof,
         join_roster_root: initial_root,
-        leave_nullifier,
-        leave_proof,
-        leave_roster_root: post_join_root,
     }
 }
 fn build_usage_artifacts() -> UsageArtifacts {
@@ -172,10 +147,11 @@ fn build_usage_artifacts() -> UsageArtifacts {
     let vk_base = keygen_vk(&params, &KaigiUsageCommitmentCircuit::default()).expect("vk");
     let mut vk_env = zk1_envelope_start();
     zk1_append_ipa_k(&mut vk_env, KAIGI_USAGE_CIRCUIT_K);
+    zk1_append_circuit_id(&mut vk_env, KAIGI_USAGE_CANONICAL_CIRCUIT_ID);
     zk1_append_vk_pasta(&mut vk_env, &vk_base);
     let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vk_env.clone());
     let vk_commitment = hash_vk(&vk_box);
-    let schema_hash: [u8; 32] = Hash::new(USAGE_PUBLIC_INPUTS_DESC).into();
+    let schema_hash: [u8; 32] = Hash::new(KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1).into();
     let mut vk_record = VerifyingKeyRecord::new(
         1,
         KAIGI_USAGE_BACKEND,
@@ -267,11 +243,11 @@ fn build_roster_envelope(
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
         vk_hash: vk_commitment,
-        public_inputs: ROSTER_PUBLIC_INPUTS_DESC.to_vec(),
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: zk1,
         aux: Vec::new(),
     };
-    norito::to_bytes(&envelope).expect("serialize roster envelope")
+    norito::encode_canonical(&envelope).expect("serialize canonical roster envelope")
 }
 fn build_usage_envelope(
     params: &ParamsIPA<Curve>,
@@ -309,20 +285,20 @@ fn build_usage_envelope(
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: KAIGI_USAGE_BACKEND.to_string(),
         vk_hash: vk_commitment,
-        public_inputs: USAGE_PUBLIC_INPUTS_DESC.to_vec(),
+        public_inputs: KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: zk1,
         aux: Vec::new(),
     };
-    norito::to_bytes(&envelope).expect("serialize usage envelope")
+    norito::encode_canonical(&envelope).expect("serialize canonical usage envelope")
 }
 fn mutate_open_verify_envelope(
     proof: &[u8],
     mutate: impl FnOnce(&mut OpenVerifyEnvelope),
 ) -> Vec<u8> {
     let mut envelope: OpenVerifyEnvelope =
-        norito::decode_from_bytes(proof).expect("decode OpenVerifyEnvelope fixture");
+        norito::decode_canonical(proof).expect("decode canonical OpenVerifyEnvelope fixture");
     mutate(&mut envelope);
-    norito::to_bytes(&envelope).expect("serialize mutated OpenVerifyEnvelope")
+    norito::encode_canonical(&envelope).expect("serialize mutated OpenVerifyEnvelope")
 }
 fn zk1_envelope_start() -> Vec<u8> {
     b"ZK1\0".to_vec()
@@ -334,6 +310,9 @@ fn zk1_append_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
 }
 fn zk1_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
     zk1_append_tlv(buf, b"IPAK", &k.to_le_bytes());
+}
+fn zk1_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
+    zk1_append_tlv(buf, b"CID1", circuit_id.as_bytes());
 }
 fn zk1_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Curve>) {
     let bytes = vk.to_bytes(SerdeFormat::Processed);
@@ -361,7 +340,7 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Scalar]]) {
     zk1_append_tlv(buf, b"I10P", &payload);
 }
 #[test]
-fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
+fn kaigi_privacy_join_fails_closed_until_authority_is_bound() {
     let roster = build_roster_artifacts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -410,7 +389,7 @@ fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
     }
     .execute(&host, &mut tx1)
     .expect("create kaigi");
-    JoinKaigi {
+    let err = JoinKaigi {
         call_id: call_id.clone(),
         participant: participant.clone(),
         commitment: Some(roster.join_commitment.clone()),
@@ -419,57 +398,15 @@ fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
         proof: Some(roster.join_proof.clone()),
     }
     .execute(&participant, &mut tx1)
-    .expect("privacy join succeeds");
+    .expect_err("unbound private-roster statement must fail closed");
+    assert!(
+        format!("{err:?}").contains("binds the signed participant authority"),
+        "unexpected rejection: {err:?}"
+    );
     tx1.apply();
     block1.commit().expect("commit block1");
-    let leave_root = {
-        let view_after_join = state.view();
-        let domain = view_after_join
-            .world
-            .domain(&domain_id)
-            .expect("domain exists");
-        let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");
-        let stored = domain
-            .metadata()
-            .get(&key)
-            .cloned()
-            .expect("kaigi record stored");
-        let record: KaigiRecord = stored.try_into_any_norito().expect("decode record");
-        assert_eq!(record.roster_commitments.len(), 1);
-        assert_eq!(record.nullifier_log.len(), 1);
-        assert!(record.participants.is_empty());
-        assert_eq!(
-            record.roster_commitments[0].commitment,
-            roster.join_commitment.commitment
-        );
-        assert!(
-            record
-                .nullifier_log
-                .iter()
-                .any(|entry| entry.digest == roster.join_nullifier.digest)
-        );
-        let root = record.roster_root();
-        assert_eq!(root, roster.leave_roster_root);
-        root
-    };
-    let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut tx2 = block2.transaction();
-    LeaveKaigi {
-        call_id: call_id.clone(),
-        participant: participant.clone(),
-        commitment: Some(roster.join_commitment.clone()),
-        nullifier: Some(roster.leave_nullifier.clone()),
-        roster_root: Some(leave_root),
-        proof: Some(roster.leave_proof.clone()),
-    }
-    .execute(&participant, &mut tx2)
-    .expect_err("privacy-mode Kaigi leave is intentionally off-chain only");
-    let view_after_rejected_leave = state.view();
-    let domain = view_after_rejected_leave
-        .world
-        .domain(&domain_id)
-        .expect("domain exists");
+    let view = state.view();
+    let domain = view.world.domain(&domain_id).expect("domain exists");
     let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");
     let stored = domain
         .metadata()
@@ -477,36 +414,17 @@ fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
         .cloned()
         .expect("kaigi record stored");
     let record: KaigiRecord = stored.try_into_any_norito().expect("decode record");
-    assert_eq!(record.roster_commitments.len(), 1);
-    assert_eq!(record.nullifier_log.len(), 1);
+    assert!(record.roster_commitments.is_empty());
+    assert!(record.nullifier_log.is_empty());
     assert!(record.participants.is_empty());
-    assert_eq!(
-        record.roster_commitments[0].commitment,
-        roster.join_commitment.commitment
-    );
-    assert!(
-        record
-            .nullifier_log
-            .iter()
-            .any(|entry| entry.digest == roster.join_nullifier.digest)
-    );
 }
 #[test]
-fn kaigi_privacy_join_rejects_noncanonical_proof_envelope_metadata() {
+fn kaigi_privacy_join_fail_closed_precedes_proof_metadata_dispatch() {
     enum Tamper {
         AuxiliaryBytes,
         ZeroVerifierKeyHash,
     }
-    for (tamper, expected_msg) in [
-        (
-            Tamper::AuxiliaryBytes,
-            "privacy proof envelope auxiliary bytes must be empty",
-        ),
-        (
-            Tamper::ZeroVerifierKeyHash,
-            "privacy proof verifier commitment mismatch",
-        ),
-    ] {
+    for tamper in [Tamper::AuxiliaryBytes, Tamper::ZeroVerifierKeyHash] {
         let roster = build_roster_artifacts();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -576,8 +494,8 @@ fn kaigi_privacy_join_rejects_noncanonical_proof_envelope_metadata() {
         .expect_err("noncanonical privacy proof envelope must be rejected");
         let msg = format!("{err:?}");
         assert!(
-            msg.contains(expected_msg),
-            "expected {expected_msg:?}, got {msg:?}"
+            msg.contains("binds the signed participant authority"),
+            "unexpected fail-closed rejection: {msg:?}"
         );
     }
 }

@@ -1377,6 +1377,70 @@ impl LeaderWireLifecycleStoreGate {
             })
         }))
     }
+    /// Test-only closed projection of an exact durable Ingress owner.
+    #[cfg(test)]
+    pub(crate) fn exact_record_is_ingress_for_test(
+        &self,
+        token: &FairV2IngressLeaderWireToken,
+    ) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        state.records.get(&token.slot).is_some_and(|record| {
+            record.token == *token
+                && record.status == LeaderWireLifecycleStatus::Ingress
+                && record.runtime_owner.is_none()
+                && record.terminal_evidence.is_none()
+        })
+    }
+    /// Test-only closed projection of the exact body-backed terminal handoff.
+    #[cfg(test)]
+    pub(crate) fn exact_record_is_durable_body_terminal_for_test(
+        &self,
+        token: &FairV2IngressLeaderWireToken,
+    ) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        state.records.get(&token.slot).is_some_and(|record| {
+            let (
+                Some(runtime_owner),
+                Some(terminal @ LeaderWireStableTerminalEvidence::DurableBody(_)),
+            ) = (record.runtime_owner, record.terminal_evidence.as_ref())
+            else {
+                return false;
+            };
+            record.token == *token
+                && record.status == LeaderWireLifecycleStatus::Terminal
+                && leader_wire_stable_terminal_matches_runtime(
+                    terminal,
+                    token,
+                    runtime_owner,
+                    self.context_id,
+                    self.height,
+                    self.owner,
+                )
+        })
+    }
+    /// Test-only closed projection of one same-process ordinary retirement.
+    #[cfg(test)]
+    pub(crate) fn exact_record_is_volatile_terminal_for_test(
+        &self,
+        token: &FairV2IngressLeaderWireToken,
+    ) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        state.records.get(&token.slot).is_some_and(|record| {
+            record.token == *token
+                && record.status == LeaderWireLifecycleStatus::VolatileTerminal
+                && record.runtime_owner.is_some_and(|owner| {
+                    owner.causal_lifecycle_key() == token.identity_hash()
+                        && owner.admission_ordinal() == token.scheduler_ordinal()
+                })
+                && record.terminal_evidence.is_none()
+        })
+    }
     /// Return whether the latest live safety-WAL cut rejects this identity.
     pub(crate) fn identity_is_obsolete(
         &self,

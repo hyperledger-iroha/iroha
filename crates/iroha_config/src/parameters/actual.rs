@@ -55,6 +55,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
+    soracloud::SoraInrouRuntimeBackendV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -226,24 +227,20 @@ impl_default!(SoracloudRuntime => {
         }
 });
 impl SoracloudRuntime {
-    /// Assert that production mode is paired with fail-closed runtime settings.
+    /// Assert release-wide hosting admission and production-only runtime settings.
     ///
     /// This method is intentionally available on the parsed `actual` config so
     /// callers that construct runtime settings directly cannot bypass the
-    /// production posture checks performed by user-config parsing.
-    pub fn assert_production_posture(&self) {
+    /// runtime posture checks performed by user-config parsing.
+    pub fn assert_runtime_posture(&self) {
+        self.inrou.assert_archive_resource_bounds();
+        assert!(
+            !self.inrou.enabled,
+            "first-release iroha3d forbids soracloud_runtime.inrou.enabled = true until PortableVM has mandatory mount, network, IPC, and MAC isolation; QEMU seccomp and uid firewalls alone are insufficient"
+        );
         if !self.production_mode {
             return;
         }
-        self.inrou.assert_archive_resource_bounds();
-        assert!(
-            self.inrou.enabled,
-            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.enabled = true"
-        );
-        assert!(
-            !self.inrou.proxy_only,
-            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
-        );
         assert!(
             !self.egress.default_allow,
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.default_allow = false"
@@ -294,14 +291,24 @@ impl_default!(SoracloudRuntimeCacheBudgets => {
         }
 });
 /// Resource ceilings for mutable Inrou microVM workloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
-    /// Maximum number of Inrou VMs hosted concurrently.
-    pub max_concurrent_vms: NonZeroUsize,
+    /// Maximum number of Inrou VMs hosted concurrently (exactly one for PortableVM V1).
+    pub max_concurrent_vms: NonZeroU16,
     /// Whether this node advertises and materializes local Inrou workloads.
     pub enabled: bool,
-    /// Whether the validator should act as a proxy/control-plane node only.
-    pub proxy_only: bool,
+    /// Exact runtime backends this node is permitted to advertise and use.
+    pub backends: BTreeSet<SoraInrouRuntimeBackendV1>,
+    /// Fixed-corridor uid of the locked local `iroha-inrou` service account.
+    pub portable_vm_uid: Option<NonZeroU32>,
+    /// Fixed-corridor gid of the locked local `iroha-inrou` primary group.
+    pub portable_vm_gid: Option<NonZeroU32>,
+    /// Maximum aggregate hosted CPU budget in millicores.
+    pub max_cpu_millis: NonZeroU32,
+    /// Maximum aggregate hosted memory budget in bytes.
+    pub max_memory_bytes: NonZeroU64,
+    /// Maximum aggregate hosted writable-storage budget in bytes.
+    pub max_storage_bytes: NonZeroU64,
     /// Maximum compressed size accepted for one bundle archive.
     pub bundle_archive_max_compressed_bytes: NonZeroU64,
     /// Maximum decoded size accepted for one bundle archive.
@@ -321,7 +328,12 @@ impl_default!(SoracloudRuntimeInrou => {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
-            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            backends: BTreeSet::new(),
+            portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
+            portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
+            max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
+            max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
+            max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
             bundle_archive_max_compressed_bytes:
                 defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
             bundle_archive_max_decoded_bytes:
@@ -1118,7 +1130,7 @@ pub struct SoranetPrivacy {
     pub flush_delay_buckets: u64,
     /// Forced flush interval expressed in buckets.
     pub force_flush_buckets: u64,
-    /// Maximum number of completed buckets retained in memory.
+    /// Per-queue cap for completed, open-event, and incomplete-share buckets.
     pub max_completed_buckets: usize,
     /// Maximum bucket lag tolerated for collector shares before suppression.
     pub max_share_lag_buckets: u64,
@@ -1128,6 +1140,14 @@ pub struct SoranetPrivacy {
     pub event_buffer_capacity: usize,
 }
 impl SoranetPrivacy {
+    /// First-release upper bound for flush and collector-retention windows.
+    pub const MAX_BUCKET_WINDOW_V1: u64 = 256;
+    /// First-release upper bound for each in-memory privacy bucket queue.
+    pub const MAX_BUCKET_BACKLOG_V1: usize = 256;
+    /// First-release upper bound for collectors contributing to one bucket.
+    pub const MAX_EXPECTED_SHARES_V1: u16 = 16;
+    /// First-release upper bound for the relay privacy event queue.
+    pub const MAX_EVENT_BUFFER_CAPACITY_V1: usize = 16_384;
     /// Default telemetry bucket width in seconds.
     pub const DEFAULT_BUCKET_SECS: u64 = defaults::soranet::privacy::BUCKET_SECS;
     /// Default minimum handshake contributors required before publishing.
@@ -1136,7 +1156,7 @@ impl SoranetPrivacy {
     pub const DEFAULT_FLUSH_DELAY_BUCKETS: u64 = defaults::soranet::privacy::FLUSH_DELAY_BUCKETS;
     /// Default forced flush interval expressed in buckets.
     pub const DEFAULT_FORCE_FLUSH_BUCKETS: u64 = defaults::soranet::privacy::FORCE_FLUSH_BUCKETS;
-    /// Default number of completed buckets retained in memory.
+    /// Default per-queue bucket capacity.
     pub const DEFAULT_MAX_COMPLETED_BUCKETS: usize =
         defaults::soranet::privacy::MAX_COMPLETED_BUCKETS;
     /// Default maximum bucket lag tolerated for collector shares before suppression.
@@ -1161,7 +1181,7 @@ impl_default!(SoranetPrivacy => {
         }
 });
 /// Derived VPN configuration for the native SoraNet tunnel.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SoranetVpn {
     /// Whether the VPN surface is enabled.
     pub enabled: bool,
@@ -1209,6 +1229,56 @@ pub struct SoranetVpn {
     pub guard_directory_path: Option<PathBuf>,
     /// Externally provisioned digest authenticating the exact snapshot bytes.
     pub guard_directory_digest: Option<[u8; 32]>,
+}
+struct RedactedHelperTicketSecret(bool);
+impl fmt::Debug for RedactedHelperTicketSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(if self.0 { "Some([REDACTED])" } else { "None" })
+    }
+}
+impl fmt::Debug for SoranetVpn {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SoranetVpn")
+            .field("enabled", &self.enabled)
+            .field("cell_size_bytes", &self.cell_size_bytes)
+            .field("flow_label_bits", &self.flow_label_bits)
+            .field("cover_to_data_per_mille", &self.cover_to_data_per_mille)
+            .field("max_cover_burst", &self.max_cover_burst)
+            .field("heartbeat_ms", &self.heartbeat_ms)
+            .field("jitter_ms", &self.jitter_ms)
+            .field("padding_budget_ms", &self.padding_budget_ms)
+            .field("guard_refresh", &self.guard_refresh)
+            .field("lease", &self.lease)
+            .field("dns_push_interval", &self.dns_push_interval)
+            .field("exit_class", &self.exit_class)
+            .field("meter_family", &self.meter_family)
+            .field(
+                "helper_ticket_secret",
+                &RedactedHelperTicketSecret(self.helper_ticket_secret.is_some()),
+            )
+            .field("operator_account_id", &self.operator_account_id)
+            .field("lease_fee", &self.lease_fee)
+            .field("settlement_grace", &self.settlement_grace)
+            .field("route_pushes", &self.route_pushes)
+            .field("excluded_routes", &self.excluded_routes)
+            .field("dns_servers", &self.dns_servers)
+            .field("relay_id", &self.relay_id)
+            .field("guard_directory_path", &self.guard_directory_path)
+            .field("guard_directory_digest", &self.guard_directory_digest)
+            .finish()
+    }
+}
+#[cfg(test)]
+#[test]
+fn soranet_vpn_debug_redacts_helper_ticket_secret() {
+    let vpn = SoranetVpn {
+        helper_ticket_secret: Some([0xA5; 32]),
+        ..SoranetVpn::default()
+    };
+    let rendered = format!("{vpn:?}");
+    assert!(rendered.contains("helper_ticket_secret: Some([REDACTED])"));
+    assert!(!rendered.contains("[165, 165, 165"));
 }
 impl_default!(SoranetVpn => {
         Self {
@@ -2698,6 +2768,19 @@ pub struct NexusStorage {
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
     pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
+}
+impl NexusStorage {
+    /// Return the resolved source SoraFS capacity before Nexus budget clamping.
+    ///
+    /// `None` means no aggregate Nexus storage budget has captured component caps yet. This
+    /// source value can be an explicit operator value or the generic default. The accessor lets
+    /// fixed deployment profiles distinguish an exact source cap from a default, zero, or
+    /// oversized value that normalizes to the same effective cap.
+    #[must_use]
+    pub fn configured_sorafs_max_capacity_bytes(&self) -> Option<Bytes<u64>> {
+        self.configured_component_caps
+            .map(|caps| caps.sorafs_max_capacity_bytes)
+    }
 }
 impl fmt::Debug for NexusStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -4401,7 +4484,7 @@ impl LaneConfigEntry {
             key_prefix,
             manifest_policy,
             confidential_compute: meta.confidential_compute.clone(),
-            scheduler: meta.scheduler.clone(),
+            scheduler: meta.scheduler,
             settlement_buffer: meta.settlement_buffer.clone(),
         }
     }

@@ -36,6 +36,28 @@ const FRI_MASK_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-
 const FRI_MASK_ROOT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-root:v1";
 const DEEP_POINT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-point:v1";
 const DEEP_OPENINGS_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-openings:v1";
+const AGGREGATE_STARK_RESERVED_DOMAINS_V1: [&[u8]; 5] = [
+    DEEP_POINT_LABEL_V1,
+    DEEP_OPENINGS_LABEL_V1,
+    FRI_MASK_LEAF_DOMAIN_V1,
+    FRI_MASK_NODE_DOMAIN_V1,
+    FRI_MASK_ROOT_LABEL_V1,
+];
+
+/// Whether a relation-supplied domain collides with an aggregate-core role.
+///
+/// Relation layers validate their own transcript labels separately from the
+/// aggregate domain bundle. Keeping this predicate in the aggregate core
+/// prevents those outer labels from silently reusing a fixed DEEP or FRI-mask
+/// role that is not present in [`AggregateStarkDomainsV1`].
+pub(crate) fn aggregate_stark_domain_is_reserved_v1(domain: &[u8]) -> bool {
+    AGGREGATE_STARK_RESERVED_DOMAINS_V1.contains(&domain)
+}
+/// Return every fixed aggregate-core role for cross-layer uniqueness tests.
+#[cfg(test)]
+pub(crate) const fn aggregate_stark_reserved_domains_v1() -> [&'static [u8]; 5] {
+    AGGREGATE_STARK_RESERVED_DOMAINS_V1
+}
 /// Rows processed per bounded DEEP/FRI denominator-inversion batch.
 pub(crate) const DEEP_FRI_BASE_BATCH_ROWS_V1: usize = 1 << 12;
 /// Exact maximum number of independent masked-trace LDE columns retained
@@ -224,6 +246,9 @@ impl AggregateStarkDomainsV1 {
         let values = [
             DEEP_POINT_LABEL_V1,
             DEEP_OPENINGS_LABEL_V1,
+            FRI_MASK_LEAF_DOMAIN_V1,
+            FRI_MASK_NODE_DOMAIN_V1,
+            FRI_MASK_ROOT_LABEL_V1,
             self.base_leaf,
             self.base_node,
             self.aux_leaf,
@@ -240,7 +265,10 @@ impl AggregateStarkDomainsV1 {
             self.fri_beta_label,
             self.query_seed,
         ];
-        if values.iter().any(|value| value.is_empty()) {
+        if values
+            .iter()
+            .any(|value| value.is_empty() || u16::try_from(value.len()).is_err())
+        {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
         for (index, value) in values.iter().enumerate() {
@@ -915,6 +943,12 @@ pub(crate) fn deep_point_is_admissible_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Result<bool, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
+    // At zero every translated opening `z * omega_H` collapses to the same
+    // point. The proof carries independently mixed current/next openings, so
+    // the sampler must preserve their advertised distinct-point geometry.
+    if point == E::ZERO {
+        return Ok(false);
+    }
     let evaluation_size = layout.common_lde_size();
     for group in &layout.trace_groups {
         let next_root = goldilocks_primitive_root_v1(group.native_trace_log2)
@@ -938,12 +972,13 @@ pub(crate) fn deep_point_is_admissible_v1(
 /// Derive the sole uniform DEEP point outside every trace, evaluation, and
 /// query domain used by an aggregate proof.
 ///
-/// Zero remains admissible: it is outside all multiplicative domains and all
-/// required denominators remain nonzero. For every trace group the predicate
-/// also excludes `z * omega_H`, because the next-row opening is evaluated at
-/// that point. Query positions are elements of the common evaluation coset, so
-/// excluding the complete coset also excludes every possible query point
-/// before grinding fixes the concrete index set.
+/// Zero is excluded even though it is outside every multiplicative domain:
+/// otherwise every translated point `z * omega_H` would equal `z`, collapsing
+/// the independently mixed current/next opening geometry. For every trace
+/// group the predicate also excludes `z * omega_H`, because the next-row
+/// opening is evaluated at that point. Query positions are elements of the
+/// common evaluation coset, so excluding the complete coset also excludes
+/// every possible query point before grinding fixes the concrete index set.
 pub(crate) fn derive_deep_point_v1(
     transcript: &mut TransparentTranscriptV1,
     parameters: AggregateStarkParametersV1,
@@ -1285,7 +1320,11 @@ impl StreamingMerkleAccumulatorV1 {
         leaf_count: usize,
         opening_indices: &[usize],
     ) -> Result<Self, AggregateStarkErrorV1> {
-        if node_domain.is_empty() || leaf_count == 0 || !leaf_count.is_power_of_two() {
+        if node_domain.is_empty()
+            || u16::try_from(node_domain.len()).is_err()
+            || leaf_count == 0
+            || !leaf_count.is_power_of_two()
+        {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
         if !opening_indices.is_empty() {
@@ -1622,7 +1661,7 @@ impl Drop for ZeroizingFieldColumnV1 {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_field_column_v1(values: &mut [F]) {
     for value in values {
-        value.0 = 0;
+        value.zeroize_v1();
     }
 }
 /// Owner of one secret-bearing quartic-extension column that overwrites every
@@ -1641,7 +1680,7 @@ impl Drop for ZeroizingExtensionFieldColumnV1 {
 }
 fn zeroize_extension_field_column_v1(values: &mut [E]) {
     for value in values {
-        *value = E::ZERO;
+        value.zeroize_v1();
     }
 }
 #[cfg(test)]
@@ -3140,6 +3179,9 @@ pub(crate) fn verify_canonical_multiproof_v1(
     leaves: &BTreeMap<usize, [u8; 32]>,
     frontier: &[[u8; 32]],
 ) -> Result<(), AggregateStarkErrorV1> {
+    if node_domain.is_empty() || u16::try_from(node_domain.len()).is_err() {
+        return Err(AggregateStarkErrorV1::TraceOpening);
+    }
     let indices = leaves.keys().copied().collect::<Vec<_>>();
     validate_canonical_index_set_v1(leaf_count, &indices)?;
     if multiproof_frontier_len_v1(leaf_count, &indices)? != frontier.len() {
@@ -4998,9 +5040,9 @@ mod tests {
             .expect("transcript")
     }
     #[test]
-    fn aggregate_domains_cannot_alias_fixed_deep_transcript_labels() {
+    fn aggregate_domains_cannot_alias_fixed_core_roles() {
         assert!(DOMAINS.validate().is_ok());
-        for reserved in [DEEP_POINT_LABEL_V1, DEEP_OPENINGS_LABEL_V1] {
+        for reserved in AGGREGATE_STARK_RESERVED_DOMAINS_V1 {
             assert_eq!(
                 AggregateStarkDomainsV1 {
                     query_seed: reserved,
@@ -5374,8 +5416,8 @@ mod tests {
                 .expect("next-point predicate")
         );
         assert!(
-            deep_point_is_admissible_v1(E::ZERO, PARAMETERS, &layout)
-                .expect("zero is outside multiplicative domains")
+            !deep_point_is_admissible_v1(E::ZERO, PARAMETERS, &layout)
+                .expect("zero must not collapse translated DEEP points")
         );
         let mut transcript = transcript();
         let derived =
@@ -6480,6 +6522,37 @@ mod tests {
         let mut domains = DOMAINS;
         domains.fri_node = domains.fri_leaf;
         assert!(domains.validate().is_err());
+        domains = DOMAINS;
+        domains.fri_leaf = FRI_MASK_LEAF_DOMAIN_V1;
+        assert!(domains.validate().is_err());
+        domains = DOMAINS;
+        domains.fri_node = FRI_MASK_NODE_DOMAIN_V1;
+        assert!(domains.validate().is_err());
+        domains = DOMAINS;
+        domains.fri_root_label = FRI_MASK_ROOT_LABEL_V1;
+        assert!(domains.validate().is_err());
+        domains = DOMAINS;
+        let oversized_domain: &'static [u8] =
+            Box::leak(vec![0_u8; usize::from(u16::MAX) + 1].into_boxed_slice());
+        domains.base_node = oversized_domain;
+        assert_eq!(
+            domains.validate(),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        assert!(matches!(
+            StreamingMerkleAccumulatorV1::new(oversized_domain, 2, &[0]),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        ));
+        assert_eq!(
+            verify_canonical_multiproof_v1(
+                oversized_domain,
+                &[0; 32],
+                1,
+                &BTreeMap::from([(0, [0; 32])]),
+                &[],
+            ),
+            Err(AggregateStarkErrorV1::TraceOpening)
+        );
         let (layout, proof, _, _) = fixture();
         let mut changed = proof.clone();
         changed.trace_groups[0].base_frontier.pop();

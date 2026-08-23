@@ -260,9 +260,6 @@ pub struct SoraInrouHostCapabilityRecordV1 {
     pub max_memory_bytes: u64,
     /// Maximum aggregate hosted writable storage budget in bytes.
     pub max_storage_bytes: u64,
-    /// Whether this validator intentionally participates as a proxy/control-plane node only.
-    #[norito(default)]
-    pub proxy_only: bool,
     /// Optional geography labels advertised by the host or derived by telemetry.
     #[norito(default)]
     pub geography_tags: BTreeSet<String>,
@@ -291,11 +288,15 @@ impl SoraInrouHostCapabilityRecordV1 {
             "peer_id",
             &self.peer_id,
         )?;
-        if self.supported_backends.is_empty() {
+        if self.supported_backends.len() != 1
+            || !self
+                .supported_backends
+                .contains(&SoraInrouRuntimeBackendV1::PortableVm)
+        {
             return Err(invalid_field(
                 "sora inrou host capability record",
                 "supported_backends",
-                "must not be empty",
+                "Inrou V1 admits exactly the PortableVm backend",
             ));
         }
         if self.supported_guest_isas.is_empty() {
@@ -333,35 +334,21 @@ impl SoraInrouHostCapabilityRecordV1 {
                 "must be greater than advertised_at_ms",
             ));
         }
-        let capacities_are_zero = self.max_hosted_replica_capacity == 0
-            && self.max_cpu_millis == 0
-            && self.max_memory_bytes == 0
-            && self.max_storage_bytes == 0;
-        if self.proxy_only {
-            if !capacities_are_zero {
+        for (field, value) in [
+            (
+                "max_hosted_replica_capacity",
+                u64::from(self.max_hosted_replica_capacity),
+            ),
+            ("max_cpu_millis", u64::from(self.max_cpu_millis)),
+            ("max_memory_bytes", self.max_memory_bytes),
+            ("max_storage_bytes", self.max_storage_bytes),
+        ] {
+            if value == 0 {
                 return Err(invalid_field(
                     "sora inrou host capability record",
-                    "proxy_only",
-                    "proxy_only adverts must publish zero replica, CPU, memory, and storage capacity",
+                    field,
+                    "must be greater than zero",
                 ));
-            }
-        } else {
-            for (field, value) in [
-                (
-                    "max_hosted_replica_capacity",
-                    u64::from(self.max_hosted_replica_capacity),
-                ),
-                ("max_cpu_millis", u64::from(self.max_cpu_millis)),
-                ("max_memory_bytes", self.max_memory_bytes),
-                ("max_storage_bytes", self.max_storage_bytes),
-            ] {
-                if value == 0 {
-                    return Err(invalid_field(
-                        "sora inrou host capability record",
-                        field,
-                        "must be greater than zero",
-                    ));
-                }
             }
         }
         Ok(())
@@ -374,7 +361,7 @@ impl SoraInrouHostCapabilityRecordV1 {
     /// Return whether the advert may host placed replicas at the supplied timestamp.
     #[must_use]
     pub fn can_host_replicas_at(&self, now_ms: u64) -> bool {
-        self.is_active_at(now_ms) && !self.proxy_only && self.max_hosted_replica_capacity > 0
+        self.is_active_at(now_ms) && self.max_hosted_replica_capacity > 0
     }
 }
 /// Authoritative host assignment for one placed Inrou replica slot.
