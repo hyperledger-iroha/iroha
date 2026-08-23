@@ -2862,6 +2862,11 @@ pub(crate) trait EffectRuntime {
     fn last_scheduler_selection_for_test(&self) -> Option<RuntimeSelectedOwnerKind> {
         None
     }
+    /// Whether any live reducer clock has been armed for this height.
+    /// Synthetic runtimes model cold recovery unless they opt into live clocks.
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        false
+    }
     /// Return the reducer incarnation which currently owns effects.
     fn authoritative_tag(&self) -> Option<EventTag>;
     /// Read the reducer tag, durable lock, and Decision from one serialized
@@ -3103,6 +3108,9 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        SerializedV2Runtime::lifecycle_live_clocks_are_armed(self)
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
@@ -3459,6 +3467,10 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
     durable_validate_retry_seals:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+    published_lifecycle_validate_retry_markers: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        PublishedLifecycleValidateRetryMarkerV1,
+    >,
     #[cfg(test)]
     last_recovered_validate_retry_trace_root: Option<Hash>,
     #[cfg(test)]
@@ -3497,6 +3509,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     live_lifecycle_decision_apply: Option<LiveLifecycleDecisionApplyOwnerV1>,
     live_lifecycle_validate_successor: Option<LiveLifecycleValidateSuccessorOwnerV1>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
@@ -4943,6 +4956,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) fn ready_to_finish(&self) -> bool {
         !self.output_guard.restart_required()
             && self.finality_completion.is_some()
+            && self.pending_runner_decision_cleanup.is_none()
             && self.live_lifecycle_decision_apply.is_none()
             && self.live_lifecycle_validate_successor.is_none()
             && self.retained_effect_batch.is_none()
@@ -5423,6 +5437,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             authenticated_genesis_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
             durable_validate_retry_seals: BTreeMap::new(),
+            published_lifecycle_validate_retry_markers: BTreeMap::new(),
             #[cfg(test)]
             last_recovered_validate_retry_trace_root: None,
             #[cfg(test)]
@@ -5444,6 +5459,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             reconciled_tag,
             protected_lock: None,
             protected_decision: None,
+            pending_runner_decision_cleanup: None,
             live_lifecycle_decision_apply: None,
             live_lifecycle_validate_successor: None,
             pending_tip_recovery: None,
@@ -7374,6 +7390,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(EffectExecutorError::Runtime)?;
         }
         self.durable_validate_retry_seals = retained_validate_retry_seals;
+        self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
         #[cfg(test)]
         if let Some(trace_root) = recovered_validate_retry_trace_root {
             self.last_recovered_validate_retry_trace_root = Some(trace_root);
@@ -8002,6 +8019,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .map_err(|error| self.close(error, services))?;
         match step {
             RuntimeStep::Idle => {
+                self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
                 #[cfg(test)]
                 {
                     self.last_runtime_step_observation = Some(RuntimeStepObservationV1 {
@@ -8036,7 +8054,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
                     });
                 }
-                let count = self.consume_effects(effects, services)?;
+                let count = self.consume_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                )?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }
