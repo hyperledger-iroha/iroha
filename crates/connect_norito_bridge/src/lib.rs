@@ -35,7 +35,6 @@ use iroha_data_model::{
         },
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
-        privacy::SubmitPrivacyProofV1,
         transfer::Transfer,
         zk,
     },
@@ -44,14 +43,11 @@ use iroha_data_model::{
     nexus::DataSpaceId,
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
         PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyExact12FixtureBundleValidationStatusV1,
-        PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
-        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
-        validate_privacy_exact12_fixture_bundle_v1,
+        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -138,6 +134,13 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment for NativeSignerBridge JNI descriptor changes that the bridge-wide ABI cannot distinguish.
 // Revision 4 narrowed RegisterZkAsset bindings; revision 5 replaced the chain label with the exact
 // 32-byte genesis-derived NetworkId.
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
 const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
@@ -416,6 +419,13 @@ where
 pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 fn native_signer_jni_contract_revision() -> u32 {
     NATIVE_SIGNER_JNI_CONTRACT_REVISION
 }
@@ -5556,12 +5566,33 @@ fn try_acquire_kagemusha_heavy_proof_permit_v4()
 -> BridgeResult<KagemushaHeavyProofPermitV4<'static>> {
     try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(&KAGEMUSHA_HEAVY_PROOF_PERMIT_V4)
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 struct KagemushaHeavyProofPreacquiredMarkerV4;
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 impl Drop for KagemushaHeavyProofPreacquiredMarkerV4 {
     fn drop(&mut self) {
         KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4.with(|preacquired| preacquired.set(false));
     }
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 enum KagemushaHeavyProofPreacquiredScopeV4<'lock> {
     Acquired {
         // Clear the thread-local borrowing marker before releasing the mutex.
@@ -5570,6 +5601,13 @@ enum KagemushaHeavyProofPreacquiredScopeV4<'lock> {
     },
     Borrowed,
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 fn try_preacquire_kagemusha_heavy_proof_permit_from_v4(
     permit: &Mutex<()>,
 ) -> BridgeResult<KagemushaHeavyProofPreacquiredScopeV4<'_>> {
@@ -5583,6 +5621,13 @@ fn try_preacquire_kagemusha_heavy_proof_permit_from_v4(
         _permit: permit,
     })
 }
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 fn try_preacquire_kagemusha_heavy_proof_permit_v4()
 -> BridgeResult<KagemushaHeavyProofPreacquiredScopeV4<'static>> {
     try_preacquire_kagemusha_heavy_proof_permit_from_v4(&KAGEMUSHA_HEAVY_PROOF_PERMIT_V4)
@@ -25103,7 +25148,7 @@ mod accel_tests {
     #[test]
     fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let mut fixture = AssetSignedEncoderFixture::swift("swift-parity-transfer", "15.7500");
+        let mut fixture = AssetSignedEncoderFixture::swift("swift-parity-transfer", "15.75");
         fixture.asset_definition = cstring(&format!(
             "{}#dataspace:10",
             asset_definition_literal("wonderland", "rose")
@@ -25177,7 +25222,7 @@ mod accel_tests {
         swift_parity_transfer_hash_matches_fixture,
         "swift-parity-transfer",
         connect_norito_encode_transfer_signed_transaction,
-        "15.7500",
+        "15.75",
         1_736_000_000_000,
         3_500,
         17,
@@ -25186,7 +25231,7 @@ mod accel_tests {
         swift_parity_mint_hash_matches_fixture,
         "swift-parity-mint",
         connect_norito_encode_mint_signed_transaction,
-        "42.0100",
+        "42.01",
         1_736_001_000_000,
         2_000,
         19,
@@ -25195,7 +25240,7 @@ mod accel_tests {
         swift_parity_burn_hash_matches_fixture,
         "swift-parity-burn",
         connect_norito_encode_burn_signed_transaction,
-        "5.2500",
+        "5.25",
         1_736_002_000_000,
         1_800,
         23,

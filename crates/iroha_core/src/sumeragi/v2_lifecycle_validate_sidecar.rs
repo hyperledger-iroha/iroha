@@ -4,7 +4,7 @@ use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
     LifecycleKey, LifecyclePhase, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
-    ReadyEvent, WaitSource, WaitToken,
+    ReadyEvent, ReadyValidateSuccessorV1, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
     ledger::{LifecycleLedgerError, LifecycleLedgerStoreV1},
 };
@@ -154,7 +154,7 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarDriveV1 {
     /// The exact dependency is still fetching or awaiting bounded capacity.
     Waiting(RegisteredLifecycleValidateSidecarWaitV1),
     /// The exact dependency became durable and the same row is Ready.
-    Woken,
+    Woken(ReadyValidateSuccessorV1),
     /// The owner failed closed; dropping it arms the existing restart guard.
     RestartRequired(LifecycleValidateSidecarRegistrationErrorV1),
 }
@@ -240,13 +240,34 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
                 {
                     return LifecycleValidateSidecarDriveV1::RestartRequired(error);
                 }
+                let dispatch_key = self.identity.dispatch_key();
+                let attestation = match coordinator
+                    .attest_ready_validate_demand(registry, dispatch_key.lifecycle_ordinal())
+                {
+                    Ok(attestation) => attestation,
+                    Err(_) => {
+                        return LifecycleValidateSidecarDriveV1::RestartRequired(
+                            LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
+                        );
+                    }
+                };
+                let Some(successor) = ReadyValidateSuccessorV1::from_sidecar_wake(
+                    dispatch_key,
+                    self.identity.round(),
+                    self.identity.subject(),
+                    attestation,
+                ) else {
+                    return LifecycleValidateSidecarDriveV1::RestartRequired(
+                        LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
+                    );
+                };
                 if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
                     let (dispatch, ack) = completion.into_sidecar_wake_parts();
-                    debug_assert!(dispatch.matches_dispatch_key(self.identity.dispatch_key));
+                    debug_assert!(dispatch.matches_dispatch_key(dispatch_key));
                     drop(dispatch);
                     ack.acknowledge_after_publication();
                 }
-                LifecycleValidateSidecarDriveV1::Woken
+                LifecycleValidateSidecarDriveV1::Woken(successor)
             }
             Ok(MergeSidecarDeferralDisposition::Rejected(reason)) => {
                 LifecycleValidateSidecarDriveV1::RestartRequired(

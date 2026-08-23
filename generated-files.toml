@@ -556,10 +556,11 @@ outputs = [
 # modes, completion manifests, and every file byte before refreshing tracked
 # outputs as an identity-relative reviewed patch from either sealed tree; then
 # run `norito-rpc-verify`.
-generator = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root \"${IROHA_NORITO_RPC_FIXTURE_STAGE:?set an absent absolute private external publication root}\""
+generator = "CARGO_TARGET_DIR=\"${IROHA_NORITO_RPC_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" cargo run --locked --offline --jobs 1 -p xtask --features dev-tools --bin xtask -- norito-rpc-fixtures --output-root \"${IROHA_NORITO_RPC_FIXTURE_STAGE:?set an absent absolute private external publication root}\""
 generator_sources = [
   "crates/iroha/Cargo.toml",
   "crates/iroha/src/client.rs",
+  "tools/norito_codegen_exporter/Cargo.toml",
   "tools/norito_codegen_exporter/src/lib.rs",
   "tools/norito_codegen_exporter/src/norito_rpc.rs",
   "xtask/Cargo.toml",
@@ -568,13 +569,16 @@ generator_sources = [
   "xtask/src/norito_rpc/alias_setup_fixture.rs",
 ]
 inputs = [
+  "Cargo.lock",
+  "Cargo.toml",
   "crates/iroha_crypto/src/**/*.rs",
   "crates/iroha_data_model/src/**/*.rs",
   "crates/iroha_primitives/src/**/*.rs",
   "crates/norito/src/**/*.rs",
   "fixtures/norito_rpc/transaction_payloads.json",
+  "rust-toolchain.toml",
 ]
-check = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify"
+check = "CARGO_TARGET_DIR=\"${IROHA_NORITO_RPC_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" cargo run --locked --offline --jobs 1 -p xtask --features dev-tools --bin xtask -- norito-rpc-verify"
 
 [[generated]]
 name = "swift-parity-fixtures"
@@ -726,7 +730,7 @@ inputs = [
   "mochi/mochi-core/src/**/*.rs",
   "rust-toolchain.toml",
 ]
-check = "cargo run --locked -p xtask --features dev-tools --bin xtask -- norito-rpc-verify"
+check = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_MOCHI_REPLAY_FIXTURE_STAGE cargo test --locked --offline -p mochi-integration --lib torii_replay_fixture_owner -- --ignored"
 
 [[generated]]
 name = "kotodama-v1-artifacts-and-manifests"

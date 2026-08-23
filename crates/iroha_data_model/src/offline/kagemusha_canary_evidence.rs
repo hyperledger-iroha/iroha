@@ -989,6 +989,7 @@ impl KagemushaV4TairaCanaryQueryObservationV1 {
             || self.transaction_details_trigger_completion_count != 0
             || self.node_status_before_height < finalized_height
             || self.node_status_after_height < self.node_status_before_height
+            || self.node_status_after_observed_at_ms < self.node_status_before_observed_at_ms
             || self.finality_proof_count == 0
             || usize::try_from(self.finality_proof_count).map_or(true, |count| {
                 count > KAGEMUSHA_V4_ACTIVATION_FINALITY_PROOF_MAX_COUNT_V1

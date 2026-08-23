@@ -242,6 +242,11 @@ Verifier behavior (native STARK)
   composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.
+- For the V1 verifier-owned binding AIR, compares every coordinate of each
+  transcript-sampled current/next row with the deterministic row derived from
+  the bound public digest. Public residuals are not compressed with fixed
+  coefficients. This remains a sampled proximity check, not a full-domain
+  trace reconstruction.
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
   backend, circuit id, VK hash, schema descriptor, and public input columns, and

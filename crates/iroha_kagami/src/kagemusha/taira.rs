@@ -514,6 +514,10 @@ fn set_online_backing_balance(
         balances.insert(asset_id, quantity);
     }
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the exhaustive instruction whitelist keeps every balance transition and rejection case auditable in one place"
+)]
 fn apply_online_backing_balance_instruction(
     balances: &mut BTreeMap<AssetId, Quantity>,
     online_backing_definition: &AssetDefinitionId,

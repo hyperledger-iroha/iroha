@@ -533,6 +533,10 @@ mod tests {
         assert_roundtrip!(TimeoutJustification, timeout_justification);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fail-closed audit enumerates every retired nullable consensus prefix in one schema test"
+    )]
     fn pre_release_consensus_layouts_cannot_omit_nullable_slots() {
         #[derive(Encode)]
         struct PreReleaseHeightContextPrefix {
@@ -558,6 +562,10 @@ mod tests {
             predecessor_height: u64,
         }
         #[derive(Encode)]
+        #[expect(
+            clippy::struct_field_names,
+            reason = "the retired prefix field names document the exact consensus roots omitted by the hostile layout"
+        )]
         struct PreReleaseExecutionCommitmentPrefix {
             parent_state_root: Hash,
             post_state_root: Hash,

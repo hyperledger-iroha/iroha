@@ -155,6 +155,10 @@ fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata
         settlement: None,
         storage: LaneStorageProfile::FullReplica,
         proof_scheme: DaProofScheme::default(),
+        manifest_policy: Default::default(),
+        confidential_compute: None,
+        scheduler: None,
+        settlement_buffer: None,
         metadata,
     }
 }
@@ -568,52 +572,6 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
     for idx in 0..128 {
         let role_id = iroha_data_model::role::RoleId {
             name: format!("staleelasticdisabled{idx}")
-                .parse()
-                .expect("valid role name"),
-        };
-        let default_tx = build_tx(
-            network_id,
-            &authority,
-            &keypair,
-            vec![InstructionBox::from(Register::role(
-                iroha_data_model::role::Role::new(role_id, authority.clone()),
-            ))],
-        );
-        let decision = router
-            .try_route_with_view(&default_tx, &state.view())
-            .expect("disabled-autoscale default routing should resolve");
-        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-        lanes_seen.insert(decision.lane_id);
-    }
-    assert_eq!(
-        lanes_seen,
-        std::collections::BTreeSet::from([LaneId::new(0)]),
-        "disabled autoscale must keep default-route traffic on the base lane even when stale managed lanes remain in the catalog"
-    );
-    Ok(())
-}
-#[test]
-fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> Result<()> {
-    let (base_lane_catalog, dataspace_catalog, policy) = sample_catalogs();
-    let mut lanes = base_lane_catalog.lanes().to_vec();
-    lanes.push(autoscale_elastic_lane(LaneId::new(3), 7));
-    lanes.push(autoscale_elastic_lane(LaneId::new(4), 7));
-    let lane_catalog =
-        LaneCatalog::new(NonZeroU32::new(5).expect("lane count"), lanes).expect("lane catalog");
-    let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
-        policy.clone(),
-        dataspace_catalog.clone(),
-        lane_catalog.clone(),
-    ));
-    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
-    seed_committed_height(&mut state, 7);
-    state.nexus.write().autoscale.enabled = false;
-    let (authority, keypair) = gen_account_in("nexus");
-    let network_id = *state.network_id_ref();
-    let mut lanes_seen = std::collections::BTreeSet::new();
-    for idx in 0..128 {
-        let role_id = iroha_data_model::role::RoleId {
-            name: format!("staleelasticnexusdisabled{idx}")
                 .parse()
                 .expect("valid role name"),
         };

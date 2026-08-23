@@ -264,6 +264,10 @@ struct PrepareReleaseCircuitParamsV4Args {
     output_dir: PathBuf,
 }
 impl<T: Write> RunArgs<T> for Args {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the command dispatcher keeps each authenticated release operation and its publication boundary visibly ordered"
+    )]
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::VerifyReleaseV4(args) => {
@@ -1276,10 +1280,8 @@ fn verify_exact_inventory_v4(
             "authenticated artifact",
         )?;
     }
-    if inventory_state.includes_promotion_record() {
-        if expected.len() != 18 {
-            bail!("Kagemusha V4 promoted release contract must name exactly eighteen unique files");
-        }
+    if inventory_state.includes_promotion_record() && expected.len() != 18 {
+        bail!("Kagemusha V4 promoted release contract must name exactly eighteen unique files");
     }
     if expected.len() != inventory_state.exact_file_count() {
         bail!(
@@ -1616,6 +1618,13 @@ impl PromotionDirectorySnapshotV1 {
         }
         Ok(())
     }
+    fn matches_except_links(self, other: Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.mode == other.mode
+            && self.uid == other.uid
+            && self.gid == other.gid
+    }
 }
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1768,17 +1777,50 @@ impl PinnedPromotionParentV1 {
         parent.verify_path_identity()?;
         Ok(parent)
     }
+    fn snapshot_after_new_subdirectory(&self) -> Result<PromotionDirectorySnapshotV1> {
+        let current = PromotionDirectorySnapshotV1::from_metadata(
+            &self
+                .file
+                .metadata()
+                .wrap_err("failed to inspect promotion-record parent after staging")?,
+        )
+        .ok_or_else(|| eyre!("promotion-record parent is no longer a directory"))?;
+        // Unix filesystems may increment a parent's link count for the newly
+        // staged subdirectory; some filesystems report a stable count instead.
+        if !self.snapshot.matches_except_links(current)
+            || !current
+                .links
+                .checked_sub(self.snapshot.links)
+                .is_some_and(|delta| delta <= 1)
+        {
+            bail!("promotion-record parent changed unexpectedly while staging a directory");
+        }
+        self.verify_path_identity_against(current)?;
+        Ok(current)
+    }
     fn verify_path_identity(&self) -> Result<()> {
+        self.verify_path_identity_against(self.snapshot)
+    }
+    fn verify_path_identity_against(
+        &self,
+        expected_parent: PromotionDirectorySnapshotV1,
+    ) -> Result<()> {
         let opened = PromotionDirectorySnapshotV1::from_metadata(
             &self
                 .file
                 .metadata()
                 .wrap_err("failed to re-inspect pinned promotion-record parent")?,
         );
-        if opened != Some(self.snapshot) {
+        if opened != Some(expected_parent) {
             bail!("pinned promotion-record parent changed identity");
         }
-        for (path, expected) in &self.path_chain {
+        let final_component = self.path_chain.len().saturating_sub(1);
+        for (index, (path, original_expected)) in self.path_chain.iter().enumerate() {
+            let expected = if index == final_component {
+                expected_parent
+            } else {
+                *original_expected
+            };
             let current = fs::symlink_metadata(path).wrap_err_with(|| {
                 format!(
                     "failed to re-inspect promotion-record ancestor {}",
@@ -1786,7 +1828,7 @@ impl PinnedPromotionParentV1 {
                 )
             })?;
             if current.file_type().is_symlink()
-                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(*expected)
+                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(expected)
             {
                 bail!(
                     "promotion-record ancestor changed after it was pinned: {}",
@@ -1797,7 +1839,7 @@ impl PinnedPromotionParentV1 {
         let named = fs::symlink_metadata(&self.path)
             .wrap_err("failed to re-inspect named promotion-record parent")?;
         if named.file_type().is_symlink()
-            || PromotionDirectorySnapshotV1::from_metadata(&named) != Some(self.snapshot)
+            || PromotionDirectorySnapshotV1::from_metadata(&named) != Some(expected_parent)
         {
             bail!("promotion-record parent pathname changed after it was pinned");
         }
@@ -2127,6 +2169,13 @@ where
             return Err(error);
         }
     };
+    let publication_parent_snapshot = match parent.snapshot_after_new_subdirectory() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+            return Err(error);
+        }
+    };
     let prepare_result = (|| -> Result<()> {
         write_release_circuit_params_staged_file_v1(
             &staging,
@@ -2147,7 +2196,7 @@ where
             bail!("circuit-parameter staging directory changed identity or custody");
         }
         before_publish()?;
-        parent.verify_path_identity()
+        parent.verify_path_identity_against(publication_parent_snapshot)
     })();
     if let Err(error) = prepare_result {
         cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
@@ -2179,7 +2228,7 @@ where
         }
         sync_parent(&parent.file)
             .wrap_err("failed to durably sync circuit-parameter parent directory")?;
-        parent.verify_path_identity()?;
+        parent.verify_path_identity_against(publication_parent_snapshot)?;
         Ok(())
     })();
     Ok(match after_publication {
@@ -2701,6 +2750,60 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn release_circuit_params_publication_tracks_its_parent_link_change() {
+        use std::{
+            fs,
+            os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+        };
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let links_before = fs::metadata(&parent)
+            .expect("inspect circuit-parameter parent")
+            .nlink();
+        let output_dir = parent.join("circuit-params-v4");
+        let bytes = b"canonical circuit parameters";
+
+        let outcome = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            bytes,
+            || Ok(()),
+            std::fs::File::sync_all,
+        )
+        .expect("the publisher's staging directory is an authorized parent-link transition");
+
+        match outcome {
+            ReleaseCircuitParamsPublicationOutcomeV1::Committed { final_path } => {
+                assert_eq!(final_path, output_dir);
+            }
+            ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain { reason, .. } => {
+                panic!("unchanged parent must commit durably: {reason}");
+            }
+        }
+        let links_after = fs::metadata(&parent)
+            .expect("re-inspect circuit-parameter parent")
+            .nlink();
+        assert!(
+            links_after
+                .checked_sub(links_before)
+                .is_some_and(|delta| delta <= 1)
+        );
+        for file_name in [
+            RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+            RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+        ] {
+            assert_eq!(
+                fs::read(output_dir.join(file_name)).expect("read published circuit parameters"),
+                bytes
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
     fn release_circuit_params_publication_rejects_parent_substitution_before_visibility() {
         use std::{fs, os::unix::fs::PermissionsExt as _};
         let root = tempfile::tempdir().expect("temporary circuit-parameter root");
@@ -2976,7 +3079,7 @@ mod tests {
                 }
                 Ok(())
             },
-            |_| {
+            |()| {
                 events.borrow_mut().push("publish");
                 Ok(())
             },

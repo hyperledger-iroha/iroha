@@ -87,6 +87,61 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
     ));
     drop(pending);
 
+    let direct_pending_directory =
+        TempDir::new().expect("temporary direct pending Kura Decision Apply WAL");
+    let direct_storage = TempDir::new().expect("temporary direct pending Kura stores");
+    let (direct_startup, body_store) = write_decision_startup_with_body_marker(
+        &direct_pending_directory,
+        &direct_storage.path().join("body"),
+        0xCA,
+        DecisionBodyMarkerFixture::Validated,
+    );
+    let direct_expected = match direct_startup.effects.as_slice() {
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                ..
+            },
+        ] => crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
+            round.context_id,
+            tag.height(),
+            subject.block_hash,
+        ),
+        _ => panic!("validated Decision must replay one exact Fetch"),
+    };
+    let direct_pending = direct_startup
+        .bind_pending_kura_apply(direct_expected)
+        .unwrap_or_else(|(error, _)| panic!("bind direct pending Kura tip: {error}"))
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|error| panic!("authenticate direct pending Kura Decision Fetch: {error}"));
+    assert!(direct_pending.retains_decision_fetch_for_test());
+    assert_eq!(direct_pending.expected_for_test(), direct_expected);
+    let body_store = body_store
+        .into_revalidated_startup()
+        .expect("seal the validated pending Kura body outcome");
+    let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic direct pending Kura signer");
+    let ledger_root = direct_storage.path().join("ledger");
+    let serve_root = direct_storage.path().join("serve");
+    let owner = direct_pending
+        .open_production_lifecycle_owner_v1_with_store_for_test(
+            &lifecycle_owner_config(),
+            4,
+            &ledger_root,
+            &serve_root,
+            body_store,
+            &local_signer,
+        )
+        .unwrap_or_else(|error| panic!("open direct pending Kura Apply owner: {error}"));
+    let (row_count, apply_ordinal) = owner
+        .recovered_decision_apply_summary_for_test()
+        .expect("pending Kura owner retains the exact recovered Apply carrier");
+    assert_eq!(row_count, 4);
+    assert!(apply_ordinal > 0);
+    drop(owner);
+
     let empty_pending_directory =
         TempDir::new().expect("temporary pending Kura startup without a Decision");
     let empty_pending = write_and_reopen_authenticated_wal_startup(

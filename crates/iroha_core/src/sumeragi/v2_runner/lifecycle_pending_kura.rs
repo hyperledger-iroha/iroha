@@ -933,7 +933,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
                 recovery_stage,
             ));
         }
-        match pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)? {
+        match pending.drive_apply_recovery_turn(&mut setup_runner)? {
             ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts } => {
                 recovery_attempts = attempts;
                 break;

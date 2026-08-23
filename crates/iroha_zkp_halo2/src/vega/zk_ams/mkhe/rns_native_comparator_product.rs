@@ -24,11 +24,13 @@
 use core::marker::PhantomData;
 
 use super::{
-    rns_native_claimed_successor::{
-        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1, RnsNativeClaimedSuccessorV1,
+    rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
+    rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_cross_field_rlwe_direct::{
+        RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1,
         RnsNativeCrossFieldRlweClaimedInventoryParentV1,
     },
-    rns_native_cross_field_inventory::RnsNativeCrossFieldInventoryPrerequisiteV1,
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
@@ -903,6 +905,24 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
+
+    /// Consume statement-3 evidence and recover the exact claimed direct
+    /// successor carrier. This is the only ownership path back to the direct
+    /// frame retained by the comparator chain.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeClaimedSuccessorV1<
+        'proof,
+        RnsNativeCrossFieldRlweClaimedInventoryParentV1<'source, 'proof, S>,
+    > {
+        self._parent
+    }
+
+    pub(super) fn take_existing_radix_validation_permit_v1(
+        &mut self,
+    ) -> Option<RnsNativeExistingRadixValidationPermitV1> {
+        self._parent.take_existing_radix_validation_permit_v1()
+    }
 }
 
 struct VerifiedComparatorProductPartsV1<'proof> {
@@ -976,9 +996,10 @@ where
     })
 }
 
-/// Consume the sealed successor carrier and verify all 344 comparator
-/// boolean/disjoint product proofs sequentially. The carrier has no production
-/// constructor, and raw inventory continuation bytes cannot enter this stage.
+/// Consume the exact-preflighted direct successor claim and verify all 344
+/// comparator boolean/disjoint product proofs sequentially. This does not
+/// assert the retained direct algebra. A production caller cannot enter this
+/// stage from raw `inventory.continuation()` bytes.
 #[allow(
     dead_code,
     reason = "the sound private statement-3 entry awaits the remaining statement-5, statement-8, and lookup consumers"

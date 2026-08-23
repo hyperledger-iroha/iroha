@@ -196,7 +196,10 @@ low-degree commitment and is not required to vanish at every LDE point.
 - **Field encoding:** canonical Goldilocks (little-endian 64-bit limb, reject ≥ p).
   Proof-carried Poseidon field commitments use the repository's canonical
   32-byte field container; transfer touched-balance roots are canonical
-  `iroha_crypto::Hash` bytes, not Poseidon fields.
+  `iroha_crypto::Hash` bytes, not Poseidon fields. After proof-size limits and
+  before transcript verification, the verifier walks every proof-carried field
+  scalar/container and rejects alternate representatives; opaque public hashes
+  are intentionally excluded from this field preflight.
 - **Transcript (Fiat–Shamir):**
   1. BLAKE2b absorb `protocol_version`, `params_version`, `parameter_set`, `public_io`, and Poseidon2 commit tag (`fastpq:v1:init`).
   2. Absorb `trace_root`, `lookup_root` (`fastpq:v1:roots`).
@@ -435,9 +438,12 @@ proof semantics profile.
     `bn254_metrics` block so wrapped CUDA evidence can carry
     `acceleration.bn254_{fft,lde}_ms` directly. When the local BN254 CUDA path
     downgrades at runtime, the bench now keeps the CPU timings and emits
-    `bn254_warnings` instead of aborting the capture. The remaining work is the
-    lab rerun / higher-level integration side, not the basic bench/report
-    wiring.
+    `bn254_warnings` instead of aborting the capture. The CPU, CUDA, and Metal
+    radix-2 decimation-in-time paths bit-reverse coefficient input before their
+    butterfly stages. Independent direct-Horner CPU tests cover both FFT and
+    coset LDE, and GPU parity uses that tested CPU oracle rather than a duplicate
+    transform. The remaining work is the lab rerun / higher-level integration
+    side, not the basic bench/report wiring.
   - Metal readiness evidence (archive the artefacts below with every rollout so the roadmap audit can prove determinism, telemetry coverage, and fail-closed GPU behaviour):
 
     | Step | Goal | Command / Evidence |

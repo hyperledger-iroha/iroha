@@ -6,9 +6,10 @@
 //! input. Each admitted v1 operation accepts one bounded public network context
 //! on stdin and returns one genuine proof-bearing transaction on stdout.
 //! Witness and signing material are derived and consumed inside this process
-//! and never cross the IPC boundary. ZK-AMS and ZK-X509 remain absent until
-//! their native release paths are genuinely available, so receipt issuance
-//! remains closed.
+//! and never cross the IPC boundary. Vega remains absent until its exact
+//! governed Figure 9 proving artifacts are available; ZK-AMS and ZK-X509 also
+//! remain absent until their native release paths are genuinely available, so
+//! receipt issuance remains closed.
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::compiled_privacy_profile_v1,
@@ -20,7 +21,6 @@ use iroha_core::{
         build_privacy_release_jindo_network_action_v1,
         build_privacy_release_orchard_network_action_v1,
         build_privacy_release_pq_masp_network_actions_v1,
-        build_privacy_release_vega_network_action_v1,
         build_privacy_release_verange_network_action_v1,
         build_privacy_release_zk_ace_network_action_v1,
     },
@@ -53,7 +53,7 @@ const SCHEMA_VERSION: u8 = 1;
 const ZK_ACE_OPERATION: &str = "build-zk-ace-action-v1";
 const ANONYMOUS_PGC_OPERATION: &str = "build-anonymous-pgc-action-v1";
 const VERANGE_OPERATION: &str = "build-verange-action-v1";
-const VEGA_OPERATION: &str = "build-vega-action-v1";
+const UNAVAILABLE_VEGA_OPERATION: &str = "build-vega-action-v1";
 const JINDO_OPERATION: &str = "build-jindo-action-v1";
 const BOOTLE_LANTERN_OPERATION: &str = "build-bootle-lantern-action-v1";
 const ORCHARD_OPERATION: &str = "build-orchard-action-v1";
@@ -82,6 +82,7 @@ const CONSTRUCTION_ONLY_STATUS: &str = "constructible";
 const JINDO_EXPERIMENTAL_STATUS: &str = "available-experimental";
 const MISSING_CONTROLLER_CASE_EVIDENCE: &str = "MissingSealedControllerProtocolCaseEvidence";
 const MISSING_ADMISSION_ARTIFACT_BUNDLE: &str = "MissingCanonicalAdmissionArtifactBundle";
+const MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS: &str = "MissingGovernedFigure9ProverArtifacts";
 const MISSING_JINDO_KNOWLEDGE_SOUNDNESS: &str = "MissingDistributionWideKnowledgeSoundnessEvidence";
 const MISSING_VERANGE_SETUP_AUTHORITY: &str =
     "MissingExactGenesisSourceClosedControllerSetupAuthorityIdentity";
@@ -109,7 +110,7 @@ struct ConstructibleOperationSpecV1 {
     operation: &'static str,
     protocol: &'static str,
 }
-const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 10] = [
+const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     ConstructibleOperationSpecV1 {
         operation: ZK_ACE_OPERATION,
         protocol: "zk-ace-pq-authorization-v0",
@@ -121,10 +122,6 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 10] = [
     ConstructibleOperationSpecV1 {
         operation: VERANGE_OPERATION,
         protocol: "verange-transparent-range-v1",
-    },
-    ConstructibleOperationSpecV1 {
-        operation: VEGA_OPERATION,
-        protocol: "vega-existing-credential-zk-v0",
     },
     ConstructibleOperationSpecV1 {
         operation: JINDO_OPERATION,
@@ -156,6 +153,9 @@ fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOpera
         .iter()
         .copied()
         .find(|spec| spec.operation == operation)
+}
+fn unavailable_operation_reason_v1(operation: &str) -> Option<&'static str> {
+    (operation == UNAVAILABLE_VEGA_OPERATION).then_some(MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS)
 }
 #[derive(Debug, Clone, norito::JsonDeserialize, norito::JsonSerialize)]
 #[norito(deny_unknown_fields)]
@@ -560,6 +560,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
     if request.schema != REQUEST_SCHEMA || request.schema_version != SCHEMA_VERSION {
         return Err("action-driver request selects an unsupported contract".to_owned());
     }
+    if let Some(reason) = unavailable_operation_reason_v1(&request.operation) {
+        return Err(reason.to_owned());
+    }
     let operation = constructible_operation_spec_v1(&request.operation)
         .ok_or_else(|| "action-driver request selects an unsupported contract".to_owned())?;
     if request.creation_time_millis == 0
@@ -665,11 +668,6 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
             )
             .map_err(|error| format!("native VeRange action construction failed: {error:?}"))?
             .transaction
-        }
-        VEGA_OPERATION => {
-            build_privacy_release_vega_network_action_v1(context, *fixture_seed, &private_key)
-                .map_err(|error| format!("native Vega action construction failed: {error:?}"))?
-                .transaction
         }
         JINDO_OPERATION => {
             build_privacy_release_jindo_network_action_v1(context, *fixture_seed, &private_key)
@@ -800,6 +798,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const DRIVER_SOURCE: &str = include_str!("privacy_exact12_action_driver.rs");
     const REQUEST_ID_GOLDEN: &str =
         include_str!("../../../../fixtures/privacy_exact12_action_driver_request_id_v1.json");
     #[derive(Debug, norito::JsonDeserialize)]
@@ -856,14 +855,13 @@ mod tests {
     }
     #[test]
     fn operation_table_contains_only_genuine_release_action_paths() {
-        assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 10);
+        assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 9);
         assert_eq!(
             CONSTRUCTIBLE_OPERATION_SPECS_V1.map(|spec| spec.protocol),
             [
                 "zk-ace-pq-authorization-v0",
                 "anonymous-pgc-k-out-of-n-v1",
                 "verange-transparent-range-v1",
-                "vega-existing-credential-zk-v0",
                 "iroha-jindo-polynomial-commitment-v0",
                 "iroha-bootle-lantern-anoncred-v1",
                 "orchard-halo2-actions-v1",
@@ -877,8 +875,54 @@ mod tests {
                 .iter()
                 .all(|spec| !matches!(
                     spec.protocol,
-                    "iroha-zk-ams-v1" | "iroha-zk-x509-stark-p256-v0"
+                    "vega-existing-credential-zk-v0"
+                        | "iroha-zk-ams-v1"
+                        | "iroha-zk-x509-stark-p256-v0"
                 ))
+        );
+    }
+
+    #[test]
+    fn vega_is_rejected_before_request_material_derivation_with_exact_reason() {
+        let request = BuildActionRequestV1 {
+            asset_definition_id: String::new(),
+            candidate_binding_sha256: String::new(),
+            creation_time_millis: 0,
+            network_id_hex: String::new(),
+            nonce: 0,
+            operation: UNAVAILABLE_VEGA_OPERATION.to_owned(),
+            request_id: String::new(),
+            schema: REQUEST_SCHEMA.to_owned(),
+            schema_version: SCHEMA_VERSION,
+            ttl_millis: 0,
+        };
+        assert!(constructible_operation_spec_v1(UNAVAILABLE_VEGA_OPERATION).is_none());
+        assert_eq!(
+            build_response(request).expect_err("Vega must remain unavailable"),
+            MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS
+        );
+        assert_eq!(
+            DRIVER_SOURCE
+                .matches("\"MissingGovernedFigure9ProverArtifacts\"")
+                .count(),
+            1
+        );
+        let retired_builder = ["build_privacy_release_", "vega_network_action_v1"].concat();
+        assert!(!DRIVER_SOURCE.contains(&retired_builder));
+        let response_source = DRIVER_SOURCE
+            .split_once("fn build_response")
+            .expect("build-response boundary")
+            .1
+            .split_once("fn run()")
+            .expect("driver-run boundary")
+            .0;
+        assert!(
+            response_source
+                .find("unavailable_operation_reason_v1")
+                .expect("explicit unavailable-operation check")
+                < response_source
+                    .find("let signing_seed")
+                    .expect("secret seed derivation")
         );
     }
 }

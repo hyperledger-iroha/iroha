@@ -402,6 +402,10 @@ fn chunk_points_v1(
     }
 }
 
+#[allow(
+    clippy::needless_range_loop,
+    reason = "column-major witness vectors must be traversed in coordinate-major order"
+)]
 fn chunk_witness_v1(
     chunk: usize,
     values: [Vec<Scalar>; COMMITMENTS_PER_CORE_V1],

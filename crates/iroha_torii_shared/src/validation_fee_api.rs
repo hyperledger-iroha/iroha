@@ -1482,6 +1482,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the focused schema test keeps every required and retired mobile policy key auditable together"
+    )]
     fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
         let proposal = ValidationFeeVerifiedParliamentProposalV1 {
             proposal_kind: "ValidationFeePolicyV1".to_owned(),

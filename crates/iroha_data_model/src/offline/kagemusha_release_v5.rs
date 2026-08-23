@@ -1760,6 +1760,12 @@ fn validate_internal_validation_receipt_v4(
             != manifest.reviewed_source_closure_descriptor_sha256
         || body.authenticated_source_seal_projection_sha256
             != manifest.authenticated_source_seal_projection_sha256
+        || body.tracked_cargo_lock.sha256
+            != manifest.reviewed_source_closure.ignored_cargo_lock_sha256
+        || body.tracked_cargo_lock.size_bytes
+            != manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_size_bytes
         || body.reviewed_cargo_binary_sha256 != manifest.reviewed_cargo_binary_sha256
         || body.reviewed_rustc_binary_sha256 != manifest.reviewed_rustc_binary_sha256
         || body.generator_binary_sha256 != manifest.generator_binary_sha256

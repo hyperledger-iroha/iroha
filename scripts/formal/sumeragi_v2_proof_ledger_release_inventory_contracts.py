@@ -1677,6 +1677,12 @@ def _production_liveness_release_inventory_errors(
         "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
         "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
     }
+    formal_replay_environment = {
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    }
     environment_contracts = (
         (
             repo_root / "scripts" / "bootstrap_sumeragi_v2_release.py",
@@ -1685,6 +1691,10 @@ def _production_liveness_release_inventory_errors(
         (
             repo_root / "scripts" / "validate_sumeragi_v2_release_bootstrap.py",
             "_RUNNER_EXTRA_ENV",
+        ),
+        (
+            repo_root / "scripts" / "write_sumeragi_v2_release_receipt.py",
+            "_BOOTSTRAP_RUNNER_ENV_ALLOWLIST",
         ),
     )
     for contract_path, assignment_name in environment_contracts:
@@ -1734,12 +1744,65 @@ def _production_liveness_release_inventory_errors(
                 f"{contract_path}: authenticated release environment must admit "
                 "exactly the five source-bound G-SCALE trust inputs"
             )
+        admitted_formal_replay = {
+            value
+            for value in allowlist
+            if isinstance(value, str)
+            and value.startswith("IROHA_RELEASE_FORMAL_REPLAY_")
+        }
+        if admitted_formal_replay != formal_replay_environment:
+            errors.append(
+                f"{contract_path}: authenticated release environment must admit "
+                "exactly the four signed formal replay inputs"
+            )
+
+    for option in (
+        "--formal-replay-source-receipt",
+        "--formal-replay-release-root",
+        "--expected-formal-replay-signature-sha256",
+        "--formal-replay-principal",
+    ):
+        if source.count(option) != 1:
+            errors.append(
+                f"{release_path}: terminal receipt publication must carry {option} "
+                "exactly once"
+            )
+    for fragment, description in (
+        (
+            'IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT="$release_formal_replay_source_receipt" \\\n',
+            "the canonical source receipt into the sealed child",
+        ),
+        (
+            'IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT="$release_formal_replay_release_root" \\\n',
+            "the finalized bundle root into the sealed child",
+        ),
+        (
+            'IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256="$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \\\n',
+            "the detached signature digest into the sealed child",
+        ),
+        (
+            'IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL="$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \\\n',
+            "the signer principal into the sealed child",
+        ),
+    ):
+        if source.count(fragment) != 1:
+            errors.append(
+                f"{release_path}: production release must propagate {description} "
+                "exactly once"
+            )
 
     receipt_path = repo_root / "scripts" / "write_sumeragi_v2_release_receipt.py"
     if not receipt_path.is_file() or receipt_path.is_symlink():
         errors.append(f"{receipt_path}: release receipt writer must be a regular file")
     else:
         receipt_source = receipt_path.read_text(encoding="utf-8")
+        if receipt_source.count(
+            "bootstrap runner signed formal replay inputs are not the receipt inputs"
+        ) != 1:
+            errors.append(
+                f"{receipt_path}: aggregate receipt must bind the signed formal "
+                "replay inputs to the authenticated bootstrap environment"
+            )
         try:
             receipt_tree = ast.parse(receipt_source, filename=str(receipt_path))
         except SyntaxError as error:
@@ -1798,16 +1861,16 @@ def _production_liveness_release_inventory_errors(
                 )
             expected_receipt_component_sha256 = {
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-                    "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
+                    "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
+                    "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
                     "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
+                    "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1822,6 +1885,7 @@ def _production_liveness_release_inventory_errors(
                     "_validate_multilane_apalache_evidence",
                     "_validate_formal_snapshot_replays",
                     "_formal_artifacts",
+                    "_formal_replay_release",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
                     "_receipt_validation_invocation_value_sha256",
@@ -1967,6 +2031,77 @@ def _production_liveness_release_inventory_errors(
             gate_evidence_path = receipt_path.with_name(
                 "write_sumeragi_v2_release_receipt_gate_evidence.py"
             )
+            formal_component_path = receipt_path.with_name(
+                "write_sumeragi_v2_release_receipt_formal_artifacts.py"
+            )
+            formal_component_source = (
+                formal_component_path.read_text(encoding="utf-8")
+                if formal_component_path.is_file()
+                and not formal_component_path.is_symlink()
+                else ""
+            )
+            for fragment, description in (
+                (
+                    '"namespace": "iroha-sumeragi-v2-replay-receipt-v1",\n',
+                    "the V1 replay SSHSIG namespace",
+                ),
+                (
+                    '"source_artifacts": [\n',
+                    "the complete replay output inventory",
+                ),
+                (
+                    '"receipt",\n            release_root_path / "receipt.json",\n            0o400,\n',
+                    "the immutable finalized receipt",
+                ),
+                (
+                    'if status != 0 or stdout != expected_stdout or stderr:\n',
+                    "the independent verifier success gate",
+                ),
+                (
+                    'release_root_contract = _capture_directory_contract(\n',
+                    "the pre-verification release-root identity",
+                ),
+                (
+                    'source_root_contract = _capture_directory_contract(\n',
+                    "the pre-verification source-root identity",
+                ),
+                (
+                    'watched_contracts=(\n            *snapshots.values(),\n            *source_artifacts,\n            *verifier_dependencies,\n        ),\n',
+                    "the exact verifier input closure",
+                ),
+                (
+                    '"formal replay release directories changed during verification"\n',
+                    "the post-verification directory identity gate",
+                ),
+            ):
+                if formal_component_source.count(fragment) != 1:
+                    errors.append(
+                        f"{formal_component_path}: aggregate formal replay evidence "
+                        f"must retain {description} exactly once"
+                    )
+            aggregate_replay_markers = (
+                '    specs = (\n        (\n            "source_receipt",\n',
+                "snapshots: dict[str, EvidenceSnapshot] = {}\n",
+                "source_artifacts: list[EvidenceSnapshot] = []\n",
+                "status, stdout, stderr = _run_bounded_python_validator(\n",
+                '"formal replay release directories changed during verification"\n',
+                "def full_record(snapshot: EvidenceSnapshot) -> dict[str, Any]:\n",
+            )
+            aggregate_replay_source = formal_component_source[
+                formal_component_source.find("def _formal_replay_release(") :
+            ]
+            aggregate_replay_positions = tuple(
+                aggregate_replay_source.find(marker)
+                for marker in aggregate_replay_markers
+            )
+            if -1 in aggregate_replay_positions or aggregate_replay_positions != tuple(
+                sorted(aggregate_replay_positions)
+            ):
+                errors.append(
+                    f"{formal_component_path}: aggregate formal replay evidence must "
+                    "snapshot its complete bundle before the independent verifier and "
+                    "revalidate it before inventory publication"
+                )
             gate_evidence_source = (
                 gate_evidence_path.read_text(encoding="utf-8")
                 if gate_evidence_path.is_file() and not gate_evidence_path.is_symlink()
@@ -1998,7 +2133,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
+            "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -2047,6 +2182,9 @@ def _production_liveness_release_inventory_errors(
             bootstrap_assignments: dict[str, list[Any]] = {
                 "_BOOTSTRAP_COMPONENT_FILES": [],
                 "_BOOTSTRAP_COMPONENT_SHA256": [],
+                "_TERMINAL_EVIDENCE_KEYS": [],
+                "_VALIDATOR_OPTION_ORDER": [],
+                "_VALIDATOR_PATH_OPTIONS": [],
             }
             for statement in bootstrap_tree.body:
                 if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
@@ -2058,9 +2196,20 @@ def _production_liveness_release_inventory_errors(
                 ):
                     continue
                 try:
-                    bootstrap_assignments[target.id].append(
-                        ast.literal_eval(statement.value)
-                    )
+                    if (
+                        target.id == "_VALIDATOR_PATH_OPTIONS"
+                        and isinstance(statement.value, ast.Call)
+                        and isinstance(statement.value.func, ast.Name)
+                        and statement.value.func.id == "frozenset"
+                        and len(statement.value.args) == 1
+                        and not statement.value.keywords
+                    ):
+                        parsed_value = frozenset(
+                            ast.literal_eval(statement.value.args[0])
+                        )
+                    else:
+                        parsed_value = ast.literal_eval(statement.value)
+                    bootstrap_assignments[target.id].append(parsed_value)
                 except (TypeError, ValueError, SyntaxError):
                     bootstrap_assignments[target.id].append(None)
             if bootstrap_assignments["_BOOTSTRAP_COMPONENT_FILES"] != [
@@ -2076,6 +2225,57 @@ def _production_liveness_release_inventory_errors(
                 errors.append(
                     f"{bootstrap_path}: release bootstrap component digests must "
                     f"equal {expected_bootstrap_component_sha256!r}"
+                )
+            terminal_keys = bootstrap_assignments["_TERMINAL_EVIDENCE_KEYS"]
+            if (
+                len(terminal_keys) != 1
+                or not isinstance(terminal_keys[0], set)
+                or "formal_replay_release" not in terminal_keys[0]
+            ):
+                errors.append(
+                    f"{bootstrap_path}: terminal release evidence must require the "
+                    "signed formal replay release bundle"
+                )
+            replay_validator_options = (
+                "--formal-replay-source-receipt",
+                "--formal-replay-release-root",
+                "--expected-formal-replay-signature-sha256",
+                "--formal-replay-principal",
+            )
+            validator_orders = bootstrap_assignments["_VALIDATOR_OPTION_ORDER"]
+            if len(validator_orders) != 1 or not isinstance(
+                validator_orders[0], tuple
+            ):
+                errors.append(
+                    f"{bootstrap_path}: validator option order must remain literal"
+                )
+            else:
+                validator_order = validator_orders[0]
+                try:
+                    replay_offset = validator_order.index(
+                        "--formal-replay-source-receipt"
+                    )
+                except ValueError:
+                    replay_offset = -1
+                if validator_order[
+                    replay_offset : replay_offset + len(replay_validator_options)
+                ] != replay_validator_options:
+                    errors.append(
+                        f"{bootstrap_path}: protected receipt validation must carry "
+                        "the four formal replay options in canonical order"
+                    )
+            validator_paths = bootstrap_assignments["_VALIDATOR_PATH_OPTIONS"]
+            if (
+                len(validator_paths) != 1
+                or not isinstance(validator_paths[0], frozenset)
+                or not set(replay_validator_options[:2]).issubset(
+                    validator_paths[0]
+                )
+                or set(replay_validator_options[2:]) & validator_paths[0]
+            ):
+                errors.append(
+                    f"{bootstrap_path}: formal replay validator path/text kinds "
+                    "must remain exact"
                 )
             expected_parent_bootstrap_symbols = frozenset(
                 symbol
@@ -2128,6 +2328,30 @@ def _production_liveness_release_inventory_errors(
                         f"{component_path}: release bootstrap component SHA-256 must "
                         f"equal {expected_bootstrap_component_sha256[component_name]}"
                     )
+                component_source = component_path.read_text(encoding="utf-8")
+                for fragment, description in (
+                    (
+                        'receipt_evidence["formal_replay_release"]',
+                        "the terminal signed replay evidence",
+                    ),
+                    (
+                        '"terminal formal replay finalized root",\n',
+                        "the exact finalized bundle inventory",
+                    ),
+                    (
+                        'finalized["receipt"].sha256 != source_receipt.sha256\n',
+                        "the source/archive receipt equality gate",
+                    ),
+                    (
+                        '"--expected-formal-replay-signature-sha256",\n',
+                        "the protected signature digest replay",
+                    ),
+                ):
+                    if component_source.count(fragment) != 1:
+                        errors.append(
+                            f"{component_path}: bootstrap formal replay integration "
+                            f"must retain {description} exactly once"
+                        )
 
     for assignment in (
         'required_data_model_status_test="block::consensus_v2::tests::'

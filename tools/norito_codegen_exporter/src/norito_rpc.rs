@@ -3699,21 +3699,21 @@ mod tests {
             properties["canonical.prefix.hex"],
             format!("00000000{}", properties["compact.length.hex"])
         );
-        assert_eq!(properties["versioned.bytes"], "619");
+        assert_eq!(properties["versioned.bytes"], "624");
         assert_eq!(
             properties["versioned.sha256"],
-            "f8a4e12f40d0d5d92d74a032a4b782b6b3361363a1a313161f2336b68006087f"
+            "564f351b91c59f2fbad3f02fdeb4a477f9ded3af4ec7576c8bdf6a8c7e5513af"
         );
-        assert_eq!(properties["bare.bytes"], "618");
-        assert_eq!(properties["compact.length.hex"], "da03");
-        assert_eq!(properties["canonical.prefix.hex"], "00000000da03");
+        assert_eq!(properties["bare.bytes"], "623");
+        assert_eq!(properties["compact.length.hex"], "df03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000df03");
         assert_eq!(
             properties["canonical.hash"],
-            "76ca8143ab4fc3697dd755576ceb33c82086af30d69d77b030f9817a8e9c2fc3"
+            "2515ee634afb06d636c4947ffce5c0ebe70b9d9df52943f95e3e074e65438d91"
         );
         assert_eq!(
             properties["payload.prehash"],
-            "36b2c7537acc2c100743039539ed28612e5f34e1ecf6df2e2afb4ad55fcebe43"
+            "cf3c67158dfa4b370219f4ff24861551de386ce3ce07fa3e142c242ed49e421d"
         );
     }
     #[test]
@@ -3865,6 +3865,49 @@ mod tests {
             b"not ours"
         );
         assert!(!destination.join("fixture.json").exists());
+    }
+    #[test]
+    fn create_only_publication_commits_exact_tree_with_manifest_seal_last() {
+        let rendered = tempdir().expect("rendered publication");
+        let owned = test_owned_publication_paths();
+        fs::write(rendered.path().join("fixture.json"), b"rendered").expect("write rendered file");
+        write_test_publication_seal(rendered.path());
+        normalize_rendered_modes(rendered.path(), &owned).expect("normalize rendered modes");
+        let expected = PublicationSnapshot::capture(rendered.path(), &owned)
+            .expect("capture rendered snapshot");
+        let parent = tempdir().expect("destination parent");
+        let destination = parent.path().join("publication");
+        let validation_calls = std::cell::Cell::new(0_u8);
+
+        publish_create_only_publication(&expected, &destination, &owned, || {
+            validation_calls.set(validation_calls.get() + 1);
+            assert!(destination.is_dir());
+            assert_eq!(
+                fs::read(destination.join("fixture.json")).expect("read unsealed fixture"),
+                b"rendered"
+            );
+            assert!(
+                !destination.join(CANONICAL_MANIFEST).exists(),
+                "pre-seal validation must observe an incomplete publication"
+            );
+            Ok(())
+        })
+        .expect("publish exact create-only fixture tree");
+
+        assert_eq!(validation_calls.get(), 1);
+        require_publication_seal(&destination).expect("final manifest seals publication");
+        let published = PublicationSnapshot::capture_complete_tree(&destination)
+            .expect("capture complete publication");
+        expected
+            .require_identical(&published)
+            .expect("published tree remains byte-, path-, type-, and mode-exact");
+        assert!(
+            !parent
+                .path()
+                .join(format!(".publication{PUBLICATION_SEAL_PENDING_SUFFIX}"))
+                .exists(),
+            "seal staging link must be retired at the commit point"
+        );
     }
     #[test]
     fn create_only_publication_leaves_unsealed_residue_after_failed_validation() {
@@ -4216,6 +4259,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed-schema test keeps all top-level and nested rejection cases auditable together"
+    )]
     fn payload_descriptor_requires_exact_top_level_and_payload_fields() {
         let mut fixture = canonical_descriptor_fixture("typed_fee_payment_gas_limit");
         let entry = fixture

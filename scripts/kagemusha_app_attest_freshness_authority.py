@@ -388,12 +388,7 @@ def _write_new_private_json(path: Path, value: dict[str, Any], label: str) -> No
     try:
         descriptor = os.open(target, flags, 0o600)
         created = True
-        offset = 0
-        while offset < len(payload):
-            written = os.write(descriptor, payload[offset:])
-            if written <= 0:
-                raise OSError("short authority output write")
-            offset += written
+        _write_all(descriptor, payload, "authority output")
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
@@ -414,6 +409,17 @@ def _write_new_private_json(path: Path, value: dict[str, Any], label: str) -> No
         if isinstance(error, AuthorityError):
             raise
         raise AuthorityError(f"{label} could not be written durably") from error
+
+
+def _write_all(descriptor: int, payload: bytes, label: str) -> None:
+    """Write every byte or fail instead of accepting/spinning on a short write."""
+
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        if written <= 0:
+            raise OSError(f"short {label} write")
+        offset += written
 
 
 class AuthorityState:
@@ -1852,9 +1858,7 @@ def _verify_cms_signature(
                 0o600,
             )
             try:
-                offset = 0
-                while offset < len(root_payload):
-                    offset += os.write(descriptor, root_payload[offset:])
+                _write_all(descriptor, root_payload, "pinned root")
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
@@ -1867,9 +1871,7 @@ def _verify_cms_signature(
                 0o600,
             )
             try:
-                offset = 0
-                while offset < len(receipt_der):
-                    offset += os.write(receipt_descriptor, receipt_der[offset:])
+                _write_all(receipt_descriptor, receipt_der, "CMS receipt")
                 os.fsync(receipt_descriptor)
             finally:
                 os.close(receipt_descriptor)

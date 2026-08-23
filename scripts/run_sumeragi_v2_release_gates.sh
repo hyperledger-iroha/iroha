@@ -88,6 +88,20 @@ if [[ "$profile" == "--release" \
     echo "production release requires one protected SDK dependency manifest and digest" >&2
     exit 1
   fi
+  for replay_input_name in \
+    IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT \
+    IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT \
+    IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL; do
+    if [[ -z "${!replay_input_name:-}" ]]; then
+      echo "production release requires signed formal replay input ${replay_input_name}" >&2
+      exit 1
+    fi
+  done
+  if [[ ! "${IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256:-}" \
+    =~ ^[0-9a-f]{64}$ ]]; then
+    echo "production release requires the detached formal replay SSHSIG digest" >&2
+    exit 1
+  fi
 fi
 readonly inherited_cargo_cache_home="${CARGO_HOME:-${HOME:-}/.cargo}"
 cd "$repo_root"
@@ -530,6 +544,35 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   fi
   readonly release_sdk_dependency_bundle_manifest
+  release_formal_replay_source_receipt="$(
+    canonical_path "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"
+  )" || {
+    echo "the signed formal replay source receipt is unavailable" >&2
+    exit 1
+  }
+  release_formal_replay_release_root="$(
+    canonical_path "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"
+  )" || {
+    echo "the finalized formal replay release root is unavailable" >&2
+    exit 1
+  }
+  if [[ "$release_formal_replay_source_receipt" \
+      != "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT" \
+    || ! -f "$release_formal_replay_source_receipt" \
+    || -L "$release_formal_replay_source_receipt" \
+    || "$release_formal_replay_source_receipt" != */receipt.json ]]; then
+    echo "formal replay source receipt must be one canonical regular receipt.json" >&2
+    exit 1
+  fi
+  if [[ "$release_formal_replay_release_root" \
+      != "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT" \
+    || ! -d "$release_formal_replay_release_root" \
+    || -L "$release_formal_replay_release_root" ]]; then
+    echo "formal replay release root must be one canonical non-symlink directory" >&2
+    exit 1
+  fi
+  readonly release_formal_replay_source_receipt
+  readonly release_formal_replay_release_root
   release_git_bin="$(canonical_git_executable)" || {
     echo "a resolved Git executable is required for the release corridor" >&2
     exit 1
@@ -1239,6 +1282,10 @@ PY
     IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
     IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
     IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
+    IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT="$release_formal_replay_source_receipt" \
+    IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT="$release_formal_replay_release_root" \
+    IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256="$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+    IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL="$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
     IROHA_RELEASE_TLAPM_BIN="$release_child_runtime/tlapm-distribution/bin/tlapm" \
     IROHA_RELEASE_TLAPM_STDLIB="$release_child_runtime/tlapm-distribution/lib/tlapm/stdlib" \
     IROHA_RELEASE_TLA2TOOLS_JAR="$release_child_runtime/tla2tools.jar" \
@@ -1518,6 +1565,13 @@ PY
         "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
       --corridor-completion "$corridor_completion_path" \
       --formal-completion "$formal_completion_path" \
+      --formal-replay-source-receipt \
+        "$release_formal_replay_source_receipt" \
+      --formal-replay-release-root "$release_formal_replay_release_root" \
+      --expected-formal-replay-signature-sha256 \
+        "$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+      --formal-replay-principal \
+        "$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
       --seed-completion "$seed_completion_path" \
       --chaos-completion "$chaos_completion_path" \
       --g4p-completion "$multilane_four_peer_completion_path" \
@@ -1622,6 +1676,10 @@ if [[ "$profile" == "--release" ]]; then
   readonly IROHA_RELEASE_SCALING_IROHAD_SHA256
   readonly IROHA_RELEASE_SCALING_IROHA_CLI_SHA256
   readonly IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256
+  readonly IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT
+  readonly IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT
+  readonly IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256
+  readonly IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL
   readonly IROHA_RELEASE_SDK_INPUT_ROOT
   readonly IROHA_RELEASE_SDK_INPUT_INVENTORY
   readonly IROHA_RELEASE_SDK_INPUT_INVENTORY_SHA256

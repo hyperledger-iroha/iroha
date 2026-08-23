@@ -2444,7 +2444,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "902be400390561abf765799c869da64adb9ed53909fce4329734cfb60e04842b"
+        "934cac43859cca5ef5975f978a32934d88fd586b3b50fb97df1d62038e36e2c8"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
@@ -3226,7 +3226,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4"
+        "d6ed8d045a8446c7f915babf543832727f77b485fbf233954c3645612792a47b"
     ),
     "preflight_effect_batch_frontier": (
         "d2debd37b0ef330c5dba99fd01e483e44edc4be3df5ccee02513ef7203f3f96d"
@@ -3238,21 +3238,15 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "43002ee7e8aa283ea163fe22d59b120312d190a80c5ac9ca531403725cff678b"
+        "988c941d0456dd0af66bf25bd1dba3cf5284bfbcf0a789c301f571383e1ba2c3"
     ),
     "consume_pacemaker_effects_with_runner_decision_cleanup": (
         "6e62b027c673e7cfe7122197f165cbcd316219ee6f8c1333bfcca64d1acd5343"
     ),
-    "consume_pending_tip_recovery_effects": (
-        "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
-    ),
     "step_pacemaker_once": (
         "c35c6e284b25bc13c1e08d351b5108be7ba72e51701b8beab9860765337bc163"
     ),
-    "step": "92b58251ac56ae73eb36981a7a3edd650f4e25dee7582447fd5d0e368119c730",
-    "step_pending_tip_recovery": (
-        "839907e02db4e0fdda25a94c9d17b3b98b8884e0037eb5038d45899d98c4c05e"
-    ),
+    "step": "4cb1b0ed16376658416f5aa7fd1aa48865c468637b5cf5f53f65d03cb7bc06cf",
 }
 
 _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {
@@ -3772,7 +3766,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "1f889bb50a6c0fac71ef8ab4d5b76940d2932ea708422aba6d6343595ea2f980",
+    "launch:ProductionLifecycleOwnerV1::launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
 }
 
 # Completion provenance remains separately sealed because the direct runtime

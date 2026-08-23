@@ -3090,8 +3090,8 @@ pub(crate) struct V2LaneWorkAdapter {
     merge_qc_preflight_checks: usize,
     completed_merge_sidecars: BTreeSet<HashOf<MergeLedgerEntry>>,
     rejected_merge_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
-    recovered_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>,
-    rejected_recovered_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
+    lifecycle_decision_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>,
+    rejected_lifecycle_decision_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
     closed_sidecar_prefixes: BTreeMap<PeerId, CertifiedMergeSidecarClosedPrefix>,
     sidecar_effects: VecDeque<V2LaneWorkEffect>,
     sidecar_effect_keys: BTreeSet<Hash>,
@@ -3112,8 +3112,8 @@ pub(crate) struct V2LaneWorkAdapter {
 impl V2LaneWorkAdapter {
     /// Compare the exact process-local dependencies used by lifecycle-owned work.
     ///
-    /// This fixed oracle exposes no dependency parts. It prevents a recovered
-    /// Apply deferral from registering or waking through a foreign height,
+    /// This fixed oracle exposes no dependency parts. It prevents a lifecycle
+    /// Decision Apply deferral from registering or waking through a foreign height,
     /// State, Kura instance, or consensus output corridor.
     pub(in crate::sumeragi) fn matches_lifecycle_dependencies(
         &self,
@@ -3137,14 +3137,15 @@ impl V2LaneWorkAdapter {
     /// advance it first. The method never scans past fair FIFO order, and an
     /// exact request is returned to the same sidecar lane if the service
     /// corridor retains source ownership under backpressure.
-    pub(in crate::sumeragi) fn dispatch_next_recovered_apply_sidecar_request(
+    pub(in crate::sumeragi) fn dispatch_next_lifecycle_decision_apply_sidecar_request(
         &mut self,
         services: &ProductionV2Services,
         reference: &CertifiedMergeLedgerReference,
     ) -> Result<(), V2LaneWorkError> {
         if !services.matches_lifecycle_lane_work(self) {
             return Err(V2LaneWorkError::InvalidContext(
-                "recovered Apply sidecar request belongs to another service/lane owner".to_owned(),
+                "lifecycle Decision Apply sidecar request belongs to another service/lane owner"
+                    .to_owned(),
             ));
         }
         let Some(next) = self.next_effect() else {
@@ -3805,8 +3806,8 @@ impl V2LaneWorkAdapter {
             merge_qc_preflight_checks: 0,
             completed_merge_sidecars: BTreeSet::new(),
             rejected_merge_sidecars: BTreeMap::new(),
-            recovered_apply_sidecar_waits: BTreeSet::new(),
-            rejected_recovered_apply_sidecars: BTreeMap::new(),
+            lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),
+            rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
             closed_sidecar_prefixes: BTreeMap::new(),
             sidecar_effects: VecDeque::new(),
             sidecar_effect_keys: BTreeSet::new(),
@@ -9958,18 +9959,18 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         self.defer_missing_merge_sidecar_with_priority(round, subject, reference, true, false)
     }
-    /// Register the exact decided sidecar owned by one recovered Apply carrier.
+    /// Register the exact decided sidecar owned by one lifecycle Decision Apply carrier.
     ///
     /// A terminal full-entry rejection is retained in a dedicated owner class
     /// so the ordinary executor recovery drain cannot consume it first.
-    pub(in crate::sumeragi) fn defer_missing_recovered_decision_apply_sidecar(
+    pub(in crate::sumeragi) fn defer_missing_lifecycle_decision_apply_sidecar(
         &mut self,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         if let Some(reason) = self
-            .rejected_recovered_apply_sidecars
+            .rejected_lifecycle_decision_apply_sidecars
             .get(&reference.entry_hash)
         {
             return Ok(MergeSidecarDeferralDisposition::Rejected(reason.clone()));
@@ -9980,11 +9981,13 @@ impl V2LaneWorkAdapter {
         match disposition {
             MergeSidecarDeferralDisposition::Fetching
             | MergeSidecarDeferralDisposition::RetryLater => {
-                self.recovered_apply_sidecar_waits.insert(entry_hash);
+                self.lifecycle_decision_apply_sidecar_waits
+                    .insert(entry_hash);
             }
             MergeSidecarDeferralDisposition::Available
             | MergeSidecarDeferralDisposition::Rejected(_) => {
-                self.recovered_apply_sidecar_waits.remove(&entry_hash);
+                self.lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash);
             }
         }
         Ok(disposition)
@@ -11909,8 +11912,11 @@ impl V2LaneWorkAdapter {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
                     .or_insert(error.clone());
-                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-                    self.rejected_recovered_apply_sidecars
+                if self
+                    .lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash)
+                {
+                    self.rejected_lifecycle_decision_apply_sidecars
                         .entry(entry_hash)
                         .or_insert(error);
                 }
@@ -11932,8 +11938,11 @@ impl V2LaneWorkAdapter {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
                     .or_insert_with(|| reason.clone());
-                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-                    self.rejected_recovered_apply_sidecars
+                if self
+                    .lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash)
+                {
+                    self.rejected_lifecycle_decision_apply_sidecars
                         .entry(entry_hash)
                         .or_insert(reason);
                 }

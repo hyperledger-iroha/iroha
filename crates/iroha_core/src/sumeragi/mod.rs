@@ -6598,6 +6598,36 @@ impl FairV2Ingress {
     fn len(&self) -> usize {
         self.state.lock().len
     }
+    /// Whether one exact physical carrier remains queued without a leader-wire handoff.
+    #[cfg(test)]
+    pub(crate) fn exact_queued_ungated_occurrence_for_test(
+        &self,
+        physical_admission_ordinal: u64,
+    ) -> bool {
+        let state = self.state.lock();
+        let mut matches = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter(|entry| entry.admission_ordinal == physical_admission_ordinal);
+        let Some(entry) = matches.next() else {
+            return false;
+        };
+        if matches.next().is_some() || entry.leader_wire_token.is_some() {
+            return false;
+        }
+        let Some(ownership) = entry.inbound.ingress_ownership() else {
+            return false;
+        };
+        ownership.validate_exact()
+            && entry.ownership_snapshot.same_semantic_request(ownership)
+            && ownership.physical_admission_ordinal() == Some(physical_admission_ordinal)
+            && ownership.leader_wire_token().is_none()
+            && ownership.leader_wire_runtime_receipt().is_none()
+            && ownership.matches_message(entry.inbound.message())
+            && ownership.matches_semantic_origin(entry.inbound.sender())
+            && ownership.matches_reply_routes(entry.inbound.reply_routes())
+    }
 }
 /// Admit one test envelope through the real fair-ingress ownership seam.
 #[cfg(test)]

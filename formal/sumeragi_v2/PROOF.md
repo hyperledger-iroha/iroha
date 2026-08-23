@@ -285,7 +285,7 @@ and its count-and-power assumptions must not be imported into the current
 protocol.
 
 This note gives the deductive protocol argument corresponding to
-`SumeragiV2.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
+`SumeragiV2Inductive.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
 the paper argument from its mechanization status: the lemmas below explain the
 conditional target, while `SumeragiV2Proofs.tla`, `verus_proofs.rs`, and
 `proof_coverage.json` record what is actually machine checked. A theorem is not

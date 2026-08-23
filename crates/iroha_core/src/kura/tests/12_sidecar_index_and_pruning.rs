@@ -926,8 +926,7 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
     let store_dir = temp_dir.path().to_path_buf();
     drop(store);
     let config = kura_config_for_path(&store_dir, BLOCKS_IN_MEMORY);
-    let (kura, BlockCount(count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     assert_eq!(count, 0);
     assert_eq!(kura.blocks_count(), 0);
 }

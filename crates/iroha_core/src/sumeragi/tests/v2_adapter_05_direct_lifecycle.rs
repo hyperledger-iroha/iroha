@@ -1006,6 +1006,7 @@ fn direct_validation_apply_preview_preserves_complete_decision_authority() {
         reducer::BodyState::Durable
     );
 }
+
 #[test]
 fn direct_validation_inactive_retains_ignored_state_change_and_commitment() {
     let directory = TempDir::new().expect("temporary direct-validation observer directory");

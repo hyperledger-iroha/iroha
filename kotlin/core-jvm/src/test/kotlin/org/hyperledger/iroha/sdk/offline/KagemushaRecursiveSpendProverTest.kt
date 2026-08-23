@@ -609,7 +609,8 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES_V4,
             KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES,
         )
-        assertEquals(24_576, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
+        assertEquals(12 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES)
+        assertEquals(9_211, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
         assertEquals(24_576, KagemushaRecursiveSpendProver.MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2)
         assertEquals(2_048, KagemushaRecursiveSpendProver.MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1)
         assertEquals(40, KagemushaRecursiveSpendProver.PROMOTED_FINALITY_CHECKPOINT_BYTES_V2)
@@ -1513,17 +1514,49 @@ class KagemushaRecursiveSpendProverTest {
             offerArchive,
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
         )
-        val text = KagemushaPeerTextCodec.encode(request)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaPeerTextCodec.encode(request)
+        }
+        val oversizedText = KagemushaPeerTransportContract.RECEIVE_REQUEST_TEXT_PREFIX +
+            KagemushaPeerTextCodec.base64UrlEncode(offerArchive)
+        assertTrue(
+            oversizedText.toByteArray(Charsets.UTF_8).size >
+                KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaPeerTextCodec.decode(oversizedText)
+        }
+        val acknowledgementArchive = archive(
+            "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2",
+        )
+        val acknowledgement = KagemushaPeerPayload.decode(
+            acknowledgementArchive,
+            KagemushaPeerPayloadKind.ACKNOWLEDGEMENT,
+        )
+        val text = KagemushaPeerTextCodec.encode(acknowledgement)
 
-        assertTrue(text.startsWith("PKK2R."))
-        assertContentEquals(offerArchive, KagemushaPeerTextCodec.decode(text).archive())
+        assertTrue(text.startsWith("PKK2A."))
+        assertContentEquals(acknowledgementArchive, KagemushaPeerTextCodec.decode(text).archive())
         assertEquals(
-            KagemushaPeerPayloadKind.RECEIVE_REQUEST,
+            KagemushaPeerPayloadKind.ACKNOWLEDGEMENT,
             KagemushaPeerTextCodec.decode(text).kind,
         )
         assertEquals(
-            KagemushaPeerPayloadKind.RECEIVE_REQUEST,
+            KagemushaPeerPayloadKind.ACKNOWLEDGEMENT,
             KagemushaPeerTextCodec.decodeUserPresented(" \n$text\t").kind,
+        )
+        assertEquals(
+            KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES,
+            KagemushaPeerTransportContract.ACKNOWLEDGEMENT_TEXT_PREFIX.length +
+                KagemushaPeerTextCodec.base64UrlEncode(
+                    ByteArray(KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES),
+                ).length,
+        )
+        assertTrue(
+            KagemushaPeerTransportContract.ACKNOWLEDGEMENT_TEXT_PREFIX.length +
+                KagemushaPeerTextCodec.base64UrlEncode(
+                    ByteArray(KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES + 1),
+                ).length > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES,
         )
         assertEquals("PKK2R.", KagemushaPeerTransportContract.RECEIVE_REQUEST_TEXT_PREFIX)
         assertEquals("PKK2P.", KagemushaPeerTransportContract.PAYMENT_TEXT_PREFIX)

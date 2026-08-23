@@ -51,6 +51,10 @@ fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the JSON schema audit checks every mandatory nullable consensus slot under one canonical contract"
+)]
 fn current_consensus_json_requires_explicit_nullable_slots() {
     macro_rules! assert_required_nullable_field {
         ($ty:ty, $value:expr, $field:literal) => {{

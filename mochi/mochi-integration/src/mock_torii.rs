@@ -84,16 +84,18 @@ fn canonical_block_stream_message() -> Vec<u8> {
     block
         .replace_signatures(std::collections::BTreeSet::from([final_signature]))
         .expect("replace result-bearing mock-block signature");
-    let mut final_signatures = block.signatures();
-    let final_signature = final_signatures
-        .next()
-        .expect("result-bearing mock-block signature");
-    assert_eq!(final_signature.index(), 0);
-    assert!(final_signatures.next().is_none());
-    final_signature
-        .signature()
-        .verify_hash(signer.key_pair().public_key(), block.hash())
-        .expect("verify result-bearing mock-block signature");
+    {
+        let mut final_signatures = block.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing mock-block signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(signer.key_pair().public_key(), block.hash())
+            .expect("verify result-bearing mock-block signature");
+    }
     norito::to_bytes(&BlockMessage(block)).expect("canonical block message must encode")
 }
 fn canonical_event_stream_message() -> Vec<u8> {

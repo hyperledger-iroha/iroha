@@ -1573,7 +1573,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "41a0c3d8cfda9400fcdd26e27cabbbeeeae4e06f13fd9bb5819f38af50fe6a9e"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "03bbd7ef8c8c6605bce067b6b469a1c407e08f8ad5534d7b733fc94557633213"
+        "d046eb57d9a2a99dfc318980707614f96058fc3f5143becdce6a7b9cf3822511"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
         "c8baa9b718c40c26062b2a54107da0ae46f20ae333304f386be08e5dc40b7645"

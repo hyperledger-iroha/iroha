@@ -536,6 +536,10 @@ def build_receipt(
     bootstrap_runner_path: Path,
     corridor_completion_path: Path,
     formal_completion_path: Path,
+    formal_replay_source_receipt_path: Path,
+    formal_replay_release_root_path: Path,
+    expected_formal_replay_signature_sha256: str,
+    formal_replay_principal: str,
     seed_completion_path: Path,
     chaos_completion_path: Path,
     g4p_completion_path: Path,
@@ -658,6 +662,16 @@ def build_receipt(
         ),
         expected_scaling_irohad_sha256=expected_scaling_irohad_sha256,
         expected_scaling_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
+        expected_formal_replay_source_receipt_path=(
+            formal_replay_source_receipt_path
+        ),
+        expected_formal_replay_release_root_path=(
+            formal_replay_release_root_path
+        ),
+        expected_formal_replay_signature_sha256=(
+            expected_formal_replay_signature_sha256
+        ),
+        expected_formal_replay_principal=formal_replay_principal,
         bootstrap_private_inputs_available=bootstrap_private_inputs_available,
     )
     sdk_dependencies = _validate_sdk_dependency_evidence(
@@ -791,6 +805,18 @@ def build_receipt(
         bootstrap_authentication["runner"]["tools"],
         corridor_completion,
         private_build_roots_available,
+    )
+    formal_replay_release = _formal_replay_release(
+        source_receipt_path=formal_replay_source_receipt_path,
+        release_root_path=formal_replay_release_root_path,
+        expected_signature_sha256=expected_formal_replay_signature_sha256,
+        expected_ssh_keygen_sha256=expected_ssh_keygen_sha256,
+        expected_allowed_signers_sha256=expected_allowed_signers_sha256,
+        expected_revocation_sha256=expected_revocation_sha256,
+        principal=formal_replay_principal,
+        expected_signer_fingerprint=expected_signer_fingerprint,
+        checker_environment=checker_environment,
+        repo_root=repo_root,
     )
     seed_path, seed = _load_tsv(seed_completion_path, "seed completion")
     seed_manifest_fields = {
@@ -968,6 +994,7 @@ def build_receipt(
             "formal_toolchain": _artifact(formal_toolchain),
             "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
             "formal_tlaps_resource_summary": _artifact(formal_tlaps_resource_summary),
+            "formal_replay_release": formal_replay_release,
             "seed_matrix_completion": _artifact(seed_path),
             "seed_matrix_summary": _artifact(seed_summary_contract),
             "seed_matrix_run_logs": [_artifact(path) for path in seed_run_logs],
@@ -2065,6 +2092,16 @@ def main() -> int:
     parser.add_argument("--bootstrap-runner", type=Path, required=True)
     parser.add_argument("--corridor-completion", type=Path, required=True)
     parser.add_argument("--formal-completion", type=Path, required=True)
+    parser.add_argument(
+        "--formal-replay-source-receipt", type=Path, required=True
+    )
+    parser.add_argument(
+        "--formal-replay-release-root", type=Path, required=True
+    )
+    parser.add_argument(
+        "--expected-formal-replay-signature-sha256", required=True
+    )
+    parser.add_argument("--formal-replay-principal", required=True)
     parser.add_argument("--seed-completion", type=Path, required=True)
     parser.add_argument("--chaos-completion", type=Path, required=True)
     parser.add_argument("--g4p-completion", type=Path, required=True)
@@ -2137,6 +2174,14 @@ def main() -> int:
             bootstrap_runner_path=args.bootstrap_runner,
             corridor_completion_path=args.corridor_completion,
             formal_completion_path=args.formal_completion,
+            formal_replay_source_receipt_path=(
+                args.formal_replay_source_receipt
+            ),
+            formal_replay_release_root_path=args.formal_replay_release_root,
+            expected_formal_replay_signature_sha256=(
+                args.expected_formal_replay_signature_sha256
+            ),
+            formal_replay_principal=args.formal_replay_principal,
             seed_completion_path=args.seed_completion,
             chaos_completion_path=args.chaos_completion,
             g4p_completion_path=args.g4p_completion,

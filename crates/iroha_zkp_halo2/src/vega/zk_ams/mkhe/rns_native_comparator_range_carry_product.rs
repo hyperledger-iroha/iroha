@@ -40,6 +40,7 @@ use super::{
         RnsNativeComparatorProductPrerequisiteV1,
     },
     rns_native_cross_field_inventory::ComparatorRangeCarryCommitmentsV1,
+    rns_native_existing_radix_commitment_view::RnsNativeExistingRadixValidationPermitV1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
     },
@@ -1101,6 +1102,19 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
+    }
+
+    /// Consume statement-5 evidence and recover its exact statement-3 owner.
+    pub(super) fn into_previous_v1(
+        self,
+    ) -> RnsNativeComparatorProductPrerequisiteV1<'source, 'proof, S> {
+        self._previous
+    }
+
+    pub(super) fn take_existing_radix_validation_permit_v1(
+        &mut self,
+    ) -> Option<RnsNativeExistingRadixValidationPermitV1> {
+        self._previous.take_existing_radix_validation_permit_v1()
     }
 }
 

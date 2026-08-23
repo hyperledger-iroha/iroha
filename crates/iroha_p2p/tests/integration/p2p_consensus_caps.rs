@@ -114,8 +114,8 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
     cfg2.connect_startup_delay = Duration::ZERO;
     cfg1.max_total_connections = NonZeroUsize::new(1);
     cfg2.max_total_connections = NonZeroUsize::new(1);
-    let (net1, _child1) =
-        match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
+    let (net1, _child1) = match Box::pin(
+        NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
             super::p2p_identity_keys(kp1),
             cfg1,
             chain.clone(),
@@ -124,14 +124,15 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
             None,
             HashSet::from([id2.clone()]),
             ShutdownSignal::new(),
-        )
-        .await
-        {
-            Ok(started) => started,
-            Err(_) => return,
-        };
-    let (net2, _child2) =
-        match NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
+        ),
+    )
+    .await
+    {
+        Ok(started) => started,
+        Err(_) => return,
+    };
+    let (net2, _child2) = match Box::pin(
+        NetworkHandle::<Dummy>::start_with_crypto_and_initial_trusted_sources(
             super::p2p_identity_keys(kp2),
             cfg2,
             chain,
@@ -140,12 +141,13 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
             None,
             HashSet::from([id1.clone()]),
             ShutdownSignal::new(),
-        )
-        .await
-        {
-            Ok(started) => started,
-            Err(_) => return,
-        };
+        ),
+    )
+    .await
+    {
+        Ok(started) => started,
+        Err(_) => return,
+    };
     // Deliberately publish no asynchronous trusted-peer update: source
     // authority must already exist when the zero-delay connection authenticates.
     net1.update_topology(UpdateTopology(HashSet::from([id2.clone()])));

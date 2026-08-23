@@ -22,7 +22,7 @@
   "properties": {
     "schema": {"const": "iroha-sumeragi-v2-replay-receipt-v1"},
     "schema_version": {"const": 1},
-    "evidence_class": {"const": "diagnostic"},
+    "evidence_class": {"const": "release-receipt"},
     "mode": {"const": "formal-only"},
     "runner": {
       "type": "object",
@@ -100,7 +100,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "accepted",
+        "execution_validated",
         "sany_status",
         "tlc_status",
         "normalizer_status",
@@ -112,7 +112,7 @@
         "normalized_matches_fixture"
       ],
       "properties": {
-        "accepted": {"const": true},
+        "execution_validated": {"const": true},
         "sany_status": {"const": 0},
         "tlc_status": {"const": 12},
         "normalizer_status": {"const": 0},
@@ -129,12 +129,30 @@
     "signing": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "provider", "release_evidence", "attestation"],
+      "required": [
+        "scheme",
+        "provider",
+        "namespace",
+        "payload",
+        "artifact",
+        "policy"
+      ],
       "properties": {
-        "status": {"const": "unsigned-diagnostic"},
-        "provider": {"type": "null"},
-        "release_evidence": {"const": false},
-        "attestation": {"type": "null"}
+        "scheme": {"const": "detached-ssh"},
+        "provider": {"const": "openssh-sshsig"},
+        "namespace": {"const": "iroha-sumeragi-v2-replay-receipt-v1"},
+        "payload": {"const": "receipt.json"},
+        "artifact": {"const": "receipt.json.sig"},
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed_signers", "revocation", "active_signers"],
+          "properties": {
+            "allowed_signers": {"const": "allowed_signers"},
+            "revocation": {"const": "revocation.krl"},
+            "active_signers": {"const": 1}
+          }
+        }
       }
     },
     "artifact_inventory": {

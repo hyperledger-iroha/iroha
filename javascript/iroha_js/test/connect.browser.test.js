@@ -11,6 +11,7 @@ import {
   ConnectApprovalRejectedError,
   ConnectSessionClosedError,
   ConnectSignRequestError,
+  NetworkId,
   TORII_CANONICAL_REQUEST_DOMAIN_TAG,
   buildConnectTokenProtocol,
   buildConnectWebSocketUrl,
@@ -32,7 +33,6 @@ import {
   canonicalRequestSignatureMessage,
 } from "../src/canonicalRequest.js";
 import { NexusAppClient } from "../src/nexusApp.js";
-import { NetworkId } from "../src/networkId.js";
 
 const connectVectors = JSON.parse(
   readFileSync(new URL("../../../fixtures/connect/session_vectors.json", import.meta.url), "utf8"),

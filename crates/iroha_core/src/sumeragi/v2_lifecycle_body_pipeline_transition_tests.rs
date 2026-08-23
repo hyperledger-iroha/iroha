@@ -8,7 +8,10 @@ mod tests {
             CertifiedFetchReplayEvidenceV1, CertifiedStoreReplayEvidenceV1,
             DurableValidateReplayEvidenceV1,
         },
-        v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
+        v2_runtime::{
+            RuntimeEffectOwnership, RuntimeLifecycleOrdinalSource,
+            bind_adapter_effect_batch_ownership,
+        },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
@@ -17,6 +20,7 @@ mod tests {
     struct PreparedBodyStageTransition<'a> {
         _coordinator: &'a mut LifecycleCoordinator,
         staged: LifecycleCoordinator,
+        ordinal_reservation: DurableLifecycleOrdinalReservation,
         edge: DurableContinuationEdge,
         parent_ordinal: u128,
         child_ordinal: u128,
@@ -26,8 +30,10 @@ mod tests {
     }
     pub(super) struct FetchStoreFixture {
         coordinator: LifecycleCoordinator,
+        runtime_ordinals: RuntimeLifecycleOrdinalSource,
         lease: TurnLease,
         verified: VerifiedHeightContext,
+        manifest: wire::PayloadManifest,
         durable_receipt: DurableBodyReceipt,
         store_effect: AdapterEffect,
         store_pending: PendingRuntimeEffectBinding,
@@ -48,6 +54,7 @@ mod tests {
     }
     struct ValidateApplyFixture {
         coordinator: LifecycleCoordinator,
+        runtime_ordinals: RuntimeLifecycleOrdinalSource,
         lease: TurnLease,
         verified: VerifiedHeightContext,
         validate_effect: AdapterEffect,
@@ -74,6 +81,17 @@ mod tests {
         let mut id = [0_u8; 32];
         id.copy_from_slice(context.id().0.as_ref());
         super::super::LifecycleContext::new(super::super::LifecycleDigest::new(id), context.height)
+    }
+    fn bind_test_ordinal_authority(
+        coordinator: &mut LifecycleCoordinator,
+    ) -> RuntimeLifecycleOrdinalSource {
+        let (runtime, coordinator_authority) =
+            super::super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        assert!(coordinator.lifecycle_ordinal_authority.is_none());
+        coordinator.lifecycle_ordinal_authority = Some(coordinator_authority);
+        RuntimeLifecycleOrdinalSource::from_authority(runtime)
     }
     fn verified_context() -> (VerifiedHeightContext, wire::HeightContext) {
         let mut keys = (1_u8..=4)
@@ -171,6 +189,7 @@ mod tests {
         Ok(PreparedBodyStageTransition {
             _coordinator: coordinator,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             edge,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -221,6 +240,14 @@ mod tests {
     fn fetch_store_fixture_with_authority(
         effect_limit: usize,
         authority_phase: wire::GlobalPhase,
+    ) -> FetchStoreFixture {
+        fetch_store_fixture_with_authority_and_initial_high_water(effect_limit, authority_phase, 0)
+    }
+    #[allow(clippy::too_many_lines)]
+    fn fetch_store_fixture_with_authority_and_initial_high_water(
+        effect_limit: usize,
+        authority_phase: wire::GlobalPhase,
+        initial_high_water: u128,
     ) -> FetchStoreFixture {
         let (verified, context) = verified_context();
         let round = wire::ConsensusRound {
@@ -303,7 +330,7 @@ mod tests {
             lifecycle_context(&context),
             tag,
             certificate,
-            manifest,
+            manifest.clone(),
             certified_sources,
             &durable_receipt,
         );
@@ -325,7 +352,7 @@ mod tests {
         );
         let mut coordinator = LifecycleCoordinator::new(
             lifecycle_context(&context),
-            0,
+            initial_high_water,
             capacity_geometry(effect_limit),
         );
         let AdmissionDecision::Admitted {
@@ -343,10 +370,13 @@ mod tests {
         let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
             panic!("claim Fetch fixture")
         };
+        let runtime_ordinals = bind_test_ordinal_authority(&mut coordinator);
         FetchStoreFixture {
             coordinator,
+            runtime_ordinals,
             lease,
             verified,
+            manifest,
             durable_receipt,
             store_effect,
             store_pending,
@@ -523,6 +553,7 @@ mod tests {
         let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
             panic!("claim Store fixture")
         };
+        let _runtime_ordinals = bind_test_ordinal_authority(&mut coordinator);
         StoreValidateFixture {
             coordinator,
             lease,
@@ -621,8 +652,10 @@ mod tests {
         let super::super::TurnPlan::Execute(lease) = coordinator.plan_turn(inputs) else {
             panic!("claim Validate fixture")
         };
+        let runtime_ordinals = bind_test_ordinal_authority(&mut coordinator);
         ValidateApplyFixture {
             coordinator,
+            runtime_ordinals,
             lease,
             verified,
             validate_effect,
@@ -715,34 +748,48 @@ mod tests {
         assert_eq!(format!("{coordinator:#?}"), before);
     }
     #[test]
-    fn body_successor_uses_shared_ordinal_after_intervening_runtime_owners() {
+    fn recovered_fetch_binds_store_after_actor_global_ordinal_skew() {
         let FetchStoreFixture {
             mut coordinator,
+            runtime_ordinals,
             lease,
             verified,
+            manifest,
             durable_receipt,
+            store_effect,
+            store_pending,
             store_candidate,
             ..
-        } = fetch_store_fixture(1);
-        let (runtime_ordinals, durable_ordinals) =
-            super::super::authority::lifecycle_ordinal_authorities_after_high_watermark(
-                coordinator.high_water,
-            );
-        assert_eq!(
-            runtime_ordinals
-                .reserve_range(2)
-                .expect("reserve intervening runtime owners"),
-            (Some(2), Some(4))
+        } = fetch_store_fixture_with_authority_and_initial_high_water(
+            1,
+            wire::GlobalPhase::Prepare,
+            10,
         );
-        coordinator.lifecycle_ordinal_authority = Some(durable_ordinals);
-        let parent_payload = DurablePayloadReference::BodyFrame(
-            projection::durable_body_frame_reference(
-                lifecycle_context(verified.context()),
-                &durable_receipt,
+        assert_eq!(lease.ordinal(), 11);
+        assert_eq!(coordinator.high_water, 11);
+        let body =
+            crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1::for_test(
+                manifest,
+                durable_receipt,
             )
-            .expect("durable Fetch completion projects one body frame"),
-        );
-
+            .expect("seal exact recovered Decision body authority");
+        let store = super::super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1::for_staged_address_test(
+            &verified,
+            store_effect,
+            store_pending,
+            body,
+            store_candidate.clone(),
+        )
+        .expect("seal exact recovered Decision Store projection");
+        let local_prediction = coordinator
+            .high_water
+            .checked_add(1)
+            .expect("local Store successor ordinal");
+        assert_eq!(local_prediction, 12);
+        runtime_ordinals
+            .advance_past(12)
+            .expect("advance actor-global ordinals past the local Store prediction");
+        let parent_payload = store_candidate.payload;
         let prepared = prepare_authorized_body_transition(
             &mut coordinator,
             &lease,
@@ -750,15 +797,30 @@ mod tests {
             parent_payload,
             DurableContinuationEdge::FetchToStore,
         )
-        .expect("stage Store after shared runtime ordinals");
-        assert_eq!(prepared.parent_ordinal, 1);
-        assert_eq!(prepared.child_ordinal, 4);
-        assert_eq!(
-            prepared.staged.durable_records[&prepared.parent_ordinal].continuation,
-            DurableContinuation::successor(
-                DurableContinuationEdge::FetchToStore,
-                prepared.child_ordinal,
+        .expect("stage Store at the actor-global reserved ordinal");
+        assert_eq!(prepared.child_ordinal, 13);
+        assert_ne!(prepared.child_ordinal, local_prediction);
+        let address = super::super::work_registry::exact_staged_recovered_decision_store_address(
+            lease.owner(),
+            &store,
+            &prepared.staged,
+            prepared.child_ordinal,
+            prepared.child_slot,
+            prepared.child_digest,
+        )
+        .expect("bind recovered Store to the exact staged row");
+        assert_eq!(address.ordinal, 13);
+        assert!(
+            super::super::work_registry::exact_staged_recovered_decision_store_address(
+                lease.owner(),
+                &store,
+                &prepared.staged,
+                local_prediction,
+                prepared.child_slot,
+                prepared.child_digest,
             )
+            .is_err(),
+            "the stale coordinator-local Store prediction must not name a child"
         );
     }
     #[test]
@@ -1864,6 +1926,84 @@ mod tests {
         );
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
+    }
+    #[test]
+    fn validate_apply_reserves_after_runtime_cursor_and_commits_only_after_fsync() {
+        let ValidateApplyFixture {
+            mut coordinator,
+            runtime_ordinals,
+            lease,
+            validated_receipt,
+            apply_effect,
+            apply_candidate,
+            ..
+        } = validate_apply_fixture(1, false);
+        let ledger = tempfile::tempdir().expect("temporary Validate-to-Apply ledger");
+        coordinator
+            .attach_empty_test_ledger(ledger.path())
+            .expect("attach exact Validate parent ledger");
+        runtime_ordinals
+            .advance_past(7)
+            .expect("advance through independently minted runtime ordinals");
+
+        let prepared = prepare_authorized_validate_apply_transition(
+            &mut coordinator,
+            &lease,
+            &validated_receipt,
+            &apply_effect,
+            apply_candidate.clone(),
+        )
+        .expect("reserve the Apply child after the shared runtime cursor");
+        assert_eq!(prepared.child_ordinal, 8);
+        assert_eq!(prepared.staged.high_water, 8);
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the fenced runtime cursor"),
+            Some(8),
+            "staging alone must not publish the reserved ordinal"
+        );
+        drop(prepared);
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the released runtime cursor"),
+            Some(8),
+            "dropping an unpublished transition must release its fence"
+        );
+
+        let prepared = prepare_authorized_validate_apply_transition(
+            &mut coordinator,
+            &lease,
+            &validated_receipt,
+            &apply_effect,
+            apply_candidate,
+        )
+        .expect("re-reserve the same unpublished Apply ordinal");
+        let PreparedBodyStageTransition {
+            _coordinator: coordinator,
+            staged,
+            ordinal_reservation,
+            child_ordinal,
+            ..
+        } = prepared;
+        coordinator
+            .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+            .expect("fsync Apply before publishing its actor-global ordinal");
+        *coordinator = staged;
+        assert_eq!(child_ordinal, 8);
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the committed runtime cursor"),
+            Some(9)
+        );
+        let (_, persisted) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            ledger.path(),
+            coordinator.active_context,
+        )
+        .expect("reopen the exact Validate-to-Apply successor");
+        assert_eq!(persisted.high_water(), 8);
     }
     #[test]
     fn advanced_validate_link_stutters_and_recovers_its_exact_apply() {

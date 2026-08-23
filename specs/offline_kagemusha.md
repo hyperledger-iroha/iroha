@@ -1170,14 +1170,15 @@ and the workflow does not invoke the authenticated controller's
 `promote-kagemusha-release-v4` subcommand.
 
 The local Kagami publication boundary is non-circular. `promote-release-v4`
-first authenticates the exact sixteen-file pre-promotion candidate, including
-the release, cryptographic-review, and physical-device approval roles. It
+first authenticates the exact seventeen-file pre-promotion candidate, including
+the internal-validation receipt plus the release, cryptographic-review, and
+physical-device approval roles. It
 requires `--promotion-record` to be the exact canonical absent
 `<bundle-dir>/promotion-record-v4.norito` leaf, publishes the derived record with
 the descriptor-relative no-replace durable writer, and then runs the full exact
-seventeen-file promoted-release verifier. The command reports success only from
+eighteen-file promoted-release verifier. The command reports success only from
 that post-publication verification pass. `verify-release-v4` remains a distinct
-verification-only command and always requires the complete seventeen-file
+verification-only command and always requires the complete eighteen-file
 inventory.
 
 The dedicated authenticated publisher now exists as
@@ -1197,11 +1198,11 @@ additions or reordering:
 
 The controller is macOS-only and root-only. It pins the expected macOS build,
 requires canonical root-custodied controller, Kagami, bundle, and policy paths,
-authenticates the exact Kagami binary and exact sixteen-file candidate, and
+authenticates the exact Kagami binary and exact seventeen-file candidate, and
 confines the authenticated Kagami snapshot to the fixed read roots and fixed
 same-directory staging names plus the single absent
 `promotion-record-v4.norito` leaf. Publication remains no-replace. Success
-requires the exact seventeen-file result and Kagami's exact canonical one-line,
+requires the exact eighteen-file result and Kagami's exact canonical one-line,
 candidate-bound JSON report. Once publication may have started, any cleanup,
 observation, or reporting ambiguity exits with status 75 and requires explicit
 reconciliation rather than automatic retry.

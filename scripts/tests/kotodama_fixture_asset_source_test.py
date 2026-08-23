@@ -27,7 +27,7 @@ class AssetSpec:
 
 @dataclass(frozen=True)
 class SourceSpec:
-    """Preimage fingerprint and ordered assets for one Rust source."""
+    """Preimage fingerprint and closed fixture assets for one Rust source."""
 
     path: str
     skeleton_digest: str
@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        'a617f933ee35463d73183749471484fe1250406cde7b3bcc9c4c8784da2db3b6',
+        '286e12ff8e7c3b6cb0545be912abaa429059ef6c519bf59d4b96f43825256c33',
         (
             AssetSpec('001.ko', '2cd0d5b786b303f342a13799a5828a17903c4b3934b6b7332e994e080039d6ee', 225, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
@@ -328,21 +328,38 @@ def _normalize_source(source: SourceSpec, data: bytes) -> bytes:
     matches = list(_INCLUDE_RE.finditer(data))
     if len(matches) != len(source.assets):
         raise GuardFailure(f"{source.path}: expected {len(source.assets)} fixture includes, found {len(matches)}")
+    assets_by_name = {asset.name: asset for asset in source.assets}
+    if len(assets_by_name) != len(source.assets):
+        raise GuardFailure(f"{source.path}: duplicate fixture asset specification")
+    seen_assets: set[str] = set()
     chunks: list[bytes] = []
     cursor = 0
     source_dir = (ROOT / source.path).parent
-    for match, asset in zip(matches, source.assets):
-        expected_repo_path = _asset_repo_path(source, asset)
+    for match in matches:
         included = match.group("path").decode()
+        name = Path(included).name
+        asset = assets_by_name.get(name)
+        if asset is None or name in seen_assets:
+            raise GuardFailure(f"{source.path}: unknown or repeated fixture include {name}")
+        seen_assets.add(name)
+        expected_repo_path = _asset_repo_path(source, asset)
         resolved = (source_dir / included).resolve()
         expected = (ROOT / expected_repo_path).resolve()
         if resolved != expected:
             raise GuardFailure(f"{source.path}: include path drift for {asset.name}")
-        has_sentinel_projection = match.group("sentinel") is not None
+        prefix = data[max(0, match.start() - 96) : match.start()]
+        wrapper_projection = re.search(
+            rb"CaseSource::Fixture\([ \t\r\n]*$", prefix
+        ) is not None
+        has_sentinel_projection = (
+            match.group("sentinel") is not None or wrapper_projection
+        )
         if has_sentinel_projection != asset.sentinel:
             raise GuardFailure(f"{source.path}: sentinel projection drift for {asset.name}")
         chunks.extend((data[cursor:match.start()], _marker(expected_repo_path)))
         cursor = match.end()
+    if seen_assets != set(assets_by_name):
+        raise GuardFailure(f"{source.path}: fixture include set drift")
     chunks.append(data[cursor:])
     normalized = b"".join(chunks)
     if hashlib.sha256(normalized).hexdigest() != source.skeleton_digest:

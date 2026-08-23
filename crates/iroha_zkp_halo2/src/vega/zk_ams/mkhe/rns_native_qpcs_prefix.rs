@@ -1261,6 +1261,10 @@ pub(super) fn authenticate_tree_v1(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test helper mirrors each authenticated qPCS proof section explicitly"
+)]
 fn verify_relations_openings_and_batch_v1(
     context: PrefixContextV1,
     openings: RelationOpeningsV1<'_>,

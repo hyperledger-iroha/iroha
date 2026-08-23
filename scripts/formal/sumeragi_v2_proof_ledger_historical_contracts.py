@@ -10,7 +10,6 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2Revision4",
     "SumeragiV2Revision4AdversarialSafety",
     "SumeragiV2Revision4CertifiedFenceReservation",
-    "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
     "SumeragiV2Availability",

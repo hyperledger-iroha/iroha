@@ -12,6 +12,7 @@ import {
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
   normalizeOfflineStatus,
+  normalizeKagemushaOperationStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "../src/kagemushaOffline.js";
 
@@ -224,4 +225,48 @@ test("operation parsing rejects a V3 top-up anchor instead of upgrading it", asy
     () => client.getKagemushaOperationStatus(OPERATION_ID),
     /anchor and artifact binding must use V4/u,
   );
+});
+
+test("rejected operation parsing requires the exact error envelope", () => {
+  const rejected = {
+    state: "rejected",
+    value: {
+      operation_id: OPERATION_ID,
+      kind: { kind: "redeem", value: null },
+      transaction_hash: TRANSACTION_HASH,
+      error: {
+        code: "offline_operation_rejected",
+        message: "rejected",
+      },
+    },
+  };
+  for (const normalize of [
+    normalizeKagemushaOperationStatus,
+    distSdk.normalizeKagemushaOperationStatus,
+  ]) {
+    assert.equal(
+      normalize(rejected, OPERATION_ID).value.error.code,
+      "offline_operation_rejected",
+    );
+    assert.throws(
+      () => normalize({
+        ...rejected,
+        value: {
+          ...rejected.value,
+          error: { ...rejected.value.error, retryable: true },
+        },
+      }, OPERATION_ID),
+      /error contains missing or unknown fields/u,
+    );
+    assert.throws(
+      () => normalize({
+        ...rejected,
+        value: {
+          ...rejected.value,
+          error: { ...rejected.value.error, details: null },
+        },
+      }, OPERATION_ID),
+      /error\.details must be an object/u,
+    );
+  }
 });

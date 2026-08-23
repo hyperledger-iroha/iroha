@@ -3991,7 +3991,7 @@ mod tests {
             .expect("the inner signed call hash must resolve to the outer reveal result");
         assert_eq!(
             positive.batch_transfer_outcomes_for(&first_outer_hash),
-            &[outcome.clone()]
+            std::slice::from_ref(&outcome)
         );
 
         let mut duplicate_assignment = positive.clone();
@@ -4007,7 +4007,7 @@ mod tests {
         );
         assert_eq!(
             duplicate_assignment.batch_transfer_outcomes_for(&first_outer_hash),
-            &[outcome.clone()],
+            std::slice::from_ref(&outcome),
             "a rejected reassignment must not mutate the prior result leaf"
         );
 

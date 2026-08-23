@@ -204,17 +204,17 @@ for pending in self.pending_applications.values() {
 if let Some(finality) = &self.finality_completion {
     match &finality.ownership {
         FinalityCompletionOwner::Runtime(ownership) => insert(ownership)?,
-        FinalityCompletionOwner::RecoveredDecisionApply(key)
+        FinalityCompletionOwner::LifecycleDecisionApply(key)
             if key.matches_height_context(&self.context) => {}
-        FinalityCompletionOwner::RecoveredDecisionApply(_) => {
+        FinalityCompletionOwner::LifecycleDecisionApply(_) => {
             return Err(EffectExecutorError::Contract(
-                "recovered Apply finality changed its height context".to_owned(),
+                "lifecycle Apply finality changed its height context".to_owned(),
             ));
         }
     }
 }
 """,
-        "pending and durable Apply ownership must retain the exact runtime owner while recovered finality stays bound to this height context",
+        "pending and durable Apply ownership must retain the exact runtime owner while lifecycle finality stays bound to this height context",
         errors,
     )
 

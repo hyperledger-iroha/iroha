@@ -403,7 +403,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1:
             "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",
             "--bin",
             "kagemusha_recursive_spend_v4_bundle",
-            "final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
+            "final_release_inventory_is_exact_and_includes_both_receipts",
         ],
         fuzz_target: None,
     },
@@ -1514,6 +1514,24 @@ pub(crate) mod tests {
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
+        signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
+            candidate,
+            finalized_manifest,
+            finalized_manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_sha256,
+            finalized_manifest
+                .reviewed_source_closure
+                .ignored_cargo_lock_size_bytes,
+        )
+    }
+
+    pub(crate) fn signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        tracked_cargo_lock_sha256: [u8; 32],
+        tracked_cargo_lock_size_bytes: u64,
+    ) -> KagemushaRecursiveSpendInternalValidationReceiptV1 {
         let validation_runner = validation_runner();
         let mut body = valid_body(&validation_runner);
         body.candidate_sha256 = candidate.sha256().expect("valid V4 candidate identity");
@@ -1527,6 +1545,8 @@ pub(crate) mod tests {
             finalized_manifest.reviewed_source_closure_descriptor_sha256;
         body.authenticated_source_seal_projection_sha256 =
             finalized_manifest.authenticated_source_seal_projection_sha256;
+        body.tracked_cargo_lock.sha256 = tracked_cargo_lock_sha256;
+        body.tracked_cargo_lock.size_bytes = tracked_cargo_lock_size_bytes;
         body.reviewed_cargo_binary_sha256 = finalized_manifest.reviewed_cargo_binary_sha256;
         body.reviewed_rustc_binary_sha256 = finalized_manifest.reviewed_rustc_binary_sha256;
         body.generator_binary_sha256 = finalized_manifest.generator_binary_sha256;
@@ -1548,6 +1568,7 @@ pub(crate) mod tests {
             "data-model-post-canary-wire-splices",
             "workspace-tests",
             "workspace-strict-clippy",
+            "core-final-release-inventory",
             "connect-bridge-production-release-kat",
             "fuzz-release-bundle-parser",
             "fuzz-recursive-topology",
@@ -1581,6 +1602,10 @@ pub(crate) mod tests {
                 .filter(|argument| **argument == "--locked")
                 .count(),
             1
+        );
+        assert_eq!(
+            command("core-final-release-inventory").argv.last(),
+            Some(&"final_release_inventory_is_exact_and_includes_both_receipts")
         );
     }
 

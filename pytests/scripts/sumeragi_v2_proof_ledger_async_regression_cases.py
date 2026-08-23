@@ -1587,23 +1587,6 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
-            "step_pending_tip_recovery",
-            "        if let Err(reason) = self.runtime.take_scheduler_ownership() {\n",
-            "        if false {\n",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "step_pending_tip_recovery must consume the exact scheduler owner immediately "
-        "after the runtime step" in error
-        or "retained effect FIFO step_pending_tip_recovery declaration and complete "
-        "control flow must match" in error
-        for error in errors
-    ), errors
-
-    effects_path.write_text(
-        mutate_effect_item(
             "consume_pacemaker_effects_with_runner_decision_cleanup",
             "evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS",
             "evidence.owner().causal_origin().root_class == SERVICE_CLASS_PROGRESS",

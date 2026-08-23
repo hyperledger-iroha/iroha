@@ -62,7 +62,6 @@ EXPECTED_ACTIONS = 100
 # DFS parse order and dependency-order semantic phase for this pinned closure.
 SANY_PARSE_ORDER = (
     "SumeragiV2TraceWitness",
-    "SumeragiV2",
     "SumeragiV2Inductive",
     "SumeragiV2Reconfiguration",
     "SumeragiV2SafetyDefinitions",
@@ -87,7 +86,6 @@ SANY_SEMANTIC_ORDER = (
     "SumeragiV2Reconfiguration",
     "SumeragiV2SafetyDefinitions",
     "SumeragiV2Inductive",
-    "SumeragiV2",
     "SumeragiV2TraceWitness",
 )
 

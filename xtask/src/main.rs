@@ -14437,7 +14437,7 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     let path = path.ok_or("missing `path=` in --artifact spec")?;
     Ok((kind, path))
 }
-const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors in one absent absolute create-only root outside the workspace.";
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors in one absent absolute create-only output root outside the workspace.";
 const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 include!("usage.rs");
 #[cfg(test)]
