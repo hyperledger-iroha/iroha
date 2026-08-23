@@ -1,0 +1,14 @@
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 3
+max_lanes = 5
+target_block_ms = 2500
+scale_out_latency_ratio = 1.25
+scale_in_latency_ratio = 0.75
+scale_out_utilization_ratio = 0.90
+scale_in_utilization_ratio = 0.35
+scale_out_window_blocks = 12
+scale_in_window_blocks = 48
+cooldown_blocks = 9
+per_lane_target_tps = 75

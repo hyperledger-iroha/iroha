@@ -45,6 +45,14 @@ class FakeRuntime:
         self.doctor_fails = False
         self.leave_peer_running_on_stop = False
         self.process_commands: dict[int, str] = {}
+        self.start_env: dict[str, str] | None = None
+        self.mcp_protocol_version = "taira-test-protocol-v1"
+        self.requests: list[tuple[str, object | None]] = []
+        self.api_port = module.DEFAULT_API_PORT
+        self.ping_stdout = json.dumps({"hash": "hash:" + "a" * 64 + "#ABCD"})
+        self.status_stdout = json.dumps(
+            {"hash": "a" * 64, "terminal_kind": "Applied"}
+        )
 
     def run(
         self,
@@ -56,6 +64,7 @@ class FakeRuntime:
         if "localnet" in values:
             target = Path(values[values.index("--out-dir") + 1])
             api_port = int(values[values.index("--base-api-port") + 1])
+            self.api_port = api_port
             target.mkdir(mode=0o700)
             for name in ("start.sh", "stop.sh"):
                 executable(target / name, b"#!/usr/bin/env bash\n")
@@ -79,6 +88,7 @@ class FakeRuntime:
             )
         elif values[0] == "/bin/bash" and values[1].endswith("/start.sh"):
             target = Path(str(kwargs["cwd"]))
+            self.start_env = dict(kwargs["env"])
             for index in range(module.PEER_COUNT):
                 pid = 10_000 + index
                 (target / f"peer{index}.pid").write_text(f"{pid}\n", encoding="utf-8")
@@ -101,24 +111,33 @@ class FakeRuntime:
             return subprocess.CompletedProcess(values, 0, stdout, "")
         elif "ping" in values:
             self.height += 1
+            return subprocess.CompletedProcess(values, 0, self.ping_stdout, "")
+        elif "status" in values:
+            return subprocess.CompletedProcess(values, 0, self.status_stdout, "")
         elif "doctor" in values and self.doctor_fails:
             raise module.DevnetError("full doctor failed")
         return subprocess.CompletedProcess(values, 0, "", "")
 
     def request(self, url: str, payload: object | None) -> tuple[int, object | None]:
+        self.requests.append((url, payload))
         if url.endswith("v1/mcp"):
             if payload is None:
                 return 200, {
                     "enabled": True,
-                    "protocolVersion": module.MCP_PROTOCOL_VERSION,
+                    "protocolVersion": self.mcp_protocol_version,
                 }
             assert isinstance(payload, dict)
             if payload.get("method") == "initialize":
+                params = payload.get("params")
+                assert isinstance(params, dict)
+                assert params.get("protocolVersion") == self.mcp_protocol_version
                 return 200, {
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "result": {"protocolVersion": module.MCP_PROTOCOL_VERSION},
+                    "result": {"protocolVersion": self.mcp_protocol_version},
                 }
+            if payload.get("method") == "notifications/initialized":
+                return 202, None
             if payload.get("method") == "tools/list":
                 return 200, {
                     "jsonrpc": "2.0",
@@ -127,7 +146,7 @@ class FakeRuntime:
                 }
             raise AssertionError(f"unexpected MCP payload: {payload}")
         for index in range(module.PEER_COUNT):
-            if f":{module.DEFAULT_API_PORT + index}/" not in url:
+            if f":{self.api_port + index}/" not in url:
                 continue
             if index == self.unhealthy_peer and url.endswith("readyz"):
                 return 503, None
@@ -176,11 +195,17 @@ class TairaDevnetTests(unittest.TestCase):
 
         self.assertEqual(report["baseline_height"], 1)
         self.assertEqual(report["final_height"], 2)
+        self.assertEqual(report["transaction_hash"], "a" * 64)
+        self.assertEqual(report["terminal_status"], "Applied")
         kagami = next(command for command in runtime.commands if "localnet" in command)
         self.assertIn("--fresh-random-keys", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
         self.assertEqual(kagami[kagami.index("--sora-profile") + 1], "nexus")
         self.assertEqual(kagami[kagami.index("--consensus-mode") + 1], "npos")
+        self.assertEqual(
+            kagami[kagami.index("--block-cadence-ms") + 1],
+            str(module.DEFAULT_BLOCK_CADENCE_MS),
+        )
         self.assertEqual(kagami[kagami.index("--chain-id") + 1], module.DEFAULT_CHAIN_ID)
         self.assertEqual(kagami[kagami.index("--bind-host") + 1], "127.0.0.1")
         self.assertEqual(kagami[kagami.index("--public-host") + 1], "127.0.0.1")
@@ -192,11 +217,56 @@ class TairaDevnetTests(unittest.TestCase):
             all(command.count(str(self.bin_dir / "iroha3d")) == 1 for command in config_checks)
         )
         self.assertEqual(sum("ping" in command for command in runtime.commands), 1)
+        self.assertEqual(sum("status" in command for command in runtime.commands), 1)
         self.assertEqual(sum("doctor" in command for command in runtime.commands), 0)
         ping = next(command for command in runtime.commands if "ping" in command)
         self.assertIn("--machine", ping)
         self.assertIn("--fee-payer", ping)
         self.assertIn("tx", ping)
+        self.assertIn("--no-wait", ping)
+        status = next(command for command in runtime.commands if "status" in command)
+        self.assertIn("--wait", status)
+        self.assertEqual(status[status.index("--hash") + 1], "a" * 64)
+        self.assertEqual(status[status.index("--terminal-status") + 1], "applied")
+        start = next(command for command in runtime.commands if command[0] == "/bin/bash")
+        self.assertTrue(start[1].endswith("network/start.sh"))
+        self.assertIsNotNone(runtime.start_env)
+        self.assertEqual(runtime.start_env["IROHA_LOCALNET_FAUCET_RESERVE_RETRIES"], "0")
+        mcp_methods = [
+            payload.get("method")
+            for url, payload in runtime.requests
+            if url.endswith("v1/mcp") and isinstance(payload, dict)
+        ]
+        self.assertEqual(
+            mcp_methods,
+            ["initialize", "notifications/initialized", "tools/list"],
+        )
+
+    def test_default_deadline_matches_the_generated_transaction_window(self) -> None:
+        args = module.parser().parse_args(
+            [
+                "--dir",
+                str(self.root / "state"),
+                "up",
+                "--no-build",
+                "--bin-dir",
+                str(self.bin_dir),
+            ]
+        )
+
+        self.assertEqual(args.timeout_seconds, 300)
+
+    def test_up_waits_for_committed_genesis_before_signed_smoke(self) -> None:
+        runtime = FakeRuntime()
+        runtime.height = 0
+        args = self.up_args()
+        args.timeout_seconds = 0.01
+
+        with mock.patch.object(module.time, "sleep", return_value=None):
+            with self.assertRaisesRegex(module.DevnetError, "required_above=0"):
+                module.up(args, run=runtime.run, request=runtime.request)
+
+        self.assertFalse(any("ping" in command for command in runtime.commands))
 
     def test_fresh_generation_has_no_hidden_wall_clock_deadline(self) -> None:
         calls: list[dict[str, object]] = []
@@ -213,6 +283,7 @@ class TairaDevnetTests(unittest.TestCase):
             self.bin_dir / "kagami",
             module.DEFAULT_API_PORT,
             module.DEFAULT_P2P_PORT,
+            module.DEFAULT_BLOCK_CADENCE_MS,
             run,
         )
 
@@ -264,6 +335,53 @@ class TairaDevnetTests(unittest.TestCase):
 
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         self.assertTrue(module.down(down_args, run=runtime.run)["stopped"])
+
+    def test_check_derives_custom_ports_from_the_generated_bundle(self) -> None:
+        runtime = FakeRuntime()
+        module.up(
+            self.up_args("--base-api-port", "30120"),
+            run=runtime.run,
+            request=runtime.request,
+        )
+        state = self.root / "state"
+
+        args = module.parser().parse_args(
+            ["--dir", str(state), "check", "--timeout-seconds", "1"]
+        )
+        report = module.check(args, run=runtime.run, request=runtime.request)
+
+        self.assertEqual(report["torii_roots"][0], "http://127.0.0.1:30120/")
+        self.assertEqual(report["torii_roots"][-1], "http://127.0.0.1:30123/")
+
+    def test_signed_smoke_rejects_untyped_or_unbound_terminal_receipts(self) -> None:
+        cases = [
+            ("not-json", None, "transaction receipt"),
+            (
+                None,
+                json.dumps({"hash": "b" * 64, "terminal_kind": "Applied"}),
+                "Applied pipeline finality",
+            ),
+            (
+                None,
+                json.dumps({"hash": "a" * 64, "terminal_kind": "Rejected"}),
+                "Applied pipeline finality",
+            ),
+        ]
+        for ping_stdout, status_stdout, message in cases:
+            with self.subTest(message=message):
+                runtime = FakeRuntime()
+                if ping_stdout is not None:
+                    runtime.ping_stdout = ping_stdout
+                if status_stdout is not None:
+                    runtime.status_stdout = status_stdout
+
+                with self.assertRaisesRegex(module.DevnetError, message):
+                    module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+                self.assertEqual(runtime.process_commands, {})
+                self.assertEqual(
+                    list((self.root / "state" / "network").glob("peer*.pid")), []
+                )
 
     def test_down_and_replacement_fail_closed_on_residual_peer(self) -> None:
         runtime = FakeRuntime()
@@ -424,6 +542,20 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertIn("--locked", command)
         self.assertNotIn("--features", command)
 
+        runtime = FakeRuntime()
+        state = module.managed_root(self.root / "state", create=True)
+        network = state / "network"
+        network.mkdir()
+        sentinel = network / "keep"
+        sentinel.write_text("running cohort\n", encoding="utf-8")
+        args = module.parser().parse_args(
+            ["--dir", str(state), "up", "--bin-dir", str(self.bin_dir)]
+        )
+        with self.assertRaisesRegex(module.DevnetError, "--bin-dir requires --no-build"):
+            module.up(args, run=runtime.run, request=runtime.request)
+        self.assertEqual(runtime.commands, [])
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "running cohort\n")
+
     def test_http_request_accepts_plain_text_health_response(self) -> None:
         class PlainResponse:
             status = 200
@@ -438,11 +570,41 @@ class TairaDevnetTests(unittest.TestCase):
             def read(_limit: int = -1) -> bytes:
                 return b"Healthy"
 
-        with mock.patch.object(module.urllib.request, "urlopen", return_value=PlainResponse()):
+        def open_plain(request, *, timeout: int):
+            self.assertEqual(timeout, 3)
+            self.assertEqual(request.get_header("Accept"), "text/plain")
+            return PlainResponse()
+
+        with mock.patch.object(module.urllib.request, "urlopen", side_effect=open_plain):
             status, payload = module.http_request("http://127.0.0.1:29080/health")
 
         self.assertEqual(status, 200)
         self.assertEqual(payload, "Healthy")
+
+    def test_http_request_keeps_json_accept_for_torii_json_routes(self) -> None:
+        class JsonResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            @staticmethod
+            def read(_limit: int = -1) -> bytes:
+                return b"2"
+
+        def open_json(request, *, timeout: int):
+            self.assertEqual(timeout, 3)
+            self.assertEqual(request.get_header("Accept"), "application/json")
+            return JsonResponse()
+
+        with mock.patch.object(module.urllib.request, "urlopen", side_effect=open_json):
+            status, payload = module.http_request("http://127.0.0.1:29080/status/blocks")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, 2)
 
     def test_http_request_rejects_an_oversized_response(self) -> None:
         class OversizedResponse:
@@ -498,12 +660,12 @@ class TairaDevnetTests(unittest.TestCase):
             with self.assertRaisesRegex(module.DevnetError, "cargo timed out after 7s"):
                 module.run_command(["cargo", "build"], timeout=7)
 
-    def test_mcp_rejects_stale_negotiated_protocol(self) -> None:
+    def test_mcp_rejects_stale_protocol_and_nonaccepted_notification(self) -> None:
         def stale_request(_url: str, payload: object | None) -> tuple[int, object]:
             if payload is None:
                 return 200, {
                     "enabled": True,
-                    "protocolVersion": module.MCP_PROTOCOL_VERSION,
+                    "protocolVersion": "advertised-version",
                 }
             return 200, {
                 "jsonrpc": "2.0",
@@ -513,6 +675,30 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(module.DevnetError, "MCP initialize failed"):
             module.check_mcp("http://127.0.0.1:29080/", stale_request)
+
+        def rejected_notification(
+            _url: str, payload: object | None
+        ) -> tuple[int, object | None]:
+            if payload is None:
+                return 200, {
+                    "enabled": True,
+                    "protocolVersion": "advertised-version",
+                }
+            assert isinstance(payload, dict)
+            if payload.get("method") == "initialize":
+                return 200, {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"protocolVersion": "advertised-version"},
+                }
+            if payload.get("method") == "notifications/initialized":
+                return 200, None
+            raise AssertionError(f"unexpected MCP payload: {payload}")
+
+        with self.assertRaisesRegex(
+            module.DevnetError, "MCP initialized notification failed"
+        ):
+            module.check_mcp("http://127.0.0.1:29080/", rejected_notification)
 
     def test_help_exposes_only_up_check_and_down(self) -> None:
         completed = subprocess.run(
@@ -538,6 +724,16 @@ class TairaDevnetTests(unittest.TestCase):
             names(REPO_ROOT / "scripts" / "tests"),
             {"render_taira_edge_nginx_conf_test.py", "taira_devnet_test.py"},
         )
+        config_root = REPO_ROOT / "configs" / "soranexus" / "taira"
+        self.assertEqual(
+            names(config_root, "*.sh"),
+            {
+                "install_taira_edge_nginx_conf.sh",
+                "install_taira_edge_nginx_conf_mock_test.sh",
+            },
+        )
+        self.assertEqual(names(config_root, "*.py"), set())
+        self.assertFalse((REPO_ROOT / "defaults" / "kagami" / "iroha3-taira").exists())
         self.assertEqual(names(REPO_ROOT / ".github" / "workflows"), set())
         self.assertEqual(names(REPO_ROOT / "ci"), set())
         self.assertEqual(

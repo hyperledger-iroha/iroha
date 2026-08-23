@@ -1,4 +1,6 @@
 //! Kagemusha offline-cash instruction execution.
+mod kagemusha_marker;
+mod kagemusha_runtime_effective_config;
 mod kagemusha_terminal_registry_v4;
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -14,7 +16,8 @@ use iroha_data_model::{
     isi::{
         error::InstructionExecutionError,
         offline::{
-            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
+            ActivateKagemushaRecursiveReleaseV4, AuthorizeKagemushaTairaCanaryV4,
+            RecordKagemushaTairaCanaryV4, RedeemKagemushaRecursiveV4,
             RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
             TopUpKagemushaRecursiveV4,
         },
@@ -56,9 +59,13 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Quantity;
+use kagemusha_marker::v2_marker as kagemusha_v2_marker;
+pub use kagemusha_runtime_effective_config::VerifiedKagemushaV4RuntimeEffectiveConfigV1;
 pub use kagemusha_terminal_registry_v4::{
-    KagemushaCatalogQualificationSealV1, KagemushaReleaseCatalogV4,
+    KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1, KagemushaCatalogQualificationSealV1,
+    KagemushaReleaseCatalogV4, KagemushaValidatorQualificationCatalogCaptureV1,
 };
+use kagemusha_terminal_registry_v4::{commit_v4_promotion_id, plan_v4_promotion_id};
 use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -173,11 +180,8 @@ fn decode_canonical_offline_proof_envelope(
 /// Key-material-free projection of one authenticated ABI-21 recursive verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveVerifierReadinessV4 {
-    /// Stable logical role identifier exposed by Torii.
-    ///
-    /// Consensus registry records use release-qualified identifiers derived
-    /// from the owner-manifest digest. Readiness intentionally abstracts that
-    /// rotating storage identity into the fixed ABI-21 Eq/Ep role.
+    /// Stable Torii role; consensus storage IDs are release-qualified by the owner-manifest digest.
+    /// Readiness exposes the fixed ABI-21 Eq/Ep role rather than that rotating identity.
     pub id: iroha_data_model::proof::VerifyingKeyId,
     /// Governance-managed version of the selected registry record.
     pub version: u32,
@@ -1758,25 +1762,6 @@ pub mod isi {
     fn kagemusha_attestation_evidence_key(evidence_hash: &Hash) -> Hash {
         kagemusha_replay_key(KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN, evidence_hash)
     }
-    fn kagemusha_v2_marker(domain: &str, components: &[&[u8]]) -> Hash {
-        let mut preimage = Vec::with_capacity(
-            domain.len()
-                + components
-                    .iter()
-                    .map(|component| 8usize.saturating_add(component.len()))
-                    .sum::<usize>(),
-        );
-        preimage.extend_from_slice(domain.as_bytes());
-        for component in components {
-            preimage.extend_from_slice(
-                &u64::try_from(component.len())
-                    .unwrap_or(u64::MAX)
-                    .to_be_bytes(),
-            );
-            preimage.extend_from_slice(component);
-        }
-        Hash::new(&preimage)
-    }
     fn kagemusha_v4_authorization_markers(
         authorization: &KagemushaRequestAuthorizationV2,
     ) -> Result<[Hash; 4], Error> {
@@ -2129,10 +2114,7 @@ pub mod isi {
         let mut active_account_count = 0_usize;
         let mut seen_replay_keys = BTreeSet::new();
         let mut plan = KagemushaOnlineRegistrationAdmissionPlanV1::default();
-
-        // TODO: Replace this bounded prefix scan with consensus-maintained counters and an expiry
-        // cache. The first-release protocol limits below already bound correctness, storage, and
-        // worst-case work; an index would only make admission and snapshot derivation cheaper.
+        // TODO: Replace this correctness-bounded prefix scan with consensus-maintained counters and an expiry cache to make admission and snapshot derivation cheaper.
         let range_start = kagemusha_online_registration_range_start();
         for (existing_key, existing_archive) in state_transaction
             .world
@@ -5965,186 +5947,6 @@ pub mod isi {
         }
         Ok(())
     }
-    impl Execute for ActivateKagemushaRecursiveReleaseV4 {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            ensure_kagemusha_recursive_release_v4_activation_authorized(
-                state_transaction,
-                authority,
-            )?;
-            let policy = self.device_attestation_policy;
-            validate_offline_attestation_policy_for_release_activation(
-                &policy,
-                state_transaction.block_unix_timestamp_ms(),
-            )?;
-            let policy_bytes = norito::encode_canonical(&policy).map_err(|error| {
-                labeled_invariant(
-                    "invalid_attestation_policy",
-                    format!("failed to encode atomic Offline device attestation policy: {error}"),
-                )
-            })?;
-            let activation = self.activation;
-            let binding = kagemusha_v4_release_binding(&activation.release_record)?;
-            let cached = state_transaction
-                .kagemusha_release_catalog
-                .resolve_binding(&binding)
-                .map_err(|error| labeled_invariant("recursive_release_invalid", error))?
-                .clone();
-            if activation.configured_policy_sha256
-                != state_transaction
-                    .kagemusha_release_catalog
-                    .configured_policy_sha256()
-                    .ok_or_else(|| {
-                        labeled_invariant(
-                            "recursive_release_invalid",
-                            "this validator has no configured Kagemusha V4 release policy",
-                        )
-                    })?
-                || cached.release_record() != &activation.release_record
-            {
-                return Err(labeled_invariant(
-                    "recursive_release_invalid",
-                    "activation release or configured-policy digest differs from the local authenticated catalog",
-                )
-                .into());
-            }
-            let manifest = &activation.release_record.manifest;
-            if &manifest.network_id != state_transaction.network_id() {
-                return Err(labeled_invariant(
-                    "wrong_network",
-                    "Kagemusha V4 activation manifest targets a different network",
-                )
-                .into());
-            }
-            let spec = state_transaction.numeric_spec_for(&manifest.asset)?;
-            if spec.scale() != Some(manifest.asset_scale) {
-                return Err(labeled_invariant(
-                    "amount_scale_mismatch",
-                    "Kagemusha V4 activation manifest scale differs from the live asset definition",
-                )
-                .into());
-            }
-            let current_height = state_transaction.block_height();
-            if manifest.activation_height <= current_height {
-                return Err(labeled_invariant(
-                    "recursive_release_invalid",
-                    "Kagemusha V4 activation height must be in the future",
-                )
-                .into());
-            }
-            ensure_kagemusha_v4_non_overlapping_issuance(&binding, manifest, state_transaction)?;
-            let expected_eq_id =
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-                    binding.manifest_sha256,
-                );
-            let expected_ep_id =
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-                    binding.manifest_sha256,
-                );
-            if activation.step_eq_verifier_key_id != expected_eq_id
-                || activation.step_ep_verifier_key_id != expected_ep_id
-                || activation.step_eq_verifier_key_id == activation.step_ep_verifier_key_id
-            {
-                return Err(labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha V4 activation verifier ids do not match the release-bound Eq/Ep identities",
-                )
-                .into());
-            }
-            let expected_version = kagemusha_v4_next_verifier_version(state_transaction)?;
-            if activation.step_eq_verifier_record.version != expected_version
-                || activation.step_ep_verifier_record.version != expected_version
-            {
-                return Err(labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha V4 Eq/Ep verifier records do not use the next atomic version",
-                )
-                .into());
-            }
-            cached
-                .validate_verifier_records(
-                    &activation.step_eq_verifier_record,
-                    &activation.step_ep_verifier_record,
-                )
-                .map_err(|error| labeled_invariant("verifier_key_invalid", error))?;
-            if state_transaction
-                .world
-                .verifying_keys
-                .get(&expected_eq_id)
-                .is_some()
-                || state_transaction
-                    .world
-                    .verifying_keys
-                    .get(&expected_ep_id)
-                    .is_some()
-            {
-                return Err(labeled_invariant(
-                    "recursive_release_overlap",
-                    "Kagemusha V4 release verifier ids are already registered",
-                )
-                .into());
-            }
-            let release_key = kagemusha_terminal_registry_v4::release_state_key(&binding)
-                .map_err(|error| labeled_invariant("recursive_release_invalid", error))?;
-            if state_transaction
-                .world
-                .smart_contract_state
-                .get(&release_key)
-                .is_some()
-            {
-                return Err(labeled_invariant(
-                    "recursive_release_overlap",
-                    "Kagemusha V4 release record is already activated",
-                )
-                .into());
-            }
-            let release_bytes =
-                norito::encode_canonical(&activation.release_record).map_err(|error| {
-                    labeled_invariant(
-                        "recursive_release_invalid",
-                        format!("failed to encode Kagemusha V4 release record: {error}"),
-                    )
-                })?;
-            // Every fallible validation completed above. Publish the exact device policy,
-            // release, and paired verifier records in this transaction overlay.
-            state_transaction.world.smart_contract_state.insert(
-                (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
-                policy_bytes,
-            );
-            state_transaction
-                .world
-                .smart_contract_state
-                .insert(release_key, release_bytes);
-            state_transaction.world.verifying_keys.insert(
-                expected_eq_id.clone(),
-                activation.step_eq_verifier_record.clone(),
-            );
-            state_transaction.world.verifying_keys.insert(
-                expected_ep_id.clone(),
-                activation.step_ep_verifier_record.clone(),
-            );
-            state_transaction.world.verifying_keys_by_circuit.insert(
-                (
-                    activation.step_eq_verifier_record.circuit_id.clone(),
-                    expected_version,
-                ),
-                expected_eq_id,
-            );
-            state_transaction.world.verifying_keys_by_circuit.insert(
-                (
-                    activation.step_ep_verifier_record.circuit_id.clone(),
-                    expected_version,
-                ),
-                expected_ep_id,
-            );
-            Ok(())
-        }
-    }
     impl Execute for TopUpKagemushaRecursiveV4 {
         fn execute(
             self,
@@ -6613,5 +6415,9 @@ pub mod isi {
             commit_plan.commit(state_transaction)
         }
     }
+    include!("offline/kagemusha_activation.rs");
+    include!("offline/kagemusha_taira_canary.rs");
     include!("offline/isi_tests.rs");
 }
+
+pub(crate) use isi::signed_kagemusha_taira_canary_wire_identity_v1;

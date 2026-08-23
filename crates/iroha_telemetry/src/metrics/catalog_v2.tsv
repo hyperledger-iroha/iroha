@@ -137,15 +137,15 @@ sumeragi_epoch_length_blocks	sumeragi_epoch_length_blocks	Epoch length in blocks
 sumeragi_epoch_commit_deadline_offset	sumeragi_epoch_commit_deadline_offset	Commit window deadline offset from epoch start (blocks)	registered
 sumeragi_epoch_reveal_deadline_offset	sumeragi_epoch_reveal_deadline_offset	Reveal window deadline offset from epoch start (blocks)	registered
 state_tiered_hot_entries	state_tiered_hot_entries	Entries retained in the tiered-state hot tier after the latest snapshot	registered
-state_tiered_hot_bytes	state_tiered_hot_bytes	Bytes retained in the tiered-state hot tier after the latest snapshot	registered
+state_tiered_hot_bytes	state_tiered_hot_bytes	Deterministic key-plus-value hot budget weight after the latest tiered-state snapshot	registered
 state_tiered_cold_entries	state_tiered_cold_entries	Entries spilled to the tiered-state cold tier after the latest snapshot	registered
 state_tiered_cold_bytes	state_tiered_cold_bytes	Total bytes written to the tiered-state cold tier in the latest snapshot	registered
 state_tiered_cold_reused_entries	state_tiered_cold_reused_entries	Cold entries reused without re-encoding in the latest tiered-state snapshot	registered
 state_tiered_cold_reused_bytes	state_tiered_cold_reused_bytes	Total bytes reused from cold payloads in the latest tiered-state snapshot	registered
 state_tiered_hot_promotions	state_tiered_hot_promotions	Entries promoted into the tiered-state hot tier in the latest snapshot	registered
 state_tiered_hot_demotions	state_tiered_hot_demotions	Entries demoted into the tiered-state cold tier in the latest snapshot	registered
-state_tiered_hot_grace_overflow_keys	state_tiered_hot_grace_overflow_keys	Hot-tier key budget overflow caused by grace retention in the latest snapshot	registered
-state_tiered_hot_grace_overflow_bytes	state_tiered_hot_grace_overflow_bytes	Hot-tier byte budget overflow caused by grace retention in the latest snapshot	registered
+state_tiered_hot_budget_overflow_keys	state_tiered_hot_budget_overflow_keys	Hot-tier key budget overflow in the latest snapshot	registered
+state_tiered_hot_budget_overflow_bytes	state_tiered_hot_budget_overflow_bytes	Hot-tier byte budget overflow in the latest snapshot	registered
 state_tiered_last_snapshot_index	state_tiered_last_snapshot_index	Latest tiered-state snapshot index recorded by this peer	registered
 storage_budget_bytes_used	storage_budget_bytes_used	Storage budget bytes used per component	registered
 storage_budget_bytes_limit	storage_budget_bytes_limit	Storage budget limit bytes per component	registered

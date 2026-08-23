@@ -2602,12 +2602,14 @@ impl StateBlock<'_> {
                 "Transaction metadata `tx_sequence` must be an unsigned integer: {err}"
             )))
         })?;
-        if require_height_ttl {
-            let expiry = expires_at_height.ok_or_else(|| {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        if require_height_ttl && expires_at_height.is_none() {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
                     "Transaction metadata `expires_at_height` is required by configuration".into(),
-                ))
-            })?;
+                ),
+            ));
+        }
+        if let Some(expiry) = expires_at_height {
             let current_height = state_transaction.block_height();
             if current_height >= expiry {
                 return Err(TransactionRejectionReason::Validation(
@@ -2736,9 +2738,7 @@ impl StateBlock<'_> {
             validation_fee_credit,
         })
     }
-    /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
-    ///
-    /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
+    /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -2873,6 +2873,8 @@ impl StateBlock<'_> {
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
+        state_transaction.kagemusha_taira_canary_external_entrypoint =
+            matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);
@@ -9924,70 +9926,7 @@ pub mod tests {
             other => panic!("expected retired heartbeat rejection, got {other:?}"),
         }
     }
-    #[test]
-    fn transaction_expired_at_height_is_rejected_by_state() {
-        use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
-        use iroha_logger::Level;
-        use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        use std::time::Duration;
-        let (mut world, authority_id, kp) = world_with_authority("wonderland");
-        let mut params = iroha_data_model::parameter::system::Parameters::default();
-        params.transaction = params.transaction.with_ingress_enforcement(true, false);
-        world.parameters = mv::cell::Cell::new(params);
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "ttl-check-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            iroha_data_model::name::Name::from_str("expires_at_height").unwrap(),
-            Json::from(0_u64),
-        );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "ttl".into())])
-        .with_metadata(metadata)
-        .sign(kp.private_key());
-        let default_limits = TransactionParameters::default();
-        let limits = TransactionParameters::with_max_signatures(
-            default_limits.max_signatures(),
-            default_limits.max_instructions(),
-            default_limits.ivm_bytecode_size(),
-            default_limits.max_tx_bytes(),
-            default_limits.max_decompressed_bytes(),
-            default_limits.max_metadata_depth(),
-        )
-        .with_ingress_enforcement(true, false);
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
-            tx,
-            &test_network_id(),
-            Duration::from_secs(0),
-            limits,
-            &crypto_cfg,
-        )
-        .expect("stateless TTL checks should pass when metadata present");
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-        match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
-                assert!(
-                    msg.contains("expired"),
-                    "expected expiry rejection, got {msg}"
-                );
-            }
-            other => {
-                panic!("expected Validation::NotPermitted for expired transaction, got {other:?}")
-            }
-        }
-    }
+    include!("tx_height_expiry_inline_tests.rs");
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
         use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};

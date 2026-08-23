@@ -19,10 +19,12 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.android.test.FixtureGeneratorRunner;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -41,6 +43,50 @@ public final class RegisterOfflineDeviceAttestationTests {
       "04"
           + "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
           + "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
+
+  @Test
+  public void nullTtlUsesCanonicalTransactionDefault() throws Exception {
+    final String accountId =
+        AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x42), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final DeviceAttestationRegistration registration = registration(accountId);
+    final RegisterOfflineDeviceAttestation request =
+        new RegisterOfflineDeviceAttestation(
+            TEST_NETWORK_ID,
+            accountId,
+            registration,
+            1_900_000_000_000L,
+            null,
+            7L,
+            TEST_FEE_PAYMENT,
+            Collections.emptyMap());
+    final TransactionPayload canonicalPayload =
+        TransactionPayload.builder()
+            .setNetworkId(TEST_NETWORK_ID)
+            .setAuthority(accountId)
+            .setCreationTimeMs(1_900_000_000_000L)
+            .setExecutable(
+                Executable.instructions(Collections.singletonList(request.instruction())))
+            .setNonce(7L)
+            .setFeePayment(TEST_FEE_PAYMENT)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+            .build();
+
+    assertEquals(Long.valueOf(100_000L), canonicalPayload.timeToLiveMs().get());
+    assertEquals(canonicalPayload.timeToLiveMs(), request.transactionPayload().timeToLiveMs());
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new RegisterOfflineDeviceAttestation(
+                TEST_NETWORK_ID,
+                accountId,
+                registration,
+                registration.expiresAtMs() - 99_999L,
+                null,
+                7L,
+                TEST_FEE_PAYMENT,
+                Collections.emptyMap()));
+  }
 
   @Test
   public void registrationAndInstructionExactlyMatchRustCurrentModel() throws Exception {

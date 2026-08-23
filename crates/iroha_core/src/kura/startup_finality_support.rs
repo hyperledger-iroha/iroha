@@ -318,6 +318,7 @@ impl V2StartupReplayStorageBinding {
 /// guards keep internal writers out while bodyless historical reads reuse the
 /// exact live-body validation performed by the startup audit.
 pub(crate) struct V2StartupFinalityVerificationSession<'a> {
+    kura: &'a Kura,
     _prune_guard: parking_lot::MutexGuard<'a, ()>,
     _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,

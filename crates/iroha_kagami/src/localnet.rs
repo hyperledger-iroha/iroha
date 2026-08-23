@@ -1872,7 +1872,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                 "governance",
                 "Governance & parliament traffic",
                 "universal",
-                "restricted",
+                "public",
                 None,
             ),
             (
@@ -1880,7 +1880,7 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
                 "zk",
                 "Zero-knowledge attachments",
                 "universal",
-                "restricted",
+                "public",
                 None,
             ),
         ]
@@ -2080,8 +2080,8 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
 }
 fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
     // Static lanes sharing one physical dataspace share the lowest stake-elected owner. The
-    // private-profile governance and ZK lanes therefore inherit lane 0's validator pool, while
-    // their restricted lane is governed by its authenticated lane manifest.
+    // universal governance and ZK lanes therefore inherit lane 0's validator pool, while a
+    // restricted non-universal lane is governed by its authenticated lane manifest.
     let mut lanes = vec![LaneId::SINGLE];
     match sora_profile {
         Some(SoraProfile::Nexus) => {
@@ -4620,6 +4620,10 @@ fn write_start_script(
     writeln!(start_file, "ensure_faucet_reserve() {{")?;
     writeln!(
         start_file,
+        "  [ \"$FAUCET_RESERVE_RETRIES\" != \"0\" ] || {{ echo \"Skipping faucet reserve check: retries disabled\" >&2; return 0; }}"
+    )?;
+    writeln!(
+        start_file,
         "  [ -n \"$IROHA_CLI\" ] || {{ echo \"Skipping faucet reserve check: iroha CLI unavailable\" >&2; return 0; }}"
     )?;
     writeln!(
@@ -7005,6 +7009,7 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+    include!("localnet/profile_policy_tests.rs");
     #[test]
     #[allow(clippy::too_many_lines)]
     fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
@@ -7089,11 +7094,11 @@ mod tests {
         );
         assert_eq!(
             lanes_by_alias.get("governance"),
-            Some(&("universal".to_owned(), "restricted".to_owned()))
+            Some(&("universal".to_owned(), "public".to_owned()))
         );
         assert_eq!(
             lanes_by_alias.get("zk"),
-            Some(&("universal".to_owned(), "restricted".to_owned()))
+            Some(&("universal".to_owned(), "public".to_owned()))
         );
         let dataspace_catalog = nexus
             .get("dataspace_catalog")
@@ -9095,11 +9100,6 @@ mod tests {
     }
     // Keep the generated rANS table contract tests in a focused child under `localnet::tests`.
     include!("localnet/rans_table_tests.rs");
-    #[test]
-    fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {
-        let mode = resolve_requested_consensus_mode(None, None);
-        assert_eq!(mode, SumeragiConsensusMode::Permissioned);
-    }
     #[test]
     fn localnet_perf_profile_keeps_matching_consensus_mode() {
         let mode =

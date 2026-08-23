@@ -27,12 +27,14 @@ struct PendingLifecycleOrdinalRange {
     first: u128,
     last: u128,
     successor: u128,
+    publication_started: bool,
 }
 
 #[derive(Debug)]
 struct LifecycleOrdinalAuthorityState {
     next: Option<u128>,
     pending: Option<PendingLifecycleOrdinalRange>,
+    faulted: bool,
 }
 
 #[derive(Debug)]
@@ -47,6 +49,7 @@ impl SharedLifecycleOrdinalAuthority {
             state: Mutex::new(LifecycleOrdinalAuthorityState {
                 next: high_watermark.checked_add(1),
                 pending: None,
+                faulted: false,
             }),
             durable_publication: Condvar::new(),
         })
@@ -62,11 +65,17 @@ impl SharedLifecycleOrdinalAuthority {
         &self,
         mut state: MutexGuard<'a, LifecycleOrdinalAuthorityState>,
     ) -> Result<MutexGuard<'a, LifecycleOrdinalAuthorityState>, String> {
-        while state.pending.is_some() {
+        while state.pending.is_some() && !state.faulted {
             state = self
                 .durable_publication
                 .wait(state)
                 .map_err(|_| "Sumeragi v2 lifecycle ordinal authority was poisoned".to_owned())?;
+        }
+        if state.faulted {
+            return Err(
+                "Sumeragi v2 lifecycle ordinal authority requires restart after ambiguous durable publication"
+                    .to_owned(),
+            );
         }
         Ok(state)
     }
@@ -153,6 +162,12 @@ impl RuntimeLifecycleOrdinalAuthority {
     /// Advance past a restored durable high-watermark before live ingress opens.
     pub(in crate::sumeragi) fn advance_past(&self, high_watermark: u128) -> Result<(), String> {
         let mut state = self.shared.lock_state()?;
+        if state.faulted {
+            return Err(
+                "Sumeragi v2 lifecycle ordinal authority requires restart after ambiguous durable publication"
+                    .to_owned(),
+            );
+        }
         if state.pending.is_some() {
             return Err(
                 "Sumeragi v2 lifecycle ordinal restoration crossed a pending publication"
@@ -175,7 +190,16 @@ impl RuntimeLifecycleOrdinalAuthority {
 
     /// Read the next unused committed ordinal without reserving it.
     pub(in crate::sumeragi) fn next_ordinal(&self) -> Result<Option<u128>, String> {
-        self.shared.lock_state().map(|state| state.next)
+        self.shared.lock_state().and_then(|state| {
+            if state.faulted {
+                Err(
+                    "Sumeragi v2 lifecycle ordinal authority requires restart after ambiguous durable publication"
+                        .to_owned(),
+                )
+            } else {
+                Ok(state.next)
+            }
+        })
     }
 
     /// Test whether an ordinal precedes the committed actor-global cursor.
@@ -185,7 +209,16 @@ impl RuntimeLifecycleOrdinalAuthority {
         }
         self.shared
             .lock_state()
-            .map(|state| state.next.is_some_and(|next| ordinal < next))
+            .and_then(|state| {
+                if state.faulted {
+                    Err(
+                        "Sumeragi v2 lifecycle ordinal authority requires restart after ambiguous durable publication"
+                            .to_owned(),
+                    )
+                } else {
+                    Ok(state.next.is_some_and(|next| ordinal < next))
+                }
+            })
     }
 }
 
@@ -218,7 +251,7 @@ impl CoordinatorLifecycleOrdinalAuthority {
             .shared
             .lock_state()
             .map_err(|_| DurableLifecycleOrdinalReservationError::Invariant)?;
-        if state.pending.is_some() {
+        if state.faulted || state.pending.is_some() {
             return Err(DurableLifecycleOrdinalReservationError::Invariant);
         }
         let ledger_successor = coordinator_high_water
@@ -240,6 +273,7 @@ impl CoordinatorLifecycleOrdinalAuthority {
             first,
             last,
             successor,
+            publication_started: false,
         });
         Ok(DurableLifecycleOrdinalReservation {
             shared: Arc::clone(&self.shared),
@@ -254,7 +288,9 @@ impl CoordinatorLifecycleOrdinalAuthority {
     /// Verify that launch restoration placed the shared cursor after the ledger.
     pub(super) fn recognizes_high_water(&self, high_water: u128) -> Result<bool, String> {
         self.shared.lock_state().map(|state| {
-            state.pending.is_none() && state.next.is_some_and(|next| next > high_water)
+            !state.faulted
+                && state.pending.is_none()
+                && state.next.is_some_and(|next| next > high_water)
         })
     }
 }
@@ -281,6 +317,36 @@ impl DurableLifecycleOrdinalReservation {
         self.last
     }
 
+    /// Fence runtime reservations before the first potentially durable write.
+    ///
+    /// After this point an error is ambiguous: the LedgerV1 frame may already
+    /// have reached stable storage. Dropping the token therefore faults the
+    /// shared source instead of recycling its range.
+    pub(super) fn mark_publication_started(&self) -> Result<(), String> {
+        if self.committed.load(Ordering::Acquire) {
+            return Err("durable lifecycle ordinal reservation was already committed".to_owned());
+        }
+        let mut state = self.shared.lock_state()?;
+        if state.faulted {
+            return Err("durable lifecycle ordinal authority is already faulted".to_owned());
+        }
+        let Some(pending) = state.pending.as_mut() else {
+            return Err("durable lifecycle ordinal reservation lost its pending fence".to_owned());
+        };
+        if !Arc::ptr_eq(&pending.seal, &self.seal)
+            || pending.first != self.first
+            || pending.last != self.last
+            || pending.successor != self.successor
+            || pending.publication_started
+        {
+            return Err(
+                "durable lifecycle ordinal reservation changed before publication".to_owned(),
+            );
+        }
+        pending.publication_started = true;
+        Ok(())
+    }
+
     /// Publish the range to runtime/fair ingress after LedgerV1 fsync.
     pub(super) fn commit_after_durable_publication(&self) -> Result<(), String> {
         if self.committed.load(Ordering::Acquire) {
@@ -294,6 +360,7 @@ impl DurableLifecycleOrdinalReservation {
             || pending.first != self.first
             || pending.last != self.last
             || pending.successor != self.successor
+            || !pending.publication_started
         {
             return Err("durable lifecycle ordinal reservation changed before commit".to_owned());
         }
@@ -319,6 +386,13 @@ impl Drop for DurableLifecycleOrdinalReservation {
             .as_ref()
             .is_some_and(|pending| Arc::ptr_eq(&pending.seal, &self.seal))
         {
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.publication_started)
+            {
+                state.faulted = true;
+            }
             state.pending = None;
             drop(state);
             self.shared.durable_publication.notify_all();
@@ -587,6 +661,108 @@ pub(super) fn test_authority(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{Barrier, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn durable_ordinal_reservation_aborts_before_io_and_faults_after_io_starts() {
+        let (runtime, coordinator) = lifecycle_ordinal_authorities_after_high_watermark(3);
+
+        let aborted = coordinator
+            .begin_durable_range(3, 1)
+            .expect("reserve one coordinator ordinal");
+        assert_eq!((aborted.first(), aborted.last()), (4, 4));
+        drop(aborted);
+        assert_eq!(
+            runtime.reserve_range(1).expect("reuse pre-I/O abort"),
+            (Some(4), Some(5))
+        );
+
+        let ambiguous = coordinator
+            .begin_durable_range(3, 1)
+            .expect("reserve the next coordinator ordinal");
+        assert_eq!((ambiguous.first(), ambiguous.last()), (5, 5));
+        ambiguous
+            .mark_publication_started()
+            .expect("arm ambiguous-publication fence");
+        drop(ambiguous);
+        assert!(runtime.reserve_range(1).is_err());
+        assert!(
+            !coordinator
+                .recognizes_high_water(3)
+                .expect("faulted authority remains inspectable")
+        );
+    }
+
+    #[test]
+    fn committed_durable_range_advances_past_runtime_and_ledger_high_watermarks() {
+        let (runtime, coordinator) = lifecycle_ordinal_authorities_after_high_watermark(3);
+        assert_eq!(
+            runtime.reserve_range(2).expect("reserve runtime prefix"),
+            (Some(4), Some(6))
+        );
+        let durable = coordinator
+            .begin_durable_range(3, 2)
+            .expect("reserve adjacent durable pair");
+        assert_eq!((durable.first(), durable.last()), (6, 7));
+        durable
+            .mark_publication_started()
+            .expect("start durable publication");
+        durable
+            .commit_after_durable_publication()
+            .expect("commit durable ordinal pair");
+        drop(durable);
+        assert_eq!(
+            runtime
+                .reserve_range(1)
+                .expect("reserve after durable pair"),
+            (Some(8), Some(9))
+        );
+    }
+
+    #[test]
+    fn runtime_reservation_waits_for_durable_publication_then_wakes_after_commit() {
+        let (runtime, coordinator) = lifecycle_ordinal_authorities_after_high_watermark(9);
+        let durable = coordinator
+            .begin_durable_range(9, 2)
+            .expect("reserve a durable pair");
+        let barrier = Arc::new(Barrier::new(2));
+        let runtime_barrier = Arc::clone(&barrier);
+        let (result_tx, result_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            runtime_barrier.wait();
+            result_tx
+                .send(runtime.reserve_range(1))
+                .expect("publish runtime reservation result");
+        });
+
+        barrier.wait();
+        assert!(
+            matches!(
+                result_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "runtime reservation crossed an unpublished durable range"
+        );
+        durable
+            .mark_publication_started()
+            .expect("start durable publication");
+        durable
+            .commit_after_durable_publication()
+            .expect("commit durable publication");
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("runtime reservation wakes after commit")
+                .expect("runtime reservation succeeds"),
+            (Some(12), Some(13))
+        );
+        waiter.join().expect("runtime waiter exits cleanly");
+    }
+
     #[test]
     fn production_capacity_geometry_matches_shared_runtime_resources() {
         let geometry = capacity_geometry_from_limits(4, 8, 3, 2)

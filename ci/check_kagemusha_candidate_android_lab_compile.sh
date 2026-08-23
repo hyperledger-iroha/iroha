@@ -249,11 +249,15 @@ IFS='|' read -r CANDIDATE_SHA256 STAGE_SHA256 SOURCE_COMMIT SOURCE_TREE_SHA256 \
   exit 1
 }
 FIXTURE_CANDIDATE_ROOT="$ROOT_DIR/artifacts/kagemusha-candidate-evidence/$CANDIDATE_SHA256"
+EXTERNAL_BUILD_ROOT=""
 cleanup() {
   if [[ -d "$FIXTURE_CANDIDATE_ROOT" && ! -L "$FIXTURE_CANDIDATE_ROOT" ]]; then
     chmod -R u+w "$FIXTURE_CANDIDATE_ROOT" 2>/dev/null || true
   fi
   rm -rf "$FIXTURE_CANDIDATE_ROOT"
+  if [[ -n "$EXTERNAL_BUILD_ROOT" && -d "$EXTERNAL_BUILD_ROOT" && ! -L "$EXTERNAL_BUILD_ROOT" ]]; then
+    rm -rf "$EXTERNAL_BUILD_ROOT"
+  fi
 }
 trap cleanup EXIT
 
@@ -273,8 +277,60 @@ ANDROID_SDK_RESOLVED="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/
 PRIVATE_GRADLE_HOME="$EVIDENCE_ROOT/compile-gradle-user-home"
 mkdir -p "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 chmod 0700 "$PRIVATE_GRADLE_HOME" "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
+EXTERNAL_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-kagemusha-candidate-compile.XXXXXXXX")"
+EXTERNAL_BUILD_ROOT="$("$PYTHON3_BINARY" -I -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$EXTERNAL_BUILD_ROOT")"
+WARM_ARTIFACT_ROOT="$EXTERNAL_BUILD_ROOT/warm-gradle-artifacts"
+FINAL_ARTIFACT_ROOT="$EXTERNAL_BUILD_ROOT/final-gradle-artifacts"
+mkdir -m 0700 "$WARM_ARTIFACT_ROOT" "$FINAL_ARTIFACT_ROOT"
 SOURCE_GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 SOURCE_DEPENDENCY_CACHE="$SOURCE_GRADLE_HOME/caches/modules-2"
+CANDIDATE_IDENTITY_PROPERTIES=(
+  -PkagemushaCandidateEvidenceLab=true
+  -PkagemushaCandidateSha256="$CANDIDATE_SHA256"
+  -PkagemushaCandidateStageSha256="$STAGE_SHA256"
+  -PkagemushaCandidateEvidenceRoot="$EVIDENCE_ROOT"
+  -PkagemushaCandidateSourceCommit="$SOURCE_COMMIT"
+  -PkagemushaCandidateSourceTreeSha256="$SOURCE_TREE_SHA256"
+  -PkagemushaCandidateGeneration=compile-only
+  -PkagemushaCandidateSlotId=compile-only
+  -PkagemushaCandidateLabNativeLibrary="$NATIVE_LIBRARY"
+)
+case "${KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE:-0}" in
+  0) ;;
+  1)
+    mkdir -p "$SOURCE_GRADLE_HOME"
+    chmod 0700 "$SOURCE_GRADLE_HOME"
+    (
+      cd "$ROOT_DIR/kotlin"
+      /usr/bin/env -i \
+        HOME="$HOME" \
+        PATH="$JAVA_HOME_RESOLVED/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+        TMPDIR="${TMPDIR:-/tmp}" \
+        LANG="${LANG:-C.UTF-8}" \
+        JAVA_HOME="$JAVA_HOME_RESOLVED" \
+        ANDROID_HOME="$ANDROID_SDK_RESOLVED" \
+        ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
+        GRADLE_USER_HOME="$SOURCE_GRADLE_HOME" \
+        MOBILE_SDK_ANDROID_ARTIFACT_DIR="$WARM_ARTIFACT_ROOT" \
+        ./gradlew --no-daemon --max-workers=2 \
+        --project-cache-dir "$EVIDENCE_ROOT/warm-gradle-project-cache" \
+        -Pkotlin.compiler.execution.strategy=in-process \
+        -PkagemushaCandidateCompileOnly=true \
+        "${CANDIDATE_IDENTITY_PROPERTIES[@]}" \
+        :kagemusha-candidate-evidence-lab:compileDebugKotlin \
+        :kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin
+    )
+    chmod -R u+w "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache" 2>/dev/null || true
+    rm -rf -- "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache"
+    rm -rf -- "$WARM_ARTIFACT_ROOT"
+    ;;
+  *)
+    echo "[kagemusha-candidate-compile] ERROR: KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE must be exactly 0 or 1" >&2
+    exit 64
+    ;;
+esac
 [[ -d "$SOURCE_DEPENDENCY_CACHE" ]] || {
   echo "[kagemusha-candidate-compile] ERROR: warmed Gradle dependency cache is required" >&2
   exit 69
@@ -314,17 +370,12 @@ fi
     ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
     GRADLE_USER_HOME="$PRIVATE_GRADLE_HOME" \
     GRADLE_RO_DEP_CACHE="$READ_ONLY_DEPENDENCY_CACHE" \
+    MOBILE_SDK_ANDROID_ARTIFACT_DIR="$FINAL_ARTIFACT_ROOT" \
     ./gradlew --no-daemon --offline --max-workers=2 \
+    --project-cache-dir "$EVIDENCE_ROOT/compile-gradle-project-cache" \
+    -Pkotlin.compiler.execution.strategy=in-process \
     -PkagemushaCandidateCompileOnly=true \
-    -PkagemushaCandidateEvidenceLab=true \
-    -PkagemushaCandidateSha256="$CANDIDATE_SHA256" \
-    -PkagemushaCandidateStageSha256="$STAGE_SHA256" \
-    -PkagemushaCandidateEvidenceRoot="$EVIDENCE_ROOT" \
-    -PkagemushaCandidateSourceCommit="$SOURCE_COMMIT" \
-    -PkagemushaCandidateSourceTreeSha256="$SOURCE_TREE_SHA256" \
-    -PkagemushaCandidateGeneration=compile-only \
-    -PkagemushaCandidateSlotId=compile-only \
-    -PkagemushaCandidateLabNativeLibrary="$NATIVE_LIBRARY" \
+    "${CANDIDATE_IDENTITY_PROPERTIES[@]}" \
     :kagemusha-candidate-evidence-lab:compileDebugKotlin \
     :kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin
 )

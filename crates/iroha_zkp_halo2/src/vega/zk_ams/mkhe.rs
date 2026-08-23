@@ -113,11 +113,6 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
-// TODO: Reconnect the private global-lookup prototype after its confidential
-// spool dependency can enter the authorized workspace lock graph.
-#[cfg(any())]
-#[path = "mkhe/global_lookup_statement_v1.rs"]
-mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -142,14 +137,6 @@ mod phase23_ingress;
 mod phase23_mask_proof;
 #[path = "mkhe/phase23_materialized_wire.rs"]
 mod phase23_materialized_wire;
-#[path = "mkhe/phase23_rns_link.rs"]
-mod phase23_rns_link;
-#[allow(
-    dead_code,
-    reason = "the release-shape RNS-Link codec remains private while its relation responses are algebraically unverified"
-)]
-#[path = "mkhe/phase23_rns_link_wire.rs"]
-mod phase23_rns_link_wire;
 #[allow(
     dead_code,
     reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
@@ -160,12 +147,26 @@ mod receipt_capability_audit;
 mod release_evidence;
 #[path = "mkhe/resource.rs"]
 mod resource;
+#[allow(
+    dead_code,
+    reason = "the sealed compatibility facade is intentionally unconstructible after retirement"
+)]
+#[path = "mkhe/rns_native_claimed_successor.rs"]
+mod rns_native_claimed_successor;
+#[allow(
+    dead_code,
+    reason = "the retained private comparator seam remains unreachable while composite verification is fail-closed"
+)]
 #[path = "mkhe/rns_native_comparator_product.rs"]
 mod rns_native_comparator_product;
 #[path = "mkhe/rns_native_comparator_range_carry_product.rs"]
 mod rns_native_comparator_range_carry_product;
 #[path = "mkhe/rns_native_composite_verifier.rs"]
 mod rns_native_composite_verifier;
+#[allow(
+    dead_code,
+    reason = "the retained private inventory seam remains unreachable while composite verification is fail-closed"
+)]
 #[path = "mkhe/rns_native_cross_field_inventory.rs"]
 mod rns_native_cross_field_inventory;
 #[path = "mkhe/rns_native_profile.rs"]
@@ -184,6 +185,10 @@ mod rns_native_qpcs_prefix;
 mod rns_native_rlwe_source_statement;
 #[path = "mkhe/rns_native_section_codec.rs"]
 mod rns_native_section_codec;
+#[allow(
+    dead_code,
+    reason = "the retained private successor seam remains unreachable while composite verification is fail-closed"
+)]
 #[path = "mkhe/rns_native_small_sign_disjointness_product.rs"]
 mod rns_native_small_sign_disjointness_product;
 #[path = "mkhe/rns_native_source.rs"]
@@ -196,6 +201,10 @@ mod rns_native_source;
 mod rns_native_source_terminal_cross_field;
 #[path = "mkhe/rns_native_terminal_cross_basis.rs"]
 mod rns_native_terminal_cross_basis;
+#[allow(
+    dead_code,
+    reason = "private staged transcript seams remain unreachable while composite verification is fail-closed"
+)]
 #[path = "mkhe/rns_native_transcript.rs"]
 mod rns_native_transcript;
 #[path = "mkhe/rns_native_wire.rs"]

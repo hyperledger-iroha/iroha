@@ -483,7 +483,7 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
-            "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222",
+            "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
         )
 
 

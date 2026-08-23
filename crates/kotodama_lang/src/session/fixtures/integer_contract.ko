@@ -1,0 +1,9 @@
+
+                seiyaku IntegerContract {
+                    struct Shared { int value; }
+                    fn make() -> Shared { return Shared { value: 7 }; }
+                    view fn read() -> int {
+                        let record = make();
+                        return record.value;
+                    }
+                }

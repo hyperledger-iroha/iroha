@@ -3045,7 +3045,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         item="complete_certified_fetch_body_persistence",
                         item_token_sha256=(
-                            "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851"
+                            "97681979dd7f57bd52e8666099f26014c37d6ccd07c6ce2fa4b9b30359354361"
                         ),
                         brace_context=(("impl", "LifecycleCoordinator"),),
                         projection="historical_trace",

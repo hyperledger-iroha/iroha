@@ -8,7 +8,7 @@ mod tests {
         state::{State, World},
     };
     use core::num::NonZeroU64;
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
         ChainId, NetworkId, Registrable,
         account::Account,
@@ -18,16 +18,27 @@ mod tests {
         isi::{
             SetAssetHoldingLimit,
             error::{AssetTransferAdmissionError, InstructionExecutionError},
+            offline::{AuthorizeKagemushaTairaCanaryV4, RecordKagemushaTairaCanaryV4},
         },
         offline::{
+            KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            KAGEMUSHA_V4_TAIRA_CANARY_AUTHORIZATION_BODY_SCHEMA,
+            KAGEMUSHA_V4_TAIRA_CANARY_PERMIT_SCHEMA,
+            KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_BODY_SCHEMA,
+            KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_SCHEMA,
             KagemushaAndroidKeyMintHardwareAssertionV1, KagemushaDevicePublicKeyV2,
-            KagemushaDeviceSignatureV2, KagemushaIosAppAttestHardwareAssertionV1,
+            KagemushaDeviceSignatureV2, KagemushaExactBytesDigestV1,
+            KagemushaIosAppAttestHardwareAssertionV1, KagemushaV4PromotionBindingV1,
+            KagemushaV4TairaCanaryAuthorizationBodyV1, KagemushaV4TairaCanaryPermitV1,
+            KagemushaV4TairaCanaryReservationBodyV1, KagemushaV4TairaCanaryReservationV1,
+            kagemusha_v4_taira_canary_transaction_metadata,
         },
         permission::Permission,
         role::{Role, RoleId},
+        transaction::{Executable, ExecutableBatchItem, FeePaymentIntent, TransactionBuilder},
     };
     use iroha_primitives::{json::Json, numeric::Quantity};
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use p256::{
         ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _},
         elliptic_curve::sec1::ToEncodedPoint as _,
@@ -512,8 +523,8 @@ mod tests {
             .expect("V4 issuance-overlap validator");
         let end = start
             + source[start..]
-                .find("impl Execute for ActivateKagemushaRecursiveReleaseV4")
-                .expect("V4 release activation executor");
+                .find("impl Execute for TopUpKagemushaRecursiveV4")
+                .expect("next V4 instruction executor");
         let validator = &source[start..end];
         assert!(validator.contains("world.smart_contract_state.iter()"));
         assert!(validator.contains("decode_kagemusha_v4_consensus_release_state"));
@@ -524,22 +535,564 @@ mod tests {
         );
     }
     #[test]
-    fn kagemusha_v4_activation_validates_bounded_policy_before_state_mutation() {
-        let source = include_str!("../offline.rs");
+    fn kagemusha_v4_activation_validates_identity_and_policy_before_state_mutation() {
+        let source = include_str!("kagemusha_activation.rs");
         let start = source
             .find("impl Execute for ActivateKagemushaRecursiveReleaseV4")
             .expect("V4 release activation executor");
         let body = &source[start..];
+        let promotion_consumption_plan = body
+            .find("plan_kagemusha_v4_activation_binding(")
+            .expect("activation promotion-binding validation and replay check");
         let validation = body
             .find("validate_offline_attestation_policy_for_release_activation")
             .expect("activation policy validation");
         let first_mutation = body
             .find("state_transaction.world.smart_contract_state.insert")
             .expect("activation state publication");
+        let promotion_consumption_commit = body
+            .find("commit_v4_promotion_binding")
+            .expect("atomic activation promotion-binding consumption");
 
         assert!(
-            validation < first_mutation,
-            "an over-limit activation policy must be rejected before any state publication",
+            validation < promotion_consumption_plan
+                && promotion_consumption_plan < first_mutation
+                && first_mutation < promotion_consumption_commit,
+            "promotion identity and replay plus bounded policy must be rejected before atomic state publication",
+        );
+    }
+    #[test]
+    fn kagemusha_v4_promotion_id_consumption_accepts_fresh_and_rejects_duplicate() {
+        offline_test_transaction!(transaction);
+        let promotion_id = [0xA5; 32];
+        let replay_keys_before = transaction.world.kagemusha_replay_keys.iter().count();
+        let marker = plan_v4_promotion_id(promotion_id, &transaction)
+            .expect("fresh promotion id must admit one activation");
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_before,
+            "planning consumption must not mutate consensus state",
+        );
+        commit_v4_promotion_id(marker, &mut transaction);
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&marker)
+                .is_some(),
+            "successful activation must persist its promotion marker",
+        );
+        let replay_keys_after_first = transaction.world.kagemusha_replay_keys.iter().count();
+
+        let error = plan_v4_promotion_id(promotion_id, &transaction)
+            .expect_err("a second activation must not reuse the promotion id");
+        assert!(error.to_string().contains("promotion_replay"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_first,
+            "duplicate rejection must not mutate consensus state",
+        );
+
+        let distinct_marker = plan_v4_promotion_id([0xA6; 32], &transaction)
+            .expect("a distinct promotion id remains eligible");
+        assert_ne!(distinct_marker, marker);
+        assert!(plan_v4_promotion_id([0; 32], &transaction).is_err());
+    }
+    #[derive(Clone)]
+    struct CanaryConsensusFixture {
+        permit: KagemushaV4TairaCanaryPermitV1,
+        reservation: KagemushaV4TairaCanaryReservationV1,
+        exact_call_hash: Hash,
+        canary_transaction: SignedTransaction,
+        canary_transaction_wire: Vec<u8>,
+    }
+    fn canary_consensus_controller() -> KeyPair {
+        KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519)
+    }
+    fn canary_consensus_digest(label: &[u8]) -> KagemushaExactBytesDigestV1 {
+        KagemushaExactBytesDigestV1::from_bytes(label).expect("non-empty canary test identity")
+    }
+    fn canary_consensus_fixture(
+        state_transaction: &StateTransaction<'_, '_>,
+        nonce: u32,
+    ) -> CanaryConsensusFixture {
+        canary_consensus_fixture_for_key(state_transaction, nonce, &ALICE_KEYPAIR)
+    }
+    fn canary_consensus_fixture_for_key(
+        state_transaction: &StateTransaction<'_, '_>,
+        nonce: u32,
+        canary_key: &KeyPair,
+    ) -> CanaryConsensusFixture {
+        let controller = canary_consensus_controller();
+        let canary_authority = AccountId::new(canary_key.public_key().clone());
+        let binding = KagemushaV4PromotionBindingV1 {
+            promotion_controller: controller.public_key().clone(),
+            promotion_reservation: canary_consensus_digest(b"canary reservation"),
+            promotion_id: [0xC5; 32],
+            network_id: state_transaction.network_id().clone(),
+            reviewed_source_closure_descriptor_sha256: [0xC6; 32],
+            manifest_sha256: [0xC7; 32],
+            release_record_sha256: [0xC8; 32],
+            release_policy_source: canary_consensus_digest(b"canary release policy"),
+            device_attestation_policy_norito: canary_consensus_digest(b"canary device policy"),
+            signed_genesis: canary_consensus_digest(b"canary signed genesis"),
+            catalog_consensus_policy_digest: [0xC9; 32],
+            execution_policy_hash: Hash::new(b"canary execution policy"),
+        };
+        let expires_at_height = NonZeroU64::new(3).expect("non-zero canary expiry");
+        let body = KagemushaV4TairaCanaryAuthorizationBodyV1 {
+            schema: KAGEMUSHA_V4_TAIRA_CANARY_AUTHORIZATION_BODY_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            binding,
+            activation_expectations_artifact: canary_consensus_digest(b"canary expectations"),
+            activation_finality_receipt: canary_consensus_digest(b"canary receipt"),
+            canary_authority: canary_authority.clone(),
+            canonical_torii_origin: "https://taira.example".to_owned(),
+            authorized_at_unix_ms: POLICY_TEST_TIME_MS - 1_000,
+            expires_at_unix_ms: POLICY_TEST_TIME_MS + 60_000,
+            expires_at_height,
+        };
+        let permit_signature =
+            SignatureOf::try_from_hash(controller.private_key(), body.signing_hash())
+                .expect("controller signs canary permit");
+        let permit = KagemushaV4TairaCanaryPermitV1 {
+            schema: KAGEMUSHA_V4_TAIRA_CANARY_PERMIT_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            body,
+            signature: permit_signature,
+        };
+        let metadata = kagemusha_v4_taira_canary_transaction_metadata(
+            permit.body.binding.promotion_id,
+            permit.body.activation_finality_receipt,
+            &permit.body.canonical_torii_origin,
+            expires_at_height,
+        );
+        let mut builder = TransactionBuilder::new(
+            state_transaction.network_id().clone(),
+            canary_authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([RecordKagemushaTairaCanaryV4::new(permit.clone())])
+        .with_metadata(metadata);
+        builder.set_creation_time(core::time::Duration::from_millis(POLICY_TEST_TIME_MS));
+        builder.set_ttl(core::time::Duration::from_millis(30_000));
+        builder.set_nonce(
+            core::num::NonZeroU32::new(nonce).expect("non-zero canary transaction nonce"),
+        );
+        let canary_transaction = builder.sign(canary_key.private_key());
+        let canary_transaction_wire = canary_transaction
+            .encode_wire_v1()
+            .expect("canonical canary transaction wire");
+        let reservation_body = KagemushaV4TairaCanaryReservationBodyV1 {
+            schema: KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_BODY_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            permit: permit.clone(),
+            canary_transaction_wire: KagemushaExactBytesDigestV1::from_bytes(
+                &canary_transaction_wire,
+            )
+            .expect("exact canary wire identity"),
+            canary_transaction_intent: canary_transaction.hash(),
+            canary_entrypoint_hash: Hash::from(canary_transaction.hash_as_entrypoint()),
+        };
+        let reservation_signature =
+            SignatureOf::try_from_hash(controller.private_key(), reservation_body.signing_hash())
+                .expect("controller signs exact-hash canary reservation");
+        let reservation = KagemushaV4TairaCanaryReservationV1 {
+            schema: KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_SCHEMA.to_owned(),
+            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+            body: reservation_body,
+            signature: reservation_signature,
+        };
+        CanaryConsensusFixture {
+            permit,
+            exact_call_hash: Hash::from(canary_transaction.hash_as_entrypoint()),
+            reservation,
+            canary_transaction,
+            canary_transaction_wire,
+        }
+    }
+    fn bind_canary_consensus_wire(
+        fixture: &CanaryConsensusFixture,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        let identity =
+            crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(
+                &fixture.canary_transaction,
+            )
+            .expect("derive canary signed-wire binding")
+            .expect("single direct canary record has a signed-wire binding");
+        assert_eq!(identity, fixture.reservation.body.canary_transaction_wire);
+        state_transaction.kagemusha_taira_canary_external_entrypoint = true;
+        state_transaction.kagemusha_taira_canary_wire_identity = Some(identity);
+    }
+    fn commit_canary_activation_binding(
+        binding: &KagemushaV4PromotionBindingV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        let (promotion, binding) = plan_v4_promotion_binding(binding, state_transaction)
+            .expect("fresh canary activation binding");
+        commit_v4_promotion_binding(promotion, binding, state_transaction);
+    }
+    #[test]
+    fn taira_canary_requires_activation_before_exact_authorization() {
+        offline_test_transaction!(transaction);
+        let fixture = canary_consensus_fixture(&transaction, 7);
+        let replay_keys_before = transaction.world.kagemusha_replay_keys.iter().count();
+        let error = AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("authorization without activation must fail closed");
+        assert!(error.to_string().contains("canary_activation_missing"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_before,
+            "failed authorization must not reserve any marker",
+        );
+    }
+    #[test]
+    fn taira_canary_rejects_fake_controller_for_real_promotion_id() {
+        offline_test_transaction!(transaction);
+        let fixture = canary_consensus_fixture(&transaction, 7);
+        commit_canary_activation_binding(&fixture.permit.body.binding, &mut transaction);
+        let markers_after_activation = transaction.world.kagemusha_replay_keys.iter().count();
+        let fake_controller = KeyPair::from_seed(vec![0xDA; 32], Algorithm::Ed25519);
+        let mut fake_permit = fixture.permit;
+        fake_permit.body.binding.promotion_controller = fake_controller.public_key().clone();
+        fake_permit.signature = SignatureOf::try_from_hash(
+            fake_controller.private_key(),
+            fake_permit.body.signing_hash(),
+        )
+        .expect("attacker self-signs a structurally valid permit");
+        let mut fake_reservation = fixture.reservation;
+        fake_reservation.body.permit = fake_permit;
+        fake_reservation.signature = SignatureOf::try_from_hash(
+            fake_controller.private_key(),
+            fake_reservation.body.signing_hash(),
+        )
+        .expect("attacker self-signs a structurally valid reservation");
+        let error = AuthorizeKagemushaTairaCanaryV4::new(fake_reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a fake controller cannot reuse a real activated promotion id");
+        assert!(error.to_string().contains("canary_activation_missing"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_after_activation,
+        );
+    }
+    #[test]
+    fn taira_canary_reservation_withholds_wire_and_rejects_tampered_hashes() {
+        offline_test_transaction!(transaction);
+        let fixture = canary_consensus_fixture(&transaction, 7);
+        let instruction = AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation.clone());
+        let encoded = norito::encode_canonical(&instruction).expect("canonical reservation ISI");
+        assert!(
+            !encoded
+                .windows(fixture.canary_transaction_wire.len())
+                .any(|window| window == fixture.canary_transaction_wire.as_slice()),
+            "pre-finality authorization must not disclose the signed canary wire",
+        );
+        let decoded: AuthorizeKagemushaTairaCanaryV4 = norito::decode_canonical_with_limits(
+            &encoded,
+            norito::canonical_decode_limits(encoded.len()),
+        )
+        .expect("reservation-only authorization decodes");
+        assert_eq!(decoded.reservation(), &fixture.reservation);
+
+        commit_canary_activation_binding(&fixture.permit.body.binding, &mut transaction);
+        let markers_before = transaction.world.kagemusha_replay_keys.iter().count();
+        let mut intent = fixture.reservation.clone();
+        intent.body.canary_transaction_intent =
+            HashOf::from_untyped_unchecked(Hash::new(b"tampered canary intent"));
+        let mut wire = fixture.reservation.clone();
+        wire.body.canary_transaction_wire.sha256[0] ^= 1;
+        let mut entrypoint = fixture.reservation;
+        entrypoint.body.canary_entrypoint_hash = Hash::new(b"tampered canary entrypoint");
+        for (case, reservation) in [
+            ("intent", intent),
+            ("wire", wire),
+            ("entrypoint", entrypoint),
+        ] {
+            let error = AuthorizeKagemushaTairaCanaryV4::new(reservation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("tampered exact-hash reservation must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("invalid_taira_canary_authorization"),
+                "unexpected {case} rejection: {error}",
+            );
+            assert_eq!(
+                transaction.world.kagemusha_replay_keys.iter().count(),
+                markers_before,
+                "tampered {case} must not reserve markers",
+            );
+        }
+
+        let controller = canary_consensus_controller();
+        let mut inconsistent = canary_consensus_fixture(&transaction, 7).reservation;
+        inconsistent.body.canary_transaction_intent =
+            HashOf::from_untyped_unchecked(Hash::new(b"signed mismatched canary intent"));
+        let mut oversized = canary_consensus_fixture(&transaction, 7).reservation;
+        oversized.body.canary_transaction_wire.byte_len = u64::MAX;
+        for (case, mut reservation) in [("intent", inconsistent), ("wire length", oversized)] {
+            reservation.signature = SignatureOf::try_from_hash(
+                controller.private_key(),
+                reservation.body.signing_hash(),
+            )
+            .expect("controller signs malformed reservation fixture");
+            let error = AuthorizeKagemushaTairaCanaryV4::new(reservation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("signed malformed reservation must fail structurally");
+            assert!(
+                error
+                    .to_string()
+                    .contains("invalid_taira_canary_authorization"),
+                "unexpected signed {case} error: {error}",
+            );
+        }
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_before,
+            "signed malformed reservations must not reserve markers",
+        );
+    }
+    #[test]
+    fn taira_canary_exact_two_step_rejects_altered_call_then_consumes_once() {
+        offline_test_transaction!(transaction);
+        let fixture = canary_consensus_fixture(&transaction, 7);
+        commit_canary_activation_binding(&fixture.permit.body.binding, &mut transaction);
+        let replay_keys_after_activation = transaction.world.kagemusha_replay_keys.iter().count();
+        let foreign_authority = AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation.clone())
+            .execute(&BOB_ID, &mut transaction)
+            .expect_err("a foreign account cannot front-run exact authorization publication");
+        assert!(
+            foreign_authority
+                .to_string()
+                .contains("invalid_taira_canary_authorization")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_activation,
+            "foreign-authority rejection must not reserve any marker",
+        );
+        AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("controller signatures authorize without a broad account permission");
+        let replay_keys_after_authorization =
+            transaction.world.kagemusha_replay_keys.iter().count();
+        AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("the same exact authorization publication is idempotent");
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+            "idempotent authorization publication must not add markers",
+        );
+        let controller = canary_consensus_controller();
+        let mut same_call_different_reservation = fixture.reservation.clone();
+        same_call_different_reservation
+            .body
+            .canary_transaction_wire
+            .sha256[0] ^= 1;
+        same_call_different_reservation.signature = SignatureOf::try_from_hash(
+            controller.private_key(),
+            same_call_different_reservation.body.signing_hash(),
+        )
+        .expect("controller signs the conflicting exact reservation");
+        let conflicting = AuthorizeKagemushaTairaCanaryV4::new(same_call_different_reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("the same call hash cannot hide a different exact reservation");
+        assert!(
+            conflicting
+                .to_string()
+                .contains("canary_authorization_replay")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+            "conflicting exact reservation rejection must not mutate markers",
+        );
+        let distinct_nonce = canary_consensus_fixture(&transaction, 8);
+        let different_exact = AuthorizeKagemushaTairaCanaryV4::new(distinct_nonce.reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a different exact call cannot occupy the reserved promotion slot");
+        assert!(
+            different_exact
+                .to_string()
+                .contains("canary_authorization_replay")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+        );
+        bind_canary_consensus_wire(&fixture, &mut transaction);
+        transaction.tx_call_hash = Some(Hash::new(b"altered same-permit transaction"));
+        let altered = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("an altered same-permit call must not consume the canary");
+        assert!(altered.to_string().contains("canary_authorization_missing"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+        );
+        transaction.tx_call_hash = Some(fixture.exact_call_hash);
+        bind_canary_consensus_wire(&fixture, &mut transaction);
+        let mismatched_authority = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
+            .execute(&BOB_ID, &mut transaction)
+            .expect_err("the exact call still requires the permitted relayer authority");
+        assert!(
+            mismatched_authority
+                .to_string()
+                .contains("invalid_taira_canary_permit")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+        );
+
+        RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("the exactly authorized ordinary canary consumes its one-shot marker");
+        let replay_keys_after_canary = transaction.world.kagemusha_replay_keys.iter().count();
+        bind_canary_consensus_wire(&fixture, &mut transaction);
+        let duplicate = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("the exact canary cannot execute twice");
+        assert!(duplicate.to_string().contains("canary_replay"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_canary,
+        );
+
+        AuthorizeKagemushaTairaCanaryV4::new(fixture.reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("the same exact reservation stays idempotent after canary consumption");
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_canary,
+            "post-consumption idempotence must not add or remove markers",
+        );
+
+        let post_consumption = canary_consensus_fixture(&transaction, 9);
+        let second_authorization =
+            AuthorizeKagemushaTairaCanaryV4::new(post_consumption.reservation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("a distinct nonce cannot reopen one consumed promotion canary");
+        assert!(
+            second_authorization
+                .to_string()
+                .contains("canary_authorization_replay")
+        );
+    }
+    #[test]
+    fn taira_canary_complete_wire_rejects_alternate_valid_proof_for_same_intent() {
+        offline_test_transaction!(transaction);
+        let canary_key = KeyPair::from_seed(vec![0xD4; 32], Algorithm::MlDsa);
+        let authority = AccountId::new(canary_key.public_key().clone());
+        let first = canary_consensus_fixture_for_key(&transaction, 7, &canary_key);
+        let second = canary_consensus_fixture_for_key(&transaction, 7, &canary_key);
+        for transaction in [&first.canary_transaction, &second.canary_transaction] {
+            transaction
+                .verify_signature()
+                .expect("independent ML-DSA canary proof verifies");
+        }
+        assert_eq!(first.permit, second.permit);
+        assert_eq!(
+            first.canary_transaction.hash(),
+            second.canary_transaction.hash()
+        );
+        assert_eq!(first.exact_call_hash, second.exact_call_hash);
+        let wire_identity = |transaction: &SignedTransaction| {
+            crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(
+                transaction,
+            )
+            .expect("derive canary wire")
+        };
+        let first_wire = wire_identity(&first.canary_transaction)
+            .expect("first transaction has exact direct Record shape");
+        let second_wire = wire_identity(&second.canary_transaction)
+            .expect("second transaction has exact direct Record shape");
+        assert_ne!(first_wire, second_wire);
+        let multi_record = TransactionBuilder::new(
+            transaction.network_id().clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            RecordKagemushaTairaCanaryV4::new(first.permit.clone()),
+            RecordKagemushaTairaCanaryV4::new(first.permit.clone()),
+        ])
+        .sign(canary_key.private_key());
+        assert_eq!(wire_identity(&multi_record), None);
+        let batch = TransactionBuilder::new(
+            transaction.network_id().clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(
+                RecordKagemushaTairaCanaryV4::new(first.permit.clone()).into(),
+            )]
+            .into(),
+        ))
+        .sign(canary_key.private_key());
+        assert_eq!(wire_identity(&batch), None);
+        commit_canary_activation_binding(&first.permit.body.binding, &mut transaction);
+        AuthorizeKagemushaTairaCanaryV4::new(first.reservation.clone())
+            .execute(&authority, &mut transaction)
+            .expect("first exact signed wire is authorized");
+        let markers_after_authorization = transaction.world.kagemusha_replay_keys.iter().count();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.tx_call_hash = Some(second.exact_call_hash);
+        transaction.kagemusha_taira_canary_wire_identity = Some(second_wire);
+        let error = RecordKagemushaTairaCanaryV4::new(second.permit)
+            .execute(&authority, &mut transaction)
+            .expect_err("alternate valid proof wire must not consume the authorization");
+        assert!(error.to_string().contains("canary_authorization_missing"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_after_authorization
+        );
+        transaction.kagemusha_taira_canary_wire_identity = Some(first_wire);
+        RecordKagemushaTairaCanaryV4::new(first.permit)
+            .execute(&authority, &mut transaction)
+            .expect("the exactly authorized complete wire consumes the canary");
+    }
+    #[test]
+    fn taira_canary_rejects_invalid_and_expired_permits_before_marker_consumption() {
+        offline_test_transaction!(transaction);
+        let fixture = canary_consensus_fixture(&transaction, 7);
+        commit_canary_activation_binding(&fixture.permit.body.binding, &mut transaction);
+        transaction.tx_call_hash = Some(fixture.exact_call_hash);
+        bind_canary_consensus_wire(&fixture, &mut transaction);
+        let markers_before = transaction.world.kagemusha_replay_keys.iter().count();
+        let mut invalid = fixture.permit.clone();
+        invalid.body.canonical_torii_origin = "https://different.example".to_owned();
+        let invalid_error = RecordKagemushaTairaCanaryV4::new(invalid)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("tampering after permit signing must fail");
+        assert!(
+            invalid_error
+                .to_string()
+                .contains("invalid_taira_canary_permit")
+        );
+        let controller = canary_consensus_controller();
+        let mut expired = fixture.permit;
+        expired.body.expires_at_height = NonZeroU64::new(1).expect("non-zero expired height");
+        expired.signature =
+            SignatureOf::try_from_hash(controller.private_key(), expired.body.signing_hash())
+                .expect("controller signs expired test permit");
+        let expired_error = RecordKagemushaTairaCanaryV4::new(expired)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("exclusive current-height expiry must fail");
+        assert!(
+            expired_error
+                .to_string()
+                .contains("invalid_taira_canary_permit")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_before,
+            "invalid and expired permits must not consume the canary marker",
         );
     }
     fn offline_permission(name: &str) -> Permission {
@@ -2441,5 +2994,6 @@ mod tests {
             "the exact manager permission inherited through a role must authorize policy changes"
         );
     }
+    include!("isi_kagemusha_taira_canary_context_tests.rs");
     include!("isi_platform_policy_tests.rs");
 }

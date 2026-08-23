@@ -197,6 +197,7 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
     let qpcs_roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
         digest(b"qpcs-initial-root", context, 0),
+        digest(b"q-mask-s-root", context, 0),
         digest(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )

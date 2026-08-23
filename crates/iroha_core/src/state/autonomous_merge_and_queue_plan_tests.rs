@@ -1,4 +1,5 @@
 include!("autonomous_merge_and_queue_plan_test_support.rs");
+include!("autonomous_merge_admission_intent_tests.rs");
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -38,6 +39,432 @@ fn canonical_wsv_authorization_commits_exact_autonomous_execution_once() {
             .expect("committed marker lookup"),
         "canonical commit must publish its replay markers"
     );
+}
+#[test]
+fn queue_plan_synced_transfer_binds_fastpq_transcript_and_commits_after_ttl() {
+    let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("QueuePlan transfer produces an autonomous execution batch");
+    let lane = batch.lanes.first().expect("fixture carries one lane");
+    let TransactionEntrypoint::External(transaction) = &lane.entrypoints[0] else {
+        panic!("fixture QueuePlan transfer is external")
+    };
+    assert_eq!(
+        transaction.admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    );
+    let expires_at = transaction
+        .creation_time()
+        .checked_add(transaction.time_to_live().expect("fixture TTL"))
+        .expect("fixture expiry fits");
+    assert!(
+        carrier.header().creation_time() > expires_at,
+        "embedded canonical execution must remain valid after top-level transaction TTL"
+    );
+    assert_eq!(
+        lane.fastpq_transcripts.len(),
+        1,
+        "numeric transfer must emit FASTPQ evidence; results={:?}",
+        lane.results
+    );
+    let bundle = &lane.fastpq_transcripts[0];
+    assert_eq!(bundle.entry_hash, lane.entrypoint_hashes[0]);
+    assert_eq!(bundle.transcripts.len(), 1);
+    let transcript = &bundle.transcripts[0];
+    assert_eq!(transcript.batch_hash, bundle.entry_hash);
+    let delta = transcript
+        .deltas
+        .first()
+        .expect("numeric transfer emits one FASTPQ delta")
+        .clone();
+    assert_eq!(delta.amount, Quantity::from(3_u32));
+    let source_asset = AssetId::new(delta.asset_definition.clone(), delta.from_account.clone());
+    let destination_asset = AssetId::new(delta.asset_definition.clone(), delta.to_account.clone());
+    let balance = |asset_id: &AssetId| {
+        state
+            .world
+            .view()
+            .assets()
+            .get(asset_id)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    };
+    assert_eq!(balance(&source_asset), Quantity::from(10_u32));
+    assert_eq!(balance(&destination_asset), Quantity::zero());
+    let mut lane_without_evidence = lane.clone();
+    lane_without_evidence.fastpq_transcripts = Vec::new().into();
+    assert_ne!(
+        crate::merge::merge_lane_execution_hash(lane),
+        crate::merge::merge_lane_execution_hash(&lane_without_evidence),
+        "FASTPQ evidence must change the lane execution hash"
+    );
+    assert_ne!(
+        batch.execution_root,
+        crate::merge::merge_execution_root(core::slice::from_ref(&lane_without_evidence)),
+        "FASTPQ evidence must change the execution root"
+    );
+    let mut batch_without_evidence = batch.clone();
+    batch_without_evidence.lanes[0] = lane_without_evidence;
+    batch_without_evidence.execution_root =
+        crate::merge::merge_execution_root(&batch_without_evidence.lanes);
+    assert_ne!(
+        crate::merge::merge_execution_batch_hash(batch),
+        crate::merge::merge_execution_batch_hash(&batch_without_evidence),
+        "FASTPQ evidence must change the execution batch hash"
+    );
+    let pending_obligation_key = State::queue_plan_pending_obligation_marker_key(
+        crate::torii_proxy::queue_plan_admission_network_id_digest(state.network_id_ref()),
+        lane.entrypoints[0].hash(),
+    )
+    .expect("fixture pending-obligation key");
+    commit_staged_autonomous_for_test(staged_autonomous_merge_commit_block(
+        &state, &entry, &carrier,
+    ))
+    .expect("follower replay and exact carrier commit accept transcript-bound execution");
+    assert_eq!(balance(&source_asset), Quantity::from(7_u32));
+    assert_eq!(balance(&destination_asset), Quantity::from(3_u32));
+    assert!(
+        state
+            .world
+            .view()
+            .smart_contract_state()
+            .get(&pending_obligation_key)
+            .is_none(),
+        "canonical execution resolves the durable QueuePlan obligation"
+    );
+}
+fn assert_autonomous_batch_transfer_carrier_roundtrip(mode: QueuePlanTransferFixture) {
+    let (state, entry, carrier) =
+        autonomous_merge_batch_transfer_commit_authorization_fixture(mode);
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("batch transfer produces an autonomous execution batch");
+    let lane = batch.lanes.first().expect("fixture carries one lane");
+    assert_eq!(lane.results.len(), 1);
+    let outcomes = lane.results[0].batch_transfer_outcomes();
+    assert_eq!(
+        outcomes.len(),
+        2,
+        "both batch legs must be result-bound; result={:?}",
+        lane.results[0]
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|outcome| outcome.leg_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1],
+        "receipt order must remain exact execution order"
+    );
+    assert_eq!(outcomes[0].leg_id, "autonomous-batch-leg-a");
+    assert_eq!(outcomes[1].leg_id, "autonomous-batch-leg-b");
+    assert!(outcomes.iter().all(|outcome| matches!(
+        &outcome.status,
+        data_pre::AssetBatchTransferLegStatus::Applied
+    )));
+    assert_eq!(outcomes[0].asset, outcomes[1].asset);
+    let source_asset = outcomes[0].asset.clone();
+    let destination_assets = outcomes
+        .iter()
+        .map(|outcome| {
+            AssetId::new(
+                source_asset.definition().clone(),
+                outcome.destination.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let balance = |asset_id: &AssetId| {
+        state
+            .world
+            .view()
+            .assets()
+            .get(asset_id)
+            .map(|value| value.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+    };
+    assert_eq!(balance(&source_asset), Quantity::from(20_u32));
+    assert_eq!(balance(&destination_assets[0]), Quantity::zero());
+    assert_eq!(balance(&destination_assets[1]), Quantity::zero());
+
+    let mut result_without_receipts = lane.results[0].clone();
+    result_without_receipts.set_batch_transfer_outcomes(Vec::new());
+    assert_ne!(
+        lane.results[0].hash(),
+        result_without_receipts.hash(),
+        "receipt rows must change the transaction-result leaf"
+    );
+    let mut lane_without_receipts = lane.clone();
+    lane_without_receipts.results[0] = result_without_receipts;
+    lane_without_receipts.result_hashes[0] = Hash::from(lane_without_receipts.results[0].hash());
+    assert_ne!(
+        crate::merge::merge_lane_execution_hash(lane),
+        crate::merge::merge_lane_execution_hash(&lane_without_receipts),
+        "receipt-bound results must change the lane execution hash"
+    );
+
+    assert!(!matches!(mode, QueuePlanTransferFixture::Single));
+    assert_eq!(lane.fastpq_transcripts.len(), 1);
+    let transcripts = &lane.fastpq_transcripts[0].transcripts;
+    assert_eq!(transcripts.len(), 1);
+    assert_eq!(transcripts[0].deltas.len(), 2);
+    assert_eq!(transcripts[0].poseidon_preimage_digest, None);
+    for (delta, outcome) in transcripts[0].deltas.iter().zip(outcomes) {
+        assert_eq!(&delta.from_account, source_asset.account());
+        assert_eq!(&delta.to_account, &outcome.destination);
+        assert_eq!(&delta.asset_definition, source_asset.definition());
+        assert_eq!(&delta.amount, &outcome.amount);
+    }
+
+    let state_block = production_validated_autonomous_merge_commit_block(&state, &entry, &carrier);
+    commit_staged_autonomous_for_test(state_block)
+        .expect("production-validated autonomous batch carrier must commit");
+    assert_eq!(balance(&source_asset), Quantity::from(13_u32));
+    assert_eq!(balance(&destination_assets[0]), Quantity::from(3_u32));
+    assert_eq!(balance(&destination_assets[1]), Quantity::from(4_u32));
+    assert!(
+        state
+            .merge_execution_already_applied(&entry, batch)
+            .expect("committed marker lookup"),
+        "batch effects and receipt-bound execution must have one applied marker set"
+    );
+    match state.block_with_certified_merge_entry(carrier.header().clone(), &entry) {
+        Err(MergeLedgerCommitError::NonMonotonicEpoch {
+            expected,
+            attempted,
+        }) => {
+            assert_eq!(expected, 2);
+            assert_eq!(attempted, 1);
+        }
+        Err(MergeLedgerCommitError::ExecutionMarkerConflict(_)) => {}
+        Err(error) => panic!("unexpected autonomous batch replay rejection: {error:?}"),
+        Ok(_) => panic!("committed autonomous batch replay must fail closed"),
+    }
+    assert_eq!(balance(&source_asset), Quantity::from(13_u32));
+    assert_eq!(balance(&destination_assets[0]), Quantity::from(3_u32));
+    assert_eq!(balance(&destination_assets[1]), Quantity::from(4_u32));
+}
+#[test]
+fn autonomous_atomic_batch_receipts_survive_production_carrier_validation_and_apply_once() {
+    assert_autonomous_batch_transfer_carrier_roundtrip(QueuePlanTransferFixture::AtomicBatch);
+}
+#[test]
+fn autonomous_independent_batch_receipts_and_fastpq_survive_production_carrier_once() {
+    assert_autonomous_batch_transfer_carrier_roundtrip(QueuePlanTransferFixture::IndependentBatch);
+}
+fn rebind_mutated_fastpq_batch(batch: &mut MergeExecutionBatch) {
+    batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
+    batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+}
+fn assert_fastpq_batch_rejected(
+    state: &State,
+    active_lanes: &[MergeLaneBinding],
+    mut batch: MergeExecutionBatch,
+    expected_reason: &str,
+) {
+    rebind_mutated_fastpq_batch(&mut batch);
+    match state.validate_merge_execution_batch(
+        active_lanes,
+        &batch,
+        &std::collections::BTreeMap::new(),
+        true,
+    ) {
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
+            assert_eq!(reason, expected_reason)
+        }
+        other => panic!("malformed FASTPQ evidence was not rejected as expected: {other:?}"),
+    }
+}
+include!("autonomous_merge_fastpq_shape_tests.rs");
+#[test]
+fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
+    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let lane = &entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one execution batch")
+        .lanes[0];
+    let TransactionEntrypoint::External(signed) = lane.entrypoints[0].clone() else {
+        panic!("fixture carries one external numeric transfer")
+    };
+    let salt = [0xB7; 32];
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        state.network_id_ref(),
+        &signed,
+        salt,
+        64,
+    );
+    let sealed_entrypoint = TransactionEntrypoint::SealedReveal(
+        iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+            commitment, signed, salt,
+        ),
+    );
+    let outer_entrypoint_hash = Hash::from(sealed_entrypoint.hash());
+    let inner_call_hash = StateBlock::merge_execution_call_hash(&sealed_entrypoint);
+    assert_ne!(outer_entrypoint_hash, inner_call_hash);
+
+    let mut transcript = lane.fastpq_transcripts[0].transcripts[0].clone();
+    transcript.batch_hash = inner_call_hash;
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.latest_block_hash_fast(),
+        None,
+        None,
+        2,
+        0,
+    );
+    let mut state_block = state.block(header);
+    state_block
+        .fastpq_transcripts
+        .insert(inner_call_hash, vec![transcript]);
+    let bundles = state_block
+        .take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint))
+        .expect("sealed reveal maps its inner call evidence to its outer lane identity");
+    assert_eq!(bundles.len(), 1);
+    assert_eq!(bundles[0].entry_hash, outer_entrypoint_hash);
+    assert_eq!(bundles[0].transcripts[0].batch_hash, inner_call_hash);
+    assert!(state_block.fastpq_transcripts.is_empty());
+    state_block
+        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+        .expect("sealed-reveal evidence extraction leaves no unbound side effect");
+}
+#[test]
+fn sealed_reveal_batch_outcomes_bind_inner_call_to_outer_result_leaf() {
+    let (state, entry, _) = autonomous_merge_batch_transfer_commit_authorization_fixture(
+        QueuePlanTransferFixture::AtomicBatch,
+    );
+    let lane = &entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one execution batch")
+        .lanes[0];
+    let TransactionEntrypoint::External(signed) = lane.entrypoints[0].clone() else {
+        panic!("fixture carries one external atomic batch")
+    };
+    let salt = [0xC7; 32];
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        state.network_id_ref(),
+        &signed,
+        salt,
+        64,
+    );
+    let sealed_entrypoint = TransactionEntrypoint::SealedReveal(
+        iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+            commitment, signed, salt,
+        ),
+    );
+    let outer_entrypoint_hash = Hash::from(sealed_entrypoint.hash());
+    let inner_call_hash = StateBlock::merge_execution_call_hash(&sealed_entrypoint);
+    assert_ne!(outer_entrypoint_hash, inner_call_hash);
+
+    let expected_outcomes = lane.results[0].batch_transfer_outcomes().to_vec();
+    let mut result = lane.results[0].clone();
+    result.set_batch_transfer_outcomes(Vec::new());
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.latest_block_hash_fast(),
+        None,
+        None,
+        2,
+        0,
+    );
+    let mut state_block = state.block(header);
+    state_block.batch_transfer_outcomes.insert(
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(inner_call_hash),
+        expected_outcomes.clone(),
+    );
+    state_block
+        .take_merge_lane_batch_transfer_outcomes(
+            core::slice::from_ref(&sealed_entrypoint),
+            core::slice::from_mut(&mut result),
+        )
+        .expect("sealed reveal maps its inner receipt key to its outer result leaf");
+    assert_eq!(result.batch_transfer_outcomes(), expected_outcomes);
+    assert!(state_block.batch_transfer_outcomes.is_empty());
+    state_block
+        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+        .expect("sealed-reveal receipt extraction leaves no unbound side effect");
+}
+#[test]
+fn unbound_fastpq_transcript_remains_a_fail_closed_commit_surface() {
+    let (state, entry, _) = autonomous_merge_transfer_commit_authorization_fixture();
+    let lane = &entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one execution batch")
+        .lanes[0];
+    let unbound_hash = Hash::new(b"unbound FASTPQ transcript");
+    let mut transcript = lane.fastpq_transcripts[0].transcripts[0].clone();
+    transcript.batch_hash = unbound_hash;
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.latest_block_hash_fast(),
+        None,
+        None,
+        2,
+        0,
+    );
+    let mut state_block = state.block(header);
+    state_block
+        .fastpq_transcripts
+        .insert(unbound_hash, vec![transcript]);
+    assert!(
+        state_block
+            .take_merge_lane_fastpq_transcripts(&lane.entrypoints)
+            .expect("known entrypoint extraction itself remains well formed")
+            .is_empty()
+    );
+    assert!(matches!(
+        state_block.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+            if reason == "autonomous merge execution staged an effect outside the bound WSV overlay"
+    ));
+}
+#[test]
+fn unbound_batch_transfer_outcome_remains_a_fail_closed_commit_surface() {
+    let (state, entry, _) = autonomous_merge_batch_transfer_commit_authorization_fixture(
+        QueuePlanTransferFixture::AtomicBatch,
+    );
+    let lane = &entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one execution batch")
+        .lanes[0];
+    let outcome = lane.results[0]
+        .batch_transfer_outcomes()
+        .first()
+        .expect("atomic batch emits a receipt")
+        .clone();
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.latest_block_hash_fast(),
+        None,
+        None,
+        2,
+        0,
+    );
+    let mut state_block = state.block(header);
+    let unbound_hash = Hash::new(b"unbound autonomous batch-transfer outcome");
+    state_block.batch_transfer_outcomes.insert(
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(unbound_hash),
+        vec![outcome],
+    );
+    let mut result = lane.results[0].clone();
+    result.set_batch_transfer_outcomes(Vec::new());
+    state_block
+        .take_merge_lane_batch_transfer_outcomes(
+            &lane.entrypoints,
+            core::slice::from_mut(&mut result),
+        )
+        .expect("known entrypoint extraction itself remains well formed");
+    assert!(result.batch_transfer_outcomes().is_empty());
+    assert!(matches!(
+        state_block.validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+            if reason == "autonomous merge execution staged an effect outside the bound WSV overlay"
+    ));
 }
 #[test]
 fn autonomous_execution_commit_rejects_missing_apply_carrier_authorization() {

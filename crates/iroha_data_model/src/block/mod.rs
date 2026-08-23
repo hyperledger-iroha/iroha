@@ -192,6 +192,16 @@ pub enum SetBatchTransferOutcomesError {
         /// Unknown canonical entrypoint hash.
         hash: HashOf<TransactionEntrypoint>,
     },
+    /// One outcome key could identify more than one result leaf.
+    AmbiguousEntrypoint {
+        /// Canonical or sealed-reveal alias that is not uniquely bound.
+        hash: HashOf<TransactionEntrypoint>,
+    },
+    /// More than one outcome row resolves to the same result leaf.
+    DuplicateResultAssignment {
+        /// Canonical transaction-result index.
+        index: usize,
+    },
 }
 impl fmt::Display for SetBatchTransferOutcomesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -209,6 +219,13 @@ impl fmt::Display for SetBatchTransferOutcomesError {
             Self::UnknownEntrypoint { hash } => {
                 write!(f, "batch outcomes reference unknown entrypoint {hash}")
             }
+            Self::AmbiguousEntrypoint { hash } => {
+                write!(f, "batch outcome entrypoint alias {hash} is ambiguous")
+            }
+            Self::DuplicateResultAssignment { index } => write!(
+                f,
+                "multiple batch outcome rows resolve to transaction result index {index}",
+            ),
         }
     }
 }
@@ -504,8 +521,9 @@ impl SignedBlock {
     /// # Errors
     ///
     /// Returns [`SetBatchTransferOutcomesError`] when transaction results are absent,
-    /// their count differs from the entrypoint count, or an outcome references an
-    /// entrypoint that is not present in this block.
+    /// their count differs from the entrypoint count, an outcome references an
+    /// entrypoint that is not present in this block, or canonical/SealedReveal aliases do not
+    /// resolve one-to-one onto result leaves.
     #[cfg(feature = "transparent_api")]
     pub fn set_batch_transfer_outcomes(
         &mut self,
@@ -514,27 +532,55 @@ impl SignedBlock {
             Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
         >,
     ) -> Result<(), SetBatchTransferOutcomesError> {
-        let entrypoint_hashes = self.entrypoint_hashes().collect::<Vec<_>>();
+        let entrypoints = self.entrypoints_cloned().collect::<Vec<_>>();
         let result = self
             .result
             .as_mut()
             .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
-        if entrypoint_hashes.len() != result.transaction_results.len() {
+        if entrypoints.len() != result.transaction_results.len() {
             return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
-                entrypoints: entrypoint_hashes.len(),
+                entrypoints: entrypoints.len(),
                 results: result.transaction_results.len(),
             });
         }
-        let assignments = outcomes
-            .into_iter()
-            .map(|(hash, receipts)| {
-                entrypoint_hashes
-                    .iter()
-                    .position(|candidate| *candidate == hash)
-                    .map(|index| (index, receipts))
-                    .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut result_index_by_outcome_key = BTreeMap::new();
+        for (index, entrypoint) in entrypoints.iter().enumerate() {
+            let outer_hash = entrypoint.hash();
+            if result_index_by_outcome_key
+                .insert(outer_hash, index)
+                .is_some()
+            {
+                return Err(SetBatchTransferOutcomesError::AmbiguousEntrypoint {
+                    hash: outer_hash,
+                });
+            }
+        }
+        for (index, entrypoint) in entrypoints.iter().enumerate() {
+            let TransactionEntrypoint::SealedReveal(_) = entrypoint else {
+                continue;
+            };
+            let inner_hash = entrypoint.execution_call_hash();
+            if result_index_by_outcome_key
+                .insert(inner_hash, index)
+                .is_some()
+            {
+                return Err(SetBatchTransferOutcomesError::AmbiguousEntrypoint {
+                    hash: inner_hash,
+                });
+            }
+        }
+        let mut assigned_results = BTreeSet::new();
+        let mut assignments = Vec::with_capacity(outcomes.len());
+        for (hash, receipts) in outcomes {
+            let index = result_index_by_outcome_key
+                .get(&hash)
+                .copied()
+                .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })?;
+            if !assigned_results.insert(index) {
+                return Err(SetBatchTransferOutcomesError::DuplicateResultAssignment { index });
+            }
+            assignments.push((index, receipts));
+        }
         for transaction_result in &mut result.transaction_results {
             transaction_result.set_batch_transfer_outcomes(Vec::new());
         }
@@ -3878,6 +3924,113 @@ mod tests {
         let (decoded, rest) = super::decode_field::<String>(&input).expect("decode field");
         assert_eq!(decoded, value);
         assert!(rest.is_empty());
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
+        use crate::{
+            asset::{AssetDefinitionId, AssetId},
+            block::builder::BlockBuilder,
+            events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
+            transaction::{
+                FeePaymentIntent,
+                signed::{SealedTransactionReveal, TransactionBuilder},
+            },
+        };
+        use iroha_primitives::numeric::Quantity;
+
+        let keypair = checked_random_keypair();
+        let authority = crate::account::AccountId::new(keypair.public_key().clone());
+        let signed = TransactionBuilder::new_genesis(
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let inner_hash = signed.hash_as_entrypoint();
+        let first_reveal = SealedTransactionReveal::new(
+            Hash::new(b"sealed batch outcome alias one"),
+            signed.clone(),
+            [0x41; 32],
+        );
+        let first_entrypoint = TransactionEntrypoint::SealedReveal(first_reveal.clone());
+        let first_outer_hash = first_entrypoint.hash();
+        assert_ne!(first_outer_hash, inner_hash);
+        assert_eq!(first_entrypoint.execution_call_hash(), inner_hash);
+        let outcome = AssetBatchTransferOutcome {
+            leg_index: 0,
+            leg_id: "sealed-alias-leg".to_owned(),
+            asset: AssetId::new(
+                AssetDefinitionId::derive_from_components(
+                    crate::domain::DomainId::try_new("sealed", "universal").expect("domain id"),
+                    "coin".parse().expect("asset name"),
+                ),
+                authority.clone(),
+            ),
+            destination: authority,
+            amount: Quantity::from(1_u32),
+            status: AssetBatchTransferLegStatus::Applied,
+        };
+        let mut builder = BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        builder.push_sealed_transaction_reveal(first_reveal.clone());
+        builder.push_result(Ok(DataTriggerSequence::default()));
+        let mut positive = builder.build(BTreeSet::new());
+        positive
+            .set_batch_transfer_outcomes(BTreeMap::from([(inner_hash, vec![outcome.clone()])]))
+            .expect("the inner signed call hash must resolve to the outer reveal result");
+        assert_eq!(
+            positive.batch_transfer_outcomes_for(&first_outer_hash),
+            &[outcome.clone()]
+        );
+
+        let mut duplicate_assignment = positive.clone();
+        let error = duplicate_assignment
+            .set_batch_transfer_outcomes(BTreeMap::from([
+                (inner_hash, vec![outcome.clone()]),
+                (first_outer_hash, vec![outcome.clone()]),
+            ]))
+            .expect_err("outer and inner rows must not overwrite one result leaf");
+        assert_eq!(
+            error,
+            SetBatchTransferOutcomesError::DuplicateResultAssignment { index: 0 }
+        );
+        assert_eq!(
+            duplicate_assignment.batch_transfer_outcomes_for(&first_outer_hash),
+            &[outcome.clone()],
+            "a rejected reassignment must not mutate the prior result leaf"
+        );
+
+        let second_reveal = SealedTransactionReveal::new(
+            Hash::new(b"sealed batch outcome alias two"),
+            signed,
+            [0x42; 32],
+        );
+        let mut ambiguous_builder = BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        ambiguous_builder.push_sealed_transaction_reveal(first_reveal);
+        ambiguous_builder.push_result(Ok(DataTriggerSequence::default()));
+        ambiguous_builder.push_sealed_transaction_reveal(second_reveal);
+        ambiguous_builder.push_result(Ok(DataTriggerSequence::default()));
+        let mut ambiguous = ambiguous_builder.build(BTreeSet::new());
+        let error = ambiguous
+            .set_batch_transfer_outcomes(BTreeMap::new())
+            .expect_err("two outer leaves must not share one inner signed-call alias");
+        assert_eq!(
+            error,
+            SetBatchTransferOutcomesError::AmbiguousEntrypoint { hash: inner_hash }
+        );
     }
     #[cfg(feature = "transparent_api")]
     #[test]

@@ -5488,6 +5488,30 @@ fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
             "providers": capability_mismatch_values(&providers),
             "retryable": false,
         }),
+        NoPolicyEligibleProviders {
+            chunk_index,
+            providers,
+        } => {
+            let providers = Value::Array(
+                providers
+                    .into_iter()
+                    .map(|provider| {
+                        norito_json!({
+                            "providerId": provider.to_string(),
+                            "reason": "score_policy_denied",
+                        })
+                    })
+                    .collect(),
+            );
+            norito_json!({
+                "kind": "multi_source",
+                "code": "no_policy_eligible_providers",
+                "message": message,
+                "chunkIndex": chunk_index,
+                "providers": providers,
+                "retryable": false,
+            })
+        }
         ExhaustedRetries {
             chunk_index,
             attempts,
@@ -13632,6 +13656,32 @@ mod tests {
             payload["details"],
             Value::String("input payload is empty".to_owned())
         );
+    }
+    #[test]
+    fn multi_source_policy_exclusion_is_a_structured_non_retryable_error() {
+        let error = multi_source_js_error(MultiSourceError::NoPolicyEligibleProviders {
+            chunk_index: 4,
+            providers: vec![
+                multi_fetch::ProviderId::new("alpha"),
+                multi_fetch::ProviderId::new("beta"),
+            ],
+        });
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        let payload: Value = json::from_str(&error.reason).expect("structured error JSON");
+        assert_eq!(payload["kind"], Value::String("multi_source".to_owned()));
+        assert_eq!(
+            payload["code"],
+            Value::String("no_policy_eligible_providers".to_owned())
+        );
+        assert_eq!(payload["chunkIndex"].as_u64(), Some(4));
+        assert_eq!(
+            payload["providers"],
+            norito_json!([
+                { "providerId": "alpha", "reason": "score_policy_denied" },
+                { "providerId": "beta", "reason": "score_policy_denied" }
+            ])
+        );
+        assert_eq!(payload["retryable"], Value::Bool(false));
     }
     #[test]
     fn canonical_kotodama_binding_returns_full_artifact_manifest() {

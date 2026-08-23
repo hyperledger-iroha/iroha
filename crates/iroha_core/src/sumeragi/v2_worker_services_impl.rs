@@ -457,7 +457,11 @@ impl ProductionV2Services {
                         },
                     )
                 }
-                RecoveredCompletionCapacityProbeV1::Apply { ordinal, key } => {
+                RecoveredCompletionCapacityProbeV1::Apply {
+                    ordinal,
+                    key,
+                    executor_available,
+                } => {
                     if !key.matches_height_context(&self.context) || !apply_keys.insert(key) {
                         return Err(
                             "recovered Completion census changed an Apply dispatch key".to_owned()
@@ -467,7 +471,7 @@ impl ProductionV2Services {
                         ordinal,
                         RecoveredCompletionPreparedCapacityV1::Apply {
                             key,
-                            available: false,
+                            available: executor_available,
                         },
                     )
                 }
@@ -576,10 +580,11 @@ impl ProductionV2Services {
                     if state.recovered_decision_applies.contains_key(key) {
                         return Err("recovered Completion Apply is already worker-owned".to_owned());
                     }
-                    *available = io
-                        .command_tx
-                        .queue
-                        .recovered_completion_worker_capacity(state);
+                    *available = *available
+                        && io
+                            .command_tx
+                            .queue
+                            .recovered_completion_worker_capacity(state);
                 }
                 RecoveredCompletionPreparedCapacityV1::Sign { key, available } => {
                     if state.recovered_lifecycle_signs.contains_key(key) {

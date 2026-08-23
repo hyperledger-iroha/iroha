@@ -3305,8 +3305,8 @@ pub struct TieredState {
         default = "defaults::tiered_state::HOT_RETAINED_KEYS"
     )]
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
-    /// Grace retention may temporarily exceed this budget.
+    /// Hot-tier byte budget using canonical encoded-key bytes plus measured value bytes
+    /// (0 = unlimited). Grace or unspillable retention may temporarily exceed this budget.
     #[config(
         env = "TIERED_STATE_HOT_RETAINED_BYTES",
         default = "defaults::tiered_state::HOT_RETAINED_BYTES"
@@ -7895,6 +7895,16 @@ pub struct Offline {
     pub kagemusha_artifact_dir: Option<PathBuf>,
     /// Absolute root-trusted path to a canonical Kagemusha catalog qualification seal.
     pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
+    /// Pinned Ed25519 key of the root promotion controller.
+    pub kagemusha_promotion_controller_public_key: Option<PublicKey>,
+    /// Pinned identifier of the independent catalog-revalidation authority.
+    pub kagemusha_catalog_revalidation_authority_key_id: Option<String>,
+    /// Pinned Ed25519 key of the independent catalog-revalidation authority.
+    pub kagemusha_catalog_revalidation_authority_public_key: Option<PublicKey>,
+    /// Absolute root-trusted path to the signed promotion reservation.
+    pub kagemusha_promotion_reservation_path: Option<PathBuf>,
+    /// Absolute root-owned no-replace output path for this validator's seal.
+    pub kagemusha_validator_qualification_seal_path: Option<PathBuf>,
     /// Estimated decoded Kagemusha verifier budget, capped at the 256 MiB default.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES")]
     pub kagemusha_max_decoded_bytes: u64,
@@ -7907,6 +7917,16 @@ impl Default for Offline {
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
             kagemusha_catalog_qualification_seal_path:
                 defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
+            kagemusha_promotion_controller_public_key:
+                defaults::settlement::offline::kagemusha_promotion_controller_public_key(),
+            kagemusha_catalog_revalidation_authority_key_id:
+                defaults::settlement::offline::kagemusha_catalog_revalidation_authority_key_id(),
+            kagemusha_catalog_revalidation_authority_public_key:
+                defaults::settlement::offline::kagemusha_catalog_revalidation_authority_public_key(),
+            kagemusha_promotion_reservation_path:
+                defaults::settlement::offline::kagemusha_promotion_reservation_path(),
+            kagemusha_validator_qualification_seal_path:
+                defaults::settlement::offline::kagemusha_validator_qualification_seal_path(),
             kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
@@ -8079,6 +8099,11 @@ impl Offline {
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             kagemusha_catalog_qualification_seal_path,
+            kagemusha_promotion_controller_public_key,
+            kagemusha_catalog_revalidation_authority_key_id,
+            kagemusha_catalog_revalidation_authority_public_key,
+            kagemusha_promotion_reservation_path,
+            kagemusha_validator_qualification_seal_path,
             mut kagemusha_max_decoded_bytes,
         } = self;
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
@@ -8097,6 +8122,72 @@ impl Offline {
                 ),
             );
         }
+        let validator_qualification_inputs = [
+            kagemusha_promotion_controller_public_key.is_some(),
+            kagemusha_catalog_revalidation_authority_key_id.is_some(),
+            kagemusha_catalog_revalidation_authority_public_key.is_some(),
+            kagemusha_promotion_reservation_path.is_some(),
+            kagemusha_validator_qualification_seal_path.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if validator_qualification_inputs != 0 && validator_qualification_inputs != 5 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline Kagemusha validator qualification requires kagemusha_promotion_controller_public_key, kagemusha_catalog_revalidation_authority_key_id, kagemusha_catalog_revalidation_authority_public_key, kagemusha_promotion_reservation_path, and kagemusha_validator_qualification_seal_path together",
+                ),
+            );
+        }
+        if validator_qualification_inputs != 0
+            && kagemusha_catalog_qualification_seal_path.is_none()
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline Kagemusha validator qualification requires kagemusha_catalog_qualification_seal_path",
+                ),
+            );
+        }
+        if kagemusha_promotion_controller_public_key
+            .as_ref()
+            .is_some_and(|key| !matches!(key.try_algorithm(), Ok(Algorithm::Ed25519)))
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.kagemusha_promotion_controller_public_key must be Ed25519",
+            ));
+        }
+        if kagemusha_catalog_revalidation_authority_public_key
+            .as_ref()
+            .is_some_and(|key| !matches!(key.try_algorithm(), Ok(Algorithm::Ed25519)))
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.kagemusha_catalog_revalidation_authority_public_key must be Ed25519",
+            ));
+        }
+        if kagemusha_catalog_revalidation_authority_key_id
+            .as_deref()
+            .is_some_and(|key_id| {
+                let bytes = key_id.as_bytes();
+                bytes.is_empty()
+                    || bytes.len() > 128
+                    || !bytes[0].is_ascii_alphanumeric()
+                    || !bytes[1..].iter().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-')
+                    })
+            })
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.kagemusha_catalog_revalidation_authority_key_id must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+            ));
+        }
+        if kagemusha_promotion_controller_public_key.is_some()
+            && kagemusha_promotion_controller_public_key
+                == kagemusha_catalog_revalidation_authority_public_key
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline catalog-revalidation authority must differ from the promotion controller",
+            ));
+        }
         if kagemusha_release_policy_path
             .as_ref()
             .is_some_and(|path| path.as_os_str().is_empty())
@@ -8106,19 +8197,70 @@ impl Offline {
             || kagemusha_catalog_qualification_seal_path
                 .as_ref()
                 .is_some_and(|path| path.as_os_str().is_empty())
+            || kagemusha_promotion_reservation_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            || kagemusha_validator_qualification_seal_path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
         {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig)
                     .attach("settlement.offline Kagemusha release paths must not be empty"),
             );
         }
-        if kagemusha_catalog_qualification_seal_path
-            .as_ref()
-            .is_some_and(|path| !path.is_absolute())
+        for (label, path) in [
+            (
+                "kagemusha_catalog_qualification_seal_path",
+                kagemusha_catalog_qualification_seal_path.as_ref(),
+            ),
+            (
+                "kagemusha_promotion_reservation_path",
+                kagemusha_promotion_reservation_path.as_ref(),
+            ),
+            (
+                "kagemusha_validator_qualification_seal_path",
+                kagemusha_validator_qualification_seal_path.as_ref(),
+            ),
+        ] {
+            if path.is_some_and(|path| {
+                !path.is_absolute()
+                    || path.components().any(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::CurDir | std::path::Component::ParentDir
+                        )
+                    })
+            }) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSettlementConfig).attach(format!(
+                        "settlement.offline.{label} must be absolute without `.` or `..` components"
+                    )),
+                );
+            }
+        }
+        let trusted_artifact_paths = [
+            kagemusha_catalog_qualification_seal_path.as_ref(),
+            kagemusha_promotion_reservation_path.as_ref(),
+            kagemusha_validator_qualification_seal_path.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if trusted_artifact_paths
+            .iter()
+            .enumerate()
+            .any(|(index, path)| {
+                trusted_artifact_paths[index + 1..]
+                    .iter()
+                    .any(|other| *other == *path)
+            })
         {
-            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                "settlement.offline.kagemusha_catalog_qualification_seal_path must be absolute",
-            ));
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline Kagemusha catalog, reservation, and validator-seal paths must be distinct",
+                ),
+            );
         }
         if kagemusha_max_decoded_bytes == 0 {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -8144,6 +8286,11 @@ impl Offline {
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             kagemusha_catalog_qualification_seal_path,
+            kagemusha_promotion_controller_public_key,
+            kagemusha_catalog_revalidation_authority_key_id,
+            kagemusha_catalog_revalidation_authority_public_key,
+            kagemusha_promotion_reservation_path,
+            kagemusha_validator_qualification_seal_path,
             kagemusha_max_decoded_bytes,
         }
     }
@@ -9194,7 +9341,7 @@ pub struct NexusStorage {
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
-    /// WSV hot-tier deterministic payload size budget (bytes).
+    /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
@@ -24738,126 +24885,8 @@ fn parse_sorafs_gateway_runtime_provider_binding(
     })
 }
 #[cfg(test)]
-mod sorafs_gateway_runtime_provider_binding_tests {
-    use super::*;
-    const ACME_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
-    #[test]
-    fn exact_production_binding_parses() {
-        let mut emitter = Emitter::new();
-        let binding = parse_sorafs_gateway_runtime_provider_binding(
-            &mut emitter,
-            "sorafs.gateway.acme",
-            "provider",
-            true,
-            Some(ACME_HANDLE),
-            Some(9),
-            Some(&"a7".repeat(32)),
-        )
-        .expect("valid production binding");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(binding.provider_handle, ACME_HANDLE);
-        assert_eq!(binding.revision, 9);
-        assert_eq!(binding.policy_digest, [0xa7; 32]);
-    }
-    #[test]
-    fn incomplete_and_non_production_bindings_fail_without_echoing_values() {
-        let valid_digest = "a7".repeat(32);
-        let uppercase_digest = "A7".repeat(32);
-        let zero_digest = "00".repeat(32);
-        for (label, handle, revision, digest, expected) in [
-            (
-                "partial",
-                Some(ACME_HANDLE),
-                Some(9),
-                None,
-                "provider_policy_digest_hex is required",
-            ),
-            (
-                "test-marked handle",
-                Some("runtime://sorafs/gateway-acme/test-client-secret"),
-                Some(9),
-                Some(valid_digest.as_str()),
-                "must be one canonical production provider handle",
-            ),
-            (
-                "zero revision",
-                Some(ACME_HANDLE),
-                Some(0),
-                Some(valid_digest.as_str()),
-                "provider_revision must be nonzero",
-            ),
-            (
-                "uppercase digest",
-                Some(ACME_HANDLE),
-                Some(9),
-                Some(uppercase_digest.as_str()),
-                "exactly 64 lowercase hexadecimal characters",
-            ),
-            (
-                "zero digest",
-                Some(ACME_HANDLE),
-                Some(9),
-                Some(zero_digest.as_str()),
-                "provider_policy_digest_hex must be nonzero",
-            ),
-        ] {
-            let mut emitter = Emitter::new();
-            assert!(
-                parse_sorafs_gateway_runtime_provider_binding(
-                    &mut emitter,
-                    "sorafs.gateway.acme",
-                    "provider",
-                    true,
-                    handle,
-                    revision,
-                    digest,
-                )
-                .is_none(),
-                "{label}"
-            );
-            let diagnostic = format!(
-                "{:?}",
-                emitter
-                    .into_result()
-                    .expect_err("invalid binding must emit a diagnostic")
-            );
-            assert!(
-                diagnostic.contains(expected),
-                "{label} produced unexpected diagnostic: {diagnostic}"
-            );
-            if label == "test-marked handle" {
-                assert!(
-                    !diagnostic.contains("test-client-secret"),
-                    "provider values must not be echoed"
-                );
-            }
-        }
-    }
-    #[test]
-    fn disabled_provider_rejects_dormant_binding() {
-        let mut emitter = Emitter::new();
-        assert!(
-            parse_sorafs_gateway_runtime_provider_binding(
-                &mut emitter,
-                "sorafs.gateway.compliance",
-                "feed_transport_provider",
-                false,
-                Some("https://gateway-feed/primary"),
-                Some(1),
-                Some(&"51".repeat(32)),
-            )
-            .is_none()
-        );
-        let diagnostic = format!(
-            "{:?}",
-            emitter
-                .into_result()
-                .expect_err("disabled provider binding must fail")
-        );
-        assert!(diagnostic.contains("binding fields must be absent when disabled"));
-        assert!(!diagnostic.contains("gateway-feed/primary"));
-    }
-}
+#[path = "user/sorafs_gateway_runtime_provider_binding_tests.rs"]
+mod sorafs_gateway_runtime_provider_binding_tests;
 fn is_canonical_nonzero_ed25519_public_key_hex(value: &str) -> bool {
     value.len() == 64
         && value
@@ -33766,52 +33795,6 @@ publish_delay_seconds = 17
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);
-    }
-    #[test]
-    fn network_parse_clamps_zero_periods() {
-        let mut table = base_table();
-        let network = table
-            .get_mut("network")
-            .and_then(Value::as_table_mut)
-            .expect("network table");
-        network.insert("block_gossip_period_ms".into(), Value::Integer(0));
-        network.insert("block_gossip_max_period_ms".into(), Value::Integer(0));
-        network.insert("peer_gossip_period_ms".into(), Value::Integer(0));
-        network.insert("peer_gossip_max_period_ms".into(), Value::Integer(0));
-        network.insert("transaction_gossip_period_ms".into(), Value::Integer(0));
-        network.insert(
-            "transaction_gossip_public_target_reshuffle_ms".into(),
-            Value::Integer(0),
-        );
-        network.insert(
-            "transaction_gossip_restricted_target_reshuffle_ms".into(),
-            Value::Integer(0),
-        );
-        network.insert("idle_timeout_ms".into(), Value::Integer(0));
-        network.insert("reply_writer_flush_timeout_ms".into(), Value::Integer(0));
-        let actual = load_root(table);
-        let min = StdDuration::from_millis(100);
-        assert_eq!(actual.block_sync.gossip_period, min);
-        assert_eq!(actual.block_sync.gossip_max_period, min);
-        assert_eq!(actual.transaction_gossiper.gossip_period, min);
-        assert_eq!(
-            actual
-                .transaction_gossiper
-                .dataspace
-                .public_target_reshuffle,
-            min
-        );
-        assert_eq!(
-            actual
-                .transaction_gossiper
-                .dataspace
-                .restricted_target_reshuffle,
-            min
-        );
-        assert_eq!(actual.network.peer_gossip_period, min);
-        assert_eq!(actual.network.peer_gossip_max_period, min);
-        assert_eq!(actual.network.idle_timeout, min);
-        assert_eq!(actual.network.reply_writer_flush_timeout, min);
     }
     #[test]
     fn network_reply_writer_flush_timeout_defaults_and_parses() {

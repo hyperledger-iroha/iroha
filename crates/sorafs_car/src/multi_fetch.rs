@@ -581,6 +581,13 @@ pub enum MultiSourceError {
         /// Providers evaluated alongside their incompatibility reason.
         providers: Vec<(ProviderId, CapabilityMismatch)>,
     },
+    /// Every currently available compatible provider was rejected by the score policy.
+    NoPolicyEligibleProviders {
+        /// Chunk index that could not be scheduled.
+        chunk_index: usize,
+        /// Available compatible providers rejected by the policy.
+        providers: Vec<ProviderId>,
+    },
     /// Reached the retry limit for a chunk.
     ExhaustedRetries {
         chunk_index: usize,
@@ -620,6 +627,20 @@ impl fmt::Display for MultiSourceError {
                 write!(
                     f,
                     "no compatible providers for chunk {chunk_index}: {details}"
+                )
+            }
+            Self::NoPolicyEligibleProviders {
+                chunk_index,
+                providers,
+            } => {
+                let providers = providers
+                    .iter()
+                    .map(ProviderId::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "score policy rejected every available provider for chunk {chunk_index}: {providers}"
                 )
             }
             Self::ExhaustedRetries {
@@ -773,6 +794,7 @@ enum ProviderSelectionOutcome {
     Selected(usize),
     Unavailable,
     Ineligible(Vec<(usize, CapabilityMismatch)>),
+    PolicyDenied(Vec<usize>),
 }
 fn has_active_providers(states: &[ProviderState]) -> bool {
     states.iter().any(|state| !state.disabled)
@@ -832,6 +854,7 @@ fn select_weighted_provider(
         .any(|state| !state.disabled && provider_can_serve_chunk(&state.config, spec).is_ok());
     let mut choice: Option<usize> = None;
     let mut max_credit = i64::MIN;
+    let mut policy_denied = Vec::new();
     for (idx, state) in states.iter().enumerate() {
         if state.disabled || !state.is_available() {
             continue;
@@ -853,6 +876,7 @@ fn select_weighted_provider(
                 spec,
             });
             if !decision.allow {
+                policy_denied.push(idx);
                 continue;
             }
             credits[idx] = credits[idx]
@@ -883,6 +907,9 @@ fn select_weighted_provider(
         if !reasons.is_empty() {
             return ProviderSelectionOutcome::Ineligible(reasons);
         }
+    }
+    if !policy_denied.is_empty() {
+        return ProviderSelectionOutcome::PolicyDenied(policy_denied);
     }
     ProviderSelectionOutcome::Unavailable
 }
@@ -1096,6 +1123,24 @@ where
                         chunk_index: task.spec.chunk_index,
                         providers,
                     });
+                }
+                ProviderSelectionOutcome::PolicyDenied(indices) => {
+                    if in_flight.is_empty() {
+                        let providers = indices
+                            .into_iter()
+                            .map(|idx| provider_states[idx].config.id().clone())
+                            .collect();
+                        return Err(MultiSourceError::NoPolicyEligibleProviders {
+                            chunk_index: task.spec.chunk_index,
+                            providers,
+                        });
+                    }
+                    if pending_front.is_none() {
+                        pending_front = Some(task);
+                    } else {
+                        pending.push_front(task);
+                    }
+                    break;
                 }
             };
             let spec = task.spec.clone();
@@ -1899,6 +1944,15 @@ mod tests {
             }
         }
     }
+    struct DenyAllPolicy;
+    impl ScorePolicy for DenyAllPolicy {
+        fn score(&self, _ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
+            ProviderScoreDecision {
+                priority_delta: 0,
+                allow: false,
+            }
+        }
+    }
     #[test]
     fn score_policy_can_filter_providers() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(16 * 1024).collect();
@@ -1933,6 +1987,46 @@ mod tests {
         assert_eq!(alpha_report.successes, 0);
         assert_eq!(alpha_report.failures, 0);
         assert!(!alpha_report.disabled, "policy should skip before failure");
+    }
+    #[test]
+    fn score_policy_rejecting_every_provider_returns_without_fetching() {
+        let payload = b"policy-denied payload";
+        let plan = plan_for_payload(payload);
+        let providers = vec![FetchProvider::new("alpha"), FetchProvider::new("beta")];
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetch_calls_for_fetcher = Arc::clone(&fetch_calls);
+        let fetcher = move |_req: FetchRequest| {
+            let fetch_calls = Arc::clone(&fetch_calls_for_fetcher);
+            async move {
+                fetch_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<ChunkResponse, TestError>(ChunkResponse::new(Vec::new()))
+            }
+        };
+        let options = FetchOptions {
+            score_policy: Some(Arc::new(DenyAllPolicy)),
+            ..FetchOptions::default()
+        };
+
+        let error = block_on(fetch_plan_parallel(&plan, providers, fetcher, options))
+            .expect_err("an all-deny score policy must fail without stalling");
+
+        match error {
+            MultiSourceError::NoPolicyEligibleProviders {
+                chunk_index,
+                providers,
+            } => {
+                assert_eq!(chunk_index, 0);
+                assert_eq!(
+                    providers
+                        .iter()
+                        .map(ProviderId::as_str)
+                        .collect::<Vec<_>>(),
+                    ["alpha", "beta"]
+                );
+            }
+            other => panic!("expected policy-eligibility error, received {other:?}"),
+        }
+        assert_eq!(fetch_calls.load(Ordering::SeqCst), 0);
     }
     #[test]
     fn orchestrator_failover_to_backup_provider() {

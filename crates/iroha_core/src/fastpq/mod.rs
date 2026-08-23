@@ -66,9 +66,9 @@ pub struct FastpqPublicInputsTemplate {
 pub(crate) struct FastpqWitnessContext {
     /// Public-input fields shared by every FASTPQ batch in the witness.
     pub(crate) public_inputs: Option<FastpqPublicInputsTemplate>,
-    /// Hash of external transaction entrypoints in the committed block.
+    /// Hash of signed execution-call identities in the committed block.
     pub(crate) tx_set_hash: Option<[u8; 32]>,
-    /// Per-entry dataspace ids keyed by entrypoint hash.
+    /// Per-call dataspace ids keyed by signed execution-call hash.
     pub(crate) entry_dataspaces: BTreeMap<Hash, [u8; 16]>,
 }
 impl FastpqPublicInputsTemplate {
@@ -744,7 +744,10 @@ fn public_inputs_from_template(
 ) -> FastpqPublicInputs {
     template.with_tx_set_hash(tx_set_hash)
 }
-/// Compute a transaction set commitment from ordered entrypoint hashes.
+/// Compute a transaction set commitment from ordered FASTPQ execution-call identities.
+///
+/// These identities are the canonical outer entrypoint hashes except for sealed reveals, whose
+/// execution-scoped evidence is keyed by the revealed inner signed transaction hash.
 pub(crate) fn tx_set_hash_from_ordered_hashes<I, H>(hashes: I) -> [u8; 32]
 where
     I: IntoIterator<Item = H>,

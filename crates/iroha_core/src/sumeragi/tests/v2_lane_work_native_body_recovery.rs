@@ -106,8 +106,23 @@ fn grouped_native_candidate_fixture(
             .expect("fresh grouped Native fixture Kura has one owner")
             .set_pending_control_sidecar_validation_bytes_for_testing(aggregate_bytes);
     }
-    let (adapter, keys, participant_lane, participant_dataspace) =
+    let (mut adapter, keys, participant_lane, participant_dataspace) =
         native_body_recovery_adapter_with_kura(kura);
+    let mut finality_manifest_root = [0_u8; Hash::LENGTH];
+    finality_manifest_root
+        .copy_from_slice(Hash::new(b"grouped Native coordinator finality manifest").as_ref());
+    Arc::get_mut(&mut adapter.state)
+        .expect("fresh grouped Native fixture owns its State")
+        .set_axt_policy(
+            DataSpaceId::UNIVERSAL,
+            iroha_data_model::nexus::AxtPolicyEntry {
+                manifest_root: finality_manifest_root,
+                target_lane: LaneId::SINGLE,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 0,
+            },
+        );
     let transaction_key =
         KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519).expect("transaction key");
     let authority = AccountId::new(transaction_key.public_key().clone());
@@ -1093,6 +1108,7 @@ fn merge_native_projection_execution(
         results,
         settlement_commitment: settlement,
         settlement_hash,
+        fastpq_transcripts: Vec::new().into(),
     }
 }
 fn merge_native_projection_batch(

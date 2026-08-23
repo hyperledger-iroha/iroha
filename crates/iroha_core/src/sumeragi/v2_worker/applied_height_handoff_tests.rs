@@ -489,6 +489,66 @@ fn pending_autonomous_lane_output(
 }
 
 #[test]
+fn autonomous_payload_carrier_comparison_promotes_only_a_missing_advisory_hint() {
+    let (_, validators) = fixture();
+    let attempt = crate::kura::tests::unretired_autonomous_lane_attempt_fixture(&validators[0]);
+    let mut hint_free = attempt.payload;
+    hint_free.origin_proposal.payload_block_hint = None;
+    assert!(hint_free.origin_proposal.payload_block_hint.is_none());
+    let canonical_hint = LaneBlockProposalPayloadHintV1 {
+        proposal_height: hint_free
+            .origin_proposal
+            .descriptor
+            .proposal_height,
+        proposal_view: 0,
+        proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"canonical autonomous carrier",
+        )),
+    };
+    let canonical = hint_free
+        .attach_global_hint_exact(canonical_hint, hint_free.network_id, hint_free.epoch)
+        .expect("attach the post-finality canonical carrier hint");
+
+    assert!(autonomous_payload_matches_canonical_carrier(
+        &canonical,
+        &canonical,
+        hint_free.network_id,
+        hint_free.epoch,
+    ));
+    assert!(autonomous_payload_matches_canonical_carrier(
+        &hint_free,
+        &canonical,
+        hint_free.network_id,
+        hint_free.epoch,
+    ));
+
+    let conflicting_hint = LaneBlockProposalPayloadHintV1 {
+        proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"conflicting autonomous carrier",
+        )),
+        ..canonical_hint
+    };
+    let conflicting = hint_free
+        .attach_global_hint_exact(conflicting_hint, hint_free.network_id, hint_free.epoch)
+        .expect("attach a structurally valid but conflicting carrier hint");
+    assert!(!autonomous_payload_matches_canonical_carrier(
+        &conflicting,
+        &canonical,
+        hint_free.network_id,
+        hint_free.epoch,
+    ));
+
+    let mut mutated = hint_free;
+    mutated.producer_signature[0] ^= 1;
+    assert!(!autonomous_payload_matches_canonical_carrier(
+        &mutated,
+        &canonical,
+        mutated.network_id,
+        mutated.epoch,
+    ));
+}
+
+#[test]
 fn applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically()
  {
     let (base_service, validators) = fixture();

@@ -7,9 +7,8 @@ use super::{
     ProductionLifecycleAdapterStartupStateV1, ProductionLifecycleAdapterStartupV1,
     ProductionLifecycleOwnerStartupErrorV1, RecoveredAdapterStartup,
     RecoveredLifecycleLocalProposalAttemptV1, RecoveredLifecycleOwnerFactoryInputsV1,
-    RecoveredLifecycleStorageAuthorityV1, RecoveredWalDecisionFetch,
-    RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalFrameIdentity,
-    RecoveredWalStartupAuthorityV1, VerifiedHeightContext,
+    RecoveredLifecycleStorageAuthorityV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+    RecoveredWalFrameIdentity, RecoveredWalStartupAuthorityV1, VerifiedHeightContext,
 };
 use crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1;
 
@@ -27,20 +26,25 @@ pub(crate) struct PendingKuraRecoveredAdapterStartupV1 {
 
 /// Exact interrupted-tip replay authority after the Decision WAL frontier is authenticated.
 ///
-/// The ordinary recovered Decision-Fetch branch is removed from the embedded
-/// startup and retained here instead. Callers can neither project the raw
-/// effect nor reopen it as ordinary lifecycle Fetch work.
-#[must_use = "pending Kura replay must enter the storage-only lifecycle owner"]
+/// The ordinary recovered Decision-Fetch branch remains in the embedded
+/// startup so owner-open can reconstruct its exact recovered Apply carrier.
+/// This wrapper retains only cloneable WAL provenance for the later no-clock
+/// pending-tip join; it cannot project or dispatch ordinary lifecycle work.
+#[must_use = "pending Kura replay must enter the recovered Decision Apply owner"]
 pub(crate) struct AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
     startup: AuthenticatedRecoveredAdapterStartup,
     replay: RecoveredPendingKuraApplyReplayV1,
 }
 
-/// Move-only Decision-Fetch authority awaiting runtime ownership installation.
+/// Inert Decision-Fetch provenance awaiting runtime ownership installation.
 #[must_use = "pending Kura replay must enter serialized runtime startup"]
 pub(in crate::sumeragi) struct RecoveredPendingKuraApplyReplayV1 {
     expected: crate::sumeragi::v2_recovery::PendingKuraApply,
-    fetch: RecoveredWalDecisionFetch,
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1,
+    effect: AdapterEffect,
+    apply_carrier:
+        Option<crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1>,
 }
 
 /// Runtime-observed interrupted-tip effect retained until preactivation verification.
@@ -55,6 +59,8 @@ pub(in crate::sumeragi) struct PreparedRecoveredPendingKuraApplyReplayV1 {
     wal_identity: RecoveredWalFrameIdentity,
     replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1,
     effect: AdapterEffect,
+    apply_carrier:
+        crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1,
 }
 
 /// Installed interrupted-tip identity retained through no-clock lane recovery.
@@ -113,12 +119,13 @@ impl RecoveredAdapterStartup {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl PendingKuraRecoveredAdapterStartupV1 {
-    /// Authenticate the sole Decision Fetch without admitting ordinary Fetch recovery.
+    /// Authenticate the sole Decision Fetch and retain its inert replay provenance.
     ///
     /// The shared final-WAL classifier remains the only parser and cryptographic
-    /// authenticator. This wrapper accepts only its Decision-Fetch result, then
-    /// replaces the ordinary authority with `None` while retaining the complete
-    /// Fetch in a move-only interrupted-tip seal.
+    /// authenticator. This wrapper accepts only its Decision-Fetch result. The
+    /// move-only authority remains embedded for the ordinary recovered-Decision
+    /// Apply fast-forward, while cloneable provenance is retained for the later
+    /// pending-tip join.
     pub(crate) fn authenticate_final_wal_startup_authority(
         self,
     ) -> Result<AuthenticatedRecoveredPendingKuraAdapterStartupV1, AdapterError> {
@@ -146,26 +153,48 @@ impl PendingKuraRecoveredAdapterStartupV1 {
         ) {
             return Err(AdapterError::RecoveredPendingKuraApplyMismatch);
         }
+        let replay = RecoveredPendingKuraApplyReplayV1 {
+            expected,
+            wal_identity: fetch.wal_identity,
+            replay_evidence: fetch.replay_evidence.clone(),
+            effect: fetch.effect.clone(),
+            apply_carrier: None,
+        };
         Ok(AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
             startup: AuthenticatedRecoveredAdapterStartup {
                 adapter,
                 effects,
-                authority: RecoveredWalStartupAuthorityV1::None,
+                authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
                 validation_authority,
                 factory_owner,
             },
-            replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch },
+            replay,
         })
+    }
+}
+
+impl RecoveredPendingKuraApplyReplayV1 {
+    /// Join inert WAL provenance to the exact recovered Apply owner census.
+    pub(in crate::sumeragi) fn bind_recovered_apply_carrier(
+        mut self,
+        permit: crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1,
+    ) -> Self {
+        assert!(
+            self.apply_carrier.is_none(),
+            "pending Kura replay binds one recovered Apply carrier"
+        );
+        self.apply_carrier = Some(permit);
+        self
     }
 }
 
 #[cfg(test)]
 impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
-    pub(super) fn is_storage_only_for_test(&self) -> bool {
+    pub(super) fn retains_decision_fetch_for_test(&self) -> bool {
         self.startup.effects.is_empty()
             && matches!(
                 &self.startup.authority,
-                RecoveredWalStartupAuthorityV1::None
+                RecoveredWalStartupAuthorityV1::DecisionFetch(_)
             )
     }
 
@@ -173,18 +202,31 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
         self.replay.expected
     }
 
-    pub(super) fn into_runtime_startup_for_test(self) -> ProductionLifecycleAdapterStartupV1 {
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    pub(super) fn open_production_lifecycle_owner_v1_with_store_for_test(
+        self,
+        config: &iroha_config::parameters::actual::SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        ledger_root: &std::path::Path,
+        serve_payload_root: &std::path::Path,
+        body_store: crate::sumeragi::v2_body_store::RevalidatedV2BodyStore,
+        local_signer: &iroha_crypto::KeyPair,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
         let Self { startup, replay } = self;
-        let AuthenticatedRecoveredAdapterStartup {
-            adapter,
-            effects,
-            authority,
-            validation_authority: _,
-            factory_owner: _,
-        } = startup;
-        assert!(matches!(authority, RecoveredWalStartupAuthorityV1::None));
-        ProductionLifecycleAdapterStartupV1::recovered(adapter, effects)
-            .with_pending_kura_apply_replay(replay)
+        startup
+            .open_production_lifecycle_owner_v1_with_store_for_test(
+                config,
+                reply_route_source_capacity,
+                ledger_root,
+                serve_payload_root,
+                body_store,
+                local_signer,
+            )
+            .and_then(|owner| {
+                owner
+                    .with_pending_kura_apply_replay(replay)
+                    .map_err(ProductionLifecycleOwnerStartupErrorV1::pending_kura_recovered_apply)
+            })
     }
 }
 
@@ -206,7 +248,7 @@ impl ProductionLifecycleAdapterStartupV1 {
                 self
             }
             ProductionLifecycleAdapterStartupStateV1::Recovered { .. } => {
-                panic!("pending Kura replay must attach to one pristine storage-only startup")
+                panic!("pending Kura replay must attach to one pristine recovered Apply startup")
             }
             #[cfg(test)]
             ProductionLifecycleAdapterStartupStateV1::Fixture => {
@@ -242,12 +284,13 @@ impl ProductionLifecycleAdapterStartupV1 {
             {
                 let pending = pending_kura_apply
                     .map(|replay| {
-                        let RecoveredPendingKuraApplyReplayV1 { expected, fetch } = replay;
-                        let RecoveredWalDecisionFetch {
+                        let RecoveredPendingKuraApplyReplayV1 {
+                            expected,
                             wal_identity,
                             replay_evidence,
                             effect,
-                        } = fetch;
+                            apply_carrier,
+                        } = replay;
                         let verified = VerifiedHeightContext {
                             context: adapter.wire_context.clone(),
                             proofs_of_possession: adapter.proofs_of_possession.clone(),
@@ -265,53 +308,34 @@ impl ProductionLifecycleAdapterStartupV1 {
                                 crate::sumeragi::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership,
                             );
                         }
-                        Ok((expected, verified, wal_identity, replay_evidence, effect))
-                    })
-                    .transpose()?;
-                let (startup_effects, pending) = match pending {
-                    None => (Vec::new(), None),
-                    Some((expected, verified, wal_identity, replay_evidence, effect)) => (
-                        vec![effect],
-                        Some((expected, verified, wal_identity, replay_evidence)),
-                    ),
-                };
-                let (runtime, mut returned_effects) =
-                    crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
-                        adapter,
-                        startup_effects,
-                        started_at,
-                        round_timeout,
-                        queue_config,
-                        lifecycle_ordinals,
-                    )?;
-                let replay = match pending {
-                    None if returned_effects.is_empty() => None,
-                    Some((expected, verified, wal_identity, replay_evidence))
-                        if returned_effects.len() == 1
-                            && replay_evidence.exactly_matches_recovered_decision_fetch(
-                                &verified,
-                                wal_identity,
-                                &returned_effects[0],
-                            ) =>
-                    {
-                        let effect = returned_effects
-                            .pop()
-                            .expect("one exact pending Kura effect was compared above");
-                        Some(PreparedRecoveredPendingKuraApplyReplayV1 {
+                        let apply_carrier = apply_carrier.ok_or(
+                            crate::sumeragi::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership,
+                        )?;
+                        Ok(PreparedRecoveredPendingKuraApplyReplayV1 {
                             expected,
                             verified,
                             wal_identity,
                             replay_evidence,
                             effect,
+                            apply_carrier,
                         })
-                    }
-                    None | Some(_) => {
-                        return Err(
-                            crate::sumeragi::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership,
-                        );
-                    }
-                };
-                Ok((runtime, replay, local_proposal_attempt))
+                    })
+                    .transpose()?;
+                let (runtime, returned_effects) =
+                    crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                        adapter,
+                        Vec::new(),
+                        started_at,
+                        round_timeout,
+                        queue_config,
+                        lifecycle_ordinals,
+                    )?;
+                if !returned_effects.is_empty() {
+                    return Err(
+                        crate::sumeragi::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership,
+                    );
+                }
+                Ok((runtime, pending, local_proposal_attempt))
             }
             ProductionLifecycleAdapterStartupStateV1::Recovered { .. } => {
                 Err(crate::sumeragi::v2_runtime::RuntimeConfigError::InvalidLifecycleOwnership)
@@ -326,17 +350,17 @@ impl ProductionLifecycleAdapterStartupV1 {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedRecoveredPendingKuraApplyReplayV1 {
-    /// Install the exact runtime-observed Fetch into closed-ingress pending-tip recovery.
+    /// Join the exact WAL provenance to the already-fast-forwarded Apply boundary.
     ///
     /// Verification precedes effect consumption and repeats the canonical WAL
-    /// replay join against the exact executor context. The effect vector exists
-    /// only inside this consuming call and cannot be returned on either path.
+    /// replay join against the exact executor context. Owner-open already
+    /// reconstructed Store, Validate, and the typed Ready Apply carrier, so the
+    /// provenance is authenticated without dispatching its Fetch a second time.
     pub(in crate::sumeragi) fn install(
         self,
         executor: &mut crate::sumeragi::v2_effects::V2EffectExecutor<
             crate::sumeragi::v2_runtime::SerializedV2Runtime,
         >,
-        services: &mut crate::sumeragi::v2_worker::ProductionV2Services,
     ) -> Result<InstalledPendingKuraApplyV1, crate::sumeragi::v2_effects::EffectExecutorError> {
         let Self {
             expected,
@@ -344,6 +368,7 @@ impl PreparedRecoveredPendingKuraApplyReplayV1 {
             wal_identity,
             replay_evidence,
             effect,
+            apply_carrier,
         } = self;
         if executor.context() != verified.context()
             || !replay_evidence.exactly_matches_recovered_decision_fetch(
@@ -359,24 +384,12 @@ impl PreparedRecoveredPendingKuraApplyReplayV1 {
             );
         }
         let effects = vec![effect];
-        let genesis = executor.verify_pending_kura_apply_replay(expected, &effects)?;
-        executor.consume_pending_tip_recovery_effects(effects, services)?;
+        let genesis = executor.verify_pending_kura_recovered_apply_replay(
+            expected,
+            &effects,
+            apply_carrier,
+        )?;
         Ok(InstalledPendingKuraApplyV1 { expected, genesis })
-    }
-
-    #[cfg(test)]
-    pub(super) const fn expected_for_test(&self) -> crate::sumeragi::v2_recovery::PendingKuraApply {
-        self.expected
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_exact_for_test(&self) -> bool {
-        self.replay_evidence
-            .exactly_matches_recovered_decision_fetch(
-                &self.verified,
-                self.wal_identity,
-                &self.effect,
-            )
     }
 }
 
@@ -416,11 +429,11 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
             )
     }
 
-    /// Open only the storage lifecycle branch and attach the pending-tip replay seal.
+    /// Open the recovered Decision Apply branch and attach the pending-tip replay seal.
     ///
-    /// The embedded ordinary authority was replaced with `None` by the exact
-    /// classifier above. The resulting owner therefore cannot install a live
-    /// recovered Fetch row before the closed-ingress interrupted-tip path runs.
+    /// The embedded move-only Decision Fetch reconstructs and publishes the
+    /// exact Ready Apply carrier. Only then is the inert provenance attached
+    /// for closed-ingress interrupted-tip completion.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(
         self,
@@ -437,6 +450,10 @@ impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
                 factory_inputs,
                 body_store,
             )
-            .map(|owner| owner.with_pending_kura_apply_replay(replay))
+            .and_then(|owner| {
+                owner
+                    .with_pending_kura_apply_replay(replay)
+                    .map_err(ProductionLifecycleOwnerStartupErrorV1::pending_kura_recovered_apply)
+            })
     }
 }

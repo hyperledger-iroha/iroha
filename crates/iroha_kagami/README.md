@@ -167,7 +167,7 @@ into the output directory.
 ## Iroha 3 Profiles
 
 - Run `cargo xtask kagami-profiles` to emit sample bundles for
-  `iroha3-dev`, `iroha3-taira`, and `iroha3-nexus` under
+  `iroha3-dev` and `iroha3-nexus` under
   `defaults/kagami/<profile>/`
 - Each bundle includes:
   - `genesis.json`
@@ -175,8 +175,11 @@ into the output directory.
   - `config.toml`
   - `docker-compose.yml`
   - `README.md`
-- `iroha3-taira` and `iroha3-nexus` require `--vrf-seed-hex` when generating
-  or verifying NPoS manifests
+- For a disposable four-validator Taira deployment, use
+  `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
+  for inspection and teardown. The low-level `iroha3-taira` Kagami profile
+  remains available for manifest generation and verification, targets the live
+  Taira chain id, requires NPoS, and requires `--vrf-seed-hex`.
 
 See [specs/kagami_profiles.md](../../specs/kagami_profiles.md) for
 the profile-specific defaults.

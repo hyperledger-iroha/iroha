@@ -192,7 +192,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "e7958352865498206204cb38b06c25d4d4756705796ce96f0b8f72dc94b001fa"
+    "38e5ce3632e1d7dc0471b49d90350a165fb8326c34ea3d70187a309c3d96358f"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -274,12 +274,6 @@ _APPROVAL_ATTESTATION_NAMES = {
 }
 _APPROVAL_SET_ATTESTATION_NAME = "release-approval-set-attestation.v1.json"
 _APPROVAL_SET_ARCHIVE_ID = "release-approval.set-attestation.v1"
-_APPROVAL_OPERATION_COUNTS = {
-    "offline-toolchain-sdk": 23,
-    "formal-proof-tools": 38,
-    "network-scale-soak": 8,
-    "final-bootstrap-publication": 8,
-}
 _BOOTSTRAP_IDENTITY_ARCHIVES = {
     "cargo_lock": ("identity-Cargo.lock", _SIGNATURE_DATA_MODE),
     "git": ("identity-git", _SIGNATURE_TOOL_MODE),
@@ -3753,10 +3747,14 @@ def _validate_release_approval_evidence(
             )
     except module.ReleaseApprovalError as error:
         raise ReceiptError(f"release approval replay failed: {error}") from error
+    expected_operation_counts = {
+        approval_class.value: len(expectations[approval_class].operations)
+        for approval_class in module.APPROVAL_CLASS_ORDER
+    }
     if {
         approval.class_id.value: len(approval.operations)
         for approval in approvals
-    } != _APPROVAL_OPERATION_COUNTS:
+    } != expected_operation_counts:
         raise ReceiptError("release approval operation counts are not exact")
     class_records = _require_exact_json_fields(
         marker["class_attestations"],

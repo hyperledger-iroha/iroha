@@ -191,6 +191,198 @@ fn statement8_small_source_accessor_uses_exact_raw_roles_and_derived_positive() 
 }
 
 #[test]
+fn statement4_subtraction_accessor_selects_only_delta_and_beta_zero_through_sixteen() {
+    let mut inventory = canonical_inventory_v1();
+    let points = derive_t256_generators_v1(b"rns-native-statement4-subtraction-accessor", 39)
+        .expect("statement-4 accessor points");
+    let write_point = |inventory: &mut [u8], ordinal: usize, point: Point| {
+        let mut encoded = [0_u8; POINT_BYTES_V1];
+        point
+            .write_non_identity_wire_bytes_ref(&mut encoded)
+            .expect("canonical statement-4 point");
+        let offset = ordinal * POINT_BYTES_V1;
+        inventory[offset..offset + POINT_BYTES_V1].copy_from_slice(&encoded);
+    };
+
+    let first = COMPARATOR_TOP_POINTS_V1;
+    for column in 0..COMPARATOR_SUBTRACTION_DIGITS_V1 {
+        write_point(&mut inventory, first + column, points[column]);
+        write_point(
+            &mut inventory,
+            first + 18 + column,
+            points[COMPARATOR_SUBTRACTION_DIGITS_V1 + column],
+        );
+    }
+    for (local, point) in [(17, points[34]), (35, points[35]), (36, points[36])] {
+        write_point(&mut inventory, first + local, point);
+    }
+
+    let first_group = comparator_subtraction_commitments_v1(&inventory, 0)
+        .expect("first comparator subtraction tuple");
+    assert_eq!(
+        first_group.difference_digits.as_slice(),
+        &points[..COMPARATOR_SUBTRACTION_DIGITS_V1]
+    );
+    assert_eq!(
+        first_group.borrows.as_slice(),
+        &points[COMPARATOR_SUBTRACTION_DIGITS_V1..2 * COMPARATOR_SUBTRACTION_DIGITS_V1]
+    );
+    for excluded in &points[34..37] {
+        assert!(!first_group.difference_digits.contains(excluded));
+        assert!(!first_group.borrows.contains(excluded));
+    }
+
+    let last =
+        COMPARATOR_TOP_POINTS_V1 + (COMPARATOR_GROUPS_V1 - 1) * COMPARATOR_POINTS_PER_GROUP_V1;
+    write_point(&mut inventory, last + 16, points[37]);
+    write_point(&mut inventory, last + 18 + 16, points[38]);
+    let last_group = comparator_subtraction_commitments_v1(&inventory, COMPARATOR_GROUPS_V1 - 1)
+        .expect("last comparator subtraction tuple");
+    assert_eq!(last_group.difference_digits[16], points[37]);
+    assert_eq!(last_group.borrows[16], points[38]);
+    assert!(comparator_subtraction_commitments_v1(&inventory, COMPARATOR_GROUPS_V1).is_none());
+    assert!(comparator_subtraction_commitments_v1(&inventory[..inventory.len() - 1], 0).is_none());
+}
+
+#[test]
+fn q_mask_linear_accessor_selects_digits_and_complements_but_not_inverses() {
+    let mut inventory = canonical_inventory_v1();
+    let points = derive_t256_generators_v1(b"rns-native-q-mask-linear-accessor", 8)
+        .expect("q-mask accessor points");
+    let first = COMPARATOR_POINTS_V1 + SMALL_SOURCE_POINTS_V1;
+    for (local, point) in [
+        (0, points[0]),
+        (1, points[1]),
+        (2, points[2]),
+        (3, points[3]),
+        (8, points[4]),
+        (9, points[5]),
+        (10, points[6]),
+        (11, points[7]),
+    ] {
+        let mut encoded = [0_u8; POINT_BYTES_V1];
+        point
+            .write_non_identity_wire_bytes_ref(&mut encoded)
+            .expect("canonical q-mask point");
+        let offset = (first + local) * POINT_BYTES_V1;
+        inventory[offset..offset + POINT_BYTES_V1].copy_from_slice(&encoded);
+    }
+    let commitments =
+        q_mask_linear_commitments_v1(&inventory, 0).expect("first q-mask linear tuple");
+    assert_eq!(commitments.digits.as_slice(), &points[..4]);
+    assert_eq!(commitments.complement_digits.as_slice(), &points[4..]);
+    assert!(q_mask_linear_commitments_v1(&inventory, Q_MASK_BLOCKS_V1 - 1).is_some());
+    assert!(q_mask_linear_commitments_v1(&inventory, Q_MASK_BLOCKS_V1).is_none());
+    assert!(q_mask_linear_commitments_v1(&inventory[..inventory.len() - 1], 0).is_none());
+}
+
+#[test]
+fn global_lookup_inverse_accessors_alias_exact_post_z_roles_and_boundaries() {
+    let mut inventory = canonical_inventory_v1();
+    let points = derive_t256_generators_v1(b"rns-native-global-lookup-inverse-accessors", 25)
+        .expect("global lookup inverse accessor points");
+    let write_point = |inventory: &mut [u8], ordinal: usize, point: Point| {
+        let mut encoded = [0_u8; POINT_BYTES_V1];
+        point
+            .write_non_identity_wire_bytes_ref(&mut encoded)
+            .expect("canonical global lookup inverse point");
+        let offset = ordinal * POINT_BYTES_V1;
+        inventory[offset..offset + POINT_BYTES_V1].copy_from_slice(&encoded);
+    };
+
+    let comparator_first = COMPARATOR_TOP_POINTS_V1;
+    let comparator_last =
+        COMPARATOR_TOP_POINTS_V1 + (COMPARATOR_GROUPS_V1 - 1) * COMPARATOR_POINTS_PER_GROUP_V1;
+    write_point(&mut inventory, comparator_first + 36, points[0]);
+    write_point(&mut inventory, comparator_last + 52, points[1]);
+    write_point(&mut inventory, comparator_first + 35, points[24]);
+    assert_eq!(
+        comparator_difference_inverse_v1(&inventory, 0, 0),
+        Some(points[0])
+    );
+    assert_eq!(
+        comparator_difference_inverse_v1(
+            &inventory,
+            COMPARATOR_GROUPS_V1 - 1,
+            COMPARATOR_SUBTRACTION_DIGITS_V1 - 1,
+        ),
+        Some(points[1])
+    );
+    assert_eq!(
+        comparator_difference_inverse_v1(&inventory, COMPARATOR_GROUPS_V1, 0),
+        None
+    );
+    assert_eq!(
+        comparator_difference_inverse_v1(&inventory, 0, COMPARATOR_SUBTRACTION_DIGITS_V1),
+        None
+    );
+
+    let small_first = COMPARATOR_POINTS_V1;
+    let small_last =
+        COMPARATOR_POINTS_V1 + (SMALL_SOURCE_BLOCKS_V1 - 1) * SMALL_SOURCE_POINTS_PER_BLOCK_V1;
+    write_point(&mut inventory, small_first, points[24]);
+    write_point(&mut inventory, small_first + 2, points[2]);
+    write_point(&mut inventory, small_first + 3, points[3]);
+    write_point(&mut inventory, small_last + 2, points[4]);
+    write_point(&mut inventory, small_last + 3, points[5]);
+    assert_eq!(
+        small_source_lookup_inverses_v1(&inventory, 0),
+        Some((points[2], points[3]))
+    );
+    assert_eq!(
+        small_source_lookup_inverses_v1(&inventory, SMALL_SOURCE_BLOCKS_V1 - 1),
+        Some((points[4], points[5]))
+    );
+    assert_eq!(
+        small_source_lookup_inverses_v1(&inventory, SMALL_SOURCE_BLOCKS_V1),
+        None
+    );
+
+    let q_mask_first = COMPARATOR_POINTS_V1 + SMALL_SOURCE_POINTS_V1;
+    for column in 0..Q_MASK_DIGITS_V1 {
+        write_point(&mut inventory, q_mask_first + column, points[24]);
+        write_point(
+            &mut inventory,
+            q_mask_first + 4 + column,
+            points[6 + column],
+        );
+        write_point(
+            &mut inventory,
+            q_mask_first + 12 + column,
+            points[10 + column],
+        );
+    }
+    let q_mask_last = q_mask_first + (Q_MASK_BLOCKS_V1 - 1) * Q_MASK_POINTS_PER_BLOCK_V1;
+    for column in 0..Q_MASK_DIGITS_V1 {
+        write_point(
+            &mut inventory,
+            q_mask_last + 4 + column,
+            points[14 + column],
+        );
+        write_point(
+            &mut inventory,
+            q_mask_last + 12 + column,
+            points[18 + column],
+        );
+    }
+    let first_q_mask = q_mask_lookup_inverses_v1(&inventory, 0).expect("first q-mask inverses");
+    assert_eq!(first_q_mask.digit_inverses.as_slice(), &points[6..10]);
+    assert_eq!(first_q_mask.complement_inverses.as_slice(), &points[10..14]);
+    assert!(!first_q_mask.digit_inverses.contains(&points[24]));
+    assert!(!first_q_mask.complement_inverses.contains(&points[24]));
+    let last_q_mask =
+        q_mask_lookup_inverses_v1(&inventory, Q_MASK_BLOCKS_V1 - 1).expect("last q-mask inverses");
+    assert_eq!(last_q_mask.digit_inverses.as_slice(), &points[14..18]);
+    assert_eq!(last_q_mask.complement_inverses.as_slice(), &points[18..22]);
+    assert!(q_mask_lookup_inverses_v1(&inventory, Q_MASK_BLOCKS_V1).is_none());
+
+    let short = &inventory[..inventory.len() - 1];
+    assert!(comparator_difference_inverse_v1(short, 0, 0).is_none());
+    assert!(small_source_lookup_inverses_v1(short, 0).is_none());
+    assert!(q_mask_lookup_inverses_v1(short, 0).is_none());
+}
+
+#[test]
 fn authenticated_qpcs_grid_is_exact_canonical_and_limb_major() {
     let mut bytes = vec![0_u8; QPCS_EVALUATION_BYTES_V1];
     let relation = (ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 - 1) * REPETITIONS_V1 + (REPETITIONS_V1 - 1);
@@ -315,6 +507,9 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(source.contains("RANGE_AND_CARRY_RELATIONS_VERIFIED_V1: bool = false"));
     assert!(source.contains("CANONICAL_Q_MASK_RELATIONS_VERIFIED_V1: bool = false"));
     assert!(source.contains("GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1: bool = false"));
+    assert!(stage.contains("terminal_transcript_digest: [u8; DIGEST_BYTES_V1]"));
+    assert!(source.contains("terminal_transcript_digest: transcript.transcript_digest()"));
+    assert!(source.contains("pub(super) const fn terminal_transcript_digest_v1(&self)"));
 
     let parent = include_str!("../mkhe.rs");
     assert_eq!(
@@ -324,17 +519,12 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         1
     );
     assert!(!parent.contains("pub use rns_native_cross_field_inventory"));
-
-    let retired = include_str!("phase23_rns_link_cross_field_v2.rs");
-    assert!(retired.contains("const LIMBS_V2: usize = 38;"));
-    assert!(retired.contains("SOURCE_SET_BOUND_V2: bool = false"));
-    assert!(retired.contains("CANONICAL_Q_MASK_SET_BOUND_V2: bool = false"));
-    let vector_backend = include_str!(
-        "global_lookup_statement_v1/vector_arithmetic_plane_openings_v1/vector_arithmetic_proof_codec_v2.rs"
-    );
-    assert!(vector_backend.contains("VECTOR_ARITHMETIC_STREAMING_BACKEND_READY_V2: bool = false"));
+    assert!(!parent.contains("phase23_rns_link"));
 
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));
     assert!(composite.contains("CrossFieldGlobalLookup"));
+    let qpcs = include_str!("rns_native_qpcs_fri_complete.rs");
+    assert!(qpcs.contains("pub(super) fn authenticate_rns_native_qpcs_fri_complete_v1"));
+    assert!(qpcs.contains("Successful verification remains non-authorizing"));
 }

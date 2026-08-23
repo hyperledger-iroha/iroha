@@ -2600,6 +2600,17 @@ fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> 
                 "no compatible providers available for chunk {chunk_index}: {details}"
             ))
         }
+        NoPolicyEligibleProviders {
+            chunk_index,
+            providers,
+        } => Ok(format!(
+            "score policy rejected every available provider for chunk {chunk_index}: {}",
+            providers
+                .iter()
+                .map(|provider| provider.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
         ExhaustedRetries {
             chunk_index,
             attempts,
@@ -2891,6 +2902,20 @@ mod tests {
         sync::Arc,
     };
     use tempfile::{NamedTempFile, TempDir, tempdir};
+    #[test]
+    fn formats_all_policy_denied_providers() {
+        let error = MultiSourceError::NoPolicyEligibleProviders {
+            chunk_index: 7,
+            providers: vec![ProviderId::new("alpha"), ProviderId::new("beta")],
+        };
+
+        let rendered = format_multi_source_error(error).expect("operator-visible error");
+
+        assert_eq!(
+            rendered,
+            "score policy rejected every available provider for chunk 7: alpha, beta"
+        );
+    }
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");

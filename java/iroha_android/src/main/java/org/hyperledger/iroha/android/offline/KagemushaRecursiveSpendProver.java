@@ -2297,12 +2297,16 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Immutable canonical Norito archive; proof and accumulator bytes remain opaque. */
   public abstract static class CanonicalArchive {
+    private static final Object EQUALITY_TIE_LOCK = new Object();
     private final byte[] archive;
+    private final int equalityHashCode;
     private boolean destroyed;
 
     private CanonicalArchive(
         final byte[] archive, final String schema, final String field, final int maximumBytes) {
       this.archive = requireCanonicalArchive(archive, schema, field, maximumBytes);
+      // Retain only the 32-bit collection bucket after zeroization, never a secret digest.
+      this.equalityHashCode = Arrays.hashCode(this.archive);
     }
 
     public final synchronized byte[] noritoEncoded() {
@@ -2341,14 +2345,45 @@ public final class KagemushaRecursiveSpendProver {
 
     @Override
     public final boolean equals(final Object other) {
-      return other != null
-          && getClass() == other.getClass()
-          && Arrays.equals(archive, ((CanonicalArchive) other).archive);
+      if (this == other) {
+        return true;
+      }
+      if (other == null || getClass() != other.getClass()) {
+        return false;
+      }
+      final CanonicalArchive that = (CanonicalArchive) other;
+      final int identity = System.identityHashCode(this);
+      final int otherIdentity = System.identityHashCode(that);
+      if (identity < otherIdentity) {
+        synchronized (this) {
+          synchronized (that) {
+            return liveContentEquals(that);
+          }
+        }
+      }
+      if (identity > otherIdentity) {
+        synchronized (that) {
+          synchronized (this) {
+            return liveContentEquals(that);
+          }
+        }
+      }
+      synchronized (EQUALITY_TIE_LOCK) {
+        synchronized (this) {
+          synchronized (that) {
+            return liveContentEquals(that);
+          }
+        }
+      }
     }
 
     @Override
     public final int hashCode() {
-      return Arrays.hashCode(archive);
+      return equalityHashCode;
+    }
+
+    private boolean liveContentEquals(final CanonicalArchive other) {
+      return !destroyed && !other.destroyed && Arrays.equals(archive, other.archive);
     }
   }
 
@@ -4491,6 +4526,9 @@ public final class KagemushaRecursiveSpendProver {
       this.transport = Objects.requireNonNull(transport, "transport");
       this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
       if (!baseUri.isAbsolute()
+          || baseUri.isOpaque()
+          || baseUri.getHost() == null
+          || baseUri.getHost().isEmpty()
           || baseUri.getRawQuery() != null
           || baseUri.getRawFragment() != null
           || baseUri.getRawUserInfo() != null) {

@@ -112,6 +112,17 @@ pub(crate) fn check_production_decision_recovery_transition(
         None
     }
 }
+/// Check direct-Apply startup authorized by an exact recovered carrier census.
+#[must_use]
+pub(crate) fn check_production_decision_apply_startup_transition(
+    projection: ProductionDecisionApplyStartupTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionDecisionApplyStartupTraceProjection>> {
+    if production_decision_apply_startup_refines_recovery_witness_kernel(projection) {
+        Some(CheckedProductionTransition::unwitnessed(projection))
+    } else {
+        None
+    }
+}
 /// Check one protected scheduler selection.
 #[must_use]
 pub(crate) fn check_production_scheduler_transition(

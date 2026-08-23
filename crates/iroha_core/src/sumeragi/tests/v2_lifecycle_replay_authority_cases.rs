@@ -144,6 +144,334 @@ fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
     );
 }
 #[test]
+fn decision_replay_accepts_future_view_commit_qc_without_relaxing_other_sources() {
+    let base = Fixture::new();
+    let future = Fixture::for_record(base.context, 1);
+    let lagging_tag = ReplayEventTagV1::new(base.context.height(), 0, 9);
+    let locator = RecoveredWalFrameIdentity::for_test(31, 32, [0xD6; 32]);
+    let payload = ReplayPayloadBindingV1::from_payload(future.body_payload);
+    let source_key = KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::Ed25519)
+        .expect("deterministic future-view Decision source");
+    let certified_sources = vec![PeerId::new(source_key.public_key().clone())];
+
+    assert!(!lagging_tag.matches_round(base.context, future.commit_qc.round));
+    assert!(lagging_tag.matches_decision_round(base.context, future.commit_qc.round));
+
+    let apply = WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role: ReplayWalRoleV1::DECISION,
+        tag: lagging_tag,
+        action: WalReplayActionV1::ApplyDecision(future.commit_qc.clone()),
+    };
+    assert!(
+        apply
+            .project(base.context, LifecycleStageKind::ApplyDecision, &payload,)
+            .is_ok()
+    );
+    let fetch = WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role: ReplayWalRoleV1::DECISION,
+        tag: lagging_tag,
+        action: WalReplayActionV1::FetchDecision {
+            certificate: future.commit_qc.clone(),
+            certified_sources,
+        },
+    };
+    assert!(
+        fetch
+            .project(
+                base.context,
+                LifecycleStageKind::FetchBody,
+                &ReplayPayloadBindingV1::None,
+            )
+            .is_ok()
+    );
+
+    for origin in [
+        BodyPipelineOriginV1::Certified {
+            certificate: future.commit_qc.clone(),
+            manifest: future.proposal.manifest.clone(),
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
+        },
+        BodyPipelineOriginV1::RecoveredDecision {
+            locator: locator.persisted_locator(),
+            certificate: future.commit_qc.clone(),
+            manifest: future.proposal.manifest.clone(),
+        },
+    ] {
+        let source = BodyPipelineReplaySourceV1 {
+            tag: lagging_tag,
+            origin,
+        };
+        for stage in [
+            LifecycleStageKind::StoreBody,
+            LifecycleStageKind::ValidateBody,
+        ] {
+            assert!(source.project(base.context, stage, &payload).is_ok());
+        }
+    }
+
+    let event_tag = EventTag::new(base.context.height(), 0, Generation::new(9));
+    let fetch_effect = AdapterEffect::FetchBody {
+        tag: event_tag,
+        round: future.commit_qc.proposal_round,
+        subject: future.commit_qc.subject,
+        manifest: Some(future.proposal.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(future.commit_qc.clone()),
+    };
+    let coordinates =
+        exact_certified_fetch_coordinates_from_manifest(&fetch_effect, &future.proposal.manifest)
+            .expect("future-view CommitQC Fetch retains the current reducer owner");
+    assert_eq!(coordinates.tag, lagging_tag);
+
+    let apply_effect = AdapterEffect::Apply {
+        tag: event_tag,
+        subject: future.commit_qc.subject,
+        certificate: future.commit_qc.clone(),
+    };
+    let live = exact_live_wal_replay_projection(
+        &LiveWalFrameIdentity::for_test(41, 42, [0xD8; 32]),
+        &apply_effect,
+    )
+    .expect("future-view CommitQC seals its exact live Decision continuation");
+    assert_eq!(live.stage, LifecycleStageKind::ApplyDecision);
+
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag: event_tag,
+        round: future.prepare_qc.proposal_round,
+        subject: future.prepare_qc.subject,
+        manifest: Some(future.proposal.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(future.prepare_qc.clone()),
+    };
+    assert!(
+        exact_certified_fetch_coordinates_from_manifest(&prepare_fetch, &future.proposal.manifest,)
+            .is_none()
+    );
+    let prepare_body = BodyPipelineReplaySourceV1 {
+        tag: lagging_tag,
+        origin: BodyPipelineOriginV1::Certified {
+            certificate: future.prepare_qc,
+            manifest: future.proposal.manifest,
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
+        },
+    };
+    assert!(matches!(
+        prepare_body.project(
+            base.context,
+            LifecycleStageKind::FetchBody,
+            &ReplayPayloadBindingV1::None,
+        ),
+        Err(ReplayAuthorityValidationError::InvalidSource)
+    ));
+}
+#[cfg(feature = "bls")]
+#[test]
+fn recovered_decision_fetch_accepts_authenticated_future_view_commit_qc() {
+    let fixture = CertifiedServeRecoveredReplayFixture::new();
+    let context = fixture.verified.context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 1,
+    };
+    let subject = fixture.authenticated.request().subject;
+    let execution_commitment = fixture
+        .authenticated
+        .request()
+        .certificate
+        .execution_commitment;
+    let signers = vec![0, 1, 2];
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                fixture.keys[usize::try_from(*signer).expect("small fixture signer")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate future-view CommitQC");
+    let certificate = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment,
+        signers,
+        aggregate_signature,
+    };
+    let effect = AdapterEffect::FetchBody {
+        tag: EventTag::new(round.height, 0, Generation::new(7)),
+        round,
+        subject,
+        manifest: None,
+        certified_sources: context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        certificate: Some(certificate),
+    };
+    assert!(
+        exact_recovered_wal_decision_fetch_authority(
+            &fixture.verified,
+            RecoveredWalFrameIdentity::for_test(51, 52, [0xD9; 32]),
+            &effect,
+        )
+        .is_some()
+    );
+}
+#[cfg(feature = "bls")]
+#[test]
+fn refined_proposal_validate_joins_complete_qc_replay_authority() {
+    let fixture = CertifiedServeRecoveredReplayFixture::new();
+    let context = fixture.verified.context();
+    let certificate = &fixture.authenticated.request().certificate;
+    let round = certificate.proposal_round;
+    let subject = certificate.subject;
+    let tag = crate::sumeragi::v2_core::EventTag::new(
+        round.height,
+        round.view,
+        Generation::new(11),
+    );
+    let proposal = wire::Proposal {
+        round,
+        proposer: context.leader(round.view),
+        subject,
+        manifest: fixture.manifest.clone(),
+        justification: wire::ProposalJustification::ParentCommit(
+            wire::ParentCommitJustification { certificate: None },
+        ),
+        signature: vec![0xDA],
+    };
+    let proposal_source = BodyPipelineReplaySourceV1 {
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        origin: BodyPipelineOriginV1::Proposal(proposal),
+    };
+    let certified_fetch = AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        certificate: Some(certificate.clone()),
+    };
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    };
+    let fetch_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&certified_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, 0xDA)],
+    )
+    .expect("bind certified Fetch authority")
+    .pop()
+    .expect("one certified Fetch owner");
+    let validate_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("inherit Prepare authority at Validate");
+    let validate_pending = validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("seal refined Validate pending binding");
+    let validate_source = exact_remote_proposal_validate_source(
+        &proposal_source,
+        &validate_pending,
+        Some(certificate),
+    )
+    .expect("complete PrepareQC refines the Proposal replay source");
+    assert!(matches!(
+        validate_source.origin,
+        BodyPipelineOriginV1::Certified { .. }
+    ));
+
+    let active_context = replay_context(round);
+    let receipt = DurableBodyReceipt::for_test(
+        context.id(),
+        round,
+        subject,
+        HashOf::new(&fixture.manifest),
+    );
+    let payload = DurablePayloadReference::BodyFrame(
+        durable_body_frame_reference(active_context, &receipt)
+            .expect("fixture receipt has one durable body frame"),
+    );
+    let payload_binding = ReplayPayloadBindingV1::from_payload(payload);
+    let projected = super::super::projection::authority_free_admission_projection(
+        active_context,
+        &fixture.verified,
+        &validate_effect,
+        &validate_pending,
+    )
+    .expect("project refined Validate coordinates");
+    let stale_proposal_authority = canonical_replay_authority(
+        active_context,
+        LifecycleReplaySourceV1::BodyPipeline(proposal_source),
+        LifecycleStageKind::ValidateBody,
+        payload_binding.clone(),
+    )
+    .expect("ordinary Proposal remains canonical for an ordinary Validate");
+    assert!(
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            payload,
+            stale_proposal_authority,
+        )
+        .is_none(),
+        "the ordinary Proposal cannot authorize a Prepare-refined Validate key",
+    );
+
+    let projected = super::super::projection::authority_free_admission_projection(
+        active_context,
+        &fixture.verified,
+        &validate_effect,
+        &validate_pending,
+    )
+    .expect("reproject refined Validate coordinates");
+    let refined_authority = canonical_replay_authority(
+        active_context,
+        LifecycleReplaySourceV1::BodyPipeline(validate_source),
+        LifecycleStageKind::ValidateBody,
+        payload_binding,
+    )
+    .expect("the complete QC is canonical Validate replay authority");
+    let candidate = candidate_from_authorized_projection(
+        active_context,
+        projected,
+        payload,
+        refined_authority,
+    )
+    .expect("the QC replay source joins the refined Validate candidate");
+    assert_eq!(
+        candidate.key.execution_commitment(),
+        Some(execution_commitment(certificate.execution_commitment))
+    );
+}
+#[test]
 fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
     let fixture = Fixture::new();
     let source_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
@@ -347,6 +675,61 @@ fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
         &resumed_store,
         &resumed_validate,
         &resumed_apply,
+    ));
+    let gapped_apply_ordinal = 10;
+    let gapped_validate = super::super::ledger::LifecycleLedgerRecordV1::new(
+        lineage.validate.key,
+        owner,
+        resumed_validate.ordinal(),
+        lineage.validate.work_class,
+        lineage.validate.stage,
+        Some(TerminalOutcome::Advanced),
+        lineage.validate.reconstruction_source,
+        lineage.validate.payload,
+        lineage.validate.replay_authority.clone(),
+        super::super::schema::DurableContinuation::successor(
+            DurableContinuationEdge::ValidateToApply,
+            gapped_apply_ordinal,
+        ),
+    )
+    .expect("recovered Validate can point across unrelated shared ordinals");
+    let gapped_live_apply = super::super::ledger::LifecycleLedgerRecordV1::new(
+        lineage.apply.key,
+        owner,
+        gapped_apply_ordinal,
+        lineage.apply.work_class,
+        lineage.apply.stage,
+        None,
+        lineage.apply.reconstruction_source,
+        lineage.apply.payload,
+        lineage.apply.replay_authority.clone(),
+        super::super::schema::DurableContinuation::None,
+    )
+    .expect("live recovered Apply can follow an unrelated shared ordinal");
+    assert!(lineage.exactly_matches_successor_records(
+        owner,
+        &resumed_store,
+        &gapped_validate,
+        &gapped_live_apply,
+    ));
+    let gapped_terminal_apply = super::super::ledger::LifecycleLedgerRecordV1::new(
+        lineage.apply.key,
+        owner,
+        gapped_apply_ordinal,
+        lineage.apply.work_class,
+        lineage.apply.stage,
+        Some(TerminalOutcome::Advanced),
+        lineage.apply.reconstruction_source,
+        lineage.apply.payload,
+        lineage.apply.replay_authority.clone(),
+        super::super::schema::DurableContinuation::None,
+    )
+    .expect("terminal recovered Apply can follow an unrelated shared ordinal");
+    assert!(lineage.exactly_matches_terminal_successor_records(
+        owner,
+        &resumed_store,
+        &gapped_validate,
+        &gapped_terminal_apply,
     ));
     assert!(
         lineage
@@ -1192,15 +1575,9 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         )
         .expect("exact local durability joins Validate replay evidence");
     assert!(validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate
-        .family
-        .assembled_body_frame_mut_for_test()
-        .frame[0] ^= 1;
+    validate.family.assembled_body_frame_mut_for_test().frame[0] ^= 1;
     assert!(!validate.exactly_matches_validate(&validate_effect, &receipt));
-    validate
-        .family
-        .assembled_body_frame_mut_for_test()
-        .frame = [0; 32];
+    validate.family.assembled_body_frame_mut_for_test().frame = [0; 32];
     assert!(
         validate
             .family
@@ -1243,8 +1620,10 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
             &manifest,
             validated_receipt,
             command_identity,
+            validate_ownership.owner().lifecycle_ordinal(),
         )
         .expect("exact Validate completion retains local replay evidence");
+    assert!(ready.exactly_matches_retry(command_identity, tag, &manifest));
     let mut unsigned_proposal = fixture.proposal.clone();
     unsigned_proposal.signature.clear();
     let proposal_intent = AdapterEffect::Sign {
@@ -1254,6 +1633,29 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     let proposal_ownership = validate_ownership
         .rebind_as_inherited_adapter_effect(&proposal_intent)
         .expect("local Validate root rebinds to exact ProposalIntent");
+    let wrong_ordinal_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&proposal_intent),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, 71)],
+    )
+    .expect("bind the same causal root at a foreign ordinal")
+    .pop()
+    .expect("one wrong-ordinal ProposalIntent owner");
+    assert_eq!(
+        wrong_ordinal_ownership
+            .owner()
+            .causal_origin()
+            .lifecycle_key,
+        proposal_ownership.owner().causal_origin().lifecycle_key,
+    );
+    assert_ne!(
+        wrong_ordinal_ownership.owner().lifecycle_ordinal(),
+        proposal_ownership.owner().lifecycle_ordinal(),
+    );
+    assert!(!ready.exactly_matches_proposal_intent(
+        command_identity,
+        &proposal_intent,
+        &wrong_ordinal_ownership,
+    ));
     let foreign_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&proposal_intent),
         vec![
@@ -1421,398 +1823,15 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
     let foreign_pending = pending_binding(&forward, foreign_tag, 34);
     assert!(!evidence.exactly_matches_effect(&forward, &foreign_pending));
 }
-#[test]
-fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
-    let source = replay_authority_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("replay authority has one production prefix");
-    let direct = production
-        .split("pub(super) struct SignedBroadcastReplayEvidenceV1")
-        .nth(1)
-        .expect("signed Broadcast wrapper has one declaration")
-        .split("/// Selector-authenticated origin awaiting one exact durable body-frame binding.")
-        .next()
-        .expect("certified body replay follows direct signed evidence");
-    for required in [
-        "pub(super) struct SignedEquivocationReplayEvidenceV1",
-        "pending: DirectSignedPendingBindingV1",
-        "causal_lifecycle_key: [u8; 32]",
-        "effect_identity: [u8; 32]",
-        "pub(super) fn from_exact_effect(\n        effect: &AdapterEffect,\n        pending: &PendingRuntimeEffectBinding",
-        "pub(super) fn exactly_matches_effect(",
-        "pending.exactly_binds_adapter_effect(effect)",
-        "exact_signed_broadcast_authority(effect)",
-        "exact_signed_equivocation_authority(effect)",
-        "LifecycleReplaySourceV1::ConsensusBroadcast(message.clone())",
-        "LifecycleReplaySourceV1::Equivocation(evidence)",
-        "canonical_replay_authority(",
-    ] {
-        assert!(
-            direct.contains(required),
-            "direct signed replay wrapper omitted {required}"
-        );
-    }
-    for runtime_seal in [
-        "SignedBroadcastReplayEvidenceV1",
-        "SignedEquivocationReplayEvidenceV1",
-        "DirectSignedPendingBindingV1",
-    ] {
-        let derive = production
-            .split(runtime_seal)
-            .next()
-            .expect("direct signed seal has a declaration prefix")
-            .rsplit("#[derive(")
-            .next()
-            .expect("direct signed seal derive is inspectable")
-            .split(")]")
-            .next()
-            .expect("direct signed seal derive is bounded");
-        assert!(
-            !derive.contains("Decode") && !derive.contains("Encode"),
-            "runtime seal {runtime_seal} became codec-constructible"
-        );
-    }
-    for forbidden in [
-        "pub(crate) struct SignedBroadcastReplayEvidenceV1",
-        "pub(crate) struct SignedEquivocationReplayEvidenceV1",
-        "pub(super) fn source(",
-        "pub(super) fn message(",
-        "pub(super) fn evidence(",
-        "pub(super) fn encoded(",
-        "pub(super) fn into_parts(",
-        "pub(super) fn pending(",
-        "pub(super) fn effect_identity(",
-        "!= [0; 32]",
-        "== [0; 32]",
-        "is_zero()",
-    ] {
-        assert!(
-            !direct.contains(forbidden),
-            "direct signed replay wrapper exposed or reserved {forbidden}"
-        );
-    }
-    for caller in [
-        include_str!("../v2_lifecycle_coordinator.rs"),
-        reviewed_lifecycle_ledger_source_for_test(),
-        include_str!("../v2_effects.rs"),
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
-    ] {
-        assert!(!caller.contains("SignedBroadcastReplayEvidenceV1"));
-        assert!(!caller.contains("SignedEquivocationReplayEvidenceV1"));
-    }
-}
-#[test]
-fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() {
-    let source = replay_authority_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("replay authority has one production prefix");
-    let remote = production
-        .split("pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1")
-        .nth(1)
-        .expect("remote Proposal Fetch wrapper has one declaration")
-        .split("/// Move-only pre-intent replay seal for one exact local")
-        .next()
-        .expect("local body replay follows remote Proposal replay");
-    for required in [
-        "RemoteProposalStoreReplayEvidenceV1",
-        "RemoteProposalStoredReplayEvidenceV1",
-        "RemoteProposalValidateReplayEvidenceV1",
-        "from_exact_authenticated_proposal(",
-        "RemoteProposalReplayMintPermit",
-        "ingress.exactly_matches_authenticated(authenticated)",
-        "certificate: None",
-        "certified_sources.is_empty()",
-        "pending.exactly_binds_adapter_effect(effect)",
-        "project_proposal_fetch_store_successor",
-        "project_store_validate_successor",
-        "bind_durable_body(",
-        "durable_body_frame_reference",
-        "ReplayPayloadBindingV1::BodyFrame",
-        "LifecycleStageKind::FetchBody",
-        "LifecycleStageKind::StoreBody",
-        "LifecycleStageKind::ValidateBody",
-        "canonical_replay_authority(",
-    ] {
-        assert!(
-            remote.contains(required),
-            "remote Proposal replay wrapper omitted {required}"
-        );
-    }
-    assert!(
-        production.contains("fn remote_proposal_origin_matches_fetch("),
-        "later Proposal stages omitted the single authenticated Fetch-origin oracle"
-    );
-    let remote_certified_body = production
-        .split("fn remote_proposal_origin_matches_fetch(")
-        .nth(1)
-        .expect("remote Proposal origin matcher has one declaration")
-        .split("impl CertifiedFetchReplayEvidenceV1 {")
-        .next()
-        .expect("certified Fetch implementation follows remote Proposal matching");
-    assert_eq!(
-        remote_certified_body
-            .matches("fn exactly_matches_origin_fetch(")
-            .count(),
-        3,
-        "Store, Stored, and the retained family must all recheck one exact Fetch origin"
-    );
-    let authenticated_genesis = production
-        .split("pub(in crate::sumeragi) struct InstalledAuthenticatedGenesisReplayAuthorityV1")
-        .nth(1)
-        .expect("authenticated-genesis replay authority has one declaration")
-        .split("fn remote_proposal_origin_matches_fetch(")
-        .next()
-        .expect("remote Proposal origin matching follows authenticated genesis");
-    assert_eq!(
-        authenticated_genesis
-            .matches("fn exactly_matches_origin_fetch(")
-            .count(),
-        2,
-        "authenticated-genesis Store and Stored evidence must retain the exact sealed Fetch origin"
-    );
-    assert!(
-        production.contains("remote_proposal_fetch_effect(source).as_ref() == Some(effect)")
-            && production
-                .contains("exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()",),
-        "Proposal Fetch rediscovery must re-authenticate both projected effect and signed ingress"
-    );
-    for wrapper in [
-        "RemoteProposalFetchReplayEvidenceV1",
-        "RemoteProposalStoreReplayEvidenceV1",
-        "RemoteProposalStoredReplayEvidenceV1",
-        "RemoteProposalValidateReplayEvidenceV1",
-    ] {
-        let derive = production
-            .split(wrapper)
-            .next()
-            .expect("remote Proposal wrapper has a declaration prefix")
-            .rsplit("#[derive(")
-            .next()
-            .expect("remote Proposal wrapper derive is inspectable")
-            .split(")]")
-            .next()
-            .expect("remote Proposal wrapper derive is bounded");
-        assert!(
-            !derive.contains("Decode") && !derive.contains("Encode"),
-            "runtime replay wrapper {wrapper} became codec-constructible"
-        );
-    }
-    for forbidden in [
-        "pub(crate) struct RemoteProposal",
-        "pub(in crate::sumeragi) fn authenticated(",
-        "pub(in crate::sumeragi) fn ingress(",
-        "pub(in crate::sumeragi) fn source(",
-        "pub(in crate::sumeragi) fn proposal(",
-        "pub(in crate::sumeragi) fn pending(",
-        "pub(in crate::sumeragi) fn receipt(",
-        "pub(in crate::sumeragi) fn into_parts(",
-        "!= [0; 32]",
-        "== [0; 32]",
-        "is_zero()",
-    ] {
-        assert!(
-            !remote.contains(forbidden),
-            "remote Proposal replay wrapper exposed or reserved {forbidden}"
-        );
-    }
-    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("runtime has one production prefix");
-    assert_eq!(
-        runtime
-            .matches("RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(")
-            .count(),
-        1,
-        "only authenticated runtime dispatch mints remote Proposal evidence"
-    );
-    for required in [
-        "remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>",
-        "deferred_remote_proposal_replay",
-        "DeferredEventKind::ProposalReceived",
-        "bind_remote_proposal_fetch_replay(",
-        "certificate: None",
-        "exact_remote_proposal_fetch_replay(",
-    ] {
-        assert!(
-            runtime.contains(required),
-            "runtime remote Proposal transport omitted {required}"
-        );
-    }
-    let ledger = reviewed_lifecycle_ledger_source_for_test()
-        .split("\n#[cfg(test)]\n/// Ledger-local behavior and source-surface regressions.")
-        .next()
-        .expect("ledger production prefix is bounded");
-    for outside in [
-        ledger,
-        include_str!("../v2_worker.rs"),
-        include_str!("../v2_runner.rs"),
-    ] {
-        let outside = outside
-            .split("\n#[cfg(test)]\nmod tests {")
-            .next()
-            .expect("outside production prefix is bounded");
-        assert!(!outside.contains("RemoteProposalFetchReplayEvidenceV1"));
-        assert!(!outside.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
-    }
-}
-#[test]
-fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
-    let source = replay_authority_source_for_test();
-    let production = source
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("replay authority has one production prefix");
-    let invalid = production
-        .split("pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1")
-        .nth(1)
-        .expect("durable Validate replay enum has one declaration")
-        .split("fn exact_certified_fetch_coordinates(")
-        .next()
-        .expect("certified Fetch projection follows invalid-body evidence");
-    for required in [
-        "Certified(CertifiedValidateReplayEvidenceV1)",
-        "RemoteProposal(RemoteProposalValidateReplayEvidenceV1)",
-        "pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1",
-        "authority: LifecycleReplayAuthorityV1",
-        "validate_origin: DurableValidateReplayEvidenceV1",
-        "report_pending: DirectSignedPendingBindingV1",
-        "pub(in crate::sumeragi) fn seal_invalid_body_report(",
-        "capability: RegisteredPrepareInvalidBodyReportCapability",
-        "capability.exactly_matches_report(report_effect)",
-        "validate_origin.exactly_matches_validate_pending(",
-        "validate_pending: &PendingRuntimeEffectBinding",
-        ".project_validate_report_invalid_certified_body_successor(",
-        ".project_validate_report_invalid_certified_body_with_registered_prepare(",
-        "DirectSignedPendingBindingV1::from_exact_effect(report_effect, report_pending)",
-        "const CANONICAL_REJECTION_CODE: u8 = 0",
-        "LifecycleReplaySourceV1::InvalidCertifiedBody",
-        "body_frame_hash: *receipt.frame_hash().as_ref()",
-        "LifecycleStageKind::ReportInvalidBody",
-        "ReplayPayloadBindingV1::None",
-        "project_sealed_invalid_body_report_candidate(",
-        "_permit: &SealedInvalidBodyReportProjectionPermit",
-        "authority_free_admission_projection(",
-        "self.authority.clone()",
-    ] {
-        assert!(
-            invalid.contains(required),
-            "invalid-body runtime evidence omitted {required}"
-        );
-    }
-    let persisted_invalid = production
-        .split("struct InvalidBodyReplaySourceV1 {")
-        .nth(1)
-        .expect("persisted invalid-body source has one declaration")
-        .split("struct CertifiedServeStorageSourceV1 {")
-        .next()
-        .expect("Certified Serve source follows invalid-body source");
-    for required in [
-        "validation_origin: BodyPipelineReplaySourceV1",
-        "self.validation_origin.project(",
-        "LifecycleStageKind::ValidateBody",
-        "self.certificate.round != self.certificate.proposal_round",
-        "BodyPipelineOriginV1::Proposal(proposal)",
-        "certificate == &self.certificate && manifest == &self.outcome.manifest",
-        "BodyPipelineOriginV1::LocalBody(_)",
-        "origin_shape.key.context() != context.id()",
-    ] {
-        assert!(
-            persisted_invalid.contains(required),
-            "persisted invalid-body source omitted {required}"
-        );
-    }
-    for runtime_seal in [
-        "DurableValidateReplayEvidenceV1",
-        "InvalidBodyReportReplayEvidenceV1",
-    ] {
-        let derive = production
-            .split(runtime_seal)
-            .next()
-            .expect("runtime seal has a declaration prefix")
-            .rsplit("#[derive(")
-            .next()
-            .expect("runtime seal derive is inspectable")
-            .split(")]")
-            .next()
-            .expect("runtime seal derive is bounded");
-        assert!(
-            !derive.contains("Decode") && !derive.contains("Encode"),
-            "runtime seal {runtime_seal} became codec-constructible"
-        );
-    }
-    for forbidden in [
-        "fn from_parts(",
-        "fn into_parts(",
-        "fn certificate(",
-        "fn manifest(",
-        "fn receipt(",
-        "fn pending(",
-        "fn source(",
-        "fn encoded(",
-        "fn candidate(",
-        "!= [0; 32]",
-        "== [0; 32]",
-        "is_zero()",
-    ] {
-        assert!(
-            !invalid.contains(forbidden),
-            "invalid-body evidence exposed or reserved {forbidden}"
-        );
-    }
-    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
-        .split("\n#[cfg(test)]\nmod tests {")
-        .next()
-        .expect("adapter production prefix is bounded");
-    assert_eq!(
-        adapter
-            .matches("DurableValidateReplayEvidenceV1::seal_invalid_body_report(")
-            .count(),
-        1,
-        "only the fixed adapter preview mints invalid-body evidence"
-    );
-    for required in [
-        "struct RegisteredPrepareInvalidBodyReportCapability",
-        "report_effect: AdapterEffect",
-        "fn registered_prepare_report_capability(",
-        ".project_validate_report_invalid_certified_body_with_registered_prepare(",
-        "PreparedInvalidBodyReportAdapterReplay",
-        "projected.as_ref() == Some(&self.child_pending)",
-        "project_invalid_body_report_candidate(",
-        "permit: &SealedInvalidBodyReportProjectionPermit",
-        ".project_sealed_invalid_body_report_candidate(",
-    ] {
-        assert!(
-            adapter.contains(required),
-            "adapter invalid-body seal omitted {required}"
-        );
-    }
-    let capability = adapter
-        .split("pub(in crate::sumeragi) struct RegisteredPrepareInvalidBodyReportCapability")
-        .nth(1)
-        .expect("registered Prepare capability has one declaration")
-        .split("/// Closed classification of one direct deterministic validation rejection.")
-        .next()
-        .expect("direct rejection classification follows its capability");
-    for forbidden in [
-        "derive(Clone",
-        "fn into_parts(",
-        "fn certificate(",
-        "fn statement(",
-        "RegisteredPrepareInvalidBodyReportLinearity",
-        "impl Drop for RegisteredPrepareInvalidBodyReportCapability",
-    ] {
-        assert!(
-            !capability.contains(forbidden),
-            "registered Prepare capability exposed {forbidden}"
-        );
-    }
-}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only
+);
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     #[allow(clippy::too_many_lines)]
     live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_production_mints

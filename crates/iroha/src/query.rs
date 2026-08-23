@@ -2,17 +2,21 @@
 #![allow(clippy::result_large_err)]
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
-    crypto::KeyPair,
+    crypto::{HashOf, KeyPair},
     data_model::{
         NetworkId, ValidationFail,
         account::AccountId,
         query::{
-            Query, QueryOutput, QueryRequest, QueryResponse, QueryWithParams, SingularQuery,
-            SingularQueryBox, SingularQueryOutputBox,
+            CommittedTransaction, CommittedTxFilters, Query, QueryOutput, QueryRequest,
+            QueryResponse, QueryWithParams, SingularQuery, SingularQueryBox,
+            SingularQueryOutputBox,
             builder::{QueryBuilder, QueryExecutor},
+            dsl::{CompoundPredicate, SelectorTuple},
             error::QueryExecutionFail,
-            parameters::{DEFAULT_FETCH_SIZE, ForwardCursor, MAX_FETCH_SIZE},
+            parameters::{DEFAULT_FETCH_SIZE, ForwardCursor, MAX_FETCH_SIZE, QueryParams},
+            transaction::prelude::FindTransactions,
         },
+        transaction::TransactionEntrypoint,
     },
     http::{Method as HttpMethod, RequestBuilder},
     http_default::DefaultRequestBuilder,
@@ -20,9 +24,9 @@ use crate::{
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
-use iroha_torii_shared::uri as torii_uri;
+use iroha_torii_shared::{PipelineTransactionDetailsResponse, uri as torii_uri};
 use iroha_version::codec::EncodeVersioned;
-use norito::json;
+use norito::{codec::Encode as _, json};
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -30,6 +34,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
+
+const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Debug)]
 struct ClientQueryRequestHead {
     torii_url: Url,
@@ -73,6 +80,22 @@ impl ClientQueryRequestHead {
         .header("Accept", accept)
         .timeout(self.request_timeout)
         .body(body)
+    }
+    fn assemble_canonical_norito_body_at(
+        &self,
+        body: Vec<u8>,
+        path: &'static str,
+    ) -> DefaultRequestBuilder {
+        let mut headers = self.headers.clone();
+        headers.retain(|name, _| {
+            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("content-type")
+        });
+        DefaultRequestBuilder::new(HttpMethod::POST, join_torii_url(&self.torii_url, path))
+            .headers(headers)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", APPLICATION_NORITO)
+            .timeout(self.request_timeout)
+            .body(body)
     }
     fn sign_and_encode(&self, query: QueryRequest) -> Result<Vec<u8>, QueryError> {
         let creation_time_ms = SystemTime::now()
@@ -236,6 +259,24 @@ fn validate_fetch_size(fetch_size: NonZeroU64) -> QueryResult<()> {
         return Err(ValidationFail::QueryFailed(QueryExecutionFail::FetchSizeTooBig).into());
     }
     Ok(())
+}
+
+fn exact_transaction_details_query(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> QueryWithParams {
+    let query = FindTransactions::new();
+    let predicate = CompoundPredicate::from_filters(CommittedTxFilters {
+        entry_eq: Some(entrypoint_hash),
+        ..CommittedTxFilters::default()
+    });
+    QueryWithParams {
+        query: (),
+        query_payload: query.dyn_encode(),
+        item: query.query_item_kind(),
+        predicate_bytes: predicate.encode(),
+        selector_bytes: SelectorTuple::<CommittedTransaction>::default().encode(),
+        params: QueryParams::default(),
+    }
 }
 /// An iterable query cursor for use in the client
 #[derive(Debug)]
@@ -437,6 +478,71 @@ mod tests {
     }
 }
 impl Client {
+    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    ///
+    /// This uses the dedicated authenticated transaction-details route with the one canonical
+    /// `FindTransactions` equality predicate accepted by Torii. The response must be canonical
+    /// bounded Norito and must repeat the requested entrypoint hash, a self-consistent entrypoint
+    /// and result hash, and a successful execution result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if request binding or signing fails, Torii rejects the query, the response
+    /// violates the strict transport/codec contract, or any requested hash/result binding differs.
+    pub fn get_successful_transaction_details(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
+        let request_head = self.get_query_request_head();
+        let request = QueryRequest::Start(exact_transaction_details_query(entrypoint_hash));
+        let body = request_head.sign_and_encode(request)?;
+        let make_request = || {
+            Ok(request_head
+                .assemble_canonical_norito_body_at(body.clone(), torii_uri::TRANSACTION_DETAILS)
+                .max_response_bytes(TRANSACTION_DETAILS_RESPONSE_MAX_BYTES))
+        };
+        let response = send_once(make_request)?;
+        if response.body().len() > TRANSACTION_DETAILS_RESPONSE_MAX_BYTES {
+            return Err(QueryError::Other(eyre!(
+                "transaction-details response exceeds {} bytes",
+                TRANSACTION_DETAILS_RESPONSE_MAX_BYTES
+            )));
+        }
+        if response.status() != StatusCode::OK {
+            return match decode_query_response(&response) {
+                Err(error) => Err(error),
+                Ok(_) => Err(QueryError::Other(eyre!(
+                    "transaction-details endpoint returned an unexpected query response"
+                ))),
+            };
+        }
+        let details: PipelineTransactionDetailsResponse = Client::decode_canonical_norito_response(
+            &response,
+            TRANSACTION_DETAILS_RESPONSE_MAX_BYTES,
+            "Failed to get exact transaction details",
+        )
+        .map_err(QueryError::from)?;
+        let expected_hash = entrypoint_hash.to_string();
+        let transaction = &details.transaction;
+        if details.hash != expected_hash
+            || transaction.entrypoint_hash() != &entrypoint_hash
+            || transaction.entrypoint().hash() != entrypoint_hash
+            || transaction.result_hash() != &transaction.result().hash()
+        {
+            return Err(QueryError::Other(eyre!(
+                "transaction-details response does not match the requested entrypoint/result hash"
+            )));
+        }
+        if transaction.result().is_err() {
+            return Err(QueryError::Other(eyre!(
+                "transaction-details response contains a rejected transaction result"
+            )));
+        }
+        Ok(details)
+    }
+
     /// Bind, sign, encode, and execute an arbitrary raw query request.
     ///
     /// The client supplies the configured network identity and authority plus a fresh creation
@@ -555,10 +661,13 @@ mod query_errors_handling {
     use iroha_config::parameters::actual::SorafsRolloutPhase;
     use iroha_data_model::{
         ChainId,
-        query::{QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse},
+        query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
+        },
     };
     use iroha_test_samples::gen_account_in;
-    use norito::codec::Encode;
+    use iroha_version::codec::DecodeVersioned as _;
+    use norito::codec::{Decode, Encode};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use sorafs_orchestrator::AnonymityPolicy;
     use std::{
@@ -931,6 +1040,200 @@ mod query_errors_handling {
             !query_seen.load(Ordering::Relaxed),
             "query request must not be sent after compatibility mismatch"
         );
+    }
+    fn compatible_client_with_conflicting_wire_headers() -> Client {
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        Client {
+            chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: crate::client::test_network_id(),
+            torii_url: Url::parse("http://localhost:8081").expect("torii url"),
+            key_pair,
+            transaction_ttl: Some(Duration::from_secs(5)),
+            transaction_status_timeout: Duration::from_secs(5),
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            account: account_id,
+            headers: HashMap::from([
+                ("Accept".to_owned(), "application/json".to_owned()),
+                ("Content-Type".to_owned(), "application/json".to_owned()),
+            ]),
+            operator_key_pair: None,
+            add_transaction_nonce: false,
+            alias_cache_policy: sample_alias_policy(),
+            default_anonymity_policy: AnonymityPolicy::GuardPq,
+            rollout_phase: SorafsRolloutPhase::Default,
+            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
+            wire_format_preference: crate::client::WireFormatPreference::default(),
+        }
+    }
+    fn successful_transaction_details_fixture() -> (
+        HashOf<TransactionEntrypoint>,
+        PipelineTransactionDetailsResponse,
+    ) {
+        use crate::crypto::MerkleProof;
+        use iroha_data_model::transaction::{
+            DataTriggerSequence, TransactionBuilder, TransactionResult,
+        };
+        let (authority, key_pair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(
+            crate::client::test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(key_pair.private_key())
+        .expect("sign transaction-details fixture");
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let entrypoint_hash = entrypoint.hash();
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let transaction = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                [0x77; iroha_crypto::Hash::LENGTH],
+            )),
+            entrypoint_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
+        };
+        (
+            entrypoint_hash,
+            PipelineTransactionDetailsResponse {
+                hash: entrypoint_hash.to_string(),
+                transaction,
+                trigger_completions: Vec::new(),
+            },
+        )
+    }
+    fn assert_exact_transaction_details_query(
+        query: &QueryWithParams,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) {
+        let find = FindTransactions::new();
+        assert_eq!(query.query_payload, find.dyn_encode());
+        assert_eq!(query.item, find.query_item_kind());
+        assert_eq!(query.params, QueryParams::default());
+        let mut predicate_cursor = std::io::Cursor::new(query.predicate_bytes.as_slice());
+        let predicate = CompoundPredicate::<CommittedTransaction>::decode(&mut predicate_cursor)
+            .expect("decode transaction-details predicate");
+        assert_eq!(
+            usize::try_from(predicate_cursor.position()).expect("predicate cursor position"),
+            query.predicate_bytes.len(),
+            "predicate must not contain trailing bytes"
+        );
+        assert_eq!(
+            predicate.committed_tx_filters(),
+            Some(CommittedTxFilters {
+                entry_eq: Some(entrypoint_hash),
+                ..CommittedTxFilters::default()
+            })
+        );
+        let mut selector_cursor = std::io::Cursor::new(query.selector_bytes.as_slice());
+        let selector = SelectorTuple::<CommittedTransaction>::decode(&mut selector_cursor)
+            .expect("decode transaction-details selector");
+        assert_eq!(
+            usize::try_from(selector_cursor.position()).expect("selector cursor position"),
+            query.selector_bytes.len(),
+            "selector must not contain trailing bytes"
+        );
+        assert_eq!(selector, SelectorTuple::<CommittedTransaction>::default());
+    }
+    #[test]
+    fn transaction_details_reader_uses_exact_signed_query_and_transport_contract() {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, details) = successful_transaction_details_fixture();
+        let encoded = norito::to_bytes(&details).expect("encode transaction-details response");
+        let expected_hash = entrypoint_hash;
+        let actual = with_mock_http(
+            move |snapshot| {
+                assert_eq!(snapshot.method, HttpMethod::POST);
+                assert_eq!(snapshot.url.path(), torii_uri::TRANSACTION_DETAILS);
+                assert!(snapshot.url.query().is_none());
+                assert_eq!(
+                    snapshot.max_response_bytes,
+                    TRANSACTION_DETAILS_RESPONSE_MAX_BYTES
+                );
+                for (name, value) in [
+                    ("accept", APPLICATION_NORITO),
+                    ("content-type", APPLICATION_NORITO),
+                ] {
+                    let matching = snapshot
+                        .headers
+                        .iter()
+                        .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+                        .collect::<Vec<_>>();
+                    assert_eq!(matching.len(), 1, "expected one {name} header");
+                    assert_eq!(matching[0].1, value);
+                }
+                let signed = SignedQuery::decode_all_versioned(&snapshot.body)
+                    .expect("decode signed transaction-details query");
+                let QueryRequest::Start(query) = signed.request() else {
+                    panic!("transaction-details request must be a query start");
+                };
+                assert_exact_transaction_details_query(query, expected_hash);
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("transaction-details response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect("exact transaction-details lookup");
+        assert_eq!(actual, details);
+    }
+    #[test]
+    fn transaction_details_reader_rejects_noncanonical_or_non_norito_success() {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, details) = successful_transaction_details_fixture();
+        let mut trailing = norito::to_bytes(&details).expect("encode transaction-details response");
+        trailing.push(0);
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(trailing.clone())
+                    .expect("trailing response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect_err("trailing bytes must be rejected");
+        assert!(error.to_string().contains("canonical Norito"));
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let encoded = norito::to_bytes(&details).expect("encode transaction-details response");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(encoded.clone())
+                    .expect("wrong-media response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect_err("non-Norito success must be rejected");
+        assert!(error.to_string().contains("invalid content-type"));
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let mut mismatched = details;
+        mismatched.transaction.result_hash = HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x93; iroha_crypto::Hash::LENGTH]),
+        );
+        let encoded = norito::to_bytes(&mismatched).expect("encode mismatched result hash");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("mismatched result response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect_err("result hash mismatch must be rejected");
+        assert!(error.to_string().contains("entrypoint/result hash"));
     }
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,

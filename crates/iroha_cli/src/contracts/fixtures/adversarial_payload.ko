@@ -1,0 +1,14 @@
+
+            seiyaku Demo {
+                kotoage fn submit(int amount, AccountId recipient) -> int authorize("Submit") {
+                    return amount;
+                }
+
+                kotoage fn upload(AccountId owner, Name tag, bytes payload) -> int authorize("Upload") {
+                    return 1;
+                }
+
+                view fn ping() -> int {
+                    return 1;
+                }
+            }

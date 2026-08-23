@@ -1,12 +1,7 @@
 //! Contracts helpers.
 mod local_debug_rendering;
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
+use crate::{
+    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
 };
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
@@ -37,12 +32,17 @@ use ivm::kotodama::driver::{
     discover_source_link_request as discover_kotodama_source_link_request,
     load_source_project_manifest as load_kotodama_source_project_manifest,
 };
-use reqwest::StatusCode;
 use local_debug_rendering::{
     build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
 };
-use crate::{
-    Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
+use reqwest::StatusCode;
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
 };
 // Canonical argument preparation checks a conservative predecode gas quote
 // covering bounded complete materialization. Keep the default above the strict
@@ -3585,10 +3585,10 @@ fn normalize_local_contract_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
     use ivm::kotodama::session::{CompileRequest, CompilerSession};
+    use std::fs;
     use tempfile::tempdir;
     use url::Url;
     #[test]
@@ -3635,13 +3635,10 @@ mod tests {
         program
     }
     fn minimal_view_contract_program() -> Vec<u8> {
-        let source = r#"
-            seiyaku Demo {
-                view fn inspect() -> int {
-                    return 7;
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("contracts/fixtures/minimal_view.ko"),
+            "        "
+        );
         let compiler = ivm::KotodamaCompiler::new();
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
@@ -3689,22 +3686,10 @@ mod tests {
     }
     #[test]
     fn contract_manifest_rejects_retired_init_table() {
-        let value = toml::from_str::<toml::Value>(
-            r#"
-            bundle_name = "demo"
-
-            [[contracts]]
-            name = "demo.greeter"
-            alias = "greeter::universal"
-            source = "greeter.ko"
-
-            [[init]]
-            id = "seed"
-            contract = "demo.greeter"
-            entrypoint = "hajimari"
-            gas_limit = 1000
-            "#,
-        )
+        let value = toml::from_str::<toml::Value>(concat!(
+            include_str!("contracts/fixtures/retired_init.toml"),
+            "            "
+        ))
         .expect("parse retired manifest spelling");
         let error = parse_contract_app_manifest(value)
             .expect_err("the English lifecycle table must not be accepted");
@@ -3717,15 +3702,10 @@ mod tests {
     }
     #[test]
     fn toml_to_json_value_preserves_nested_tables() {
-        let value = toml::from_str::<toml::Value>(
-            r#"
-            retries = 2
-            enabled = true
-            [nested]
-            label = "alpha"
-            values = [1, 2]
-            "#,
-        )
+        let value = toml::from_str::<toml::Value>(concat!(
+            include_str!("contracts/fixtures/nested_tables.toml"),
+            "            "
+        ))
         .expect("parse toml");
         let json = toml_to_json_value(value).expect("convert to json");
         assert_eq!(
@@ -3871,34 +3851,19 @@ mod tests {
         let contract_path = contracts_dir.join("greeter.ko");
         fs::write(
             &contract_path,
-            r#"
-                seiyaku Greeter {
-                    hajimari(int value) {}
-                    view fn status() -> int { return 7; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/bundle_build_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.app.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[hajimari]]
-                id = "seed"
-                contract = "demo.greeter"
-                entrypoint = "hajimari"
-                gas_limit = 1000
-                payload = { value = "7" }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/bundle_build.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         let bundle = build_contract_app_bundle(&manifest_path).expect("build bundle");
@@ -3949,30 +3914,19 @@ mod tests {
         fs::create_dir_all(&contracts_dir).expect("create contracts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    kotoage fn run() authorize("Run") {}
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/non_hajimari.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.app.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter::universal"
-                source = "contracts/greeter.ko"
-
-                [[hajimari]]
-                id = "seed"
-                contract = "demo.greeter"
-                entrypoint = "run"
-                gas_limit = 1000
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/non_hajimari.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         let error = build_contract_app_bundle(&manifest_path)
@@ -3993,32 +3947,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    state int Counter;
-                    hajimari(int value) { Counter = value; }
-                    view fn status() -> int { return Counter; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/stateful_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [profiles.local]
-                client_config = "client.toml"
-                default_gas_limit = 500000
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/dev_build.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         let report = dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
@@ -4116,24 +4057,19 @@ mod tests {
         fs::create_dir_all(&contracts_dir).expect("create contracts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    view fn status(int unused) -> int { return 7; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/lint_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter::universal"
-                source = "contracts/greeter.ko"
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/lint_manifest.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         let report = dev_run_lints(&manifest_path, false).expect("lint report");
@@ -4251,15 +4187,10 @@ mod tests {
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-
-                [[contracts]]
-                name = "demo.app"
-                alias = "app::universal"
-                kotodama_project = "kotodama.project.json"
-                artifact = "artifacts/app.to"
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/locked_project.toml"),
+                "            "
+            ),
         )
         .expect("write developer manifest");
         let lint = dev_run_lints(&manifest_path, false).expect("lint locked project");
@@ -4301,17 +4232,10 @@ mod tests {
     }
     #[test]
     fn contract_manifest_rejects_unknown_contract_graph_fields() {
-        let value = toml::from_str::<toml::Value>(
-            r#"
-                bundle_name = "demo"
-
-                [[contracts]]
-                name = "demo.app"
-                alias = "app::universal"
-                source = "app.ko"
-                wildcard_imports = true
-            "#,
-        )
+        let value = toml::from_str::<toml::Value>(concat!(
+            include_str!("contracts/fixtures/unknown_graph_field.toml"),
+            "            "
+        ))
         .expect("parse manifest fixture");
         let error = parse_contract_app_manifest(value)
             .expect_err("unknown graph authority must fail closed");
@@ -4487,36 +4411,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    view fn status(int value) -> int { return value; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [profiles.local]
-                default_gas_limit = 123456
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "status"
-                contract = "demo.greeter"
-                entrypoint = "status"
-                payload = { value = "7" }
-                expected_result = "7"
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_valid.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
@@ -4545,23 +4452,10 @@ mod tests {
     #[test]
     fn contract_payload_validation_rejects_adversarial_shapes() {
         let account = fixture_account(0x11).to_string();
-        let program = compile_contract_program(
-            r#"
-            seiyaku Demo {
-                kotoage fn submit(int amount, AccountId recipient) -> int authorize("Submit") {
-                    return amount;
-                }
-
-                kotoage fn upload(AccountId owner, Name tag, bytes payload) -> int authorize("Upload") {
-                    return 1;
-                }
-
-                view fn ping() -> int {
-                    return 1;
-                }
-            }
-            "#,
-        );
+        let program = compile_contract_program(concat!(
+            include_str!("contracts/fixtures/adversarial_payload.ko"),
+            "            "
+        ));
         let submit = embedded_entrypoint(&program, "submit");
         let upload = embedded_entrypoint(&program, "upload");
         let ping = embedded_entrypoint(&program, "ping");
@@ -4648,35 +4542,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    view fn status(int value) -> int { return value; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [profiles.local]
-                default_gas_limit = 123456
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "status_with_extra_field"
-                contract = "demo.greeter"
-                entrypoint = "status"
-                payload = { value = "7", unexpected = 9 }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_extra_field.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
@@ -4701,32 +4579,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    view fn status(int value) -> int { return value; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "array_payload"
-                contract = "demo.greeter"
-                entrypoint = "status"
-                payload = [7]
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_array.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
@@ -4749,35 +4614,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    view fn status(int value) -> int { return value; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [profiles.local]
-                default_gas_limit = 123456
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "missing_entrypoint"
-                contract = "demo.greeter"
-                entrypoint = "missing"
-                payload = {}
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_missing_entrypoint.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         dev_build_manifest(&manifest_path, "local", false, false).expect("dev build");
@@ -4794,26 +4643,10 @@ mod tests {
         );
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [profiles.local]
-                default_gas_limit = 123456
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "bad_mode"
-                contract = "demo.greeter"
-                mode = "stream"
-                entrypoint = "status"
-                payload = { value = "7" }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_bad_mode.toml"),
+                "            "
+            ),
         )
         .expect("rewrite manifest");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
@@ -4830,22 +4663,10 @@ mod tests {
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-
-                [[smoke]]
-                id = "unknown_contract"
-                contract = "demo.missing"
-                entrypoint = "status"
-                payload = {}
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/smoke_unknown_contract.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
@@ -4865,28 +4686,19 @@ mod tests {
         fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
         fs::write(
             contracts_dir.join("greeter.ko"),
-            r#"
-                seiyaku Greeter {
-                    state int Counter;
-                    hajimari(int value) { Counter = value; }
-                    view fn status() -> int { return Counter; }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/stateful_greeter.ko"),
+                "            "
+            ),
         )
         .expect("write contract");
         let manifest_path = dir.path().join("iroha.contracts.toml");
         fs::write(
             &manifest_path,
-            r#"
-                bundle_name = "demo"
-                default_dataspace = "universal"
-
-                [[contracts]]
-                name = "demo.greeter"
-                alias = "greeter"
-                source = "contracts/greeter.ko"
-                artifact = "artifacts/greeter.to"
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/locked_build.toml"),
+                "            "
+            ),
         )
         .expect("write manifest");
         dev_build_manifest(&manifest_path, "local", false, false).expect("initial dev build");
@@ -5082,13 +4894,10 @@ mod tests {
         let mut ctx = TestContext::new(authority);
         let dir = tempfile::tempdir().expect("tempdir");
         let source_path = dir.path().join("debug_view_with_path.ko");
-        let source = r#"
-            seiyaku Demo {
-                view fn inspect() -> int {
-                    return 7;
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("contracts/fixtures/minimal_view.ko"),
+            "        "
+        );
         std::fs::write(&source_path, source).expect("write source");
         let (program, source_map) =
             compile_contract_program_with_source_map(source, &source_path.display().to_string());
@@ -5156,13 +4965,10 @@ mod tests {
     fn debug_source_map_rejects_mismatched_artifact_hash() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source_path = dir.path().join("debug_view_mismatch.ko");
-        let source = r#"
-            seiyaku Demo {
-                view fn inspect() -> int {
-                    return 7;
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("contracts/fixtures/minimal_view.ko"),
+            "        "
+        );
         let (program, source_map) =
             compile_contract_program_with_source_map(source, &source_path.display().to_string());
         let mut source_map: norito::json::Value =
@@ -5233,23 +5039,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let embedded_path = dir.path().join("embedded.ko");
         let override_path = dir.path().join("override.ko");
-        let source = r#"
-            seiyaku Demo {
-                view fn inspect() -> int {
-                    return 7;
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("contracts/fixtures/minimal_view.ko"),
+            "        "
+        );
         std::fs::write(&embedded_path, source).expect("write embedded source");
         std::fs::write(
             &override_path,
-            r#"
-                seiyaku Demo {
-                    view fn inspect() -> int {
-                        return 99;
-                    }
-                }
-            "#,
+            concat!(
+                include_str!("contracts/fixtures/override_view.ko"),
+                "            "
+            ),
         )
         .expect("write override source");
         let (program, source_map) =
@@ -5298,18 +5098,7 @@ mod tests {
     fn debug_call_executes_public_entrypoint_and_reports_side_effects() {
         let authority = fixture_account(0x31);
         let mut ctx = TestContext::new(authority);
-        let source = r#"
-            seiyaku Demo {
-                state int counter;
-                hajimari() { counter = 0; }
-
-                kotoage fn bump() -> int authorize("Admin") {
-                    counter = counter + 1;
-                    ledger::domain::register(DomainId::parse("debugcall.universal"));
-                    return counter;
-                }
-            }
-        "#;
+        let source = concat!(include_str!("contracts/fixtures/debug_call.ko"), "        ");
         let program = compile_contract_program(&source);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let durable_state_json = format!(
@@ -5418,17 +5207,10 @@ mod tests {
         let authority_key_pair = fixture_key_pair(0x33);
         let authority = AccountId::new(authority_key_pair.public_key().clone());
         let mut ctx = TestContext::new(authority.clone());
-        let source = r#"
-            seiyaku Demo {
-                state StateMap<int, int> Counters;
-
-                kotoage fn bump(int amount) -> int authorize("Admin") {
-                    ledger::domain::register(DomainId::parse("debugparity.universal"));
-                    Counters[0] = amount;
-                    return Counters.get(0).unwrap_or(0);
-                }
-            }
-        "#;
+        let source = concat!(
+            include_str!("contracts/fixtures/debug_parity.ko"),
+            "        "
+        );
         let program = compile_contract_program(source);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let payload_json = r#"{"amount":"7"}"#.to_owned();

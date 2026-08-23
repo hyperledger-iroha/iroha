@@ -1648,15 +1648,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "82B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD";
         const DEV_GENESIS_SEED: &str =
             "435e15ae8cca7d8ce54313e1ed60b98bd3be7832bbaa6e33b358068b61f6ea97";
-        const TAIRA_GENESIS_SEED: &str =
-            "d1ac3f81b562af48fab29c4195d8713d1f65f17159e1e87a7e61076f12303d8a";
         const NEXUS_GENESIS_SEED: &str =
             "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
         let (private_key, seed) = match genesis_path {
             "defaults/kagami/iroha3-dev/genesis.json" => (None, Some(DEV_GENESIS_SEED.to_owned())),
-            "defaults/kagami/iroha3-taira/genesis.json" => {
-                (None, Some(TAIRA_GENESIS_SEED.to_owned()))
-            }
             "defaults/kagami/iroha3-nexus/genesis.json" => {
                 (None, Some(NEXUS_GENESIS_SEED.to_owned()))
             }
@@ -1719,7 +1714,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "defaults/genesis.json",
             "defaults/kagami/iroha3-dev/genesis.json",
             "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/kagami/iroha3-taira/genesis.json",
             "defaults/nexus/genesis.json",
             "configs/soranexus/nexus/genesis.json",
             "configs/soranexus/taira/genesis.json",
@@ -1733,7 +1727,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         for path in [
             "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/kagami/iroha3-taira/genesis.json",
             "defaults/nexus/genesis.json",
             "configs/soranexus/nexus/genesis.json",
             "configs/soranexus/taira/genesis.json",
@@ -1850,16 +1843,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn checked_in_profile_commitments_match_production_signing() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for (genesis_path, config_path) in [
-            (
-                "defaults/kagami/iroha3-dev/genesis.json",
-                "defaults/kagami/iroha3-dev/config.toml",
-            ),
-            (
-                "defaults/kagami/iroha3-taira/genesis.json",
-                "defaults/kagami/iroha3-taira/config.toml",
-            ),
-        ] {
+        for (genesis_path, config_path) in [(
+            "defaults/kagami/iroha3-dev/genesis.json",
+            "defaults/kagami/iroha3-dev/config.toml",
+        )] {
             assert_checked_in_profile_commitment_matches_production_signing(
                 &root,
                 genesis_path,
@@ -1867,16 +1854,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             );
         }
     }
-    #[test]
-    fn checked_in_taira_profile_commitment_matches_production_signing() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        assert_checked_in_profile_commitment_matches_production_signing(
-            &root,
-            "defaults/kagami/iroha3-taira/genesis.json",
-            "defaults/kagami/iroha3-taira/config.toml",
-        );
-    }
-
     #[test]
     fn signer_and_final_network_id_restaging_have_exact_context_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2030,10 +2007,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             (
                 "defaults/kagami/iroha3-nexus/genesis.json",
                 Some("defaults/kagami/iroha3-nexus/config.toml"),
-            ),
-            (
-                "defaults/kagami/iroha3-taira/genesis.json",
-                Some("defaults/kagami/iroha3-taira/config.toml"),
             ),
             (
                 "defaults/nexus/genesis.json",
@@ -3320,7 +3293,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let block = decode_framed_signed_block(&bytes).expect("decode signed block");
         let rebound = RawGenesisTransaction::from_path(bound_manifest.path())
             .expect("parse config-bound Taira manifest");
-        assert_eq!(rebound.chain_id().as_str(), "iroha3-taira");
+        assert_eq!(
+            rebound.chain_id(),
+            &crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id
+        );
         assert_eq!(
             rebound.chain_discriminant(),
             crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT,
@@ -3834,30 +3810,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
             .parse()
             .expect("valid alias");
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
-                .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(
-                        asset_definition_id.clone(),
-                        "xor".to_owned(),
-                        NumericSpec::default(),
-                        iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
-                    )
-                    .with_metadata(Metadata::default()),
-                ))
-                .append_instruction(SetAssetDefinitionAlias::bind(
-                    asset_definition_id,
-                    alias,
-                    None,
-                ))
-                .append_parameter(Parameter::Custom(
-                    SumeragiNposParameters::default().into_custom_parameter(),
-                ))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
-                .with_consensus_meta();
+        let manifest = GenesisBuilder::new_without_executor(
+            crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id,
+            PathBuf::from("."),
+        )
+        .append_instruction(Register::asset_definition(
+            AssetDefinition::new(
+                asset_definition_id.clone(),
+                "xor".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
+        ))
+        .append_instruction(SetAssetDefinitionAlias::bind(
+            asset_definition_id,
+            alias,
+            None,
+        ))
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -3896,41 +3874,43 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
             .parse()
             .expect("valid alias");
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("iroha3-taira"), PathBuf::from("."))
-                .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(
-                        canonical_xor.clone(),
-                        "xor".to_owned(),
-                        NumericSpec::default(),
-                        iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
-                    )
-                    .with_metadata(Metadata::default()),
-                ))
-                .append_instruction(Register::asset_definition(
-                    AssetDefinition::new(
-                        wrong_xor.clone(),
-                        "xor-shadow".to_owned(),
-                        NumericSpec::default(),
-                        iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
-                    )
-                    .with_metadata(Metadata::default()),
-                ))
-                .append_instruction(SetAssetDefinitionAlias::bind(
-                    canonical_xor,
-                    alias.clone(),
-                    None,
-                ))
-                .append_instruction(SetAssetDefinitionAlias::bind(wrong_xor, alias, None))
-                .append_parameter(Parameter::Custom(
-                    SumeragiNposParameters::default().into_custom_parameter(),
-                ))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
-                .with_consensus_meta();
+        let manifest = GenesisBuilder::new_without_executor(
+            crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id,
+            PathBuf::from("."),
+        )
+        .append_instruction(Register::asset_definition(
+            AssetDefinition::new(
+                canonical_xor.clone(),
+                "xor".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
+        ))
+        .append_instruction(Register::asset_definition(
+            AssetDefinition::new(
+                wrong_xor.clone(),
+                "xor-shadow".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
+        ))
+        .append_instruction(SetAssetDefinitionAlias::bind(
+            canonical_xor,
+            alias.clone(),
+            None,
+        ))
+        .append_instruction(SetAssetDefinitionAlias::bind(wrong_xor, alias, None))
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
+        .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

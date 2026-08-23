@@ -23,7 +23,10 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use std::{
+    cell::Cell,
     collections::BTreeMap,
+    marker::PhantomData,
+    rc::Rc,
     sync::{Mutex, MutexGuard, OnceLock},
 };
 #[derive(Default)]
@@ -47,6 +50,49 @@ impl Drop for ExecWitnessGuard {
 }
 static SLOT: OnceLock<Mutex<BlockWitness>> = OnceLock::new();
 static EXEC_WITNESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+thread_local! {
+    static WITNESS_RECORDING_SUPPRESSION_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+/// Current-thread guard that prevents speculative execution from writing the global recorder.
+///
+/// The marker deliberately makes this guard `!Send` and `!Sync`: its nesting depth belongs to the
+/// thread on which it was created and must be decremented on that same thread.
+pub(crate) struct WitnessRecordingSuppressionGuard {
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+impl Drop for WitnessRecordingSuppressionGuard {
+    fn drop(&mut self) {
+        WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| {
+            depth.set(
+                depth
+                    .get()
+                    .checked_sub(1)
+                    .expect("witness-recording suppression depth underflow"),
+            );
+        });
+    }
+}
+fn witness_recording_suppressed() -> bool {
+    WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| depth.get() != 0)
+}
+/// Suppress writes to the process-global witness recorder on the current thread.
+///
+/// Autonomous merge pre-execution captures its evidence in the `StateBlock` overlay and runs
+/// before any legitimate block witness window. Suppression prevents that speculative work from
+/// contaminating a witness window owned by another in-process `State` instance.
+pub(crate) fn suppress_recording_for_current_thread() -> WitnessRecordingSuppressionGuard {
+    WITNESS_RECORDING_SUPPRESSION_DEPTH.with(|depth| {
+        depth.set(
+            depth
+                .get()
+                .checked_add(1)
+                .expect("witness-recording suppression depth overflow"),
+        );
+    });
+    WitnessRecordingSuppressionGuard {
+        _not_send_or_sync: PhantomData,
+    }
+}
 fn slot() -> &'static Mutex<BlockWitness> {
     SLOT.get_or_init(|| Mutex::new(BlockWitness::default()))
 }
@@ -76,6 +122,9 @@ fn lock_exec_witness_lock() -> MutexGuard<'static, ()> {
     }
 }
 fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
+    if witness_recording_suppressed() {
+        return;
+    }
     let mut g = lock_slot();
     if g.active {
         f(&mut g);
@@ -830,6 +879,40 @@ mod tests {
             },
             digest,
         )
+    }
+    #[test]
+    fn speculative_witness_suppression_is_thread_local_and_nestable() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let retained_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        let suppressed_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        let (retained, _) = sample_fastpq_transcript(1, retained_hash);
+        let (suppressed, _) = sample_fastpq_transcript(2, suppressed_hash);
+        record_fastpq_transcript(&retained);
+        std::thread::spawn(move || {
+            assert!(!witness_recording_suppressed());
+            let outer = suppress_recording_for_current_thread();
+            assert!(witness_recording_suppressed());
+            {
+                let _inner = suppress_recording_for_current_thread();
+                assert!(witness_recording_suppressed());
+                record_fastpq_transcript(&suppressed);
+            }
+            assert!(witness_recording_suppressed());
+            drop(outer);
+            assert!(!witness_recording_suppressed());
+        })
+        .join()
+        .expect("suppressed witness thread completes");
+        let witness = drain_exec_witness();
+        assert_eq!(witness.fastpq_transcripts.len(), 1);
+        assert_eq!(witness.fastpq_transcripts[0].entry_hash, retained_hash);
+        assert!(
+            witness
+                .fastpq_transcripts
+                .iter()
+                .all(|bundle| bundle.entry_hash != suppressed_hash)
+        );
     }
     #[test]
     #[allow(clippy::too_many_lines)]

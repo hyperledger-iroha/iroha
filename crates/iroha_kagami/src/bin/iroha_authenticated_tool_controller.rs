@@ -26,6 +26,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]
+mod kagemusha_promotion_publisher;
 #[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]
 mod kagemusha_python_launcher;
 
@@ -152,6 +154,9 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
         }
         Some("launch-kagemusha-sealed-builder-v1") => {
             kagemusha_python_launcher::launch_sealed_builder(&arguments[2..])
+        }
+        Some("promote-kagemusha-release-v4") => {
+            kagemusha_promotion_publisher::promote(&arguments[2..])
         }
         _ => Err(ControllerError::policy("unsupported subcommand")),
     }

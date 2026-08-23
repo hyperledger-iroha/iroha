@@ -325,14 +325,18 @@ impl RelayPayoutService {
         resolution: DisputeResolution,
         resolved_at_unix: u64,
     ) -> Result<DisputeOutcome, PayoutServiceError> {
-        let dispute = self
-            .disputes
+        // Stage both state changes so a rejected ledger adjustment does not close
+        // the dispute or leave a partially updated ledger behind.
+        let mut next_disputes = self.disputes.clone();
+        let mut next_ledger = self.ledger.clone();
+        let treasury_account = self.treasury_account().clone();
+        let dispute = next_disputes
             .resolve(dispute_id, resolution, resolved_at_unix)
             .map_err(PayoutServiceError::Registry)?;
         let (snapshot, transfer, resolution_label, adjustment) = match &dispute.status {
             DisputeStatus::Open => unreachable!("resolve() never returns an open dispute"),
             DisputeStatus::Rejected { .. } => (
-                self.ledger
+                next_ledger
                     .snapshot(dispute.relay_id)
                     .map_err(PayoutServiceError::Ledger)?,
                 None,
@@ -341,7 +345,7 @@ impl RelayPayoutService {
             ),
             DisputeStatus::Resolved { outcome, .. } => match outcome.kind {
                 ResolutionKind::NoChange => (
-                    self.ledger
+                    next_ledger
                         .snapshot(dispute.relay_id)
                         .map_err(PayoutServiceError::Ledger)?,
                     None,
@@ -360,8 +364,7 @@ impl RelayPayoutService {
                             relay: dispute.relay_id,
                             epoch: dispute.epoch,
                         })?;
-                    let snapshot = self
-                        .ledger
+                    let snapshot = next_ledger
                         .apply_credit(
                             dispute.relay_id,
                             dispute.epoch,
@@ -371,7 +374,7 @@ impl RelayPayoutService {
                             resolved_at_unix,
                         )
                         .map_err(PayoutServiceError::Ledger)?;
-                    let asset = AssetId::new(asset_def.clone(), self.treasury_account().clone());
+                    let asset = AssetId::new(asset_def.clone(), treasury_account.clone());
                     let transfer: InstructionBox =
                         Transfer::asset_quantity(asset, amount.clone(), beneficiary.clone()).into();
                     (
@@ -393,8 +396,7 @@ impl RelayPayoutService {
                             relay: dispute.relay_id,
                             epoch: dispute.epoch,
                         })?;
-                    let snapshot = self
-                        .ledger
+                    let snapshot = next_ledger
                         .apply_debit(
                             dispute.relay_id,
                             dispute.epoch,
@@ -405,12 +407,9 @@ impl RelayPayoutService {
                         )
                         .map_err(PayoutServiceError::Ledger)?;
                     let asset = AssetId::new(asset_def, beneficiary.clone());
-                    let transfer: InstructionBox = Transfer::asset_quantity(
-                        asset,
-                        amount.clone(),
-                        self.treasury_account().clone(),
-                    )
-                    .into();
+                    let transfer: InstructionBox =
+                        Transfer::asset_quantity(asset, amount.clone(), treasury_account.clone())
+                            .into();
                     (
                         snapshot,
                         Some(transfer),
@@ -420,6 +419,8 @@ impl RelayPayoutService {
                 }
             },
         };
+        self.disputes = next_disputes;
+        self.ledger = next_ledger;
         if let Some(label) = resolution_label {
             record_dispute_metric(label);
         }
@@ -1693,6 +1694,74 @@ mod tests {
         assert_eq!(transfer.source, AssetId::new(asset_id(), beneficiary));
         assert_eq!(transfer.destination, treasury);
         assert_eq!(transfer.object, quantity(40));
+    }
+    #[test]
+    fn failed_debit_resolution_keeps_dispute_open_for_retry() {
+        let (mut service, _) = payout_service();
+        let metrics = metrics(4, 1_000);
+        let bond = bond_entry(1_000);
+        service
+            .process_epoch(&metrics, &bond, account(4), Metadata::default())
+            .expect("payout recorded");
+        let dispute = service
+            .file_dispute(
+                metrics.relay_id,
+                metrics.epoch,
+                account(40),
+                quantity(101),
+                "incorrect measurement",
+                80,
+                None,
+            )
+            .expect("dispute filed");
+
+        let error = service
+            .resolve_dispute(
+                dispute.id,
+                DisputeResolution::Debit {
+                    amount: quantity(101),
+                    notes: "exceeds payout".into(),
+                },
+                90,
+            )
+            .expect_err("overlarge debit must fail");
+        assert!(matches!(
+            error,
+            PayoutServiceError::Ledger(RewardLedgerError::InsufficientNet { .. })
+        ));
+        let stored = service
+            .disputes()
+            .iter()
+            .find_map(|(&id, stored)| (id == dispute.id).then_some(stored))
+            .expect("dispute remains registered");
+        assert_eq!(stored.status, DisputeStatus::Open);
+        assert_eq!(
+            stored.norito_record.status,
+            RelayRewardDisputeStatusV1::Pending
+        );
+        assert_eq!(
+            service
+                .ledger_snapshot(metrics.relay_id)
+                .expect("ledger remains readable")
+                .total_withheld,
+            Quantity::zero()
+        );
+
+        let outcome = service
+            .resolve_dispute(
+                dispute.id,
+                DisputeResolution::Debit {
+                    amount: quantity(40),
+                    notes: "valid retry".into(),
+                },
+                100,
+            )
+            .expect("valid retry succeeds");
+        assert!(matches!(
+            outcome.dispute.status,
+            DisputeStatus::Resolved { .. }
+        ));
+        assert_eq!(outcome.ledger_snapshot.total_withheld, quantity(40));
     }
     #[test]
     fn reject_dispute_updates_status() {

@@ -214,6 +214,25 @@ impl Rule {
             if self.chunk_index != other.chunk_index {
                 return false;
             }
+            if let (
+                (Some(left_height), Some(left_view)),
+                (Some(right_height), Some(right_view)),
+            ) = (
+                (self.proposal_height, self.proposal_view),
+                (other.proposal_height, other.proposal_view),
+            ) && (left_height, left_view) != (right_height, right_view)
+            {
+                // Two unresolved selectors are both Holds and Proposal
+                // evidence later partitions them by exact round. A resolved
+                // selector already matches by manifest alone, however, so
+                // preserve ambiguity for an equal manifest or a mixed-action
+                // provisional match.
+                return match (self.manifest_hash, other.manifest_hash) {
+                    (None, None) => false,
+                    (Some(left), Some(right)) => left == right,
+                    (None, Some(_)) | (Some(_), None) => self.action != other.action,
+                };
+            }
             return match (self.manifest_hash, other.manifest_hash) {
                 (Some(left), Some(right))
                     if self.proposal_height.is_none() && other.proposal_height.is_none() =>
@@ -1016,6 +1035,12 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
     let mut rules = Vec::with_capacity(rules_value.len());
     for value in rules_value {
         let rule = parse_rule(value)?;
+        if rule.kind == MessageKind::PayloadChunk
+            && rule.proposal_height.is_some()
+            && rule.manifest_hash.is_some()
+        {
+            return Err(ControlError::InvalidField("manifest_hash"));
+        }
         if rules.iter().any(|prior: &Rule| prior.overlaps(&rule)) {
             return Err(ControlError::AmbiguousRule);
         }
@@ -2477,6 +2502,57 @@ mod tests {
         assert!(state.release_pending.is_empty());
     }
     #[test]
+    fn distinct_proposal_bound_chunk_rounds_resolve_independently() {
+        let target_proposal = proposal_meta_at(10, 1, 0x3A);
+        let view_zero = deferred_chunk_rule_for(&target_proposal, 10, 0, 7);
+        let view_one = deferred_chunk_rule_for(&target_proposal, 10, 1, 7);
+        assert!(!view_zero.overlaps(&view_one));
+
+        let resolved_view_zero = Rule {
+            manifest_hash: target_proposal.manifest_hash,
+            ..view_zero.clone()
+        };
+        let resolved_view_one = Rule {
+            manifest_hash: target_proposal.manifest_hash,
+            ..view_one.clone()
+        };
+        assert!(resolved_view_zero.overlaps(&resolved_view_one));
+        let different_resolved_view_one = Rule {
+            manifest_hash: Some(manifest_hash(0x3B)),
+            ..view_one.clone()
+        };
+        assert!(!resolved_view_zero.overlaps(&different_resolved_view_one));
+        assert!(!view_zero.overlaps(&resolved_view_one));
+        let resolved_drop_view_one = Rule {
+            action: Action::Drop,
+            ..resolved_view_one
+        };
+        assert!(view_zero.overlaps(&resolved_drop_view_one));
+
+        let mut state = State::<NetworkReplyRoute> {
+            rules: vec![view_zero, view_one],
+            ..State::default()
+        };
+        assert!(
+            resolve_deferred_chunk_rules(&mut state, &target_proposal)
+                .expect("resolve the exact bounded Proposal round")
+        );
+        assert_eq!(state.rules[0].manifest_hash, None);
+        assert_eq!(state.rules[1].manifest_hash, target_proposal.manifest_hash);
+        assert!(!state.rules[0].overlaps(&state.rules[1]));
+        let target_chunk = chunk_meta_for(&target_proposal, 7);
+        assert!(!rule_matches_with_proposal_evidence(
+            &state.rules[0],
+            &target_chunk,
+            &state.proposal_round_evidence,
+        ));
+        assert!(rule_matches_with_proposal_evidence(
+            &state.rules[1],
+            &target_chunk,
+            &state.proposal_round_evidence,
+        ));
+    }
+    #[test]
     fn command_installation_resolves_deferred_rule_from_prior_proposal_evidence() {
         let target_proposal = proposal_meta_at(10, 0, 0x35);
         let mut state = State::<NetworkReplyRoute>::default();
@@ -2818,17 +2894,18 @@ mod tests {
             proposal_view: None,
             action: Action::Hold,
         };
-        let command = |rule: Value| {
+        let command_rules = |rules: Vec<Value>| {
             canonical_json(&object_value([
                 ("drain", Value::from(false)),
                 ("queue_capacity", Value::from(4_u64)),
                 ("release", Value::Array(Vec::new())),
                 ("revision", Value::from(1_u64)),
-                ("rules", Value::Array(vec![rule])),
+                ("rules", Value::Array(rules)),
                 ("version", Value::from(FORMAT_VERSION)),
             ]))
             .expect("canonical chunk command")
         };
+        let command = |rule: Value| command_rules(vec![rule]);
         let parsed =
             parse_command(&command(rule_value(&chunk_rule))).expect("parse exact chunk rule");
         assert_eq!(parsed.rules, vec![chunk_rule.clone()]);
@@ -2865,16 +2942,34 @@ mod tests {
         let parsed = parse_command(&command(rule_value(&deferred)))
             .expect("parse Proposal-bound deferred chunk rule");
         assert_eq!(parsed.rules, vec![deferred.clone()]);
+        let next_view = Rule {
+            proposal_view: Some(3),
+            ..deferred.clone()
+        };
+        assert_eq!(
+            parse_command(&command_rules(vec![
+                rule_value(&deferred),
+                rule_value(&next_view),
+            ]))
+            .expect("parse distinct bounded Proposal views")
+            .rules,
+            vec![deferred.clone(), next_view]
+        );
+        assert!(matches!(
+            parse_command(&command_rules(vec![
+                rule_value(&deferred),
+                rule_value(&deferred),
+            ])),
+            Err(ControlError::AmbiguousRule)
+        ));
         let resolved = Rule {
             manifest_hash: Some(manifest_hash(0x55)),
             ..deferred.clone()
         };
-        assert_eq!(
-            parse_command(&command(rule_value(&resolved)))
-                .expect("parse resolved exact chunk rule")
-                .rules,
-            vec![resolved]
-        );
+        assert!(matches!(
+            parse_command(&command(rule_value(&resolved))),
+            Err(ControlError::InvalidField("manifest_hash"))
+        ));
         let invalid_deferred_drop = Rule {
             action: Action::Drop,
             ..deferred

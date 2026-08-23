@@ -396,8 +396,10 @@ def validate_capture(
         )
         if capture.get("bundle_id") != policy.get("bundle_id"):
             errors.append("physical capture bundle id does not match production policy")
-        if capture.get("bundle_version") not in policy.get(
-            "allowed_bundle_versions", []
+        allowed_bundle_versions = policy.get("allowed_bundle_versions")
+        if (
+            not isinstance(allowed_bundle_versions, list)
+            or capture.get("bundle_version") not in allowed_bundle_versions
         ):
             errors.append("physical capture bundle version is not allowed by policy")
 

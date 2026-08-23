@@ -1,0 +1,26 @@
+<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <FIToFIPmtStsRpt>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:01:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInfAndSts>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+        <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+        <GrpSts>ACSP</GrpSts>
+      </OrgnlGrpInfAndSts>
+      <TxInfAndSts>
+        <StsId>{business_message_id}-tx</StsId>
+        <TxSts>ACSP</TxSts>
+        <AddtlInf>live profile status fixture</AddtlInf>
+      </TxInfAndSts>
+    </FIToFIPmtStsRpt>
+  </Document>
+</DataPDU>

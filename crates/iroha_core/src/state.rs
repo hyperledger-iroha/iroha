@@ -71,7 +71,7 @@ use iroha_data_model::{
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     executor::ExecutorDataModel,
-    fastpq::{TransferDeltaTranscript, TransferTranscript},
+    fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
     governance::types::{ParliamentBody, ProposalKind},
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -126,6 +126,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
+    offline::KagemushaExactBytesDigestV1,
     oracle::{
         DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
         OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
@@ -336,12 +337,18 @@ use crate::{
 mod bounded_authority;
 mod canonical_history;
 mod committed_hash_journal;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod committed_transaction_context;
 mod da_hydration;
 mod lane_authority;
 mod tiered;
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
+#[cfg(test)]
+pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -10528,7 +10535,7 @@ fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &Stat
     };
     if let Some(manifest) = manifest {
         let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
-            acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
+            acc.saturating_add(entry.hot_budget_bytes())
         });
         crate::telemetry::record_state_tiered_snapshot(
             telemetry,
@@ -10539,13 +10546,13 @@ fn record_tiered_snapshot_metrics(backend: &TieredStateBackend, telemetry: &Stat
             manifest.cold_bytes_total,
             manifest.hot_promotions,
             manifest.hot_demotions,
-            manifest.hot_grace_overflow_keys,
-            manifest.hot_grace_overflow_bytes,
+            manifest.hot_budget_overflow_keys,
+            manifest.hot_budget_overflow_bytes,
             manifest.cold_reused_entries,
             manifest.cold_reused_bytes,
         );
         telemetry.record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
-        if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
+        if hot_limit > 0 && manifest.hot_budget_overflow_bytes > 0 {
             telemetry.inc_storage_budget_exceeded("wsv_hot");
         }
         if let Some(cold_used) = cold_store_bytes {
@@ -12542,13 +12549,21 @@ impl<'state> StateBlock<'state> {
             .world
             .axt_policies
             .iter()
+            .filter(|(dsid, _)| {
+                snapshot
+                    .entries
+                    .binary_search_by(|binding| binding.dsid.cmp(dsid))
+                    .is_err()
+            })
             .map(|(dsid, _)| *dsid)
             .collect();
         for dsid in stale {
             self.world.axt_policies.remove(dsid);
         }
         for binding in &snapshot.entries {
-            self.world.axt_policies.insert(binding.dsid, binding.policy);
+            if self.world.axt_policies.get(&binding.dsid) != Some(&binding.policy) {
+                self.world.axt_policies.insert(binding.dsid, binding.policy);
+            }
         }
         #[cfg(feature = "telemetry")]
         self.telemetry.set_axt_policy_snapshot_version(snapshot);
@@ -12883,14 +12898,16 @@ pub struct StateTransaction<'block, 'state> {
     pub confidential_gas_used_in_tx: u64,
     /// Confidential gas already accumulated when this transaction began.
     pub confidential_gas_used_in_block_so_far: u64,
-    /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
-    /// Not set for ad-hoc instruction execution in tests.
+    /// Current transaction entrypoint hash; unset for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
-    pub current_tx_hash:
-        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
+    /// Complete signed-wire identity of an exact direct Kagemusha Taira canary transaction.
+    pub(crate) kagemusha_taira_canary_wire_identity: Option<KagemushaExactBytesDigestV1>,
+    /// Whether the canonical carrier itself is an evidentiary `External` entrypoint.
+    pub(crate) kagemusha_taira_canary_external_entrypoint: bool,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
@@ -13595,15 +13612,6 @@ pub(crate) fn nexus_manifest_authority_eligible_lanes_at_height(
         .map(|candidate| candidate.id)
         .collect()
 }
-fn axt_lane_map_from_lane_config(lane_config: &LaneConfig) -> BTreeMap<DataSpaceId, LaneId> {
-    let mut lane_for_dataspace = BTreeMap::new();
-    for entry in lane_config.entries() {
-        lane_for_dataspace
-            .entry(entry.dataspace_id)
-            .or_insert(entry.lane_id);
-    }
-    lane_for_dataspace
-}
 pub(crate) fn axt_active_lane_map_at_height(
     nexus: &iroha_config::parameters::actual::Nexus,
     block_height: u64,
@@ -14273,7 +14281,6 @@ mod stake_snapshot_tests {
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
         let stale_lane = LaneId::new(1);
         let nexus = iroha_config::parameters::actual::Nexus::default();
-
         assert_eq!(
             nexus_active_lane_ids(&nexus),
             BTreeSet::from([LaneId::SINGLE])
@@ -14685,118 +14692,7 @@ mod stake_snapshot_tests {
         assert_eq!(mismatched.activation_epoch, None);
         assert_eq!(mismatched.activation_height, None);
     }
-    #[test]
-    fn state_block_does_not_activate_restored_non_owner_staking_rows() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state =
-            State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
-        let owner_lane = LaneId::SINGLE;
-        let sibling_lane = LaneId::new(1);
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("non-zero lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: sibling_lane,
-                    alias: "restored-staking-sibling".to_owned(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Public,
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("shared-dataspace lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            lane_catalog,
-            ..iroha_config::parameters::actual::Nexus::default()
-        };
-        nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
-        state
-            .set_nexus(nexus)
-            .expect("apply shared-dataspace Nexus config");
-
-        let owner_kp = crate::state::checked_keypair();
-        let pending_sibling_kp = crate::state::checked_keypair();
-        let jailed_sibling_kp = crate::state::checked_keypair();
-        let owner_validator = DMAccountId::of(owner_kp.public_key().clone());
-        let pending_sibling_validator = DMAccountId::of(pending_sibling_kp.public_key().clone());
-        let jailed_sibling_validator = DMAccountId::of(jailed_sibling_kp.public_key().clone());
-        let record =
-            |lane_id, validator: DMAccountId, peer_key, status: PublicLaneValidatorStatus| {
-                lane_validator_record(lane_id, &validator, PeerId::from(peer_key), 10_u32, status)
-            };
-        {
-            let mut block = state.world.public_lane_validators.block();
-            block.insert(
-                (owner_lane, owner_validator.clone()),
-                record(
-                    owner_lane,
-                    owner_validator.clone(),
-                    owner_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::PendingActivation(3),
-                ),
-            );
-            block.insert(
-                (sibling_lane, pending_sibling_validator.clone()),
-                record(
-                    sibling_lane,
-                    pending_sibling_validator.clone(),
-                    pending_sibling_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::PendingActivation(3),
-                ),
-            );
-            block.insert(
-                (sibling_lane, jailed_sibling_validator.clone()),
-                record(
-                    sibling_lane,
-                    jailed_sibling_validator.clone(),
-                    jailed_sibling_kp.public_key().clone(),
-                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_owned()),
-                ),
-            );
-            block.commit();
-        }
-
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(9).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut state_block = state.block(header);
-        state_block.activate_due_public_lane_validators(3);
-        state_block.clear_expired_vrf_public_lane_jails(3);
-
-        let owner = state_block
-            .world
-            .public_lane_validators
-            .get(&(owner_lane, owner_validator))
-            .expect("canonical owner validator remains present");
-        assert!(matches!(owner.status, PublicLaneValidatorStatus::Active));
-        let pending_sibling = state_block
-            .world
-            .public_lane_validators
-            .get(&(sibling_lane, pending_sibling_validator))
-            .expect("pending non-owner validator remains present");
-        assert!(matches!(
-            pending_sibling.status,
-            PublicLaneValidatorStatus::PendingActivation(3)
-        ));
-        let jailed_sibling = state_block
-            .world
-            .public_lane_validators
-            .get(&(sibling_lane, jailed_sibling_validator))
-            .expect("jailed non-owner validator remains present");
-        assert!(matches!(
-            jailed_sibling.status,
-            PublicLaneValidatorStatus::Jailed(ref reason)
-                if reason == "vrf_penalty_epoch_2"
-        ));
-    }
-
+    include!("state/restored_staking_owner_tests.rs");
     #[test]
     fn state_block_clears_only_expired_vrf_public_lane_jails() {
         let world = World::default();
@@ -18552,37 +18448,7 @@ mod confidential_policy_transition_index_tests {
         });
         policy
     }
-    #[test]
-    fn rebuild_uses_only_authoritative_pending_transitions() {
-        let policy = policy_with_transition(
-            ConfidentialPolicyMode::Convertible,
-            ConfidentialPolicyMode::ShieldedOnly,
-            41,
-            Some(7),
-            b"policy-index-rebuild",
-        );
-        let (definition_id, definition) = definition_with_policy("coin", policy);
-        let mut world = World::default();
-        world
-            .asset_definitions
-            .insert(definition_id.clone(), definition);
-        world
-            .confidential_policy_transition_index
-            .insert((99, definition_id.clone()), ());
-        world.confidential_policy_transition_counts.insert(99, 1);
-        world
-            .rebuild_confidential_policy_transition_index()
-            .expect("valid authoritative transition rebuilds");
-        let transition_index = world.confidential_policy_transition_index.view();
-        assert!(transition_index.get(&(99, definition_id.clone())).is_none());
-        assert_eq!(
-            transition_index.get(&(41, definition_id.clone())),
-            Some(&())
-        );
-        let transition_counts = world.confidential_policy_transition_counts.view();
-        assert!(transition_counts.get(&99).is_none());
-        assert_eq!(transition_counts.get(&41), Some(&1));
-    }
+    include!("state/confidential_policy_transition_index_tests.rs");
     #[test]
     fn track_and_untrack_keep_exact_keys_and_counts() {
         let domain_id = DomainId::try_new("policy-index", "universal").expect("valid domain");
@@ -30348,6 +30214,8 @@ impl State {
         state_block: &mut StateBlock<'_>,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<Vec<MergeLaneExecution>, MergeLedgerCommitError> {
+        let _witness_suppression =
+            crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
@@ -30406,6 +30274,15 @@ impl State {
             {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "autonomous merge input does not bind one reservation and routing plan per entrypoint"
+                        .to_owned(),
+                ));
+            }
+            if source.input.entrypoints.iter().any(|entrypoint| {
+                entrypoint.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            }) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge entrypoint does not carry QueuePlanSynced admission intent"
                         .to_owned(),
                 ));
             }
@@ -30524,14 +30401,18 @@ impl State {
                     "executor returned a different entrypoint order".to_owned(),
                 ));
             }
-            let results = raw_results
+            let mut results = raw_results
                 .into_iter()
                 .map(|(_, _, result)| TransactionResult::new(result))
                 .collect::<Vec<_>>();
+            state_block
+                .take_merge_lane_batch_transfer_outcomes(&source.input.entrypoints, &mut results)?;
             let result_hashes = results
                 .iter()
                 .map(|result| Hash::from(result.hash()))
                 .collect::<Vec<_>>();
+            let fastpq_transcripts =
+                state_block.take_merge_lane_fastpq_transcripts(&source.input.entrypoints)?;
             state_block.stage_direct_committed_entrypoints(
                 StateBlock::merge_execution_entrypoint_hashes(&source.input.entrypoints),
             );
@@ -30598,6 +30479,7 @@ impl State {
                 results,
                 settlement_hash: canonical_merge_settlement_hash(&placeholder)?,
                 settlement_commitment: placeholder,
+                fastpq_transcripts: fastpq_transcripts.into(),
             };
             let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
             execution.settlement_hash = canonical_merge_settlement_hash(&commitment)?;
@@ -37142,6 +37024,8 @@ impl State {
         previous_heights: &BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
         validate_live_authority: bool,
     ) -> Result<(), MergeLedgerCommitError> {
+        let invalid_batch =
+            |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
         if batch.version != 1 {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "unsupported version {}",
@@ -37168,32 +37052,16 @@ impl State {
             }
             total_source_bundle_bytes = total_source_bundle_bytes
                 .checked_add(execution.source_bundle.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "source bundle byte count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("source bundle byte count overflow"))?;
             total_entrypoints = total_entrypoints
                 .checked_add(execution.entrypoints.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "entrypoint count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("entrypoint count overflow"))?;
             total_results = total_results
                 .checked_add(execution.results.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "result count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("result count overflow"))?;
             total_signer_proofs = total_signer_proofs
                 .checked_add(execution.signer_proofs.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "signer proof count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("signer proof count overflow"))?;
             for validator_count in [
                 execution.proposal.descriptor.validator_set.len(),
                 execution.prepare_qc.validator_set.len(),
@@ -37221,11 +37089,7 @@ impl State {
                 }
                 total_reservation_metadata_bytes = total_reservation_metadata_bytes
                     .checked_add(encoded.len())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "reservation metadata byte count overflow".to_owned(),
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_batch("reservation metadata byte count overflow"))?;
             }
             for encoded in &execution.routing_plans {
                 if encoded.len() > MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES {
@@ -37235,11 +37099,7 @@ impl State {
                 }
                 total_reservation_metadata_bytes = total_reservation_metadata_bytes
                     .checked_add(encoded.len())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "routing metadata byte count overflow".to_owned(),
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_batch("routing metadata byte count overflow"))?;
             }
             for receipt in execution.native_amx_receipts.iter().flatten() {
                 if !crate::native_amx::native_amx_participant_leg_count_within_limit(
@@ -37305,6 +37165,17 @@ impl State {
         if !crate::merge::merge_execution_batch_commitments_match(batch) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "execution root, write-set root, post-state hash, or batch hash mismatch"
+                    .to_owned(),
+            ));
+        }
+        if batch.lanes.iter().any(|execution| {
+            execution.entrypoints.iter().any(|entrypoint| {
+                entrypoint.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            })
+        }) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous merge entrypoint does not carry QueuePlanSynced admission intent"
                     .to_owned(),
             ));
         }
@@ -37458,6 +37329,40 @@ impl State {
                 if Hash::from(result.hash()) != expected_hash {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "embedded transaction result hash mismatch".to_owned(),
+                    ));
+                }
+            }
+            let execution_entrypoints = execution
+                .entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    (
+                        Hash::from(entrypoint.hash()),
+                        StateBlock::merge_execution_call_hash(entrypoint),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            if execution
+                .fastpq_transcripts
+                .windows(2)
+                .any(|pair| pair[0].entry_hash >= pair[1].entry_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "FASTPQ transcript bundles are not unique and canonically ordered".to_owned(),
+                ));
+            }
+            for bundle in &execution.fastpq_transcripts {
+                let expected_call_hash = execution_entrypoints.get(&bundle.entry_hash);
+                if bundle.transcripts.is_empty()
+                    || expected_call_hash.is_none()
+                    || bundle
+                        .transcripts
+                        .iter()
+                        .any(|transcript| Some(&transcript.batch_hash) != expected_call_hash)
+                {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "FASTPQ transcript bundle is empty or not bound to its lane entrypoint"
+                            .to_owned(),
                     ));
                 }
             }
@@ -46440,6 +46345,8 @@ impl<'state> StateBlock<'state> {
             tx_call_hash: None,
             current_tx_hash: None,
             privacy_transaction_intent_binding: None,
+            kagemusha_taira_canary_wire_identity: None,
+            kagemusha_taira_canary_external_entrypoint: false,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
@@ -46961,6 +46868,7 @@ impl<'state> StateBlock<'state> {
             || self.world.parameters.is_dirty()
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
+            || !self.batch_transfer_outcomes.is_empty()
             || !self.settlement_accumulator.is_empty()
             || self.exec_witness.is_some()
             || finalized_event_surface_invalid
@@ -47271,6 +47179,105 @@ impl<'state> StateBlock<'state> {
         entrypoints: &[TransactionEntrypoint],
     ) -> Vec<HashOf<TransactionEntrypoint>> {
         committed_entrypoint_hashes(entrypoints)
+    }
+    fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
+        Hash::from(entrypoint.execution_call_hash())
+    }
+    fn take_merge_lane_batch_transfer_outcomes(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+        results: &mut [TransactionResult],
+    ) -> Result<(), MergeLedgerCommitError> {
+        if entrypoints.len() != results.len() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution cannot align batch-transfer outcomes with transaction results"
+                    .to_owned(),
+            ));
+        }
+        let mut seen_call_hashes = BTreeSet::new();
+        for (entrypoint, result) in entrypoints.iter().zip(results) {
+            let call_hash = Self::merge_execution_call_hash(entrypoint);
+            if !seen_call_hashes.insert(call_hash) {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate batch-transfer outcome call-hash bindings"
+                        .to_owned(),
+                ));
+            }
+            let outcome_key = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
+            let Some(outcomes) = self.batch_transfer_outcomes.remove(&outcome_key) else {
+                continue;
+            };
+            if outcomes.is_empty() {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced an empty batch-transfer outcome binding".to_owned(),
+                ));
+            }
+            result.set_batch_transfer_outcomes(outcomes);
+        }
+        Ok(())
+    }
+    fn take_merge_lane_fastpq_transcripts(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+    ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
+        let mut selected_by_call_hash = BTreeMap::new();
+        let mut entrypoint_bindings = Vec::new();
+        for entrypoint in entrypoints {
+            let entrypoint_hash = Hash::from(entrypoint.hash());
+            let call_hash = Self::merge_execution_call_hash(entrypoint);
+            if entrypoint_bindings
+                .iter()
+                .any(|(_, existing_call_hash)| *existing_call_hash == call_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate FASTPQ transcript call-hash bindings"
+                        .to_owned(),
+                ));
+            }
+            entrypoint_bindings.push((entrypoint_hash, call_hash));
+            let Some(transcripts) = self.fastpq_transcripts.remove(&call_hash) else {
+                continue;
+            };
+            if transcripts.is_empty()
+                || transcripts
+                    .iter()
+                    .any(|transcript| transcript.batch_hash != call_hash)
+                || selected_by_call_hash
+                    .insert(call_hash, transcripts)
+                    .is_some()
+            {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced malformed or duplicate FASTPQ transcript evidence"
+                        .to_owned(),
+                ));
+            }
+        }
+        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut selected_by_call_hash);
+        let mut selected = BTreeMap::new();
+        for (entry_hash, call_hash) in entrypoint_bindings {
+            let Some(transcripts) = selected_by_call_hash.remove(&call_hash) else {
+                continue;
+            };
+            if selected.insert(entry_hash, transcripts).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate FASTPQ transcript entrypoint bindings"
+                        .to_owned(),
+                ));
+            }
+        }
+        if !selected_by_call_hash.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution left selected FASTPQ transcripts without an entrypoint binding"
+                    .to_owned(),
+            ));
+        }
+        Ok(selected
+            .into_iter()
+            .map(|(entry_hash, transcripts)| TransferTranscriptBundle {
+                entry_hash,
+                transcripts,
+            })
+            .collect())
     }
     fn drain_merge_lane_settlement_commitment(
         &mut self,
@@ -50449,8 +50456,8 @@ impl<'state> StateBlock<'state> {
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
         for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
-            let tx = match entrypoint {
-                TransactionEntrypoint::External(tx) => tx,
+            let tx = match &entrypoint {
+                TransactionEntrypoint::External(tx) => tx.clone(),
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
                 TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
                     continue;
@@ -50459,7 +50466,11 @@ impl<'state> StateBlock<'state> {
             if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
-                Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
+                crate::state::seed_committed_transaction_context(
+                    &mut transaction,
+                    &entrypoint,
+                    entrypoint_index,
+                );
                 let contract_deployment_bootstrap =
                     crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
                         &transaction.world,
@@ -50499,18 +50510,6 @@ impl<'state> StateBlock<'state> {
         }
         self.resolve_queue_plan_pending_obligations_from_block(block)
             .expect("committed block must resolve exact QueuePlan pending application obligations");
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn seed_committed_transaction_context(
-        transaction: &mut StateTransaction<'_, '_>,
-        tx: &SignedTransaction,
-        entrypoint_index: usize,
-    ) {
-        transaction.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        transaction.current_tx_hash =
-            Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash);
-        transaction.current_entrypoint_index =
-            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
 }
 #[cfg(feature = "zk-preverify")]
@@ -50808,7 +50807,6 @@ mod committed_transaction_context_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
-    use iroha_logger::Level;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     #[test]
     fn committed_transaction_context_uses_canonical_entrypoint_metadata() {
@@ -50825,9 +50823,10 @@ mod committed_transaction_context_tests {
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, "context".into())])
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "context".into())])
         .sign(ALICE_KEYPAIR.private_key());
-        StateBlock::seed_committed_transaction_context(&mut transaction, &signed, 7);
+        let entrypoint = TransactionEntrypoint::External(signed.clone());
+        crate::state::seed_committed_transaction_context(&mut transaction, &entrypoint, 7);
         assert_eq!(
             transaction.tx_call_hash,
             Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()))

@@ -3680,9 +3680,11 @@ export interface SorafsGatewayFetchResult {
 }
 
 export type SorafsGatewayFetchErrorCode =
+  | "invalid_plan"
   | "no_providers"
   | "no_healthy_providers"
   | "no_compatible_providers"
+  | "no_policy_eligible_providers"
   | "exhausted_retries"
   | "observer_failed"
   | "internal_invariant"

@@ -962,7 +962,7 @@ fn resolve_deploy_chain_discriminant(
 }
 fn known_deploy_chain_discriminant(chain: &str) -> Option<u16> {
     match chain.trim() {
-        "iroha3-taira" | "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
+        "fc56984b-2be7-431d-840e-21514d1883f0" => Some(369),
         "iroha3-nexus" | "00000000-0000-0000-0000-000000000753" => Some(753),
         "00000000-0000-0000-0000-000000000000" => {
             Some(iroha_config::parameters::defaults::common::chain_discriminant())
@@ -21212,8 +21212,8 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     })
 }
 fn parse_usize(raw: &str, flag: &str) -> Result<usize, String> {
-    raw.trim()
-        .parse::<usize>()
+    require_canonical_unsigned_decimal(flag, raw, "sorafs_cli")?;
+    raw.parse::<usize>()
         .map_err(|err| format!("invalid {flag} value `{raw}`: {err}"))
 }
 fn parse_taikai_cache_override(value: Value) -> Result<Option<TaikaiCacheConfig>, String> {

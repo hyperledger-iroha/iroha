@@ -2,7 +2,7 @@
 
 REPLAY_TRACE_SOURCE_SHA256 = {
     "Cargo.lock": (
-        "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+        "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
     ),
     "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
         "c8d716f4dfdfd92618fc68967348b04260904d2afd581682a5a1be48386c3328"
@@ -1020,13 +1020,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "5da377e380261bee2e6200930f7615c5781521e64ce25b810569a2e9e8c2517b"
+        "7fef4e6d2624a76f96c3132faa646f82597d1b60ab12d6d7a332eb34a2dc413d"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "d961ff64ff4e3ea0193822f9ffce4da5ee5e58948c8b58bb2002103cc1229170"
+        "b7f8c2c1b36458d844247e4d84f8179d38b0c77bde4d200ad74b9bcb87ea504c"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "c5d359c0281809db0fb794f63683bdbf04005f1dc2eac09e250ea513567447e0"

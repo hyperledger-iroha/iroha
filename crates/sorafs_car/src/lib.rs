@@ -4481,7 +4481,9 @@ impl<'a> CarStreamingWriter<'a> {
             expected_roots: Some(roots),
         }
     }
-    /// Streams bytes from `reader`, emitting a CARv2 container to `writer`.
+    /// Streams exactly the planned payload bytes from `reader`, emitting a CARv2 container to
+    /// `writer`. The source must end at the planned content length and match the plan's complete
+    /// payload digest.
     pub fn write_from_reader<W: Write, R: Read>(
         &self,
         reader: &mut R,
@@ -4502,7 +4504,8 @@ impl<'a> CarStreamingWriter<'a> {
             validation.max_chunk_len(),
             "streaming CAR chunk buffer",
         )?;
-        layout.write_car(
+        let mut source_hasher = blake3::Hasher::new();
+        let stats = layout.write_car(
             self.plan,
             &mut writer,
             |chunk_index, chunk, writer, file_hasher, payload_hasher| {
@@ -4513,9 +4516,18 @@ impl<'a> CarStreamingWriter<'a> {
                 if digest.as_bytes() != &chunk.digest {
                     return Err(CarWriteError::DigestMismatch { chunk_index });
                 }
+                source_hasher.update(&buffer);
                 write_buffer(writer, file_hasher, Some(payload_hasher), &buffer)
             },
-        )
+        )?;
+        let mut trailing = [0u8; 1];
+        if reader.read(&mut trailing)? != 0 {
+            return Err(CarWriteError::PayloadMismatch);
+        }
+        if source_hasher.finalize() != self.plan.payload_digest {
+            return Err(CarWriteError::PayloadDigestMismatch);
+        }
+        Ok(stats)
     }
     /// Returns the plan associated with this writer.
     #[must_use]
@@ -9105,6 +9117,26 @@ mod tests {
             result,
             Err(CarWriteError::DigestMismatch { chunk_index: 0 })
         ));
+    }
+    #[test]
+    fn streaming_writer_rejects_substituted_identity_and_trailing_payload() {
+        use std::io::Cursor;
+        let payload = b"streaming payload identity";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+
+        let mut substituted_plan = plan.clone();
+        substituted_plan.payload_digest = blake3::hash(b"substituted identity");
+        let result = CarStreamingWriter::new(&substituted_plan)
+            .write_from_reader(&mut Cursor::new(payload), &mut Vec::new());
+        assert!(matches!(result, Err(CarWriteError::PayloadDigestMismatch)));
+
+        let mut payload_with_trailing_byte = payload.to_vec();
+        payload_with_trailing_byte.push(0);
+        let result = CarStreamingWriter::new(&plan).write_from_reader(
+            &mut Cursor::new(payload_with_trailing_byte),
+            &mut Vec::new(),
+        );
+        assert!(matches!(result, Err(CarWriteError::PayloadMismatch)));
     }
     #[test]
     fn writer_rejects_payload_mismatch() {

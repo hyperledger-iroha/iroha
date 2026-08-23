@@ -4665,7 +4665,6 @@ mod tests {
             repo_root.join("defaults/nexus/genesis.json"),
             repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
             repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
             repo_root.join("configs/soranexus/nexus/genesis.json"),
             repo_root.join("configs/soranexus/taira/genesis.json"),
         ];
@@ -4715,10 +4714,6 @@ mod tests {
         const PUBLIC_XOR_ALIAS: &str = "xor#universal";
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
-            (
-                repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
-                true,
-            ),
             (repo_root.join("configs/soranexus/taira/genesis.json"), true),
             (repo_root.join("defaults/nexus/genesis.json"), false),
             (
@@ -4881,7 +4876,6 @@ mod tests {
             repo_root.join("defaults/nexus/genesis.json"),
             repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
             repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
             repo_root.join("configs/soranexus/nexus/genesis.json"),
             repo_root.join("configs/soranexus/taira/genesis.json"),
         ];

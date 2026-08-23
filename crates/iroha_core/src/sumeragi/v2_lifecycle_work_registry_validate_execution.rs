@@ -827,8 +827,8 @@ fn certified_pipeline_prepare_certificate_for_test(
         subject: manifest.subject,
         execution_commitment: ValidatedBodyReceipt::for_test(receipt.clone())
             .execution_commitment(),
-        signers: vec![0],
-        aggregate_signature: vec![0xC1],
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xC1; 96],
     }
 }
 #[cfg(test)]

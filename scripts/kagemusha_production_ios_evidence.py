@@ -1535,7 +1535,11 @@ def _validate_capture_app_code_sign_measurements(
     for field, expected_value in expected.items():
         if value.get(field) != expected_value:
             errors.append(f"{label} {field} does not match production policy")
-    if value.get("bundle_version") not in policy.get("allowed_bundle_versions", []):
+    allowed_bundle_versions = policy.get("allowed_bundle_versions")
+    if (
+        not isinstance(allowed_bundle_versions, list)
+        or value.get("bundle_version") not in allowed_bundle_versions
+    ):
         errors.append(f"{label} bundle_version is not allowed by production policy")
     executable_sha256 = value.get("executable_sha256")
     if (

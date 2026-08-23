@@ -246,43 +246,7 @@ fn capacity_specs_reject_noncanonical_public_fields() {
         assert_capacity_failure(output, expected, &json_out);
     }
 }
-const SPEC_JSON: &str = r#"
-{
-  "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-  "stake": {
-    "pool_id_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "stake_amount": "5000"
-  },
-  "committed_capacity_gib": 500,
-  "chunker_commitments": [
-    {
-      "profile_handle": "sorafs.sf1@1.0.0",
-      "profile_aliases": ["sorafs.sf1@1.0.0", "sorafs-sf1"],
-      "committed_gib": 500,
-      "capability_refs": ["torii_gateway", "chunk_range_fetch"]
-    }
-  ],
-  "lane_commitments": [
-    { "lane_id": "global", "max_gib": 500 }
-  ],
-  "pricing": {
-    "currency": "xor",
-    "rate_per_gib_hour_milliu": 12,
-    "min_commitment_hours": 24,
-    "notes": "primary capacity tranche"
-  },
-  "valid_from": 1700000000,
-  "valid_until": 1700086400,
-  "metadata": {
-    "region": "global"
-  },
-  "record_window": {
-    "registered_epoch": 1700000000,
-    "valid_from_epoch": 1700000000,
-    "valid_until_epoch": 1700086400
-  }
-}
-"#;
+const SPEC_JSON: &str = include_str!("fixtures/capacity_cli/spec.json");
 #[test]
 fn capacity_telemetry_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
@@ -499,66 +463,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
         base64_trimmed
     );
 }
-const TELEMETRY_JSON: &str = r#"
-{
-  "provider_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
-  "epoch_start": 1700000000,
-  "epoch_end": 1700000360,
-  "declared_capacity_gib": 400,
-  "effective_capacity_gib": 380,
-  "utilised_capacity_gib": 360,
-  "successful_replications": 10,
-  "failed_replications": 1,
-  "uptime_percent_milli": 99500,
-  "por_success_percent_milli": 99000,
-  "notes": "weekly snapshot"
-}
-"#;
-const REPLICATION_JSON: &str = r#"
-{
-  "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
-  "manifest_cid_hex": "aabbccdd",
-  "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "chunking_profile": "sorafs.sf1@1.0.0",
-  "target_replicas": 2,
-  "assignments": [
-    {
-      "provider_id_hex": "5555555555555555555555555555555555555555555555555555555555555555",
-      "slice_gib": 100,
-      "lane": "global"
-    },
-    {
-      "provider_id_hex": "6666666666666666666666666666666666666666666666666666666666666666",
-      "slice_gib": 100,
-      "lane": "archive"
-    }
-  ],
-  "issued_at": 1700000500,
-  "deadline_at": 1700000800,
-  "sla": {
-    "ingest_deadline_secs": 900,
-    "min_availability_percent_milli": 99000,
-    "min_por_success_percent_milli": 98000
-  },
-  "metadata": {
-    "priority": "standard"
-  }
-}
-"#;
-const DISPUTE_JSON: &str = r#"
-{
-  "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-  "complainant_id_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-  "replication_order_id_hex": "abababababababababababababababababababababababababababababababab",
-  "kind": "replication_shortfall",
-  "submitted_epoch": 1700100000,
-  "description": "Provider failed to ingest replication order within SLA.",
-  "requested_remedy": "Slash 10% of committed stake",
-  "evidence": {
-    "digest_hex": "5555555555555555555555555555555555555555555555555555555555555555",
-    "media_type": "application/zip",
-    "uri": "https://evidence.example.com/bundle.zip",
-    "size_bytes": 1024
-  }
-}
-"#;
+const TELEMETRY_JSON: &str = include_str!("fixtures/capacity_cli/telemetry.json");
+const REPLICATION_JSON: &str = include_str!("fixtures/capacity_cli/replication.json");
+const DISPUTE_JSON: &str = include_str!("fixtures/capacity_cli/dispute.json");

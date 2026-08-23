@@ -1,0 +1,16 @@
+{
+                "version":"2024-05-01",
+                "source":"CSD account sample",
+                "entries":[
+                    {
+                        "settlement_account":"DLVRY-ACC",
+                        "bic":"DEUTDEFF",
+                        "account_id":"{delivery_account_id}"
+                    },
+                    {
+                        "settlement_account":"RCVG-ACC",
+                        "bic":"MARKDEFF",
+                        "account_id":"{receiving_account_id}"
+                    }
+                ]
+            }

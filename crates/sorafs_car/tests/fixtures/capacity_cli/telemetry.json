@@ -1,0 +1,14 @@
+
+{
+  "provider_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "epoch_start": 1700000000,
+  "epoch_end": 1700000360,
+  "declared_capacity_gib": 400,
+  "effective_capacity_gib": 380,
+  "utilised_capacity_gib": 360,
+  "successful_replications": 10,
+  "failed_replications": 1,
+  "uptime_percent_milli": 99500,
+  "por_success_percent_milli": 99000,
+  "notes": "weekly snapshot"
+}

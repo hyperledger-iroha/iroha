@@ -299,6 +299,7 @@ fn canonical_transcript_v1(
     let roots = ZkAmsMkheRnsNativeQpcsRootsV1::new(
         transcript.binding_digest(),
         initial_root,
+        fixture_digest_v1(b"q-mask-s-root", context, 0),
         fixture_digest_v1(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )

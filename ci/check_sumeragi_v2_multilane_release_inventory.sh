@@ -1870,9 +1870,9 @@ expected_edges = (
         "run_formal_script scripts/formal/check_sumeragi_v2_replay_trace.sh",
     ),
     (
-        "scripts/formal/check_sumeragi_v2_replay_trace.sh",
+        "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/formal/run_sumeragi_v2_harness.sh",
-        'bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --model-replay',
+        "bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay",
     ),
     (
         "scripts/verify_sumeragi_v2.sh",

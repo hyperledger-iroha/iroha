@@ -1,11 +1,132 @@
 use super::*;
-use crate::vega::derive_t256_generators_v1;
+use crate::vega::{
+    derive_t256_generators_v1,
+    zk_ams::mkhe::{
+        packing::encode_zk_ams_t256_packed_plaintext_v1,
+        rns_native_profile::{
+            zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
+            zk_ams_mkhe_rns_native_topology_v1,
+        },
+        rns_native_source::{ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1},
+    },
+};
+
+struct PackedXChunkV1 {
+    bytes: Vec<u8>,
+}
+
+impl ZkAmsMkheRnsNativeSecretChunkV1 for PackedXChunkV1 {
+    fn arena(&self) -> ZkAmsMkheRnsNativeSourceArenaV1 {
+        ZkAmsMkheRnsNativeSourceArenaV1::Main
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
+
+impl Drop for PackedXChunkV1 {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+struct PackedXSnapshotV1 {
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    coefficients: Vec<[u8; CANONICAL_COEFFICIENT_BYTES_V1]>,
+    reads: usize,
+}
+
+impl ZkAmsMkheRnsNativeSourceSnapshotV1 for PackedXSnapshotV1 {
+    type Chunk = PackedXChunkV1;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.layout
+    }
+
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; DIGEST_BYTES_V1] {
+        match arena {
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => digest(246),
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => digest(247),
+        }
+    }
+
+    fn read_slot(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        let block = usize::try_from(slot).map_err(|_| ZkAmsMkheRnsNativeSourceErrorV1::Storage)?;
+        if arena != ZkAmsMkheRnsNativeSourceArenaV1::Main || block >= CANONICAL_BLOCKS_PER_RECORD_V1
+        {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Storage);
+        }
+        let start = block * CANONICAL_COEFFICIENTS_PER_BLOCK_V1;
+        let end = start + CANONICAL_COEFFICIENTS_PER_BLOCK_V1;
+        let coefficients = self
+            .coefficients
+            .get(start..end)
+            .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Storage)?;
+        let mut bytes =
+            Vec::with_capacity(ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize);
+        for coefficient in coefficients {
+            bytes.extend_from_slice(coefficient);
+        }
+        self.reads += 1;
+        Ok(PackedXChunkV1 { bytes })
+    }
+}
+
+impl Drop for PackedXSnapshotV1 {
+    fn drop(&mut self) {
+        for coefficient in &mut self.coefficients {
+            coefficient.fill(0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 fn digest(label: u8) -> [u8; DIGEST_BYTES_V1] {
     let mut hash = Keccak256::new();
     hash.update(b"rns-native-source-terminal-cross-field-test");
     hash.update(&[label]);
     hash.finalize()
+}
+
+fn packed_x_snapshot_v1(nonzero_tail_slot: Option<usize>) -> PackedXSnapshotV1 {
+    let profile = zk_ams_mkhe_rns_native_profile_v1().expect("profile");
+    let topology = zk_ams_mkhe_rns_native_topology_v1().expect("topology");
+    let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("candidate");
+    let layout = ZkAmsMkheRnsNativeSourceLayoutV1::new(
+        profile.profile_digest,
+        topology.topology_digest,
+        release,
+        digest(244),
+        digest(245),
+    )
+    .expect("source layout");
+    let full_layout = zk_ams_t256_packing_layout_v1(ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1 as u32)
+        .expect("full packing layout");
+    let mut slots = vec![[0_u8; 32]; ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1];
+    for (slot, value) in slots[..X_USED_SLOTS_V1 as usize].iter_mut().enumerate() {
+        *value = Scalar::from_u64(slot as u64 + 1).to_be_bytes();
+    }
+    if let Some(slot) = nonzero_tail_slot {
+        assert!((X_USED_SLOTS_V1 as usize..ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1).contains(&slot));
+        slots[slot] = Scalar::from_u64(10_001).to_be_bytes();
+    }
+    let mut packed = encode_zk_ams_t256_packed_plaintext_v1(full_layout, 0, &slots)
+        .expect("canonical packed X record");
+    PackedXSnapshotV1 {
+        layout,
+        coefficients: core::mem::take(&mut packed.coefficients),
+        reads: 0,
+    }
 }
 
 fn anchor_core(downstream: &[u8]) -> [[u8; DIGEST_BYTES_V1]; ANCHOR_CORE_DIGESTS_V1] {
@@ -119,6 +240,52 @@ fn anchor_accepts_exact_maximum_and_rejects_zero_or_max_plus_one() {
         ResidualAnchorV1::from_canonical_bytes_exact_v1(&encoded),
         Err(RnsNativeSourceTerminalCrossFieldErrorV1::AnchorCapExceeded)
     );
+}
+
+#[test]
+fn x_padding_replay_accepts_exact_89_used_slots_from_the_live_source_owner() {
+    let mut snapshot = packed_x_snapshot_v1(None);
+    let layout = zk_ams_t256_packing_layout_v1(X_USED_SLOTS_V1).expect("X layout");
+    let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1().expect("workspace");
+    let mut visited = 0_usize;
+    replay_record_v1(
+        &mut snapshot,
+        X_RECORD_V1,
+        layout,
+        &mut workspace,
+        |slot, value| {
+            assert_eq!(slot, visited);
+            assert_eq!(value, Scalar::from_u64(slot as u64 + 1));
+            visited += 1;
+            Ok(())
+        },
+    )
+    .expect("exact X used slots");
+    assert_eq!(visited, X_USED_SLOTS_V1 as usize);
+    assert_eq!(snapshot.reads, CANONICAL_BLOCKS_PER_RECORD_V1);
+}
+
+#[test]
+fn x_padding_replay_rejects_the_first_nonzero_governed_tail_slot() {
+    let mut snapshot = packed_x_snapshot_v1(Some(X_USED_SLOTS_V1 as usize));
+    let layout = zk_ams_t256_packing_layout_v1(X_USED_SLOTS_V1).expect("X layout");
+    let mut workspace = T256PackedPlaintextDecodeWorkspaceV1::try_new_v1().expect("workspace");
+    let mut visited = 0_usize;
+    assert_eq!(
+        replay_record_v1(
+            &mut snapshot,
+            X_RECORD_V1,
+            layout,
+            &mut workspace,
+            |_slot, _value| {
+                visited += 1;
+                Ok(())
+            },
+        ),
+        Err(RnsNativeSourceTerminalCrossFieldErrorV1::InvalidPacking)
+    );
+    assert_eq!(visited, 0, "padding is checked before used slots escape");
+    assert_eq!(snapshot.reads, CANONICAL_BLOCKS_PER_RECORD_V1);
 }
 
 #[test]
@@ -379,9 +546,30 @@ fn production_boundary_is_move_only_non_authorizing_and_fail_closed() {
     assert!(!stage.contains("pub fn"));
     assert!(source.contains("SecretMultiexpBuilder::<ZkAmsT256BulletproofSuiteV1>"));
     assert!(source.contains("visit_rehydrated_t256_coefficients_used_slots_with_workspace_v1"));
+    assert!(source.contains("redundant,\n//! non-authoritative compatibility input"));
     assert!(!source.contains("trait RnsNativeSourceTerminal"));
     assert!(!stage.contains("Verified"));
     assert!(!stage.contains("Release"));
+    assert!(stage.contains("source: RnsNativeRlweSourceStatementStageV1"));
+    assert!(stage.contains("terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1"));
+    assert!(stage.contains("zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1"));
+
+    let replay = source
+        .split_once("fn replay_source_terminal_aggregate_v1")
+        .expect("source replay")
+        .1
+        .split_once("fn terminal_coordinate_v1")
+        .expect("source replay end")
+        .0;
+    let x = replay.find("X_RECORD_V1").expect("X padding replay");
+    let e = replay.find("E_FIRST_RECORD_V1").expect("E replay");
+    let re = replay.find("RE_RECORD_V1").expect("rE replay");
+    let w = replay.find("W_FIRST_RECORD_V1").expect("W replay");
+    let rw = replay.find("RW_RECORD_V1").expect("rW replay");
+    assert!(x < e && e < re && re < w && w < rw);
+    assert_eq!((X_RECORD_V1, X_USED_SLOTS_V1), (0, 89));
+    assert_eq!((RE_RECORD_V1, RE_USED_SLOTS_V1), (33, 1_024));
+    assert_eq!((RW_RECORD_V1, RW_USED_SLOTS_V1), (42, 512));
 
     let packing = include_str!("packing.rs");
     let rehydration = packing

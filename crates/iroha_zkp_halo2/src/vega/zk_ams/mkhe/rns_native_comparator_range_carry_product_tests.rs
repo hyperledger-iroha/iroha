@@ -623,6 +623,10 @@ fn statement5_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert_eq!(RADIX_BASE_V1, 32_768);
     assert_eq!(CARRY_INTEGER_ABSOLUTE_BOUND_V1, 2);
     assert_eq!(CONDITIONAL_RADIX_ROW_ABSOLUTE_BOUND_V1, 65_535);
+    assert_eq!(
+        RNS_NATIVE_COMPARATOR_RANGE_CARRY_RESIDUAL_MAX_BYTES_V1,
+        3_115_199
+    );
     assert_eq!(chunk_geometry_v1(COORDINATES_V1, 0), Ok((65_536, 196_608)));
     assert_eq!(chunk_geometry_v1(COORDINATES_V1, 4), Ok((49_152, 163_840)));
 

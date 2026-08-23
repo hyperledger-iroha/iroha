@@ -1007,3 +1007,391 @@ def _successor_activation_rank_source_fidelity_errors(
                 f"{exact_equivalence!r}; found {normalized!r}"
             )
     return errors
+
+def _successor_production_recovery_finalization_tail(
+    ledger_path: Path,
+    ledger_source: str,
+    lifecycle_startup_test_path: Path,
+    lifecycle_startup_test_source: str,
+    registry_validate_path: Path,
+    registry_validate_source: str,
+    registry_path: Path,
+    registry_source: str,
+    wal_recovery_path: Path,
+    wal_recovery_source: str,
+    scheduler_path: Path,
+    scheduler_source: str,
+    region: Any,
+    require_order: Any,
+    require_tokens: Any,
+    reject_tokens: Any,
+    require_literals: Any,
+) -> None:
+    """Bind production finalization publication and recovered refanout."""
+
+    finalization_publication = region(
+        ledger_path,
+        ledger_source,
+        "opaque all-row finalization publication",
+        "fn persist_exact_finalization_successor(",
+        "#[cfg(test)]",
+    )
+    require_order(
+        ledger_path,
+        "opaque all-row finalization publication",
+        finalization_publication,
+        (
+            "self,",
+            "StagedFinalizationRetirementV1 { current, retired }",
+            "LifecycleLedgerV1::from_coordinator(&self)? != current",
+            "store.persist_exact_successor(&current, &retired)?",
+            "store.load()? != retired",
+            "coordinator: self",
+        ),
+    )
+    require_tokens(
+        ledger_path,
+        "opaque all-row finalization ownership",
+        ledger_source,
+        (
+            "struct StagedFinalizationRetirementV1 { current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
+            "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, retained_floor: PublishedFinalizedLifecycleRetainedFloorV1, }",
+            "fn consume_owners( self, mut registry: LifecycleWorkRegistryHolder, )",
+            "registry.registry_mut().exactly_covers_finalization_work(&self.coordinator)",
+            "let retained_floor = self.retained_floor",
+            "drop(self.coordinator)",
+            "retained_floor",
+        ),
+    )
+    reject_tokens(
+        ledger_path,
+        "opaque all-row finalization ownership",
+        ledger_source,
+        (
+            "impl Clone for StagedFinalizationRetirementV1",
+            "impl Copy for StagedFinalizationRetirementV1",
+            "impl Clone for PublishedFinalizationRetirementV1",
+            "impl Copy for PublishedFinalizationRetirementV1",
+            "pub coordinator: LifecycleCoordinator",
+            "pub current: LifecycleLedgerV1",
+            "pub retired: LifecycleLedgerV1",
+        ),
+    )
+    require_tokens(
+        lifecycle_startup_test_path,
+        "production lifecycle all-row finalization behavior",
+        lifecycle_startup_test_source,
+        (
+            "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+            ".retire_lifecycle_stores_for_test(finality_receipt)",
+            "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+            "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
+            "let placeholder_cadence = exact_state.sumeragi_block_cadence()",
+            "placeholder_cadence.checked_add(Duration::from_millis(1))",
+            "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
+            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+            "lifecycle_run_inner::finalize_lifecycle_height(",
+            "assert_eq!(receipt.context_id(), recovered_context.id())",
+            "assert_eq!(artifact.subject, subject)",
+            ".retain_merge_sidecars_for_global_view(",
+            "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
+            "drop(retained_sidecars)",
+            "outcome.cleanup().warnings().is_empty()",
+        ),
+    )
+    finalization_registry = region(
+        registry_validate_path,
+        registry_validate_source,
+        "finalization-only recovered registry census",
+        "fn exactly_covers_finalization_work(",
+        "fn exactly_covers_ready_work_with_extra(",
+    )
+    require_tokens(
+        registry_validate_path,
+        "finalization-only recovered registry census",
+        finalization_registry,
+        (
+            "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+            "DurableRecoveredLifecycleSignedBroadcast(_)",
+            ".collect::<std::collections::BTreeSet<_>>()",
+            "self.exact_recovered_wal_registry_slot()",
+            "RecoveredWalRegistrySlotV1::None",
+            "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, &refanned_broadcasts, )",
+        ),
+    )
+    finalization_pair_link = region(
+        registry_validate_path,
+        registry_validate_source,
+        "finalization recovered Broadcast pair link",
+        "fn exact_optional_recovered_wal_authority(",
+        "/// Install one work value without overwriting an incumbent address.",
+    )
+    require_tokens(
+        registry_validate_path,
+        "finalization recovered Broadcast pair link",
+        finalization_pair_link,
+        (
+            "broadcast.is_unpaired()",
+            "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+            "refanned_broadcasts.iter().all(|ordinal|",
+            "LifecycleLedgerV1::from_coordinator(coordinator)",
+            "!matches!(record.state, super::LifecycleState::Waiting(_))",
+            "broadcast.validates_in_ledger(exact_ledger)",
+            "broadcast.paired_next_sign_matches_terminal_record( coordinator, exact_ledger, )",
+            "broadcast.matches_current_finalization_record(",
+            "!refanned_broadcasts.contains(&record.ordinal)",
+        ),
+    )
+    terminal_pair_link = region(
+        registry_path,
+        registry_source,
+        "retained recovered Broadcast terminal next-Sign link",
+        "fn paired_next_sign_matches_terminal_record(",
+        "fn validates_at(",
+    )
+    require_tokens(
+        registry_path,
+        "retained recovered Broadcast terminal next-Sign link",
+        terminal_pair_link,
+        (
+            "LifecycleState::Terminal(outcome)",
+            "exact_single_record_slot(",
+            "LifecycleWorkClass::SignVote.capacity_class()",
+            "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
+            "installed_digest == next_digest",
+            "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",
+            "coordinator.owner_index.get(&next_record.owner.causal_root()) == Some(&next_record.owner)",
+            "!coordinator.ready_index.contains(&next_address.ordinal)",
+            "durable_next.terminal() == Some(Some(outcome))",
+            "continuation.matches_record( LifecycleWorkClass::SignVote, Some(outcome), next_address.ordinal, ledger.high_water(), )",
+        ),
+    )
+    require_tokens(
+        wal_recovery_path,
+        "volatile refanned Broadcast finalization state",
+        wal_recovery_source,
+        (
+            "fn matches_current_finalization_record(",
+            "WaitSource::Recovery(digest)",
+            "coordinator.observed_generation.get(&expected_source) == Some(&wait.observed_generation())",
+            "!coordinator.ready_index.contains(&address.ordinal)",
+        ),
+    )
+    require_literals(
+        scheduler_path,
+        "volatile refanned Broadcast finalization behavior",
+        scheduler_source,
+        (
+            '"finalization accepts the exact volatile refanout wait after its next Sign retires"',
+            '"all exact post-output waits form one bounded finalization census"',
+            '"finalization rejects a corrupted retained digest after paired Sign retirement"',
+            '"finalization must reject the corrupted exact next-Sign link"',
+        ),
+    )
+    require_tokens(
+        scheduler_path,
+        "volatile refanned Broadcast finalization behavior",
+        scheduler_source,
+        (
+            "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+            "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()",
+            "finalization_registry_census_is_exact_for_test()",
+        ),
+    )
+
+
+def _successor_recovery_finalization_tail(
+    ledger_path: Path,
+    ledger_source: str,
+    lifecycle_startup_test_path: Path,
+    lifecycle_startup_test_source: str,
+    registry_validate_path: Path,
+    registry_validate_source: str,
+    registry_validate_impl_path: Path,
+    registry_validate_impl_source: str,
+    registry_path: Path,
+    registry_source: str,
+    wal_recovery_path: Path,
+    wal_recovery_source: str,
+    scheduler_path: Path,
+    scheduler_source: str,
+    region: Any,
+    require_order: Any,
+    require_tokens: Any,
+    reject_tokens: Any,
+    require_literal_count: Any,
+) -> None:
+    """Bind standalone finalization publication and recovered refanout."""
+
+    finalization_publication = region(
+        ledger_path,
+        ledger_source,
+        "opaque all-row finalization publication",
+        "fn persist_exact_finalization_successor(",
+        "#[cfg(test)]",
+    )
+    require_order(
+        ledger_path,
+        "opaque all-row finalization publication",
+        finalization_publication,
+        (
+            "self,",
+            "StagedFinalizationRetirementV1 { current, retired }",
+            "LifecycleLedgerV1::from_coordinator(&self)? != current",
+            "store.persist_exact_successor(&current, &retired)?",
+            "store.load()? != retired",
+            "coordinator: self",
+        ),
+    )
+    require_tokens(
+        ledger_path,
+        "opaque all-row finalization ownership",
+        ledger_source,
+        (
+            "struct StagedFinalizationRetirementV1 { current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
+            "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, retained_floor: PublishedFinalizedLifecycleRetainedFloorV1, }",
+            "fn consume_owners( self, mut registry: LifecycleWorkRegistryHolder, )",
+            "registry.registry_mut().exactly_covers_finalization_work(&self.coordinator)",
+            "let retained_floor = self.retained_floor",
+            "drop(self.coordinator)",
+            "retained_floor",
+        ),
+    )
+    reject_tokens(
+        ledger_path,
+        "opaque all-row finalization ownership",
+        ledger_source,
+        (
+            "impl Clone for StagedFinalizationRetirementV1",
+            "impl Copy for StagedFinalizationRetirementV1",
+            "impl Clone for PublishedFinalizationRetirementV1",
+            "impl Copy for PublishedFinalizationRetirementV1",
+            "pub coordinator: LifecycleCoordinator",
+            "pub current: LifecycleLedgerV1",
+            "pub retired: LifecycleLedgerV1",
+        ),
+    )
+    require_tokens(
+        lifecycle_startup_test_path,
+        "production lifecycle all-row finalization behavior",
+        lifecycle_startup_test_source,
+        (
+            "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+            ".retire_lifecycle_stores_for_test(finality_receipt)",
+            "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+            "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
+            "let placeholder_cadence = exact_state.sumeragi_block_cadence()",
+            "placeholder_cadence.checked_add(Duration::from_millis(1))",
+            "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
+            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+            ".claim_producer_turn_for_local_proposal(&mut serve_runner)",
+            ".settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
+            "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
+            "assert_eq!(receipt.context_id(), recovered_context.id())",
+            "assert_eq!(artifact.subject, subject)",
+            "Ok::<_, super::super::v2_runner::V2RunnerError>((successor, ()))",
+            "outcome.cleanup().warnings().is_empty()",
+            "outcome.wal_retirement_warning().is_none()",
+        ),
+    )
+    finalization_registry = region(
+        registry_validate_path,
+        registry_validate_source,
+        "finalization-only recovered registry census",
+        "fn exactly_covers_finalization_work(",
+        "fn exactly_covers_ready_work_with_extra(",
+    )
+    require_tokens(
+        registry_validate_path,
+        "finalization-only recovered registry census",
+        finalization_registry,
+        (
+            "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+            "DurableRecoveredLifecycleSignedBroadcast(_)",
+            ".collect::<std::collections::BTreeSet<_>>()",
+            "self.exact_recovered_wal_registry_slot()",
+            "RecoveredWalRegistrySlotV1::None",
+            "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, &refanned_broadcasts, )",
+        ),
+    )
+    finalization_pair_link = region(
+        registry_validate_impl_path,
+        registry_validate_impl_source,
+        "finalization recovered Broadcast pair link",
+        "fn exact_optional_recovered_wal_authority(",
+        "/// Install one work value without overwriting an incumbent address.",
+    )
+    require_tokens(
+        registry_validate_impl_path,
+        "finalization recovered Broadcast pair link",
+        finalization_pair_link,
+        (
+            "broadcast.is_unpaired()",
+            "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
+            "refanned_broadcasts.iter().all(|ordinal|",
+            "LifecycleLedgerV1::from_coordinator(coordinator)",
+            "!matches!(record.state, super::LifecycleState::Waiting(_))",
+            "broadcast.validates_in_ledger(exact_ledger)",
+            "broadcast.paired_next_sign_matches_terminal_record( coordinator, exact_ledger, )",
+            "broadcast.matches_current_finalization_record(",
+            "!refanned_broadcasts.contains(&record.ordinal)",
+        ),
+    )
+    terminal_pair_link = region(
+        registry_path,
+        registry_source,
+        "retained recovered Broadcast terminal next-Sign link",
+        "fn paired_next_sign_matches_terminal_record(",
+        "fn validates_at(",
+    )
+    require_tokens(
+        registry_path,
+        "retained recovered Broadcast terminal next-Sign link",
+        terminal_pair_link,
+        (
+            "LifecycleState::Terminal(outcome)",
+            "exact_single_record_slot(",
+            "LifecycleWorkClass::SignVote.capacity_class()",
+            "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
+            "installed_digest == next_digest",
+            "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",
+            "coordinator.owner_index.get(&next_record.owner.causal_root()) == Some(&next_record.owner)",
+            "!coordinator.ready_index.contains(&next_address.ordinal)",
+            "durable_next.terminal() == Some(Some(outcome))",
+            "continuation.matches_record( LifecycleWorkClass::SignVote, Some(outcome), next_address.ordinal, ledger.high_water(), )",
+        ),
+    )
+    require_tokens(
+        wal_recovery_path,
+        "volatile refanned Broadcast finalization state",
+        wal_recovery_source,
+        (
+            "fn matches_current_finalization_record(",
+            "WaitSource::Recovery(digest)",
+            "coordinator.observed_generation.get(&expected_source) == Some(&wait.observed_generation())",
+            "!coordinator.ready_index.contains(&address.ordinal)",
+        ),
+    )
+    require_tokens(
+        scheduler_path,
+        "volatile refanned Broadcast finalization behavior",
+        scheduler_source,
+        (
+            "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
+            "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()",
+            "finalization_registry_census_is_exact_for_test()",
+        ),
+    )
+    for literal in (
+        '"finalization accepts the exact volatile refanout wait after its next Sign retires"',
+        '"all exact post-output waits form one bounded finalization census"',
+        '"finalization rejects a corrupted retained digest after paired Sign retirement"',
+        '"finalization must reject the corrupted exact next-Sign link"',
+    ):
+        require_literal_count(
+            scheduler_path,
+            "volatile refanned Broadcast finalization behavior",
+            scheduler_source,
+            literal,
+            1,
+        )

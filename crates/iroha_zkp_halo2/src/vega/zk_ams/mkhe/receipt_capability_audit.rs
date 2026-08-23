@@ -1,10 +1,9 @@
 //! Fail-closed audit of the ZK-AMS verified-receipt capability graph.
 //!
 //! This module deliberately distinguishes implemented proof components from
-//! operational authorization.  A sealed native CPK relation receipt and a
-//! verifier-bound RNS-Link transport are useful building blocks, but neither
-//! fact proves that every release entry point consumes the required opaque
-//! capability.  The audit therefore keeps a separate bit for each handoff and
+//! operational authorization. A sealed native CPK relation receipt is useful,
+//! but the retired structural RNS-Link prototypes never minted an authorizing
+//! receipt. The audit therefore keeps a separate bit for each handoff and
 //! refuses each operational requirement whose corresponding handoff remains
 //! open. Full release remains unavailable until every handoff closes.
 //!
@@ -196,21 +195,16 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
         rkg_round_one_receipt_enforced: true,
         rkg_round_two_receipt_enforced: true,
         galois_key_receipt_enforced: true,
-        // Canonical decoding is only structural.  It explicitly returns an
-        // unverified envelope and cannot mint an algebraic receipt.
-        rns_link_transport_bound: true,
-        // These are genuine in-process checks over state-owned witnesses, but
-        // the 43-opening path returns only statement-independent Unverified
-        // topology/count metadata. No token, capability, or sealed native-BGV
-        // opening receipt is minted.
+        // The retired structural decoder never minted an algebraic receipt, so
+        // absence of its private transport is recorded explicitly.
+        rns_link_transport_bound: false,
+        // The retired 43-opening path likewise returned only unverified
+        // topology/count metadata and never minted a sealed native-BGV receipt.
         native_bgv_opening_receipt_sealed: false,
         native_materialized_hyrax_receipt_sealed: true,
         terminal_prover_consumes_native_materialized_receipt: true,
-        // The private schema and packed-state preflight now describe 89 public
-        // inputs in one X chunk and replicated U in 16 chunks, and all 43
-        // native openings are tied to that exact owner/order. This stays false
-        // until the unverified result feeds a complete proof verifier, so
-        // matching native objects cannot be mistaken for algebraic equality.
+        // No retained RNS-Link schema proves that release geometry and all
+        // native openings equal the materialized accumulator commitments.
         rns_link_family_geometry_matches_native: false,
         // A point, one evaluation scalar, and one nonzero response per section
         // do not encode opening/IPA equations for either relation.
@@ -239,8 +233,8 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
     audit.digest = receipt_capability_audit_digest_v1(audit);
     audit
 }
-/// Require one operational capability without accepting a digest shell or a
-/// structurally decoded RNS-Link envelope as a substitute.
+/// Require one operational capability without accepting a digest shell or
+/// retired structural RNS-Link metadata as a substitute.
 ///
 /// The collective-public-key aggregate and the three evaluated-key receipt consumers are authorized
 /// through their sealed handoffs. The independent algebraic/materialization/decryption blockers
@@ -356,10 +350,6 @@ mod tests {
             mint_collective_secret_binding_from_verified_cpk_v1,
             verify_and_consume_direct_relation_use_v1,
         },
-        collective::{
-            ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-            ZkAmsMkheCollectivePublicKeyV1,
-        },
         cpk_relation::{VerifiedZkAmsMkheCpkBindingSourceV1, VerifiedZkAmsMkheCpkContributionV1},
         decryption::{
             ZkAmsMkheAuthenticatedDecryptionShareV1, ZkAmsMkheDecryptionSplitTransportV1,
@@ -374,16 +364,8 @@ mod tests {
         },
         phase23_encrypted::{
             ZkAmsPhase23AccumulatorShapeV1, ZkAmsPhase23MaterializedAccumulatorsV1,
-            ZkAmsPhase23PackedAccumulatorSetV1,
             zk_ams_phase23_materialize_release_accumulator_chunks_v1,
         },
-        phase23_rns_link::{
-            StateOwnedRnsLinkAccumulatorOpeningsV1,
-            ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
-            ZkAmsPhase23RnsLinkChunkCommitmentV1, ZkAmsPhase23RnsLinkContextV1,
-            ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
-        },
-        phase23_rns_link_wire::ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
     };
     type MintCpkBindingV1 = fn(
         &ZkAmsMkheGovernedActiveRosterV1,
@@ -416,50 +398,6 @@ mod tests {
         [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
         ZkAmsMkheErrorV1,
     >;
-    type DecodeBoundRnsLinkV1 = for<'a, 'b, 'c> fn(
-        &'a [u8],
-        &'b ZkAmsPhase23RnsLinkContextV1,
-        &'c [ZkAmsPhase23RnsLinkChunkCommitmentV1],
-    ) -> Result<
-        ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
-        ZkAmsMkheErrorV1,
-    >;
-    type BeginStateOwnedNativeBgvOpeningsV1 =
-        for<'a> fn(
-            &'a ZkAmsPhase23PackedAccumulatorSetV1,
-            &'a ZkAmsMkheCollectivePublicKeyV1,
-            [&'a ZkAmsMkheCollectiveCiphertextV1;
-                ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
-        ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1>;
-    type AbsorbStateOwnedNativeBgvOpeningV1 = for<'a> fn(
-        &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
-        ZkAmsMkheCollectiveEncryptionOpeningV1,
-    ) -> Result<(), ZkAmsMkheErrorV1>;
-    type FinishStateOwnedNativeBgvOpeningsV1 = for<'a> fn(
-        StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
-    ) -> Result<
-        ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
-        ZkAmsMkheErrorV1,
-    >;
-    fn begin_state_owned_native_bgv_openings_v1<'a>(
-        packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
-        common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
-        ciphertexts: [&'a ZkAmsMkheCollectiveCiphertextV1;
-            ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
-    ) -> Result<StateOwnedRnsLinkAccumulatorOpeningsV1<'a>, ZkAmsMkheErrorV1> {
-        StateOwnedRnsLinkAccumulatorOpeningsV1::new(packed_owner, common_key, ciphertexts)
-    }
-    fn absorb_state_owned_native_bgv_opening_v1<'a>(
-        stream: &mut StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
-        opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
-    ) -> Result<(), ZkAmsMkheErrorV1> {
-        stream.absorb_next_opening_v1(opening)
-    }
-    fn finish_state_owned_native_bgv_openings_v1<'a>(
-        stream: StateOwnedRnsLinkAccumulatorOpeningsV1<'a>,
-    ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
-        stream.finish_into_unverified_metadata_v1()
-    }
     type MaterializeWithoutReceiptV1 =
         fn(
             [u8; 32],
@@ -494,17 +432,14 @@ mod tests {
             .expect("production source prefix");
         assert!(production.contains("native_bgv_opening_receipt_sealed: false"));
         assert!(!production.contains("native_bgv_opening_receipt_sealed: true"));
+        assert!(production.contains("rns_link_transport_bound: false"));
+        assert!(!production.contains("rns_link_transport_bound: true"));
         let _: MintCpkBindingV1 = mint_collective_secret_binding_from_verified_cpk_v1;
         let _: PrepareSecretFreePersistentDecryptionV1 =
             prepare_zk_ams_mkhe_persistent_decryption_from_verified_cpk_v1;
         let _: BindPersistentDecryptionStatementV1 =
             ZkAmsMkhePersistentDecryptionVerificationContextV1::bind_statement_v1;
         let _: VerifyDirectRelationV1 = verify_and_consume_direct_relation_use_v1;
-        let _: DecodeBoundRnsLinkV1 =
-            ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_bound_unverified;
-        let _: BeginStateOwnedNativeBgvOpeningsV1 = begin_state_owned_native_bgv_openings_v1;
-        let _: AbsorbStateOwnedNativeBgvOpeningV1 = absorb_state_owned_native_bgv_opening_v1;
-        let _: FinishStateOwnedNativeBgvOpeningsV1 = finish_state_owned_native_bgv_openings_v1;
         let _: MaterializeWithoutReceiptV1 =
             zk_ams_phase23_materialize_release_accumulator_chunks_v1::<
                 std::vec::IntoIter<Result<ZkAmsT256PackedPlaintextV1, ZkAmsMkheErrorV1>>,
@@ -712,7 +647,7 @@ mod tests {
         assert!(audit.rkg_round_one_receipt_enforced);
         assert!(audit.rkg_round_two_receipt_enforced);
         assert!(audit.galois_key_receipt_enforced);
-        assert!(audit.rns_link_transport_bound);
+        assert!(!audit.rns_link_transport_bound);
         assert!(!audit.native_bgv_opening_receipt_sealed);
         assert!(audit.native_materialized_hyrax_receipt_sealed);
         assert!(audit.terminal_prover_consumes_native_materialized_receipt);

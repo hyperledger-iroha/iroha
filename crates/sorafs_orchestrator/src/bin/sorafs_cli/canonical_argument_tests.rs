@@ -42,11 +42,21 @@ fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
             err.contains("canonical unsigned decimal integer"),
             "unexpected u64 error for {value:?}: {err}"
         );
+        let err =
+            parse_usize(value, "--max-peers").expect_err("noncanonical usize token must fail");
+        assert!(
+            err.contains("canonical unsigned decimal integer"),
+            "unexpected usize error for {value:?}: {err}"
+        );
     }
     assert_eq!(
         parse_u64_arg("--timeout-ms", "0", "sorafs_cli moderation runner-canary")
             .expect("zero is a canonical unsigned token"),
         0
+    );
+    assert_eq!(
+        parse_usize("42", "--max-peers").expect("canonical usize"),
+        42
     );
     assert_eq!(
         parse_u32_arg("--backlog", "42", "sorafs_cli appeal quote").expect("canonical u32"),

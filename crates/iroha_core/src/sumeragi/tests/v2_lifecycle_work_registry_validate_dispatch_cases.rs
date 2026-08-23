@@ -653,11 +653,6 @@ fn durable_validate_fixture_at_view_with_parent(
         height: context.height,
         view,
     };
-    let tag = EventTag::new(
-        round.height,
-        round.view,
-        Generation::new(u64::from(marker) + 1),
-    );
     let leader = context.leader(round.view);
     let leader_index = usize::try_from(leader).expect("durable Validate leader index");
     let header = BlockHeader::new(
@@ -687,6 +682,24 @@ fn durable_validate_fixture_at_view_with_parent(
         .expect("encode durable Validate fixture payload")
         .manifest()
         .clone();
+    durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire)
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn durable_validate_fixture_from_material(
+    marker: u8,
+    verified: VerifiedHeightContext,
+    manifest: wire::PayloadManifest,
+    canonical_wire: Vec<u8>,
+) -> DurableValidateFixture {
+    let round = manifest.round;
+    let subject = manifest.subject;
+    let tag = EventTag::new(
+        round.height,
+        round.view,
+        Generation::new(u64::from(marker) + 1),
+    );
     let expected_manifest_hash = HashOf::new(&manifest);
     let durable_receipt =
         DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
@@ -1060,7 +1073,7 @@ fn durable_validate_sidecar_store_fixture(
 
 #[cfg(feature = "bls")]
 fn durable_validate_store_fixture_from_fixture(
-    mut fixture: DurableValidateFixture,
+    fixture: DurableValidateFixture,
     execution_commitment: Option<wire::ExecutionCommitment>,
 ) -> (
     DurableValidateFixture,
@@ -1074,6 +1087,29 @@ fn durable_validate_store_fixture_from_fixture(
     let durable = store
         .store(fixture.manifest.clone(), fixture.canonical_wire.clone())
         .expect("persist detached Validate fixture body");
+    assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
+    durable_validate_store_fixture_from_existing(
+        fixture,
+        directory,
+        store,
+        durable,
+        execution_commitment,
+    )
+}
+
+#[cfg(feature = "bls")]
+fn durable_validate_store_fixture_from_existing(
+    mut fixture: DurableValidateFixture,
+    directory: TempDir,
+    store: V2BodyStore,
+    durable: DurableBodyReceipt,
+    execution_commitment: Option<wire::ExecutionCommitment>,
+) -> (
+    DurableValidateFixture,
+    TempDir,
+    V2BodyStore,
+    DurableBodyReceipt,
+) {
     assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
     let AdapterEffect::ValidateBody {
         tag,
@@ -1318,6 +1354,13 @@ struct ReadyDurableValidateFixture {
 }
 
 #[cfg(feature = "bls")]
+struct OwnedReadyDurableValidateFixture {
+    ready: ReadyDurableValidateFixture,
+    store: V2BodyStore,
+    coordinator: LifecycleCoordinator,
+}
+
+#[cfg(feature = "bls")]
 fn ready_durable_validate_fixture(
     marker: u8,
     outcome: ReadyDurableValidateFixtureOutcome,
@@ -1354,6 +1397,23 @@ fn ready_durable_validate_fixture_from_waiting(
     waiting: WaitingDurableValidateFixture,
     outcome: ReadyDurableValidateFixtureOutcome,
 ) -> ReadyDurableValidateFixture {
+    owned_ready_durable_validate_fixture_from_waiting(waiting, outcome).ready
+}
+
+#[cfg(feature = "bls")]
+fn owned_ready_durable_validate_fixture_from_waiting(
+    waiting: WaitingDurableValidateFixture,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> OwnedReadyDurableValidateFixture {
+    owned_ready_durable_validate_fixture_from_waiting_with_commitment(waiting, outcome, None)
+}
+
+#[cfg(feature = "bls")]
+fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
+    waiting: WaitingDurableValidateFixture,
+    outcome: ReadyDurableValidateFixtureOutcome,
+    validated_commitment: Option<wire::ExecutionCommitment>,
+) -> OwnedReadyDurableValidateFixture {
     let WaitingDurableValidateFixture {
         fixture,
         _directory,
@@ -1365,7 +1425,9 @@ fn ready_durable_validate_fixture_from_waiting(
     } = waiting;
     let executed = match outcome {
         ReadyDurableValidateFixtureOutcome::Validated => {
-            let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+            let commitment = validated_commitment.unwrap_or_else(|| {
+                ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment()
+            });
             dispatch
                 .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
                 .expect("execute successful Ready Validate fixture")
@@ -1402,11 +1464,15 @@ fn ready_durable_validate_fixture_from_waiting(
         coordinator.records[&lease.ordinal()].state,
         LifecycleState::Ready
     );
-    ReadyDurableValidateFixture {
-        fixture,
-        _directory,
-        holder,
-        lease,
-        durable,
+    OwnedReadyDurableValidateFixture {
+        ready: ReadyDurableValidateFixture {
+            fixture,
+            _directory,
+            holder,
+            lease,
+            durable,
+        },
+        store,
+        coordinator,
     }
 }

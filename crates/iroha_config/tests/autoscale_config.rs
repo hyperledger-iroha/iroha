@@ -28,24 +28,8 @@ fn assert_ratio_eq(actual: f64, expected: f64) {
 }
 #[test]
 fn autoscale_overrides_parse_from_toml() {
-    let config = parse_actual_config(
-        r"
-[nexus.autoscale]
-enabled = true
-min_lanes = 3
-max_lanes = 5
-target_block_ms = 2500
-scale_out_latency_ratio = 1.25
-scale_in_latency_ratio = 0.75
-scale_out_utilization_ratio = 0.90
-scale_in_utilization_ratio = 0.35
-scale_out_window_blocks = 12
-scale_in_window_blocks = 48
-cooldown_blocks = 9
-per_lane_target_tps = 75
-",
-    )
-    .expect("valid autoscale config should parse");
+    let config = parse_actual_config(include_str!("fixtures/autoscale/overrides.toml"))
+        .expect("valid autoscale config should parse");
     let autoscale = config.nexus.autoscale;
     assert!(autoscale.enabled);
     assert_eq!(autoscale.min_lanes.get(), 3);
@@ -63,18 +47,7 @@ per_lane_target_tps = 75
 }
 #[test]
 fn autoscale_rejects_zero_sizing_fields() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-min_lanes = 0
-max_lanes = 0
-target_block_ms = 0
-scale_out_window_blocks = 0
-scale_in_window_blocks = 0
-cooldown_blocks = 0
-per_lane_target_tps = 0
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/zero_fields.toml"));
     for field in [
         "min_lanes",
         "max_lanes",
@@ -92,13 +65,7 @@ per_lane_target_tps = 0
 }
 #[test]
 fn autoscale_rejects_invalid_lane_bounds() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-min_lanes = 6
-max_lanes = 5
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/invalid_bounds.toml"));
     assert!(
         message.contains("min_lanes must be < max_lanes"),
         "error should identify inverted autoscale lane bounds: {message}"
@@ -106,14 +73,7 @@ max_lanes = 5
 }
 #[test]
 fn autoscale_rejects_empty_elastic_lane_range() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-enabled = true
-min_lanes = 4
-max_lanes = 4
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/empty_range.toml"));
     assert!(
         message.contains("min_lanes must be < max_lanes"),
         "error should reject an enabled autoscale profile with no elastic lane ids: {message}"
@@ -121,12 +81,7 @@ max_lanes = 4
 }
 #[test]
 fn autoscale_rejects_max_lanes_above_safety_cap() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-max_lanes = 9
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/above_cap.toml"));
     assert!(
         message.contains("max_lanes must be <= 8"),
         "error should identify autoscale max_lanes above the safety cap: {message}"
@@ -134,17 +89,7 @@ max_lanes = 9
 }
 #[test]
 fn autoscale_rejects_reserved_lane_metadata_claim() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-lane_count = 1
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = { "autoscale.managed" = "true" }
-"#,
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/reserved_metadata.toml"));
     assert!(
         message.contains("autoscale.managed") && message.contains("reserved"),
         "error should identify reserved autoscale-managed lane metadata: {message}"
@@ -152,27 +97,7 @@ metadata = { "autoscale.managed" = "true" }
 }
 #[test]
 fn autoscale_rejects_manual_lane_inside_elastic_id_range() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-lane_count = 2
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 1
-max_lanes = 2
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "manual-elastic-range"
-metadata = {}
-"#,
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/manual_in_range.toml"));
     assert!(
         message.contains("reserved autoscale elastic lane id range [1, 2)")
             && message.contains("manual lanes outside"),
@@ -181,33 +106,8 @@ metadata = {}
 }
 #[test]
 fn autoscale_accepts_sparse_manual_catalog_around_elastic_id_range() {
-    let config = parse_actual_config(
-        r#"
-[nexus]
-lane_count = 8
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 3
-max_lanes = 6
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "manual-below-range"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 6
-alias = "manual-at-exclusive-upper-bound"
-metadata = {}
-"#,
-    )
-    .expect("sparse manual lanes outside the elastic id range should parse");
+    let config = parse_actual_config(include_str!("fixtures/autoscale/sparse_catalog.toml"))
+        .expect("sparse manual lanes outside the elastic id range should parse");
     let autoscale = config.nexus.autoscale;
     assert!(!autoscale.contains_elastic_lane_id(LaneId::new(2)));
     assert!(autoscale.contains_elastic_lane_id(LaneId::new(3)));
@@ -227,38 +127,8 @@ metadata = {}
 }
 #[test]
 fn autoscale_accepts_elastic_id_range_above_initial_catalog_namespace() {
-    let config = parse_actual_config(
-        r#"
-[nexus]
-lane_count = 4
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 4
-max_lanes = 5
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "core"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "governance"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "zk"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 3
-alias = "reserved-base"
-metadata = {}
-"#,
-    )
-    .expect("the elastic range may reserve the next id for lifecycle expansion");
+    let config = parse_actual_config(include_str!("fixtures/autoscale/range_above_catalog.toml"))
+        .expect("the elastic range may reserve the next id for lifecycle expansion");
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 4);
     assert!(
         config
@@ -278,37 +148,8 @@ metadata = {}
 }
 #[test]
 fn autoscale_rejects_manual_lane_in_sparse_elastic_id_gap() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-lane_count = 8
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 3
-max_lanes = 6
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "manual-below-range"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 5
-alias = "manual-in-sparse-gap"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 6
-alias = "manual-at-exclusive-upper-bound"
-metadata = {}
-"#,
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/manual_in_sparse_gap.toml"));
     assert!(
         message.contains("lane 5 is inside reserved autoscale elastic lane id range [3, 6)"),
         "a sparse catalog must not hide a manual occupant of the reserved id range: {message}"
@@ -316,32 +157,7 @@ metadata = {}
 }
 #[test]
 fn autoscale_rejects_default_lane_inside_elastic_id_range() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-lane_count = 2
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 1
-alias = "elastic-default"
-metadata = {}
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 1
-max_lanes = 2
-
-[nexus.routing_policy]
-default_lane = 1
-default_dataspace = "universal"
-rules = []
-"#,
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/default_in_range.toml"));
     assert!(
         message.contains("nexus.routing_policy.default_lane")
             && message.contains("must be below nexus.autoscale.min_lanes 1"),
@@ -350,32 +166,8 @@ rules = []
 }
 #[test]
 fn autoscale_rejects_default_lane_above_elastic_id_range() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-lane_count = 3
-
-[[nexus.lane_catalog]]
-index = 0
-alias = "default"
-metadata = {}
-
-[[nexus.lane_catalog]]
-index = 2
-alias = "high-default"
-metadata = {}
-
-[nexus.autoscale]
-enabled = true
-min_lanes = 1
-max_lanes = 2
-
-[nexus.routing_policy]
-default_lane = 2
-default_dataspace = "universal"
-rules = []
-"#,
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/default_above_range.toml"));
     assert!(
         message.contains("nexus.routing_policy.default_lane")
             && message.contains("must be below nexus.autoscale.min_lanes 1"),
@@ -384,15 +176,7 @@ rules = []
 }
 #[test]
 fn autoscale_rejects_hysteresis_without_gap() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-scale_out_latency_ratio = 1.0
-scale_in_latency_ratio = 1.0
-scale_out_utilization_ratio = 0.5
-scale_in_utilization_ratio = 0.5
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/no_hysteresis_gap.toml"));
     assert!(
         message.contains("scale_in_latency_ratio must be < scale_out_latency_ratio"),
         "error should identify latency hysteresis violation: {message}"
@@ -404,15 +188,8 @@ scale_in_utilization_ratio = 0.5
 }
 #[test]
 fn autoscale_rejects_hysteresis_that_collapses_after_permille_rounding() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-scale_out_latency_ratio = 1.00049
-scale_in_latency_ratio = 1.0004
-scale_out_utilization_ratio = 0.50049
-scale_in_utilization_ratio = 0.5004
-",
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/rounded_hysteresis.toml"));
     assert!(
         message.contains("scale_in_latency_ratio must round below scale_out_latency_ratio"),
         "error should identify collapsed latency hysteresis: {message}"
@@ -424,15 +201,7 @@ scale_in_utilization_ratio = 0.5004
 }
 #[test]
 fn autoscale_rejects_non_finite_ratios() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-scale_out_latency_ratio = inf
-scale_in_latency_ratio = nan
-scale_out_utilization_ratio = inf
-scale_in_utilization_ratio = nan
-",
-    );
+    let message = autoscale_config_error(include_str!("fixtures/autoscale/non_finite_ratios.toml"));
     for field in [
         "scale_out_latency_ratio",
         "scale_in_latency_ratio",
@@ -451,15 +220,8 @@ scale_in_utilization_ratio = nan
 }
 #[test]
 fn autoscale_rejects_sub_permille_ratios() {
-    let message = autoscale_config_error(
-        r"
-[nexus.autoscale]
-scale_out_latency_ratio = 0.0004
-scale_in_latency_ratio = 0.0002
-scale_out_utilization_ratio = 0.0004
-scale_in_utilization_ratio = 0.0002
-",
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/sub_permille_ratios.toml"));
     for field in [
         "scale_out_latency_ratio",
         "scale_in_latency_ratio",
@@ -478,23 +240,14 @@ scale_in_utilization_ratio = 0.0002
 }
 #[test]
 fn lane_consensus_validator_cap_accepts_boundary() {
-    let config = parse_actual_config(
-        r"
-[nexus.staking]
-max_validators = 128
-",
-    )
-    .expect("the protocol maximum must remain configurable");
+    let config = parse_actual_config(include_str!("fixtures/autoscale/validator_cap.toml"))
+        .expect("the protocol maximum must remain configurable");
     assert_eq!(config.nexus.staking.max_validators.get(), 128);
 }
 #[test]
 fn lane_consensus_validator_cap_rejects_oversized_staking_roster() {
-    let message = autoscale_config_error(
-        r"
-[nexus.staking]
-max_validators = 129
-",
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/validator_over_cap.toml"));
     assert!(
         message.contains("nexus.staking.max_validators must be <= 128") && message.contains("129"),
         "error should identify the bounded consensus proof envelope: {message}"
@@ -502,17 +255,8 @@ max_validators = 129
 }
 #[test]
 fn dataspace_fault_tolerance_accepts_largest_bounded_committee() {
-    let config = parse_actual_config(
-        r#"
-[nexus]
-
-[[nexus.dataspace_catalog]]
-alias = "universal"
-id = 0
-fault_tolerance = 42
-"#,
-    )
-    .expect("3f+1=127 must fit the 128-validator protocol envelope");
+    let config = parse_actual_config(include_str!("fixtures/autoscale/bounded_committee.toml"))
+        .expect("3f+1=127 must fit the 128-validator protocol envelope");
     assert_eq!(
         config.nexus.dataspace_catalog.entries()[0].fault_tolerance,
         42
@@ -520,16 +264,8 @@ fault_tolerance = 42
 }
 #[test]
 fn dataspace_fault_tolerance_rejects_oversized_committee() {
-    let message = autoscale_config_error(
-        r#"
-[nexus]
-
-[[nexus.dataspace_catalog]]
-alias = "universal"
-id = 0
-fault_tolerance = 43
-"#,
-    );
+    let message =
+        autoscale_config_error(include_str!("fixtures/autoscale/oversized_committee.toml"));
     assert!(
         message.contains("fault_tolerance 43 requires 130 validators")
             && message.contains("lane consensus cap 128"),

@@ -280,6 +280,8 @@ fn fixture_v1() -> FixtureV1 {
     let context = PrefixContextV1 {
         parameter_digest,
         transcript_digest,
+        q_mask_s_root: fixture_digest_v1(b"q-mask-s-root", 0),
+        qpcs_pre_relation_transcript_digest: fixture_digest_v1(b"qpcs-pre-relation-transcript", 0),
         rns_aggregation_seed: fixture_digest_v1(b"rns-aggregation-seed", 0),
         relation_seed: fixture_digest_v1(b"relation-seed", 0),
         batching_seed: fixture_digest_v1(b"batching-seed", 0),
@@ -609,6 +611,48 @@ fn relation_points_exclude_zero_denominators_and_domain_points() {
             );
         }
     }
+}
+
+#[test]
+fn move_only_relation_schedule_binds_q_mask_root_seed_and_all_exact_points() {
+    let fixture = fixture_v1();
+    let schedule =
+        RnsNativeQpcsRelationScheduleV1::from_context_v1(fixture.context).expect("schedule");
+    assert_eq!(schedule.q_mask_s_root(), fixture.context.q_mask_s_root);
+    assert_eq!(
+        schedule.qpcs_pre_relation_transcript_digest(),
+        fixture.context.qpcs_pre_relation_transcript_digest
+    );
+    assert_eq!(schedule.relation_seed(), fixture.context.relation_seed);
+    assert_eq!(schedule.points().len(), RELATION_COUNT_V1);
+    assert!(!schedule.has_qpcs_relation_lineage_v1());
+
+    let mut changed = fixture.context;
+    changed.q_mask_s_root[0] ^= 1;
+    assert!(matches!(
+        verify_prefix_parts_with_schedule_v1(
+            changed,
+            schedule,
+            &fixture.queries,
+            &fixture.initial_indices.values[..fixture.initial_indices.len],
+            &fixture.initial_values,
+            &fixture.prefix,
+        ),
+        Err(RnsNativeQpcsPrefixErrorV1::InvalidContext)
+    ));
+
+    let source = include_str!("rns_native_qpcs_prefix.rs");
+    let declaration = source
+        .find("pub(super) struct RnsNativeQpcsRelationScheduleV1")
+        .expect("relation schedule declaration");
+    let prefix = &source[declaration.saturating_sub(220)..declaration];
+    assert!(!prefix.contains("derive(Clone"));
+    assert!(!prefix.contains("derive(Copy"));
+    assert!(source.contains("relation_schedule: Some(relation_schedule)"));
+    assert!(source.contains("fn from_relation_binding_v1("));
+    assert!(source.contains("lineage: Option<ZkAmsMkheRnsNativeQpcsRelationLineageV1>"));
+    assert!(source.contains("fn validate_qpcs_bound_lineage_v1("));
+    assert!(!source.contains("from_qpcs_bound_transcript_v1"));
 }
 
 #[test]

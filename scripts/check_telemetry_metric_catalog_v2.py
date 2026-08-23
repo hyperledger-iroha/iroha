@@ -19,13 +19,13 @@ from pathlib import Path
 CATALOG = Path("crates/iroha_telemetry/src/metrics/catalog_v2.tsv")
 SOURCE = Path("crates/iroha_telemetry/src/metrics.rs")
 HEADER = "# iroha-telemetry-metric-catalog-v2"
-CATALOG_BYTES = 118_155
-CATALOG_SHA256 = "cc28011f9018dd2ca02dfc881833be25250701715ffb2f0d542b5ebd2080d02a"
-CATALOG_BLAKE3 = "b50d212eaf4d4f4e955c6bf2f8ae123abf495a84b105ed0f5c0bf34f97a6efc6"
+CATALOG_BYTES = 118_123
+CATALOG_SHA256 = "bafdd267c9c6789c6b30f9834d541cc04d525d53c724993269017586be95c211"
+CATALOG_BLAKE3 = "4f986d35fe2a1fa17430d6c2fcd59495fe492fd15592f94b060db5624078791d"
 ROWS = 868
 REGISTERED = 823
-LEDGER_BYTES = 257_078
-LEDGER_SHA256 = "4f72f06bd94b3c5e496f5b00e5946beed69626c185ae36a152684079cbe82171"
+LEDGER_BYTES = 257_048
+LEDGER_SHA256 = "dd397df508ff1411f7101198d6c6997077a75d66041b9cd9ee6074367a53edbb"
 DSL_MACROS_TOKENS_SHA256 = "879271505b3c3259b930122d4e79f6b8e9eb4b725a1cc267d6397a116ab84fb9"
 FACTORY_TOKENS_SHA256 = "41a07ee3fc3e40d3c0d18b7dd9200f5a11d75f1e3fe1bf074fe36b380be8c19f"
 SUFFIX_TOKENS_SHA256 = "0344d5ecf4b99e1800a445b33b6aa5c9bcc6166d75f0cce18eb28e6cc5be032e"
@@ -561,7 +561,7 @@ def check_contents(catalog_raw: bytes, source: str) -> list[str]:
     expected_literals = (
         "const METRIC_CATALOG_V2_ROWS: usize = 868;",
         "const METRIC_CATALOG_V2_REGISTERED: usize = 823;",
-        "const METRIC_CATALOG_V2_BYTES: usize = 118_155;",
+        "const METRIC_CATALOG_V2_BYTES: usize = 118_123;",
         CATALOG_BLAKE3,
     )
     for literal in expected_literals:

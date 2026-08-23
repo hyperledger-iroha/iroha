@@ -8,6 +8,7 @@ use crate::{
     settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
+        isi::offline::signed_kagemusha_taira_canary_wire_identity_v1,
         ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
     },
     state::{
@@ -5965,12 +5966,8 @@ impl Executor {
         Ok(())
     }
     /// Execute [`SignedTransaction`].
-    ///
     /// # Errors
-    ///
-    /// - Failed to prepare the IVM runtime;
-    /// - Failed to execute the entrypoint of the IVM bytecode;
-    /// - Executor denied the operation.
+    /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
     #[allow(clippy::too_many_lines)]
     pub fn execute_transaction(
         &self,
@@ -5979,17 +5976,25 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
+        state_transaction.bind_privacy_transaction_intent_v1(None);
+        state_transaction.kagemusha_taira_canary_wire_identity = None;
         if transaction.authority() != authority {
             return Err(ValidationFail::InternalError(
-                "executor authority argument does not match signed transaction authority"
-                    .to_owned(),
+                "signed authority mismatch".into(),
             ));
         }
         trace!("Running transaction execution");
-        state_transaction.bind_privacy_transaction_intent_v1(None);
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+        if state_transaction.kagemusha_taira_canary_external_entrypoint {
+            state_transaction.kagemusha_taira_canary_wire_identity =
+                signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
+        }
+        let call_hash = transaction.hash_as_entrypoint();
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
+        let tx_hash = transaction.hash();
+        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let tx_bytes_len = to_bytes(transaction.payload())
             .map(|bytes| bytes.len())
             .map_err(|err| {
@@ -6022,11 +6027,6 @@ impl Executor {
             )
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
         }
-        // Bind the transaction call_hash for ISI event emitters to use in audit fields
-        let call_hash = transaction.hash_as_entrypoint();
-        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
-        let tx_hash = transaction.hash();
-        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());
@@ -7197,6 +7197,21 @@ impl Executor {
             instruction,
             is_genesis,
         )?;
+        if instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::TransferAssetBatch>()
+            .is_some()
+            && !valid_contract_runtime_subject(
+                &state_transaction.world,
+                authority,
+                contract_runtime_context,
+            )
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't transfer asset batch from an inactive or inconsistent contract subject"
+                    .to_owned(),
+            ));
+        }
         if let Some(register_role) = extract_register_role(instruction) {
             if is_reserved_multisig_role_id(register_role.object().id()) {
                 return Err(ValidationFail::NotPermitted(
@@ -9252,6 +9267,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         RevokeBox,
         SetKeyValueBox,
         TransferBox,
+        iroha_data_model::isi::TransferAssetBatch,
         UnregisterBox,
         iroha_data_model::isi::Upgrade,
         iroha_data_model::isi::register::RegisterPeerWithPop,
@@ -9319,21 +9335,20 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Offline/Kagemusha execution is guarded by the native escrow, activation,
-    // release, and device-attestation policy checks in Core.
+    // Offline/Kagemusha execution is guarded by exact native checks in Core.
     if is_any!(
         iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
         iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
+        iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
         iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
     ) {
         return true;
     }
-    // Native VPN escrow admission is one signed lifecycle surface. Core
-    // validates quote issuance, funding, settlement, and timeout refund; the
-    // Initial executor must admit all three operations together so no lease can
-    // be opened without its terminal paths.
+    // Admit the complete native VPN escrow lifecycle so every lease retains
+    // its settlement and timeout-refund terminal paths.
     if is_any!(
         iroha_data_model::isi::vpn::OpenVpnLeaseEscrow,
         iroha_data_model::isi::vpn::SettleVpnLease,
@@ -10256,16 +10271,8 @@ fn can_transfer_asset(
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Quantity, Account>,
 ) -> Result<bool, ValidationFail> {
-    if let Some(context) = contract_runtime_context {
-        let live_subject =
-            code::bound_contract_subject_from_world(world, &context.contract_address);
-        if context.contract_subject != *authority
-            || context.contract_address.subject_id() != context.contract_subject
-            || live_subject.as_ref() != Some(authority)
-            || world.contract_subject_addresses().get(authority) != Some(&context.contract_address)
-        {
-            return Ok(false);
-        }
+    if !valid_contract_runtime_subject(world, authority, contract_runtime_context) {
+        return Ok(false);
     }
     if transfer.source().account() == authority {
         return Ok(true);
@@ -10283,6 +10290,20 @@ fn can_transfer_asset(
     }
     .into();
     authority_has_permission(world, authority, &by_definition)
+}
+fn valid_contract_runtime_subject(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> bool {
+    let Some(context) = contract_runtime_context else {
+        return true;
+    };
+    let live_subject = code::bound_contract_subject_from_world(world, &context.contract_address);
+    context.contract_subject == *authority
+        && context.contract_address.subject_id() == context.contract_subject
+        && live_subject.as_ref() == Some(authority)
+        && world.contract_subject_addresses().get(authority) == Some(&context.contract_address)
 }
 fn normalize_role_permission_for_initial_executor(
     state_transaction: &StateTransaction<'_, '_>,
@@ -10862,8 +10883,12 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         asset::{AssetTransferAvailability, AssetTransferControlWindow},
+        events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferRejectionCode},
         executor::{self as data_model_executor, ExecutorDataModel},
-        isi::{Grant, SetAssetTransferAvailability, SetAssetTransferControl},
+        isi::{
+            Grant, SetAssetTransferAvailability, SetAssetTransferControl,
+            transfer::{TransferAssetBatch, TransferAssetBatchEntry},
+        },
         name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
@@ -10972,6 +10997,71 @@ mod tests {
         world
             .asset_definitions
             .insert(asset_definition_id.clone(), definition);
+    }
+    struct InitialBatchFixture {
+        world: World,
+        source: AccountId,
+        foreign_source: AccountId,
+        delegate: AccountId,
+        first_destination: AccountId,
+        second_destination: AccountId,
+        asset_definition: AssetDefinitionId,
+        source_asset: AssetId,
+        foreign_source_asset: AssetId,
+    }
+    fn initial_batch_fixture() -> InitialBatchFixture {
+        let source = checked_account_id();
+        let foreign_source = checked_account_id();
+        let delegate = checked_account_id();
+        let first_destination = checked_account_id();
+        let second_destination = checked_account_id();
+        let domain_id = DomainId::try_new("batch_assets", "universal").expect("domain id");
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "coin".parse().expect("asset name"),
+        );
+        let source_asset = AssetId::new(asset_definition.clone(), source.clone());
+        let foreign_source_asset = AssetId::new(asset_definition.clone(), foreign_source.clone());
+        let mut world = World::with_assets(
+            [Domain::new(domain_id).build(&source)],
+            [
+                Account::new(source.clone()).build(&source),
+                Account::new(foreign_source.clone()).build(&foreign_source),
+                Account::new(delegate.clone()).build(&delegate),
+                Account::new(first_destination.clone()).build(&first_destination),
+                Account::new(second_destination.clone()).build(&second_destination),
+            ],
+            [AssetDefinition::numeric(
+                asset_definition.clone(),
+                "batch coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&source)],
+            [
+                Asset::new(source_asset.clone(), Quantity::from(20_u32)),
+                Asset::new(foreign_source_asset.clone(), Quantity::from(20_u32)),
+            ],
+            [],
+        );
+        seed_test_asset_supply(&mut world, &asset_definition);
+        InitialBatchFixture {
+            world,
+            source,
+            foreign_source,
+            delegate,
+            first_destination,
+            second_destination,
+            asset_definition,
+            source_asset,
+            foreign_source_asset,
+        }
+    }
+    fn initial_batch_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
+        world
+            .asset(asset_id)
+            .map(|asset| asset.value().clone().into_inner())
+            .unwrap_or_else(|_| Quantity::zero())
     }
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
@@ -11241,6 +11331,7 @@ mod tests {
         ));
     }
     include!("executor_account_lineage_tests.rs");
+    include!("executor_kagemusha_canary_allowlist_tests.rs");
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
             let instruction: $instruction_ty = $instruction;
@@ -14909,100 +15000,7 @@ mod tests {
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
     }
-    #[test]
-    fn successful_claim_fee_exempt_draft_returns_zero_quote_in_receipt_mode() {
-        let (world, mut nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
-        let fee_asset = AssetDefinitionId::parse_address_literal(&nexus.fees.fee_asset_id)
-            .expect("fixture fee asset address");
-        payload.fee_payment = FeePaymentIntent::authority(
-            vec![FeeChargeLimit::new(
-                FeeChargeKind::Nexus,
-                fee_asset.clone(),
-                Quantity::from(9_u32),
-            )],
-            None,
-        );
-        let authority_literal = payload.authority.to_string();
-        nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .insert(payload.authority.clone());
-        nexus.fees.settlement_mode =
-            iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-        payload.metadata.insert(
-            SORA_V2_CLAIM_TX_HASH_METADATA_KEY
-                .parse()
-                .expect("claim hash metadata key"),
-            Json::new("ab".repeat(32)),
-        );
-        payload.metadata.insert(
-            SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY
-                .parse()
-                .expect("claim recipient metadata key"),
-            Json::new(authority_literal),
-        );
-        payload.instructions = vec![InstructionBox::from(Mint::asset_quantity(
-            1_u32,
-            AssetId::new(fee_asset, payload.authority.clone()),
-        ))]
-        .into();
-        assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
-    }
-    #[test]
-    fn successful_claim_fee_exemption_uses_exact_account_identity() {
-        let (_, mut nexus, _, payload) = multi_component_fee_quote_fixture();
-        let authority = payload.authority;
-        let (other_authority, _) = gen_account_in("fee_quote_other");
-
-        assert!(!successful_claim_fee_authority_allowed(&nexus, &authority));
-        nexus
-            .fees
-            .successful_claim_fee_exempt_authorities
-            .insert(authority.clone());
-        assert!(successful_claim_fee_authority_allowed(&nexus, &authority));
-        assert!(!successful_claim_fee_authority_allowed(
-            &nexus,
-            &other_authority
-        ));
-    }
-    #[test]
-    fn fee_quote_discovers_pipeline_gas_and_matches_strict_signed_payload_quote() {
-        let (world, nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
-        let world = world.block();
-        let draft = quote_nexus_fee_admission_draft(
-            &world,
-            &nexus,
-            &pipeline,
-            &payload,
-            0,
-            1,
-            Some(DataSpaceId::UNIVERSAL),
-        )
-        .expect("draft quote");
-        assert_eq!(
-            draft
-                .quote
-                .charges
-                .iter()
-                .map(|charge| charge.kind)
-                .collect::<Vec<_>>(),
-            vec![FeeChargeKind::Nexus, FeeChargeKind::PipelineGas]
-        );
-        payload.fee_payment = draft.recommended_intent.clone();
-        let strict = quote_nexus_fee_admission_payload(
-            &world,
-            &nexus,
-            &pipeline,
-            &payload,
-            0,
-            1,
-            Some(DataSpaceId::UNIVERSAL),
-        )
-        .expect("strict quote for exact recommended intent");
-        assert_eq!(strict, draft.quote);
-        assert_eq!(strict.authority_balances.len(), 2);
-        assert_eq!(strict.authority_charge_assets.len(), 2);
-    }
+    include!("executor_fee_quote_tests.rs");
     #[test]
     fn receipt_settled_quote_rejects_authority_payer_with_sponsor_remediation() {
         let (world, mut nexus, pipeline, payload) = multi_component_fee_quote_fixture();
@@ -16889,133 +16887,135 @@ mod tests {
             "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
         );
     }
+    include!("executor_initial_batch_authorization_tests.rs");
     #[test]
-    fn initial_executor_denies_transfer_asset_without_owner_signature() {
-        let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = checked_account_id();
-        let user2 = checked_account_id();
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account = Account::new(user1.clone()).build(&user1);
-        let user2_account = Account::new(user2.clone()).build(&user2);
-        let world = World::with(
-            [users_domain],
-            [alice_account, user1_account, user2_account],
-            [],
-        );
-        let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let executor = super::Executor::Initial;
-        let transfer_asset_id = AssetId::new(
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("users", "universal").unwrap(),
-                "coin".parse().unwrap(),
-            ),
-            user1.clone(),
-        );
-        let instruction = InstructionBox::from(Transfer::asset_quantity(
-            transfer_asset_id,
-            1_u32,
-            user2.clone(),
-        ));
-        let transfer = extract_transfer_asset(&instruction)
-            .expect("expected to extract asset transfer from instruction");
-        let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
-            .expect("asset transfer permission check");
-        assert!(
-            !allowed,
-            "alice should not be allowed to transfer user1's asset"
-        );
-        assert!(
-            !(stx._curr_block.is_genesis() && stx.block_hashes.is_empty()),
-            "test must execute in non-genesis context"
-        );
-        let res = executor.execute_instruction(&mut stx, &alice_id, instruction);
-        match res {
-            Err(ValidationFail::NotPermitted(msg)) => assert!(
-                msg.contains("source asset owner must sign the transaction"),
-                "unexpected rejection message: {msg}"
-            ),
-            other => panic!(
-                "initial executor should deny asset transfer without owner signature, got: {other:?}"
-            ),
+    fn initial_executor_transfer_asset_batch_requires_active_canonical_contract_context_for_both_modes()
+     {
+        #[derive(Clone, Copy, core::fmt::Debug)]
+        enum Provenance {
+            Active,
+            MissingReverse,
+            InactiveAddress,
         }
-    }
-    #[test]
-    fn initial_executor_allows_source_owner_and_both_exact_transfer_permissions() {
-        let asset_domain_id = DomainId::try_new("assets", "universal").expect("asset domain id");
-        let definition_owner = checked_account_id();
-        let source = checked_account_id();
-        let delegate = checked_account_id();
-        let destination = checked_account_id();
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            asset_domain_id.clone(),
-            "coin".parse().unwrap(),
-        );
-        let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
-        let authorities = [
-            ("source owner", source.clone(), None),
-            (
-                "asset-specific permission",
-                delegate.clone(),
-                Some(Permission::from(
-                    executor_permission::asset::CanTransferAsset {
-                        asset: source_asset_id.clone(),
-                    },
-                )),
-            ),
-            (
-                "asset-definition permission",
-                delegate.clone(),
-                Some(Permission::from(
-                    executor_permission::asset::CanTransferAssetWithDefinition {
-                        asset_definition: asset_definition_id.clone(),
-                    },
-                )),
-            ),
-        ];
-        for (case, authority, permission) in authorities {
-            let mut world = World::with_assets(
-                [Domain::new(asset_domain_id.clone()).build(&definition_owner)],
-                [
-                    Account::new(definition_owner.clone()).build(&definition_owner),
-                    Account::new(source.clone()).build(&source),
-                    Account::new(delegate.clone()).build(&delegate),
-                    Account::new(destination.clone()).build(&destination),
-                ],
-                [AssetDefinition::numeric(
-                    asset_definition_id.clone(),
-                    "coin".to_owned(),
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
-                )
-                .build(&definition_owner)],
-                [Asset::new(source_asset_id.clone(), Quantity::from(10_u64))],
-                [],
-            );
-            if let Some(permission) = permission {
+        for independent in [false, true] {
+            for provenance in [
+                Provenance::Active,
+                Provenance::MissingReverse,
+                Provenance::InactiveAddress,
+            ] {
+                let deployer = checked_account_id();
+                let destination = checked_account_id();
+                let network_id = executor_test_network_id(b"initial-contract-batch-context");
+                let contract_address =
+                    ContractAddress::derive(&network_id, &deployer, 810, DataSpaceId::UNIVERSAL)
+                        .expect("contract address");
+                let contract_subject = contract_address.subject_id();
+                let asset_definition = AssetDefinitionId::from_uuid_bytes([
+                    0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0x48, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8, 0xb8,
+                    0xb8, 0xb8, 0xb8,
+                ])
+                .expect("opaque asset definition");
+                let source_asset = AssetId::new(asset_definition.clone(), contract_subject.clone());
+                let mut world = World::with_assets(
+                    [],
+                    [
+                        Account::new(deployer.clone()).build(&deployer),
+                        Account::new(contract_subject.clone()).build(&contract_subject),
+                        Account::new(destination.clone()).build(&destination),
+                    ],
+                    [AssetDefinition::numeric(
+                        asset_definition.clone(),
+                        "contract batch coin".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
+                    .build(&deployer)],
+                    [Asset::new(source_asset.clone(), Quantity::from(10_u32))],
+                    [],
+                );
+                seed_test_asset_supply(&mut world, &asset_definition);
                 world
-                    .account_permissions
-                    .insert(authority.clone(), BTreeSet::from([permission]));
+                    .contract_instances
+                    .insert(contract_address.clone(), Hash::new(b"contract-batch-code"));
+                world.contract_subject_bindings.insert(
+                    contract_address.clone(),
+                    crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+                );
+                world
+                    .contract_subject_addresses
+                    .insert(contract_subject.clone(), contract_address.clone());
+                let context_address = if matches!(provenance, Provenance::InactiveAddress) {
+                    ContractAddress::derive(&network_id, &deployer, 811, DataSpaceId::UNIVERSAL)
+                        .expect("inactive contract address")
+                } else {
+                    contract_address
+                };
+                let context = ContractRuntimeExecutionContext {
+                    contract_address: context_address,
+                    contract_subject: contract_subject.clone(),
+                    contract_alias: None,
+                    entrypoint: "execute_batch".to_owned(),
+                };
+                let state = State::new_with_chain_and_network_id_for_testing(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    query::store::LiveQueryStore::start_test(),
+                    iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    network_id,
+                );
+                let mut block =
+                    state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+                let mut transaction = block.transaction();
+                if matches!(provenance, Provenance::MissingReverse) {
+                    transaction
+                        .world
+                        .contract_subject_addresses
+                        .remove(contract_subject.clone());
+                }
+                transaction.tx_call_hash = Some(Hash::new(
+                    format!("contract-batch-{independent}-{provenance:?}").as_bytes(),
+                ));
+                let entries = vec![TransferAssetBatchEntry::with_leg_id(
+                    "contract-owned",
+                    contract_subject.clone(),
+                    destination.clone(),
+                    asset_definition.clone(),
+                    2_u32,
+                )];
+                let batch = if independent {
+                    TransferAssetBatch::independent(entries)
+                } else {
+                    TransferAssetBatch::new(entries)
+                };
+                let result = super::Executor::Initial
+                    .execute_instruction_with_contract_runtime_context(
+                        &mut transaction,
+                        &contract_subject,
+                        batch.into(),
+                        Some(&context),
+                    );
+                if matches!(provenance, Provenance::Active) {
+                    result.unwrap_or_else(|error| {
+                        panic!(
+                            "active contract batch (independent={independent}) was rejected: {error:?}"
+                        )
+                    });
+                    assert_eq!(
+                        initial_batch_balance(&transaction.world, &source_asset),
+                        Quantity::from(8_u32)
+                    );
+                } else {
+                    assert!(
+                        matches!(result, Err(ValidationFail::NotPermitted(_))),
+                        "invalid {provenance:?} context (independent={independent}) must reject the whole batch: {result:?}"
+                    );
+                    assert_eq!(
+                        initial_batch_balance(&transaction.world, &source_asset),
+                        Quantity::from(10_u32),
+                        "provenance rejection must precede either settlement mode"
+                    );
+                }
             }
-            let state = state_for_testing(world);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-            let mut transaction = block.transaction();
-            transaction.tx_call_hash = Some(Hash::new(case.as_bytes()));
-            let result = super::Executor::Initial.execute_instruction(
-                &mut transaction,
-                &authority,
-                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone())
-                    .into(),
-            );
-            assert!(
-                result.is_ok(),
-                "{case} must authorize only its exact asset transfer: {result:?}"
-            );
         }
     }
     #[test]

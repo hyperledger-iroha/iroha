@@ -28,6 +28,22 @@ class MeasurementError(RuntimeError):
     """Raised when the bundle measurement cannot be trusted."""
 
 
+def _identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return metadata fields that must remain stable during measurement."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
 def _regular_bytes(path: Path, label: str, maximum: int) -> bytes:
     try:
         before = path.lstat()
@@ -173,6 +189,31 @@ def measure_bundle(
         or CDHASH_RE.fullmatch(cdhash) is None
     ):
         raise MeasurementError("capture app codesign identity is not exact")
+    if (
+        _regular_bytes(
+            app / "Info.plist", "capture app Info.plist", MAX_PLIST_BYTES
+        )
+        != info_payload
+        or _regular_bytes(
+            entitlements_path,
+            "capture app signed entitlements",
+            MAX_PLIST_BYTES,
+        )
+        != entitlements_payload
+        or _regular_bytes(
+            app / executable_name,
+            "capture app executable",
+            MAX_EXECUTABLE_BYTES,
+        )
+        != executable_payload
+    ):
+        raise MeasurementError("capture app inputs changed during measurement")
+    try:
+        final_app_metadata = app.lstat()
+    except OSError as error:
+        raise MeasurementError("capture app changed during measurement") from error
+    if _identity(final_app_metadata) != _identity(app_metadata):
+        raise MeasurementError("capture app changed during measurement")
     return {
         "schema": SCHEMA,
         "version": 1,

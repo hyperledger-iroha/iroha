@@ -15,18 +15,31 @@ fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
         iroha_crypto::Hash::new(label),
     ))
 }
+use super::*;
+use crate::{
+    block::{BlockBuilder, ValidBlock},
+    governance::manifest::{
+        GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+    },
+    prelude::{AcceptedTransaction, StateReadOnly, World},
+    query::store::LiveQueryStore,
+    smartcontracts::Registrable,
+    state::State,
+    sumeragi::{consensus::Phase, network_topology::Topology},
+};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         defaults::kura::{
-            BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
-            MERGE_LEDGER_CACHE_CAPACITY, LANE_HISTORY_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION, MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove};
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
+};
 use iroha_data_model::{
     ChainId, Level,
     account::Account,
@@ -69,25 +82,12 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 use iroha_telemetry::metrics::Metrics;
-use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in};
+use iroha_test_samples::{
+    SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+};
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use tempfile::TempDir;
-use super::*;
-use crate::{
-    block::{BlockBuilder, ValidBlock},
-    governance::manifest::{
-        GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-    },
-    prelude::{AcceptedTransaction, StateReadOnly, World},
-    query::store::LiveQueryStore,
-    smartcontracts::Registrable,
-    state::State,
-    sumeragi::{
-        consensus::Phase,
-        network_topology::Topology,
-    },
-};
 fn provisional_snapshot_metadata(tag: u8) -> ProvisionalSnapshotBootstrap {
     ProvisionalSnapshotBootstrap {
         hash_only_prefix_height: usize::from(tag),
@@ -635,6 +635,7 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
         settlement_hash: iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
             .expect("fixture settlement hashes canonically"),
         settlement_commitment,
+        fastpq_transcripts: Vec::new().into(),
     };
     let lanes = vec![execution];
     let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
@@ -1312,7 +1313,6 @@ fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
     );
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
-
             lane_catalog: catalog.clone(),
             configured_lane_catalog: catalog,
             lane_config: lane_config.clone(),

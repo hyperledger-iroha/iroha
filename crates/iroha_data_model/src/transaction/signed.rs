@@ -2524,6 +2524,19 @@ impl TransactionEntrypoint {
             Self::SealedCommitment(_) | Self::SealedReveal(_) | Self::Time(_) => HashOf::new(self),
         }
     }
+    /// Hash identifying the signed execution call behind this entrypoint.
+    ///
+    /// Result leaves and block entrypoint Merkle trees always use [`Self::hash`]. A sealed reveal,
+    /// however, executes its inner signed transaction, whose call hash keys execution-scoped
+    /// evidence such as native batch receipts and FASTPQ transcripts. All other entrypoint kinds
+    /// execute under their canonical outer hash.
+    #[inline]
+    pub fn execution_call_hash(&self) -> HashOf<Self> {
+        match self {
+            Self::SealedReveal(reveal) => reveal.signed_transaction().hash_as_entrypoint(),
+            _ => self.hash(),
+        }
+    }
 }
 impl TransactionResult {
     /// Construct a transaction result without independent-batch receipts.

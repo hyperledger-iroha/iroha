@@ -145,6 +145,18 @@ fn proof_set_codec_is_exact_canonical_capped_and_context_bound() {
         )),)
         .is_err()
     );
+    assert_eq!(
+        RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1,
+        6_180_515
+    );
+    let cap_plus_one = vec![0_u8; RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 + 1];
+    assert_eq!(
+        ComparatorProofSetViewV1::from_components_v1(&cap_plus_one, prior, inventory, |_| Some((
+            point, point
+        )),)
+        .map(|_| ()),
+        Err(RnsNativeComparatorProductErrorV1::ProofCapExceeded)
+    );
 }
 
 #[test]
@@ -510,13 +522,53 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
     assert!(source.contains("for group in 0..GROUPS_V1"));
     assert!(source.contains("build_comparator_statement_v1"));
     assert!(source.contains(".verify(&mut transcript)?"));
+    assert!(source.contains("RNS_NATIVE_COMPARATOR_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 6_180_515"));
+    assert!(source.contains("RnsNativeClaimedSuccessorV1<"));
+    assert!(source.contains("RnsNativeCrossFieldRlweClaimedInventoryParentV1<"));
+    assert!(stage.contains("_parent: RnsNativeClaimedSuccessorV1<"));
+    let capability_forward = source
+        .split_once("pub(super) const fn pre_global_lookup_capability_v1(")
+        .expect("comparator capability forwarding")
+        .1
+        .split_once("pub(super) const fn inventory(")
+        .expect("comparator capability forwarding boundary")
+        .0;
+    assert!(capability_forward.contains(") -> &ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1"));
+    assert!(capability_forward.contains("self._parent"));
+    assert!(capability_forward.contains(".parent()"));
+    assert!(capability_forward.contains(".pre_global_lookup_capability_v1()"));
+    assert!(!capability_forward.contains("test_fixture_v1"));
+    assert!(!capability_forward.contains("post_cross_field_binding_digest"));
+    assert!(!capability_forward.contains("global_lookup_challenge_seed"));
+    let production = source
+        .split_once("pub(super) fn verify_rns_native_comparator_product_v1")
+        .expect("claimed-successor comparator entry")
+        .1
+        .split_once("/// Test-only compatibility entry")
+        .expect("production comparator boundary")
+        .0;
+    assert!(production.contains("parent: RnsNativeClaimedSuccessorV1<"));
+    assert!(production.contains("parent.successor()"));
+    assert!(!production.contains("inventory.continuation()"));
+    let legacy = source
+        .find("fn verify_rns_native_comparator_product_from_inventory_v1")
+        .expect("legacy raw inventory entry");
+    assert!(source[legacy.saturating_sub(160)..legacy].contains("#[cfg(test)]"));
 
     let parent = include_str!("../mkhe.rs");
     assert_eq!(
         parent.matches("mod rns_native_comparator_product;").count(),
         1
     );
+    assert_eq!(
+        parent.matches("mod rns_native_claimed_successor;").count(),
+        1
+    );
+    assert!(!parent.contains("mod rns_native_cross_field_rlwe_direct;"));
     assert!(!parent.contains("pub use rns_native_comparator_product"));
+    let claimed_facade = include_str!("rns_native_claimed_successor.rs");
+    assert!(!claimed_facade.contains("from_direct_claim_v1"));
+    assert!(!claimed_facade.contains("pub(super) fn new"));
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));
     assert!(composite.contains("CrossFieldGlobalLookup"));

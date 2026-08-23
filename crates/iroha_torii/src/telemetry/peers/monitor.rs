@@ -473,6 +473,56 @@ fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
     }
     None
 }
+fn configuration_request(
+    client: &Client,
+    url: Url,
+    network_id: &NetworkId,
+    operator_signer: Option<&KeyPair>,
+) -> eyre::Result<reqwest::Request> {
+    let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+        .parse()
+        .expect("static configuration URI");
+    let mut request = client
+        .get(url)
+        .header(http::header::ACCEPT, "application/json");
+    if let Some(key_pair) = operator_signer {
+        let headers = operator_signatures::signed_request_headers(
+            key_pair,
+            network_id,
+            &crate::Method::GET,
+            &config_uri,
+            &[],
+        )
+        .map_err(|error| eyre!("failed to sign /v1/configuration operator request: {error}"))?;
+        request = request.headers(headers);
+    }
+    request.build().map_err(Into::into)
+}
+fn decode_peer_config_response(
+    status: StatusCode,
+    bytes: &[u8],
+) -> eyre::Result<PeerConfigSnapshot> {
+    if status == StatusCode::NOT_FOUND {
+        iroha_logger::debug!(
+            %status,
+            "peer does not expose /v1/configuration; continuing without config snapshot"
+        );
+        return Ok(PeerConfigSnapshot::default());
+    }
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        && decode_operator_access_error(bytes).is_some()
+    {
+        iroha_logger::debug!(
+            %status,
+            "peer /v1/configuration requires operator access; continuing without config snapshot"
+        );
+        return Ok(PeerConfigSnapshot::default());
+    }
+    if !status.is_success() {
+        return Err(eyre!("/v1/configuration returned HTTP {status}"));
+    }
+    decode_peer_config_payload(bytes)
+}
 async fn get_config_with_retry(
     torii_url: &ToriiUrl,
     network_id: &NetworkId,
@@ -483,44 +533,14 @@ async fn get_config_with_retry(
         .0
         .join(iroha_torii_shared::uri::CONFIGURATION)
         .expect("valid url");
-    let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
-        .parse()
-        .expect("static configuration URI");
     let do_request = || async {
-        let mut request = client.get(url.clone());
-        if let Some(key_pair) = operator_signer {
-            let headers = operator_signatures::signed_request_headers(
-                key_pair,
-                network_id,
-                &crate::Method::GET,
-                &config_uri,
-                &[],
-            )
-            .map_err(|error| eyre!("failed to sign /v1/configuration operator request: {error}"))?;
-            request = request.headers(headers);
-        }
-        let response = request.send().await?;
+        let request = configuration_request(&client, url.clone(), network_id, operator_signer)?;
+        let response = client.execute(request).await?;
         let status = response.status();
         let bytes =
             read_response_body_bounded(response, CONFIG_RESPONSE_MAX_BYTES, "peer configuration")
                 .await?;
-        if status == StatusCode::NOT_FOUND {
-            iroha_logger::debug!(
-                %status,
-                "peer does not expose /v1/configuration; continuing without config snapshot"
-            );
-            return Ok::<_, Report>(PeerConfigSnapshot::default());
-        }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-            && decode_operator_access_error(&bytes).is_some()
-        {
-            iroha_logger::debug!(
-                %status,
-                "peer /v1/configuration requires operator access; continuing without config snapshot"
-            );
-            return Ok::<_, Report>(PeerConfigSnapshot::default());
-        }
-        let config = decode_peer_config_payload(&bytes)?;
+        let config = decode_peer_config_response(status, &bytes)?;
         Ok::<_, Report>(config)
     };
     let mut interval = GET_CONFIG_INIT_INTERVAL;
@@ -556,7 +576,12 @@ fn signed_peers_request(
         &[],
     )
     .map_err(|error| eyre!("failed to sign /v1/peers operator request: {error}"))?;
-    client.get(url).headers(headers).build().map_err(Into::into)
+    client
+        .get(url)
+        .header(http::header::ACCEPT, "application/json")
+        .headers(headers)
+        .build()
+        .map_err(Into::into)
 }
 async fn get_peers_periodic(
     torii_url: &ToriiUrl,
@@ -1115,6 +1140,39 @@ mod tests {
         assert!(decode_operator_access_error(payload).is_none());
     }
     #[test]
+    fn peer_monitor_configuration_request_accepts_json() {
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let network_id = crate::test_utils::signed_query_network_id();
+        let client = Client::new();
+        let url = Url::parse("https://peer.example/v1/configuration").expect("configuration URL");
+        let request = configuration_request(&client, url, &network_id, Some(&cfg.common.key_pair))
+            .expect("configuration request");
+        assert_eq!(
+            request.headers().get(http::header::ACCEPT),
+            Some(&http::HeaderValue::from_static("application/json"))
+        );
+        assert!(request.headers().contains_key("x-iroha-operator-signature"));
+    }
+    #[test]
+    fn peer_monitor_configuration_rejects_http_failure_before_decode() {
+        let error = decode_peer_config_response(StatusCode::INTERNAL_SERVER_ERROR, b"not-json")
+            .expect_err("HTTP failure must be reported before payload decode");
+        assert_eq!(
+            error.to_string(),
+            "/v1/configuration returned HTTP 500 Internal Server Error"
+        );
+
+        let missing = decode_peer_config_response(StatusCode::NOT_FOUND, b"not-json")
+            .expect("404 remains a configless compatibility fallback");
+        assert!(missing.public_key.is_none());
+        let protected = decode_peer_config_response(
+            StatusCode::FORBIDDEN,
+            br#"{"code":"operator_signature_missing","message":"signature required"}"#,
+        )
+        .expect("operator access failure remains a configless fallback");
+        assert!(protected.public_key.is_none());
+    }
+    #[test]
     fn peer_monitor_builds_an_exact_signed_empty_body_get() {
         let cfg = crate::test_utils::mk_minimal_root_cfg();
         let network_id = crate::test_utils::signed_query_network_id();
@@ -1129,6 +1187,10 @@ mod tests {
         assert_eq!(request.url().path(), "/v1/peers");
         assert!(request.url().query().is_none());
         assert!(request.body().is_none());
+        assert_eq!(
+            request.headers().get(http::header::ACCEPT),
+            Some(&http::HeaderValue::from_static("application/json"))
+        );
         for header in [
             "x-iroha-operator-public-key",
             "x-iroha-operator-timestamp-ms",

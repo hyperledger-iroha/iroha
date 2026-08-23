@@ -147,12 +147,6 @@ _APPROVAL_ATTESTATION_NAMES = {
 }
 _APPROVAL_SET_ATTESTATION_NAME = "release-approval-set-attestation.v1.json"
 _APPROVAL_SET_ARCHIVE_ID = "release-approval.set-attestation.v1"
-_APPROVAL_OPERATION_COUNTS = {
-    "offline-toolchain-sdk": 23,
-    "formal-proof-tools": 38,
-    "network-scale-soak": 8,
-    "final-bootstrap-publication": 8,
-}
 _FRAMEWORK_PYTHON = _TRUSTED_ARCHIVE_NAMES["python"] != "python3"
 _EXECUTABLE_INPUTS = {"bash", "git", "python", "ssh_keygen"}
 _IDENTITY_ARCHIVE_NAMES = {
@@ -1873,10 +1867,14 @@ def _release_approvals(
         )
     except module.ReleaseApprovalError as error:
         raise ValidationError(f"release approval replay failed: {error}") from error
+    expected_operation_counts = {
+        approval_class.value: len(expectations[approval_class].operations)
+        for approval_class in module.APPROVAL_CLASS_ORDER
+    }
     if {
         approval.class_id.value: len(approval.operations)
         for approval in approvals
-    } != _APPROVAL_OPERATION_COUNTS:
+    } != expected_operation_counts:
         raise ValidationError("release approval operation counts are not exact")
     class_records = _exact_dict(
         marker["class_attestations"],

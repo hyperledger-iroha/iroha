@@ -1,0 +1,18 @@
+
+                bundle_name = "demo"
+                default_dataspace = "universal"
+
+                [profiles.local]
+                default_gas_limit = 123456
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter"
+                source = "contracts/greeter.ko"
+                artifact = "artifacts/greeter.to"
+
+                [[smoke]]
+                id = "status_with_extra_field"
+                contract = "demo.greeter"
+                entrypoint = "status"
+                payload = { value = "7", unexpected = 9 }

@@ -11,6 +11,14 @@ use crate::{
 use hex::FromHex;
 use std::time::Duration;
 use tempfile::NamedTempFile;
+macro_rules! config_fixture {
+    ($name:literal) => {
+        concat!(
+            include_str!(concat!("config_tests/fixtures/", $name)),
+            "        "
+        )
+    };
+}
 fn write_config(json: &str) -> PathBuf {
     let file = NamedTempFile::new().expect("create temp file");
     std::fs::write(file.path(), json).expect("write config");
@@ -363,17 +371,7 @@ fn manifest_requires_complete_ml_kem_pair() {
 }
 #[test]
 fn load_self_signed_config() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "admin_listen": "127.0.0.1:0",
-                "admin_auth_token_path": "/run/secrets/soranet-admin-token",
-                "tls": {},
-                "pow": { "required": true, "difficulty": 18 },
-                "padding": { "cell_size": 1024, "max_idle_millis": 150 }
-            }
-        "#;
+    let json = config_fixture!("self_signed.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     assert_eq!(cfg.mode, RelayMode::Entry);
@@ -540,13 +538,7 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
 }
 #[test]
 fn non_loopback_admin_listener_is_rejected() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "admin_listen": "0.0.0.0:9090"
-            }
-        "#;
+    let json = config_fixture!("admin_nonloopback.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("remote admin listener must be protected");
     match err {
@@ -558,27 +550,14 @@ fn non_loopback_admin_listener_is_rejected() {
 }
 #[test]
 fn non_loopback_admin_listener_remains_rejected_with_token_file() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "admin_listen": "0.0.0.0:9090",
-                "admin_auth_token_path": "/run/secrets/soranet-admin-token"
-            }
-        "#;
+    let json = config_fixture!("admin_nonloopback_with_token.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("admin listener must remain local");
     assert!(matches!(err, ConfigError::Admin(message) if message.contains("loopback")));
 }
 #[test]
 fn loopback_admin_listener_requires_token_file() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "admin_listen": "127.0.0.1:9090"
-            }
-        "#;
+    let json = config_fixture!("admin_loopback_without_token.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("local admin listener still requires auth");
     assert!(
@@ -587,14 +566,7 @@ fn loopback_admin_listener_requires_token_file() {
 }
 #[test]
 fn padding_cell_size_must_be_non_zero() {
-    let json = r#"
-            {
-                "mode": "Middle",
-                "listen": "127.0.0.1:0",
-                "pow": { "required": true, "difficulty": 18 },
-                "padding": { "cell_size": 0, "max_idle_millis": 200 }
-            }
-        "#;
+    let json = config_fixture!("zero_padding_cell.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("validation must fail");
     match err {
@@ -641,14 +613,7 @@ fn padding_cell_size_clamps_to_limit() {
 }
 #[test]
 fn constant_rate_capability_rejects_future_versions() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "pow": { "required": true, "difficulty": 18 },
-                "constant_rate_capability": { "enabled": true, "version": 2, "strict": true }
-            }
-        "#;
+    let json = config_fixture!("future_constant_rate.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("validation must fail");
     match err {
@@ -663,14 +628,7 @@ fn constant_rate_capability_rejects_future_versions() {
 }
 #[test]
 fn constant_rate_capability_returns_none_when_disabled() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "pow": { "required": true, "difficulty": 18 },
-                "constant_rate_capability": { "enabled": false, "strict": true }
-            }
-        "#;
+    let json = config_fixture!("disabled_constant_rate.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     assert!(cfg.constant_rate_capability().is_none());
@@ -816,13 +774,7 @@ fn pow_revocation_store_capacity_enforces_first_release_ceiling() {
 }
 #[test]
 fn omitted_pow_policy_fields_use_secure_first_release_defaults() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "pow": {}
-            }
-        "#;
+    let json = config_fixture!("pow_defaults.json");
     let path = write_config(json);
     let config = RelayConfig::load(path).expect("load config with secure PoW defaults");
     assert!(config.pow_config().required);
@@ -1155,22 +1107,7 @@ fn replay_filter_rejects_invalid_parameters() {
 }
 #[test]
 fn relay_config_loads_replay_filter_settings() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "pow": {
-                    "required": true,
-                    "difficulty": 14,
-                    "replay_filter": {
-                        "enabled": true,
-                        "bits": 4096,
-                        "hash_functions": 3,
-                        "ttl_secs": 45
-                    }
-                }
-            }
-        "#;
+    let json = config_fixture!("replay_filter.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     let filter = cfg.pow_config().replay_filter();
@@ -1181,13 +1118,7 @@ fn relay_config_loads_replay_filter_settings() {
 }
 #[test]
 fn rejects_partial_tls_paths() {
-    let json = r#"
-            {
-                "mode": "Exit",
-                "listen": "127.0.0.1:0",
-                "tls": { "certificate_path": "/tmp/server.crt" }
-            }
-        "#;
+    let json = config_fixture!("partial_tls.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("config should fail");
     match err {
@@ -1197,13 +1128,7 @@ fn rejects_partial_tls_paths() {
 }
 #[test]
 fn rejects_bad_address() {
-    let json = r#"
-            {
-                "mode": "Middle",
-                "listen": "invalid:address",
-                "tls": {}
-            }
-        "#;
+    let json = config_fixture!("bad_address.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("config should fail");
     match err {
@@ -1216,15 +1141,7 @@ fn rejects_bad_address() {
 }
 #[test]
 fn handshake_descriptor_commit_is_decoded() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {
-                    "descriptor_commit_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-                }
-            }
-        "#;
+    let json = config_fixture!("descriptor_commit.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     let commit = cfg
@@ -1243,21 +1160,7 @@ fn handshake_descriptor_commit_is_decoded() {
 }
 #[test]
 fn rejects_unknown_kem_identifier() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {
-                    "kem": [
-                        { "id": "unknown-kem", "required": true }
-                    ],
-                    "signatures": [
-                        { "id": "dilithium3", "required": true }
-                    ],
-                    "grease": []
-                }
-            }
-        "#;
+    let json = config_fixture!("unknown_kem.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("config should fail");
     match err {
@@ -1293,18 +1196,7 @@ fn rejects_oversized_handshake_grease_value() {
 }
 #[test]
 fn pow_defaults_populate_missing_fields() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "pow": {
-                    "required": true,
-                    "difficulty": 5,
-                    "max_future_skew_secs": 0,
-                    "min_ticket_ttl_secs": 0
-                }
-            }
-        "#;
+    let json = config_fixture!("pow_zero_defaults.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     assert_eq!(cfg.pow_config().max_future_skew_secs, 300);
@@ -1312,15 +1204,7 @@ fn pow_defaults_populate_missing_fields() {
 }
 #[test]
 fn rejects_identity_private_key_with_wrong_length() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {
-                    "identity_private_key_hex": "0011"
-                }
-            }
-        "#;
+    let json = config_fixture!("short_identity_key.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("config should fail");
     match err {
@@ -1332,17 +1216,7 @@ fn rejects_identity_private_key_with_wrong_length() {
 }
 #[test]
 fn custom_congestion_config_validates() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "congestion": {
-                    "max_circuits_per_client": 4,
-                    "max_active_circuits": 32,
-                    "handshake_cooldown_millis": 750
-                }
-            }
-        "#;
+    let json = config_fixture!("custom_congestion.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     assert_eq!(cfg.congestion_config().max_circuits_per_client, 4);
@@ -1377,15 +1251,7 @@ fn congestion_capacity_accepts_exact_limit_and_rejects_overflow() {
 }
 #[test]
 fn compliance_requires_log_path_when_enabled() {
-    let json = r#"
-            {
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "compliance": {
-                    "enable": true
-                }
-            }
-        "#;
+    let json = config_fixture!("compliance_without_log.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("config should fail");
     match err {
@@ -1720,21 +1586,7 @@ fn token_policy_rejects_missing_issuer_key_without_panic() {
 }
 #[test]
 fn privacy_config_overrides_are_applied() {
-    let json = r#"
-            {
-                "mode": "Middle",
-                "listen": "127.0.0.1:0",
-                "privacy": {
-                    "bucket_secs": 90,
-                    "min_handshakes": 8,
-                    "flush_delay_buckets": 2,
-                    "force_flush_buckets": 4,
-                    "max_completed_buckets": 12,
-                    "expected_shares": 3,
-                    "event_buffer_capacity": 2048
-                }
-            }
-        "#;
+    let json = config_fixture!("privacy_overrides.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
     let privacy = cfg.privacy_config();
@@ -1748,16 +1600,7 @@ fn privacy_config_overrides_are_applied() {
 }
 #[test]
 fn privacy_config_validates_force_flush_ordering() {
-    let json = r#"
-            {
-                "mode": "Exit",
-                "listen": "127.0.0.1:0",
-                "privacy": {
-                    "flush_delay_buckets": 3,
-                    "force_flush_buckets": 2
-                }
-            }
-        "#;
+    let json = config_fixture!("privacy_flush_order.json");
     let path = write_config(json);
     let err = RelayConfig::load(path).expect_err("expected privacy validation error");
     match err {
