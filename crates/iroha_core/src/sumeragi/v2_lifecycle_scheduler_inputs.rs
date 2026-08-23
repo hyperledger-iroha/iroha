@@ -722,7 +722,7 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Service(String),
     /// A Fetch executor owner conflicted with the exact request catalogs.
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
-    /// A Ready live Apply could not retire its exact competing executor work.
+    /// A Ready Apply could not reconcile or reserve its exact executor work.
     LiveApplyReconciliation(EffectExecutorError),
     /// The Apply executor was closed or retained an active mutation owner.
     ApplyExecutor(EffectExecutorError),
@@ -2089,7 +2089,7 @@ impl ProductionLifecycleOwnerV1 {
                     let key = attestation.dispatch_key();
                     let executor_available = executor
                         .lifecycle_decision_apply_dispatch_available()
-                        .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+                        .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                     (
                         AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
                         Some(LifecycleCompletionCapacityProbeV1::Apply {
@@ -2420,7 +2420,7 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 let executor_dispatch = executor
                     .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
-                    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
             }
@@ -4222,6 +4222,7 @@ mod recovered_sign_capacity_tests {
                     &mut services,
                     runtime,
                     Arc::clone(&output_guard),
+                    0,
                     2,
                 );
             let fence = executor.lifecycle_reducer_fence_observation();
@@ -4282,6 +4283,7 @@ mod recovered_sign_capacity_tests {
                 &mut services,
                 runtime,
                 Arc::clone(&output_guard),
+                0,
                 2,
             );
             let fence = executor.lifecycle_reducer_fence_observation();
@@ -5119,31 +5121,44 @@ impl ProductionLifecycleOwnerV1 {
         registry: LifecycleWorkRegistryHolder,
         body_store: crate::sumeragi::v2_body_store::V2BodyStore,
         root: &std::path::Path,
-    ) -> Self {
+    ) -> (
+        Self,
+        crate::sumeragi::v2_lifecycle_coordinator::RuntimeLifecycleOrdinalAuthority,
+    ) {
         coordinator
             .attach_empty_test_ledger(&root.join("ledger"))
             .expect("attach exact Ready Validate lifecycle ledger");
+        let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
+            .expect("bind paired Ready Validate ordinal authority");
         let (payload_store, serve_payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
             &root.join("serve"),
             verified.context(),
         )
         .expect("open empty Ready Validate Serve payload owner");
-        Self {
-            verified,
-            coordinator,
-            registry,
-            recovered_lifecycle_outputs: None,
-            payload_store,
-            serve_payloads,
-            body_store: Some(body_store),
-            body_store_identity: None,
-            kura_binding: None,
-            apply_service: None,
-            adapter_startup: Some(
-                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
-            ),
-            timeout_supersession_successor: None,
-        }
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+                timeout_supersession_successor: None,
+            },
+            runtime_ordinal_authority,
+        )
     }
 
     /// Open one clean production executor before moving this owner's body
@@ -5225,6 +5240,7 @@ impl ProductionLifecycleOwnerV1 {
             services,
             runtime,
             output_guard,
+            0,
             class_capacity,
         )
     }
@@ -5249,15 +5265,29 @@ impl ProductionLifecycleOwnerV1 {
             .exactly_covers_finalization_work(&self.coordinator)
     }
 
-    /// Build one empty storage-owning production owner for the ingress
-    /// admission/planner transaction regression.
-    pub(in crate::sumeragi) fn empty_ingress_owner_for_test(
+    /// Build one storage-owning production owner around the exact selected
+    /// Fetch carrier used by the cross-module planner transaction regression.
+    pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(
         verified: crate::sumeragi::v2::VerifiedHeightContext,
+        prepared: &PreparedLifecycleIngressSelector,
+        effect: crate::sumeragi::v2::AdapterEffect,
+        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
         local_signer: &iroha_crypto::KeyPair,
         root: &std::path::Path,
-    ) -> Self {
-        use super::{CapacityClass, schema::CapacityGeometry};
-        let context = super::projection::lifecycle_context(verified.context());
+    ) -> (Self, u128, super::WaitSource) {
+        use super::{
+            AdmissionDecision, AdmissionRequest, CapacityClass, WaitToken,
+            schema::CapacityGeometry,
+            work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
+        };
+        let (context, _, _, _, expected_key, expected_root, source) = prepared
+            .certified_fetch_ready_authority_for_test()
+            .expect("selected Fetch must derive its exact lifecycle authority");
+        assert_eq!(
+            context,
+            super::projection::lifecycle_context(verified.context()),
+            "selected Fetch and verified owner must share one context"
+        );
         let mut coordinator = LifecycleCoordinator::new(
             context,
             0,
@@ -5323,22 +5353,26 @@ impl ProductionLifecycleOwnerV1 {
         let serve_payloads = recovery
             .authenticate(&verified, local_signer, &body_store)
             .expect("authenticate exact owner Serve payload census");
-        Self {
-            verified,
-            coordinator,
-            registry: LifecycleWorkRegistryHolder::empty(),
-            recovered_lifecycle_outputs: None,
-            payload_store,
-            serve_payloads,
-            body_store: Some(body_store),
-            body_store_identity: None,
-            kura_binding: None,
-            apply_service: None,
-            adapter_startup: Some(
-                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
-            ),
-            timeout_supersession_successor: None,
-        }
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+                timeout_supersession_successor: None,
+            },
+            ordinal,
+            source,
+        )
     }
     /// Move the owner's exact startup body store into the bounded test worker
     /// while retaining only its comparison seal in the running owner.

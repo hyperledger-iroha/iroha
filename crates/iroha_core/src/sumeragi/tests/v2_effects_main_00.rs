@@ -1,6 +1,6 @@
 use super::*;
 use crate::sumeragi::{
-    FairV2Ingress, InboundBlockMessage,
+    InboundBlockMessage,
     message::BlockMessage,
     v2::{
         AdapterEquivocationEvidence, AdapterError, AdapterFingerprints,

@@ -2868,6 +2868,11 @@ pub(crate) trait EffectRuntime {
     fn last_scheduler_selection_for_test(&self) -> Option<RuntimeSelectedOwnerKind> {
         None
     }
+    /// Whether any live reducer clock has been armed for this height.
+    /// Synthetic runtimes model cold recovery unless they opt into live clocks.
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        false
+    }
     /// Return the reducer incarnation which currently owns effects.
     fn authoritative_tag(&self) -> Option<EventTag>;
     /// Read the reducer tag, durable lock, and Decision from one serialized
@@ -3113,6 +3118,9 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        SerializedV2Runtime::lifecycle_live_clocks_are_armed(self)
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
@@ -7395,6 +7403,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(EffectExecutorError::Runtime)?;
         }
         self.durable_validate_retry_seals = retained_validate_retry_seals;
+        self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
         #[cfg(test)]
         if let Some(trace_root) = recovered_validate_retry_trace_root {
             self.last_recovered_validate_retry_trace_root = Some(trace_root);

@@ -2345,7 +2345,7 @@ fn derive_carry_intervals<F: Copy>(
     let quotient_intervals = quotient_coefficient_intervals(quotient, modulus_limbs);
     let radix_integer = BigInt::from_biguint(Sign::Plus, radix());
     let mut previous = IntegerInterval::zero();
-    let coarse_intervals: [IntegerInterval; 2 * LIMBS - 1] = std::array::from_fn(|coefficient| {
+    let coarse_intervals: [IntegerInterval; 4] = std::array::from_fn(|coefficient| {
         let numerator = expression_intervals[coefficient]
             .subtract(&quotient_intervals[coefficient])
             .add(&previous);
@@ -3773,7 +3773,7 @@ fn transpose_packed_trace<F: BigPrimeField>(
     // These are layout constants, so force them into the verifier-bound tail
     // before destructuring the builder. They may already be cached.
     let (one, minus_two, negative_radix) = ensure_layout_constants(&mut builder);
-    let zero = *builder
+    let _zero = *builder
         .constants
         .get(&BigInt::from(0))
         .expect("zero is a verifier-bound constant");

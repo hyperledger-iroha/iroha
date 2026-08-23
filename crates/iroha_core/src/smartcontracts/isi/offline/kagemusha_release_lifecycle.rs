@@ -1052,7 +1052,7 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{
         kura::Kura,

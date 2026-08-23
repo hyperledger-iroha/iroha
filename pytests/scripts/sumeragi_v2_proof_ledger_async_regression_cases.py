@@ -1710,6 +1710,125 @@ def test_runtime_step_reconciliation_survives_effect_item_reseal(
     ), errors
 
 
+def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
+    tmp_path: Path,
+) -> None:
+    """Refreshed digests cannot erase lifecycle Apply dispatch and finality gates."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    canonical_source = effects_path.read_text(encoding="utf-8")
+    canonical_digests = dict(module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256)
+    canonical_lifecycle_digests = dict(
+        module._PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256
+    )
+    canonical_ready_digest = module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256[
+        "executor_ready"
+    ]
+    mutations = (
+        (
+            "lifecycle_decision_apply_dispatch_available",
+            "&& self.finality_completion.is_none()",
+            "&& self.finality_completion.is_some()",
+            "freeze every executor mutation owner and the runtime barrier",
+        ),
+        (
+            "prepare_lifecycle_decision_apply_executor_dispatch",
+            "prepared.exactly_matches_pending_kura_recovery(",
+            "prepared.matches_pending_kura_recovery(",
+            "bind its exact stage, context, ordinal, Decision, and receipt",
+        ),
+        (
+            "prepare_lifecycle_decision_apply_completion",
+            "|| !lineage_owner_is_exact",
+            "|| lineage_owner_is_exact",
+            "reject every competing executor owner",
+        ),
+        (
+            "prepare_lifecycle_decision_apply_completion",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n"
+            "                self.live_lifecycle_decision_apply.is_none()\n"
+            "            }",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n"
+            "                self.live_lifecycle_decision_apply.is_some()\n"
+            "            }",
+            "distinguish exact live ownership from recovered non-substitution",
+        ),
+        (
+            "commit_lifecycle_decision_apply_finality",
+            "ownership: FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key),",
+            "ownership: FinalityCompletionOwner::Runtime(todo!()),",
+            "install only an exact drained lineage-owned tombstone",
+        ),
+        (
+            "drain_retained_effect_batch",
+            "if !owner.exactly_matches_apply(*subject, certificate)",
+            "if owner.exactly_matches_apply(*subject, certificate)",
+            "preliminary Validate-to-Apply ownership must retain the exact reducer Apply",
+        ),
+        (
+            "drain_retained_effect_batch",
+            "|| !self.pending_durable_validate_admissions.is_empty()",
+            "|| false",
+            "stop behind every lifecycle admission owner before consume_one",
+        ),
+        (
+            "retain_effect_batch_at_frontier",
+            "self.published_lifecycle_validate_retry_markers = "
+            "retained_published_validate_retry_markers;",
+            "let _ = retained_published_validate_retry_markers;",
+            "atomically commit both retry-owner maps",
+        ),
+        (
+            "ready_to_finish",
+            "&& self.live_lifecycle_decision_apply.is_none()",
+            "&& self.live_lifecycle_decision_apply.is_some()",
+            "exclude every live Apply or preliminary Validate owner",
+        ),
+    )
+
+    for item_name, old, new, diagnostic in mutations:
+        item, = module.rust_items(canonical_source, item_name)
+        assert item.source.count(old) == 1, (item_name, old)
+        mutated_source = canonical_source.replace(
+            item.source,
+            item.source.replace(old, new, 1),
+            1,
+        )
+        effects_path.write_text(mutated_source, encoding="utf-8")
+        mutated_item, = module.rust_items(mutated_source, item_name)
+        if item_name in module._PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256:
+            module._PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256[item_name] = (
+                module._rust_item_token_sha256(mutated_item)
+            )
+        elif item_name == "ready_to_finish":
+            module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_ready"] = (
+                module._rust_item_token_sha256(mutated_item)
+            )
+        else:
+            module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
+                module._rust_item_token_sha256(mutated_item)
+            )
+
+        errors = module._async_source_fidelity_errors(formal_dir)
+
+        assert any(diagnostic in error for error in errors), (diagnostic, errors)
+        module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256.clear()
+        module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256.update(canonical_digests)
+        module._PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256.clear()
+        module._PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256.update(
+            canonical_lifecycle_digests
+        )
+        module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_ready"] = (
+            canonical_ready_digest
+        )
+
+    effects_path.write_text(canonical_source, encoding="utf-8")
+
+
 def test_decision_apply_runner_cleanup_semantics_survive_effect_item_reseal(
     tmp_path: Path,
 ) -> None:

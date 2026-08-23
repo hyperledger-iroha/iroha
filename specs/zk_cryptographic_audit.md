@@ -332,8 +332,9 @@ same authenticated outer-envelope boundary first. Valid-proof regressions cover
 all seven exact labels. Production verification now accepts only the strict ZK1
 inner carrier. The legacy binary carrier's caller-controlled `n_in`, `n_out`,
 and lookup flags were not transcript-authenticated, so it has been retired from
-production dispatch; unknown flag bits also remain rejected by its standalone
-parser.
+production dispatch. Its standalone parser and compatibility path were removed;
+verifier keys now require `IPAK` → `CID1` → `H2VK`, and proofs require `PROF`
+followed by optional `I10P`.
 
 ### ZK-AUDIT-12: IVM verifier helpers panicked or accepted impossible control flow
 
