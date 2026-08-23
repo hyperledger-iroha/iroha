@@ -8,6 +8,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "ci/check_connect_norito_bridge_header.sh"
+      - "ci/check_authenticated_tool_controller.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
       - "ci/check_kagemusha_production_readiness_source_support.py"
@@ -757,10 +758,13 @@ on:
       - "specs/sdk/swift/readiness/*kagemusha*.md"
       - "artifacts/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
+      - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
       - "scripts/tests/check_swift_offline_device_attestation_fixture_test.py"
+      - "scripts/tests/authenticated_tool_controller_test.py"
+      - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
@@ -925,17 +929,86 @@ jobs:
         with:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Bind a canonical regular rustup executable
+        shell: bash
+        run: |
+          umask 077
+          ambient_rustup="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          candidate = pathlib.Path(sys.argv[1]).resolve(strict=True)
+          metadata = candidate.lstat()
+          if not stat.S_ISREG(metadata.st_mode) or not os.access(candidate, os.X_OK):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$ambient_rustup")"
+          rustup_dir="$RUNNER_TEMP/iroha-kagemusha-apple-tools"
+          mkdir -p "$rustup_dir"
+          rustup_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          raw = sys.argv[1]
+          candidate = pathlib.Path(raw)
+          workspace = pathlib.Path(sys.argv[2]).resolve(strict=True)
+          metadata = candidate.lstat()
+          resolved = candidate.resolve(strict=True)
+          if (
+              not candidate.is_absolute()
+              or str(candidate) != raw
+              or resolved != candidate
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISDIR(metadata.st_mode)
+              or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+              or candidate == workspace
+              or workspace in candidate.parents
+          ):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$rustup_dir" "$GITHUB_WORKSPACE")"
+          rustup_binary="$rustup_dir/rustup"
+          [[ ! -e "$rustup_binary" && ! -L "$rustup_binary" ]]
+          /bin/cp "$rustup_source" "$rustup_binary"
+          /bin/chmod 0700 "$rustup_binary"
+          canonical_rustup="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          raw = sys.argv[1]
+          candidate = pathlib.Path(raw)
+          metadata = candidate.lstat()
+          resolved = candidate.resolve(strict=True)
+          if (
+              not candidate.is_absolute()
+              or str(candidate) != raw
+              or resolved != candidate
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISREG(metadata.st_mode)
+              or not os.access(candidate, os.X_OK)
+          ):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$rustup_binary")"
+          [[ "$canonical_rustup" == "$rustup_binary" ]]
+          /usr/bin/cmp -s "$rustup_source" "$rustup_binary"
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_binary" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets and prefetch locked dependencies
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
-          cargo fetch --locked
+          "$MOBILE_SDK_RUSTUP_BINARY" target add --toolchain 1.93.1 aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          cargo_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 cargo)"
+          "$cargo_path" fetch --locked
       - name: Bind the first-release Apple Cargo envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
           mkdir -p "$cargo_target"
           cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"

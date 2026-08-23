@@ -80,7 +80,13 @@ try:
         }
         def ordinary_git(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(
-                [str(SOURCE_GIT), '-C', str(repository), '-c', 'core.hooksPath=/dev/null', *arguments],
+                [
+                    str(SOURCE_GIT), '-C', str(repository),
+                    '-c', 'core.hooksPath=/dev/null',
+                    '-c', 'user.name=Kagemusha Self Test',
+                    '-c', 'user.email=kagemusha-self-test.invalid',
+                    *arguments,
+                ],
                 cwd=Path('/'),
                 env=ordinary_environment,
                 stdin=subprocess.DEVNULL,
@@ -93,8 +99,7 @@ try:
         conflict = repository / 'conflict.txt'
         conflict.write_text('base\n', encoding='utf-8')
         ordinary_git('add', '--', conflict.name)
-        ordinary_git('-c', 'user.name=Kagemusha Self Test', '-c',
-                     'user.email=kagemusha-self-test.invalid', 'commit', '-qm', 'base')
+        ordinary_git('commit', '-qm', 'base')
         ordinary_git('checkout', '-qb', 'other')
         conflict.write_text('other\n', encoding='utf-8')
         ordinary_git('commit', '-qam', 'other')
@@ -478,15 +483,18 @@ finally:
     require_no_macos_extended_acl = real_require_no_macos_extended_acl
 if sys.platform == 'darwin':
     try:
+        acl_free_path = Path('/usr/bin/true')
+        (descriptor, _) = pin_regular_metadata(
+            acl_free_path, 'self-test ACL-free macOS input', require_single_link=False
+        )
+        try:
+            require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+        finally:
+            os.close(descriptor)
         with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
             acl_path = Path(temporary) / 'acl-input'
             acl_path.write_bytes(b'root-custody-acl-test')
             acl_path.chmod(384)
-            (descriptor, _) = pin_regular_metadata(acl_path, 'self-test macOS ACL input')
-            try:
-                require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
-            finally:
-                os.close(descriptor)
             added_acl = subprocess.run(['/bin/chmod', '+a', 'everyone allow read', str(acl_path)], cwd=Path('/'), env={'LANG': 'C',
                 'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}, stdin=subprocess.DEVNULL, check=False, capture_output=True, close_fds=True)
             if added_acl.returncode != 0:

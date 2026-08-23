@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that mobile build and packaging entrypoints pin an isolated Python 3.12.
+# Verify that mobile entrypoints pin isolated Python 3.12 and canonical rustup.
 set -euo pipefail
 
 PATH=/usr/bin:/bin
@@ -13,6 +13,7 @@ MOBILE_CHECKER_TEST="$ROOT_DIR/scripts/check_mobile_sdk_artifacts_test.sh"
 ANDROID_BUILDER="$ROOT_DIR/kotlin/client-android/build.gradle.kts"
 JVM_NATIVE_GATE="$ROOT_DIR/ci/check_kagemusha_jvm_native_bridge.sh"
 MOBILE_WORKFLOW="$ROOT_DIR/.github/workflows/mobile_sdk_artifacts.yml"
+KAGEMUSHA_WORKFLOW="$ROOT_DIR/.github/workflows/pr_kagemusha_payload_bench.yml"
 TEST_ROOT=""
 
 cleanup() {
@@ -130,6 +131,13 @@ grep -Fq 'resolve_trusted_python312()' "$MOBILE_CHECKER" \
   || fail "mobile checker does not authenticate Python 3.12"
 grep -Fq 'MOBILE_SDK_PYTHON_BINARY' "$MOBILE_CHECKER" \
   || fail "mobile checker does not expose the canonical Python override"
+for rustup_owner in "$APPLE_BUILDER" "$MOBILE_CHECKER"; do
+  grep -Fq 'MOBILE_SDK_RUSTUP_BINARY' "$rustup_owner" \
+    || fail "$rustup_owner does not expose the canonical rustup override"
+  grep -Fq 'MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable' \
+    "$rustup_owner" \
+    || fail "$rustup_owner does not fail closed for a non-canonical rustup override"
+done
 grep -Fq '"$CHECK_PYTHON_BINARY" -I -S -B "$@"' "$MOBILE_CHECKER" \
   || fail "mobile checker does not isolate Python helpers from site packages"
 grep -Fq 'NORITO_BRIDGE_BUILD_LOCK_FDS' "$APPLE_BUILDER" \
@@ -167,6 +175,17 @@ grep -Fq 'bash scripts/tests/mobile_sdk_python312_contract.sh' "$MOBILE_WORKFLOW
   || fail "mobile workflow does not run the Python 3.12 contract"
 grep -Fq '"scripts/tests/mobile_sdk_python312_contract.sh"' "$MOBILE_WORKFLOW" \
   || fail "mobile workflow does not trigger on Python 3.12 contract changes"
+grep -Fq 'echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_binary" >> "$GITHUB_ENV"' \
+  "$KAGEMUSHA_WORKFLOW" \
+  || fail "Kagemusha Swift workflow does not export its canonical rustup copy"
+for rust_tool in cargo rustc rustdoc; do
+  grep -Fq '"$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 '"$rust_tool" \
+    "$KAGEMUSHA_WORKFLOW" \
+    || fail "Kagemusha Swift workflow does not resolve exact $rust_tool through canonical rustup"
+done
+grep -Fq '"$MOBILE_SDK_RUSTUP_BINARY" target add --toolchain 1.93.1' \
+  "$KAGEMUSHA_WORKFLOW" \
+  || fail "Kagemusha Swift workflow does not install exact targets through canonical rustup"
 
 expect_failure_containing \
   "retired Apple Cargo lock override" \
@@ -249,11 +268,69 @@ APPLE_CARGO_TARGET="$TEST_ROOT/apple-cargo-target"
 APPLE_BUILD_DIR="$TEST_ROOT/apple-build"
 APPLE_OUT_DIR="$TEST_ROOT/apple-out"
 APPLE_USER_HOME="$("$PYTHON312" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
-APPLE_RUSTUP="$APPLE_USER_HOME/.cargo/bin/rustup"
-[[ -x "$APPLE_RUSTUP" ]] || fail "pinned rustup is unavailable"
+APPLE_RUSTUP_ENTRY="$APPLE_USER_HOME/.cargo/bin/rustup"
+APPLE_RUSTUP_SOURCE="$("$PYTHON312" -I -S -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$APPLE_RUSTUP_ENTRY")"
+APPLE_RUSTUP_DIR="$TEST_ROOT/apple-rustup-tools"
+APPLE_RUSTUP="$APPLE_RUSTUP_DIR/rustup"
+mkdir -p "$APPLE_RUSTUP_DIR"
+/bin/cp "$APPLE_RUSTUP_SOURCE" "$APPLE_RUSTUP"
+/bin/chmod 0700 "$APPLE_RUSTUP"
+[[ "$APPLE_RUSTUP" == /* && -f "$APPLE_RUSTUP" && ! -L "$APPLE_RUSTUP" \
+  && -x "$APPLE_RUSTUP" ]] || fail "canonical rustup fixture is unavailable"
 APPLE_RUSTC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustc)"
 APPLE_RUSTDOC="$("$APPLE_RUSTUP" which --toolchain 1.93.1 rustdoc)"
 mkdir -p "$APPLE_CARGO_TARGET" "$APPLE_BUILD_DIR" "$APPLE_OUT_DIR"
+ln -s "$APPLE_RUSTUP" "$TEST_ROOT/apple-rustup-link"
+expect_failure_containing \
+  "symlinked Apple rustup override" \
+  "MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    MOBILE_SDK_RUSTUP_BINARY="$TEST_ROOT/apple-rustup-link" \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+    RUSTC=/bin/bash \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
+    /bin/bash "$APPLE_BUILDER"
+expect_failure_containing \
+  "relative Apple rustup override" \
+  "MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    MOBILE_SDK_RUSTUP_BINARY=rustup \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+    RUSTC=/bin/bash \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
+    /bin/bash "$APPLE_BUILDER"
+expect_failure_containing \
+  "canonical Apple rustup override" \
+  "RUSTC must be the canonical Rust 1.93.1 executable" \
+  env \
+    MOBILE_SDK_PYTHON_BINARY="$PYTHON312" \
+    MOBILE_SDK_RUSTUP_BINARY="$APPLE_RUSTUP" \
+    NORITO_BRIDGE_BUILD_DIR="$APPLE_BUILD_DIR" \
+    NORITO_BRIDGE_OUT_DIR="$APPLE_OUT_DIR" \
+    CARGO_BUILD_JOBS=1 \
+    CARGO_INCREMENTAL=0 \
+    CARGO_NET_OFFLINE=true \
+    CARGO_TARGET_DIR="$APPLE_CARGO_TARGET" \
+    RUSTC=/bin/bash \
+    RUSTC_BOOTSTRAP=1 \
+    RUSTDOC="$APPLE_RUSTDOC" \
+    /bin/bash "$APPLE_BUILDER"
 expect_failure_containing \
   "retired Apple boolean lock bypass" \
   "NORITO_BRIDGE_BUILD_LOCK_HELD is not part of the first-release build contract" \

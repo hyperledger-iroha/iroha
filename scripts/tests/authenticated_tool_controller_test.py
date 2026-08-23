@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import resource
@@ -15,42 +16,78 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = (
-    ROOT
-    / "crates"
-    / "iroha_kagami"
-    / "src"
-    / "bin"
-    / "iroha_authenticated_tool_controller.rs"
-)
 CONTRACT = "iroha.authenticated-tool-os-isolation.v1"
 
 
 @pytest.fixture(scope="module")
-def controller(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Compile the dependency-free controller source as one authenticated file."""
+def controller() -> Path:
+    """Resolve the Cargo-built controller as one authenticated executable."""
 
-    output = tmp_path_factory.mktemp("authenticated-tool-controller") / "controller"
-    subprocess.run(
+    provided = os.environ.get("IROHA_AUTHENTICATED_TOOL_CONTROLLER_BINARY")
+    if provided is not None:
+        candidate = Path(provided)
+        resolved = candidate.resolve(strict=True)
+        if (
+            not candidate.is_absolute()
+            or resolved != candidate
+            or candidate.is_symlink()
+            or not candidate.is_file()
+            or not os.access(candidate, os.X_OK)
+        ):
+            raise RuntimeError(
+                "IROHA_AUTHENTICATED_TOOL_CONTROLLER_BINARY must be absolute and canonical"
+            )
+        return resolved
+
+    completed = subprocess.run(
         [
-            "rustc",
-            "--edition",
-            "2024",
-            "-D",
-            "warnings",
-            "-D",
-            "unsafe-code",
-            str(SOURCE),
-            "-o",
-            str(output),
+            "cargo",
+            "build",
+            "--locked",
+            "--package",
+            "iroha_kagami",
+            "--features",
+            "dev-tools",
+            "--bin",
+            "iroha_authenticated_tool_controller",
+            "--message-format=json-render-diagnostics",
         ],
         cwd=ROOT,
         check=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        text=True,
     )
-    return output.resolve(strict=True)
+    candidates = []
+    for line in completed.stdout.splitlines():
+        message = json.loads(line)
+        target = message.get("target")
+        executable = message.get("executable")
+        if (
+            message.get("reason") == "compiler-artifact"
+            and isinstance(target, dict)
+            and target.get("name") == "iroha_authenticated_tool_controller"
+            and isinstance(executable, str)
+        ):
+            raw_candidate = Path(executable)
+            if (
+                not raw_candidate.is_absolute()
+                or str(raw_candidate) != executable
+                or raw_candidate.is_symlink()
+            ):
+                raise RuntimeError("Cargo reported a non-canonical controller artifact")
+            candidate = raw_candidate.resolve(strict=True)
+            if (
+                candidate != raw_candidate
+                or not candidate.is_file()
+                or not os.access(candidate, os.X_OK)
+            ):
+                raise RuntimeError("Cargo produced a non-executable controller artifact")
+            candidates.append(candidate)
+    if len(candidates) != 1:
+        raise RuntimeError("Cargo did not report one exact controller executable")
+    return candidates[0]
 
 
 def exact_environment(temporary: Path) -> dict[str, str]:
