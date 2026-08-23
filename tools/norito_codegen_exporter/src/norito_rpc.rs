@@ -3867,6 +3867,49 @@ mod tests {
         assert!(!destination.join("fixture.json").exists());
     }
     #[test]
+    fn create_only_publication_commits_exact_tree_with_manifest_seal_last() {
+        let rendered = tempdir().expect("rendered publication");
+        let owned = test_owned_publication_paths();
+        fs::write(rendered.path().join("fixture.json"), b"rendered").expect("write rendered file");
+        write_test_publication_seal(rendered.path());
+        normalize_rendered_modes(rendered.path(), &owned).expect("normalize rendered modes");
+        let expected = PublicationSnapshot::capture(rendered.path(), &owned)
+            .expect("capture rendered snapshot");
+        let parent = tempdir().expect("destination parent");
+        let destination = parent.path().join("publication");
+        let validation_calls = std::cell::Cell::new(0_u8);
+
+        publish_create_only_publication(&expected, &destination, &owned, || {
+            validation_calls.set(validation_calls.get() + 1);
+            assert!(destination.is_dir());
+            assert_eq!(
+                fs::read(destination.join("fixture.json")).expect("read unsealed fixture"),
+                b"rendered"
+            );
+            assert!(
+                !destination.join(CANONICAL_MANIFEST).exists(),
+                "pre-seal validation must observe an incomplete publication"
+            );
+            Ok(())
+        })
+        .expect("publish exact create-only fixture tree");
+
+        assert_eq!(validation_calls.get(), 1);
+        require_publication_seal(&destination).expect("final manifest seals publication");
+        let published = PublicationSnapshot::capture_complete_tree(&destination)
+            .expect("capture complete publication");
+        expected
+            .require_identical(&published)
+            .expect("published tree remains byte-, path-, type-, and mode-exact");
+        assert!(
+            !parent
+                .path()
+                .join(format!(".publication{PUBLICATION_SEAL_PENDING_SUFFIX}"))
+                .exists(),
+            "seal staging link must be retired at the commit point"
+        );
+    }
+    #[test]
     fn create_only_publication_leaves_unsealed_residue_after_failed_validation() {
         let rendered = tempdir().expect("rendered publication");
         let owned = test_owned_publication_paths();

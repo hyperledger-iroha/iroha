@@ -773,7 +773,7 @@ impl Execute for EnableKagemushaRecursiveIssuanceV4 {
             highest_observed_tip_height: verified_liveness.highest_observed_tip_height(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Enabled(enabled);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Enabled(Box::new(enabled));
         state_transaction.world.smart_contract_state.insert(
             (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
             staged_policy_bytes,
@@ -852,7 +852,7 @@ impl Execute for CancelKagemushaRecursiveReleaseV4 {
             cancelled_at_unix_ms: state_transaction.block_unix_timestamp_ms(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(cancelled));
         next.validate()
             .map_err(|error| invalid(format!("invalid cancellation transition: {error}")))?;
         withdraw_cancelled_verifiers(&loaded.state, current_height, state_transaction);
@@ -897,14 +897,14 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
         }
         let marker = transition_marker(&deactivation.transition_id, state_transaction)?;
         let deactivated = KagemushaV4ReleaseDeactivatedV1 {
-            enabled: enabled.clone(),
+            enabled: enabled.as_ref().clone(),
             deactivation,
             deactivation_transaction_intent: current_transaction_intent(state_transaction)?,
             deactivated_at_height: state_transaction.block_height(),
             deactivated_at_unix_ms: state_transaction.block_unix_timestamp_ms(),
         };
         let mut next = loaded.state.clone();
-        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated);
+        next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(Box::new(deactivated));
         commit_transition(marker, loaded, next, state_transaction)
     }
 }
@@ -1039,8 +1039,8 @@ mod tests {
             phase: KagemushaV4ReleaseLifecyclePhaseV1::Staged,
         };
         let predecessor = state.exact_bytes_digest().expect("valid staged lifecycle");
-        state.phase =
-            KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(KagemushaV4ReleaseCancelledV1 {
+        state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(
+            KagemushaV4ReleaseCancelledV1 {
                 cancellation: KagemushaV4ReleaseCancellationV1 {
                     schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
                     version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
@@ -1056,7 +1056,8 @@ mod tests {
                 )),
                 cancelled_at_height: 3,
                 cancelled_at_unix_ms: 1_800_000_000_001,
-            });
+            },
+        ));
         state.validate().expect("valid terminal lifecycle");
         (artifact_binding, state, device_attestation_policy)
     }

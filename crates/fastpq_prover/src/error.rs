@@ -199,6 +199,14 @@ pub enum Error {
     /// Unsupported FRI arity advertised by the parameter set.
     #[error("unsupported FRI arity {0}; expected 8 or 16")]
     FriArity(u32),
+    /// A FRI layer cannot be partitioned into complete multiplicative cosets.
+    #[error("FRI layer length {length} is not compatible with effective arity {arity}")]
+    FriDomainSize {
+        /// Number of evaluations in the malformed layer.
+        length: usize,
+        /// Effective arity required for this reduction.
+        arity: usize,
+    },
     /// Value exceeds the supported width for the stage 1 trace encoding.
     #[error("value limb width `{length}` exceeds 64-bit limit")]
     ValueWidth {

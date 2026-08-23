@@ -1402,6 +1402,20 @@ mod tests {
             ),
             "generated one-input one-output confidential transfer v2 proof should verify against the generated VK"
         );
+        #[cfg(feature = "zk-halo2-ipa")]
+        {
+            const EXACT_BACKEND: &str =
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3";
+            let (exact_proof, exact_vk) = crate::zk::relabel_halo2_ipa_open_verify_fixture(
+                &proof.proof,
+                transfer_key,
+                EXACT_BACKEND,
+            );
+            assert!(
+                crate::zk::verify_backend(EXACT_BACKEND, &exact_proof, Some(&exact_vk)),
+                "exact confidential-transfer registry label should reach the transfer verifier"
+            );
+        }
         let wrong_cid_key = super::build_confidential_v2_vk_box(
             super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
             super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
@@ -1639,6 +1653,20 @@ mod tests {
             &result.proof,
             Some(&vk_box)
         ));
+        #[cfg(feature = "zk-halo2-ipa")]
+        {
+            const EXACT_BACKEND: &str =
+                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3";
+            let (exact_proof, exact_vk) = crate::zk::relabel_halo2_ipa_open_verify_fixture(
+                &result.proof,
+                &vk_box,
+                EXACT_BACKEND,
+            );
+            assert!(
+                crate::zk::verify_backend(EXACT_BACKEND, &exact_proof, Some(&exact_vk)),
+                "exact Kagemusha top-up registry label should reach the top-up verifier"
+            );
+        }
         let public = super::parse_kagemusha_topup_shield_public_inputs_v2(&result.proof.bytes)
             .expect("parse shield public inputs");
         assert_eq!(public.output_commitment, result.output_commitment);

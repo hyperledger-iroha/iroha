@@ -12,6 +12,7 @@
 //! - The domain-aware fold relation for `(x, -x)` openings in each round and query
 //! - Distinct transcript-derived query positions
 //! - Optional composition leaf constraints when `comp_root` is present
+//! - Exact reconstruction of the deterministic generic Binding AIR trace commitment
 //!
 //! Size and structural limits are enforced to reject oversized or malformed payloads
 //! deterministically (see [`StarkVerifierLimits`]).
@@ -40,6 +41,13 @@ pub const STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = 3;
 pub const STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = 48;
 /// Trace width of the generic OpenVerify binding AIR used by STARK/FRI v1 proofs.
 pub const STARK_BINDING_AIR_TRACE_WIDTH_V1: u16 = 6;
+/// Largest generic Binding AIR domain whose canonical trace root V1 reconstructs during
+/// verification.
+///
+/// The exact root check closes unsampled-row substitutions without allowing an attacker to make
+/// verification hash an otherwise valid domain of up to 2^24 rows. Explicit and dedicated typed
+/// AIR contexts retain their circuit-specific domain limits.
+pub const MAX_BINDING_AIR_DOMAIN_LOG2: u8 = 12;
 const MAX_DOMAIN_LOG2: u8 = 24;
 const MAX_FRI_LAYERS: usize = 32;
 const MAX_FRI_QUERIES: usize = 64;
@@ -125,6 +133,13 @@ fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool
     ]
     .into_iter()
     .any(|canonical| stark_air_circuit_id_targets_reserved_circuit(circuit_id, canonical))
+}
+fn stark_air_circuit_id_uses_generic_binding(circuit_id: &str) -> bool {
+    !stark_air_circuit_id_targets_bfv_full_bootstrap(circuit_id)
+        && !stark_air_circuit_id_targets_zk_ace(circuit_id)
+        && !stark_air_circuit_id_targets_ivm_execution(circuit_id)
+        && !stark_air_circuit_id_targets_governance_vote_relation(circuit_id)
+        && !stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id)
 }
 fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String> {
     validate_stark_circuit_id(circuit_id)
@@ -399,6 +414,17 @@ fn poseidon_node_hash(left: &[u8; 32], right: &[u8; 32]) -> Option<[u8; 32]> {
         b"iroha:zk:stark:node:v1",
         &[l, r],
     )))
+}
+fn merkle_node_hash(
+    params: &StarkFriParamsV1,
+    left: &[u8; 32],
+    right: &[u8; 32],
+) -> Option<[u8; 32]> {
+    match params.hash_fn {
+        STARK_HASH_SHA256_V1 => Some(node_hash(left, right)),
+        STARK_HASH_POSEIDON2_V1 => poseidon_node_hash(left, right),
+        _ => None,
+    }
 }
 /// Verify a Merkle inclusion proof for a leaf value to `root`.
 fn merkle_verify(params: &StarkFriParamsV1, root: &[u8; 32], leaf: Fq, path: &MerklePath) -> bool {
@@ -865,6 +891,14 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             payload.n_log2, STARK_FRI_CONSENSUS_MIN_N_LOG2
         ));
     }
+    if stark_air_circuit_id_uses_generic_binding(&payload.circuit_id)
+        && payload.n_log2 > MAX_BINDING_AIR_DOMAIN_LOG2
+    {
+        return Err(format!(
+            "{label} generic Binding AIR n_log2 {} exceeds exact trace-root reconstruction limit {}",
+            payload.n_log2, MAX_BINDING_AIR_DOMAIN_LOG2
+        ));
+    }
     if payload.blowup_log2 < STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 {
         return Err(format!(
             "{label} STARK/FRI blowup_log2 {} is below consensus floor {}",
@@ -1037,7 +1071,8 @@ pub struct StarkAirProofV1 {
     pub circuit_id: String,
     /// Digest of the public statement reconstructed by the caller.
     pub public_digest: [u8; 32],
-    /// Merkle root over row-major AIR trace rows.
+    /// Merkle root over row-major AIR trace rows. Generic Binding verification reconstructs this
+    /// root exactly from the public statement within [`MAX_BINDING_AIR_DOMAIN_LOG2`].
     pub trace_root: [u8; 32],
     /// Merkle root over AIR composition evaluations; must equal FRI layer root 0.
     pub composition_root: [u8; 32],
@@ -1698,6 +1733,40 @@ fn stark_air_trace_leaf_hash(params: &StarkFriParamsV1, row: &[u64]) -> Option<[
         _ => None,
     }
 }
+fn stark_binding_air_trace_root(
+    params: &StarkFriParamsV1,
+    public_digest: &[u8; 32],
+    domain_size: usize,
+) -> Option<[u8; 32]> {
+    if params.n_log2 == 0 || params.n_log2 > MAX_BINDING_AIR_DOMAIN_LOG2 {
+        return None;
+    }
+    let expected_domain = 1_usize.checked_shl(u32::from(params.n_log2))?;
+    if domain_size != expected_domain {
+        return None;
+    }
+    let depth = usize::from(params.n_log2);
+    let mut frontier = vec![None; depth + 1];
+    for index in 0..domain_size {
+        let row = stark_air_row(index, public_digest)?;
+        let mut accumulated = stark_air_trace_leaf_hash(params, &row)?;
+        let mut level = 0_usize;
+        loop {
+            let slot = frontier.get_mut(level)?;
+            let Some(left) = slot.take() else {
+                *slot = Some(accumulated);
+                break;
+            };
+            accumulated = merkle_node_hash(params, &left, &accumulated)?;
+            level = level.checked_add(1)?;
+        }
+    }
+    let root = frontier.get_mut(depth)?.take()?;
+    if frontier.iter().any(Option::is_some) {
+        return None;
+    }
+    Some(root)
+}
 fn stark_air_composition_value(
     index: usize,
     domain_size: usize,
@@ -1712,7 +1781,8 @@ fn stark_air_composition_value(
     let expected = stark_air_row(index, public_digest)?;
     let expected_next = stark_air_row((index + 1) % domain_size, public_digest)?;
     // Check each transcript-sampled row and its neighbour against the verifier-owned binding AIR.
-    // This is a sampled proximity check; it does not assert equality of every committed trace row.
+    // The Binding context separately reconstructs the complete deterministic trace commitment, so
+    // these opened rows also authenticate the exact committed root used by the transcript.
     if row != expected.as_slice() || next_row != expected_next.as_slice() {
         return None;
     }
@@ -1785,11 +1855,10 @@ fn stark_air_context_matches_statement(
 ) -> bool {
     match context {
         StarkAirVerificationContext::Binding => {
-            !stark_air_circuit_id_targets_bfv_full_bootstrap(&air.circuit_id)
-                && !stark_air_circuit_id_targets_zk_ace(&air.circuit_id)
-                && !stark_air_circuit_id_targets_ivm_execution(&air.circuit_id)
-                && !stark_air_circuit_id_targets_governance_vote_relation(&air.circuit_id)
-                && !stark_air_circuit_id_targets_soracloud_fhe_relation(&air.circuit_id)
+            stark_air_circuit_id_uses_generic_binding(&air.circuit_id)
+                && params.n_log2 <= MAX_BINDING_AIR_DOMAIN_LOG2
+                && stark_binding_air_trace_root(params, &air.public_digest, total_domain)
+                    == Some(air.trace_root)
         }
         StarkAirVerificationContext::BfvFullBootstrapPublicPadding {
             statement_hash,
@@ -1941,6 +2010,15 @@ fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
 }
 fn bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(label: &str) -> bool {
     label == iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
+}
+fn validate_generic_binding_air_domain(params: &StarkFriParamsV1) -> Result<(), String> {
+    if params.n_log2 > MAX_BINDING_AIR_DOMAIN_LOG2 {
+        return Err(format!(
+            "generic Binding AIR n_log2 {} exceeds exact trace-root reconstruction limit {}",
+            params.n_log2, MAX_BINDING_AIR_DOMAIN_LOG2
+        ));
+    }
+    Ok(())
 }
 fn validate_stark_prover_params(
     params: &StarkFriParamsV1,
@@ -2495,6 +2573,7 @@ pub fn prove_stark_fri_air_envelope_bytes(
     public_digest: [u8; 32],
 ) -> Result<Vec<u8>, String> {
     validate_generic_stark_air_circuit_id(&circuit_id)?;
+    validate_generic_binding_air_domain(&params)?;
     prove_stark_fri_air_envelope_bytes_for_validated_circuit(
         params,
         transcript_label,
@@ -2564,6 +2643,8 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
 /// This helper only constructs commitments and transcript-derived openings. Domain-specific AIR
 /// callers remain responsible for proving that the supplied rows satisfy their arithmetic
 /// constraints; this function records the already-zero composition vector used by those constraints.
+/// Generic Binding proofs are capped by [`MAX_BINDING_AIR_DOMAIN_LOG2`] because verification
+/// reconstructs their complete deterministic trace commitment.
 pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2572,6 +2653,7 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
     rows: Vec<Vec<u64>>,
 ) -> Result<Vec<u8>, String> {
     validate_generic_stark_air_circuit_id(&circuit_id)?;
+    validate_generic_binding_air_domain(&params)?;
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;

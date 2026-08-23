@@ -3034,7 +3034,8 @@ impl KagemushaReviewedSourceClosureV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`KagemushaValidationError`] for an invalid closure or descriptor encoding failure.
+    /// Returns [`KagemushaValidationError`] when the closure is invalid or the generated descriptor
+    /// exceeds its protocol size bound.
     pub fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
         self.validate()?;
         let mut out = String::new();
@@ -5265,6 +5266,31 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     #[cfg(feature = "transparent_api")]
     #[test]
+    fn release_lifecycle_state_binds_the_promoted_release_record() {
+        let staged = lifecycle_staged_state_fixture();
+        assert_eq!(
+            staged.promotion_binding.release_record_sha256, staged.release_record_norito.sha256,
+            "the retained record must carry the promoted release-record digest",
+        );
+        assert_ne!(
+            staged.promotion_binding.release_record_sha256,
+            staged.promotion_binding.release_policy_source.sha256,
+            "the fixture must distinguish the release record from its policy source",
+        );
+        staged.validate().expect("valid release-record binding");
+
+        let mut changed_release_record = staged;
+        changed_release_record.release_record_norito.sha256[0] ^= 0xFF;
+        assert_eq!(
+            changed_release_record.validate(),
+            Err(KagemushaV4ReleaseLifecycleValidationError::InvalidField(
+                "lifecycle.release_record_identity",
+            )),
+            "a retained record digest outside the signed promotion must fail closed",
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
     fn release_lifecycle_state_enforces_exact_predecessors_and_terminal_phases() {
         let staged = lifecycle_staged_state_fixture();
         staged.validate().expect("valid staged lifecycle");
@@ -5322,16 +5348,24 @@ mod kagemusha_v4_artifact_contract_tests {
             highest_observed_tip_height: canary.finalized_height,
         };
         let mut enabled_state = staged.clone();
-        enabled_state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Enabled(enabled.clone());
+        enabled_state.phase =
+            KagemushaV4ReleaseLifecyclePhaseV1::Enabled(Box::new(enabled.clone()));
         enabled_state.validate().expect("valid enabled lifecycle");
         assert!(enabled_state.issuance_enabled());
+        let enabled_bytes =
+            norito::encode_canonical(&enabled_state).expect("canonical enabled state");
+        assert_eq!(
+            KagemushaV4ReleaseLifecycleStateV1::decode_canonical(&enabled_bytes)
+                .expect("decode boxed enabled state"),
+            enabled_state,
+        );
         let enabled_id = enabled_state
             .exact_bytes_digest()
             .expect("enabled state identity");
 
         let mut cancelled_state = staged.clone();
-        cancelled_state.phase =
-            KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(KagemushaV4ReleaseCancelledV1 {
+        cancelled_state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(
+            KagemushaV4ReleaseCancelledV1 {
                 cancellation: KagemushaV4ReleaseCancellationV1 {
                     schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
                     version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
@@ -5347,15 +5381,23 @@ mod kagemusha_v4_artifact_contract_tests {
                 )),
                 cancelled_at_height: staged.staged_at_height + 1,
                 cancelled_at_unix_ms: staged.staged_at_unix_ms + 1,
-            });
+            },
+        ));
         cancelled_state
             .validate()
             .expect("valid terminal cancellation");
         assert!(!cancelled_state.issuance_enabled());
+        let cancelled_bytes =
+            norito::encode_canonical(&cancelled_state).expect("canonical cancelled state");
+        assert_eq!(
+            KagemushaV4ReleaseLifecycleStateV1::decode_canonical(&cancelled_bytes)
+                .expect("decode boxed cancelled state"),
+            cancelled_state,
+        );
 
         let mut deactivated_state = staged.clone();
-        deactivated_state.phase =
-            KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(KagemushaV4ReleaseDeactivatedV1 {
+        deactivated_state.phase = KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(Box::new(
+            KagemushaV4ReleaseDeactivatedV1 {
                 enabled,
                 deactivation: KagemushaV4ReleaseDeactivationV1 {
                     schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
@@ -5372,15 +5414,22 @@ mod kagemusha_v4_artifact_contract_tests {
                 )),
                 deactivated_at_height: canary.finalized_height + 2,
                 deactivated_at_unix_ms: 1_700_000_004_000,
-            });
+            },
+        ));
         deactivated_state
             .validate()
             .expect("valid terminal deactivation");
         assert!(!deactivated_state.issuance_enabled());
         assert_eq!(
-            deactivated_state.device_attestation_policy,
-            staged.device_attestation_policy,
+            deactivated_state.device_attestation_policy, staged.device_attestation_policy,
             "deactivation must retain the exact policy required for full redemption",
+        );
+        let deactivated_bytes =
+            norito::encode_canonical(&deactivated_state).expect("canonical deactivated state");
+        assert_eq!(
+            KagemushaV4ReleaseLifecycleStateV1::decode_canonical(&deactivated_bytes)
+                .expect("decode boxed deactivated state"),
+            deactivated_state,
         );
 
         let KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(ref mut deactivated) =

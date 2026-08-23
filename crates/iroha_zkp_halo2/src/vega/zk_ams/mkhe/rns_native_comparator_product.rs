@@ -614,11 +614,8 @@ fn append_frame_v1(
     Ok(())
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the transcript commits each governed context field as a separate frame"
-)]
-fn initial_transcript_state_v1(
+#[derive(Clone, Copy)]
+struct ComparatorTranscriptContextV1 {
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
     group: usize,
@@ -627,7 +624,21 @@ fn initial_transcript_state_v1(
     coordinates: usize,
     padded_gates: usize,
     generator_basis_digest: [u8; DIGEST_BYTES_V1],
+}
+
+fn initial_transcript_state_v1(
+    context: ComparatorTranscriptContextV1,
 ) -> Result<Vec<u8>, RnsNativeComparatorProductErrorV1> {
+    let ComparatorTranscriptContextV1 {
+        prior_context_digest,
+        inventory_root,
+        group,
+        difference,
+        sum,
+        coordinates,
+        padded_gates,
+        generator_basis_digest,
+    } = context;
     if prior_context_digest == [0; DIGEST_BYTES_V1]
         || inventory_root == [0; DIGEST_BYTES_V1]
         || group >= GROUPS_V1
@@ -717,32 +728,12 @@ impl<'a, S> ComparatorVerifierTranscriptV1<'a, S>
 where
     S: ProofSuite<Scalar = Scalar, Point = Point>,
 {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the verifier constructor binds the explicit transcript fields and exact proof view"
-    )]
     fn new_v1(
-        prior_context_digest: [u8; DIGEST_BYTES_V1],
-        inventory_root: [u8; DIGEST_BYTES_V1],
-        group: usize,
-        difference: Point,
-        sum: Point,
-        coordinates: usize,
-        padded_gates: usize,
-        generator_basis_digest: [u8; DIGEST_BYTES_V1],
+        context: ComparatorTranscriptContextV1,
         core: ExactCoreViewV1<'a>,
     ) -> Result<Self, RnsNativeComparatorProductErrorV1> {
         Ok(Self {
-            state: initial_transcript_state_v1(
-                prior_context_digest,
-                inventory_root,
-                group,
-                difference,
-                sum,
-                coordinates,
-                padded_gates,
-                generator_basis_digest,
-            )?,
+            state: initial_transcript_state_v1(context)?,
             core,
             cursor: 0,
             challenge_ordinal: 0,
@@ -966,15 +957,18 @@ where
             .comparator_top_commitments(group)
             .ok_or(RnsNativeComparatorProductErrorV1::InvalidContext)?;
         let core = view.core_v1(group)?;
-        let mut transcript = ComparatorVerifierTranscriptV1::<ZkAmsT256BulletproofSuiteV1>::new_v1(
-            inventory.prior_context_digest(),
-            inventory.inventory_root(),
+        let transcript_context = ComparatorTranscriptContextV1 {
+            prior_context_digest: inventory.prior_context_digest(),
+            inventory_root: inventory.inventory_root(),
             group,
             difference,
             sum,
-            COORDINATES_V1,
-            PADDED_GATES_V1,
-            ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+            coordinates: COORDINATES_V1,
+            padded_gates: PADDED_GATES_V1,
+            generator_basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
+        };
+        let mut transcript = ComparatorVerifierTranscriptV1::<ZkAmsT256BulletproofSuiteV1>::new_v1(
+            transcript_context,
             core,
         )?;
         build_comparator_statement_v1::<ZkAmsT256BulletproofSuiteV1>(

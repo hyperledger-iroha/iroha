@@ -762,6 +762,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     let lde_leaf_count = leaf_count_for_values(lde_domain_size, lde_chunk_size)?;
     let lde_path_len = merkle_path_len_for_leaf_count(lde_leaf_count)?;
     let air_path_len = merkle_path_len_for_leaf_count(lde_domain_size)?;
+    let fri_domain = backend::FriDomain::from_lde_parameters(
+        params.lde_root,
+        params.lde_log_size,
+        lde_domain_size,
+        params.omega_coset,
+    )?;
     for (pos, (&expected_idx, query)) in expected_queries.iter().zip(&proof.queries).enumerate() {
         let expected_index =
             u32::try_from(expected_idx).map_err(|_| Error::QueryIndexOverflow {
@@ -853,6 +859,7 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
                 betas: &proof.betas,
                 fri_layer_lengths: &fri_layer_lengths,
                 arity: params.fri.arity,
+                domain: fri_domain,
             },
         )?;
     }
@@ -1008,6 +1015,7 @@ struct FriQueryVerification<'a> {
     betas: &'a [u64],
     fri_layer_lengths: &'a [usize],
     arity: u32,
+    domain: backend::FriDomain,
 }
 fn verify_fri_query_chain(
     fri_query: &FriQueryOpening,
@@ -1021,6 +1029,7 @@ fn verify_fri_query_chain(
         betas,
         fri_layer_lengths,
         arity,
+        mut domain,
     } = context;
     let arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
     if arity == 0 {
@@ -1048,19 +1057,20 @@ fn verify_fri_query_chain(
         if index >= round_len {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let leaf_index = index / arity;
-        let expected_values_len = expected_leaf_value_len(round_len, arity, leaf_index)?;
+        let round_arity = backend::fri_round_arity(round_len, arity)?;
+        let output_len = round_len / round_arity;
+        let leaf_index = index % output_len;
         if usize::try_from(opening.round).ok() != Some(round)
             || usize::try_from(opening.index).ok() != Some(index)
-            || opening.values.len() != expected_values_len
+            || opening.values.len() != round_arity
         {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let offset = index % arity;
-        if opening.values.get(offset).copied() != Some(value) {
+        let position = index / output_len;
+        if opening.values.get(position).copied() != Some(value) {
             return Err(Error::QueryMismatch { index: query_pos });
         }
-        let round_leaf_count = leaf_count_for_values(round_len, arity)?;
+        let round_leaf_count = output_len;
         let round_path_len = merkle_path_len_for_leaf_count(round_leaf_count)?;
         if opening.merkle_path.len() != round_path_len {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
@@ -1071,12 +1081,18 @@ fn verify_fri_query_chain(
         if !backend::verify_merkle_path(root, leaf, leaf_index, &opening.merkle_path)? {
             return Err(Error::QueryMerklePathMismatch { index: query_pos });
         }
-        let folded = fold_fri_values(&opening.values, betas[round]);
+        let folded = fold_fri_values(
+            &opening.values,
+            betas[round],
+            domain.point(leaf_index),
+            domain.coset_generator(output_len),
+        )?;
         if folded != opening.folded_value {
             return Err(Error::QueryMismatch { index: query_pos });
         }
         index = leaf_index;
         value = folded;
+        domain = domain.folded(round_arity);
     }
     let final_len = *fri_layer_lengths
         .last()
@@ -1084,17 +1100,17 @@ fn verify_fri_query_chain(
     if usize::try_from(fri_query.final_index).ok() != Some(index) || index >= final_len {
         return Err(Error::QueryMismatch { index: query_pos });
     }
-    let final_leaf_index = index / arity;
-    let final_offset = index % arity;
-    let expected_final_values_len = expected_leaf_value_len(final_len, arity, final_leaf_index)?;
-    if fri_query.final_values.len() != expected_final_values_len {
+    let final_arity = backend::fri_round_arity(final_len, arity)?;
+    let final_leaf_count = final_len / final_arity;
+    let final_leaf_index = index % final_leaf_count;
+    let final_position = index / final_leaf_count;
+    if fri_query.final_values.len() != final_arity {
         return Err(Error::QueryMismatch { index: query_pos });
     }
-    if fri_query.final_values.get(final_offset).copied() != Some(value) {
+    if fri_query.final_values.get(final_position).copied() != Some(value) {
         return Err(Error::QueryMismatch { index: query_pos });
     }
     let final_round = betas.len();
-    let final_leaf_count = leaf_count_for_values(final_len, arity)?;
     let final_path_len = merkle_path_len_for_leaf_count(final_leaf_count)?;
     if fri_query.final_merkle_path.len() != final_path_len {
         return Err(Error::QueryMerklePathMismatch { index: query_pos });
@@ -1127,9 +1143,9 @@ fn expected_fri_layer_lengths(
     let mut rounds = 0usize;
     let mut lengths = Vec::new();
     while current > 1 && rounds < max_rounds {
-        current = pad_len_to_arity(current, arity)?;
         lengths.push(current);
-        current /= arity;
+        let round_arity = backend::fri_round_arity(current, arity)?;
+        current /= round_arity;
         rounds += 1;
     }
     lengths.push(current);
@@ -1196,14 +1212,8 @@ fn merkle_path_len_for_leaf_count(leaf_count: usize) -> Result<usize> {
     }
 }
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-fn fold_fri_values(values: &[u64], challenge: u64) -> u64 {
-    let mut acc = 0u64;
-    let mut power = 1u64;
-    for &value in values {
-        acc = add_mod(acc, mul_mod(value, power));
-        power = mul_mod(power, challenge);
-    }
-    acc
+fn fold_fri_values(values: &[u64], challenge: u64, x: u64, coset_generator: u64) -> Result<u64> {
+    backend::fold_fri_coset(values, challenge, x, coset_generator)
 }
 fn add_mod(a: u64, b: u64) -> u64 {
     let sum = u128::from(a) + u128::from(b);
@@ -1635,6 +1645,29 @@ mod tests {
             vec![sibling],
         )
     }
+    fn fold_fri_group_for_test(
+        values: &[u64],
+        beta: u64,
+        layer_len: usize,
+        leaf_index: usize,
+    ) -> u64 {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            layer_len,
+            params.omega_coset,
+        )
+        .expect("test FRI domain");
+        let output_len = layer_len / values.len();
+        fold_fri_values(
+            values,
+            beta,
+            domain.point(leaf_index),
+            domain.coset_generator(output_len),
+        )
+        .expect("test FRI fold")
+    }
     fn assert_verify_rejects<F, M>(
         batch: &TransitionBatch,
         proof: &Proof,
@@ -1746,6 +1779,14 @@ mod tests {
         fri_layer_lengths: &[usize],
         arity: u32,
     ) -> Result<()> {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain_size = fri_layer_lengths.first().copied().unwrap_or(1);
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            domain_size,
+            params.omega_coset,
+        )?;
         verify_fri_query_chain(
             fri_query,
             FriQueryVerification {
@@ -1756,6 +1797,7 @@ mod tests {
                 betas,
                 fri_layer_lengths,
                 arity,
+                domain,
             },
         )
     }
@@ -4065,6 +4107,20 @@ mod tests {
         assert!(matches!(err, Error::FriArity(0)));
     }
     #[test]
+    fn balanced_fri_schedule_reaches_one_without_padding() {
+        let params = fastpq_isi::FASTPQ_CANONICAL_BALANCED;
+        let lengths = expected_fri_layer_lengths(
+            1usize << params.lde_log_size,
+            params.fri.arity,
+            params.fri.max_reductions,
+        )
+        .expect("balanced FRI schedule");
+        assert_eq!(
+            lengths,
+            vec![1 << 19, 1 << 16, 1 << 13, 1 << 10, 1 << 7, 1 << 4, 2, 1]
+        );
+    }
+    #[test]
     fn verify_fri_query_chain_accepts_terminal_leaf_without_rounds() {
         let final_values = vec![42];
         let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
@@ -4082,7 +4138,7 @@ mod tests {
     fn verify_fri_query_chain_accepts_single_fold_round() {
         let beta = 3;
         let round_values = vec![10, 20];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -4108,8 +4164,8 @@ mod tests {
         let beta = 5;
         let round_values = vec![12, 34];
         let sibling_values = vec![77, 88];
-        let sibling_folded = fold_fri_values(&sibling_values, beta);
-        let folded = fold_fri_values(&round_values, beta);
+        let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
+        let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
         let (round_root, round_path) =
             two_fri_leaf_root_and_path(0, 1, &round_values, &sibling_values);
@@ -4135,7 +4191,7 @@ mod tests {
     fn verify_fri_query_chain_rejects_single_fold_round_mismatch() {
         let beta = 3;
         let round_values = vec![10, 20];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -4171,8 +4227,8 @@ mod tests {
         let beta = 5;
         let round_values = vec![12, 34];
         let sibling_values = vec![77, 88];
-        let sibling_folded = fold_fri_values(&sibling_values, beta);
-        let folded = fold_fri_values(&round_values, beta);
+        let sibling_folded = fold_fri_group_for_test(&sibling_values, beta, 4, 0);
+        let folded = fold_fri_group_for_test(&round_values, beta, 4, 1);
         let final_values = vec![sibling_folded, folded];
         let (round_root, round_path) =
             two_fri_leaf_root_and_path(0, 1, &round_values, &sibling_values);
@@ -4229,7 +4285,7 @@ mod tests {
             }
         ));
         let round_values = vec![1, 2];
-        let folded = fold_fri_values(&round_values, 7);
+        let folded = fold_fri_group_for_test(&round_values, 7, 2, 0);
         let fri_query = FriQueryOpening {
             initial_index: 0,
             rounds: vec![FriRoundOpening {
@@ -4257,7 +4313,7 @@ mod tests {
     fn verify_fri_query_chain_rejects_malformed_round_and_final_roots() {
         let beta = 7;
         let round_values = vec![1, 2];
-        let folded = fold_fri_values(&round_values, beta);
+        let folded = fold_fri_group_for_test(&round_values, beta, 2, 0);
         let final_values = vec![folded];
         let (round_root, round_path) = single_fri_leaf_root_and_path(0, 0, &round_values);
         let (final_root, final_path) = single_fri_leaf_root_and_path(1, 0, &final_values);
@@ -4334,20 +4390,22 @@ mod tests {
     fn modular_fri_folding_wraps_in_goldilocks_field() {
         assert_eq!(add_mod(GOLDILOCKS_MODULUS - 1, 2), 1);
         assert_eq!(mul_mod(GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS - 1), 1);
-        let values = [3, 4, 5];
-        let challenge = 7;
-        let expected = values.iter().enumerate().fold(0u128, |acc, (idx, value)| {
-            let power = (0..idx).fold(1u128, |power, _| {
-                (power * u128::from(challenge)) % u128::from(GOLDILOCKS_MODULUS)
-            });
-            (acc + u128::from(*value) * power) % u128::from(GOLDILOCKS_MODULUS)
-        });
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            2,
+            params.omega_coset,
+        )
+        .expect("two-point FRI domain");
+        let x = domain.point(0);
+        let zeta = domain.coset_generator(1);
+        let values = [GOLDILOCKS_MODULUS - 1, 2];
+        assert_eq!(fold_fri_values(&values, x, x, zeta).unwrap(), values[0]);
         assert_eq!(
-            fold_fri_values(&values, challenge),
-            u64::try_from(expected).unwrap()
+            fold_fri_values(&values, mul_mod(x, zeta), x, zeta).unwrap(),
+            values[1]
         );
-        let wrapped = fold_fri_values(&[GOLDILOCKS_MODULUS - 1, 2], GOLDILOCKS_MODULUS - 1);
-        assert_eq!(wrapped, GOLDILOCKS_MODULUS - 3);
     }
     #[test]
     fn verify_rejects_wrong_air_next_row_opening() {

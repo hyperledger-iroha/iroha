@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Bring up, verify, inspect, or stop one disposable four-peer Taira devnet.
 
-``up`` builds the current Kagami, fixed-FD Taira daemon, CLI, and native SoraFS
-ingest tool; asks Kagami for a fresh
-four-validator NPoS Nexus network using the canonical Taira chain id; validates
-all four configs; starts the peers; and proves finality with one signed
-``iroha tx ping`` submission followed by the typed transaction-status waiter.
-An explicit ``--inrou-canary-dir`` additionally builds one owner-only exact
-artifact stage, seeds both artifacts into every disjoint peer store before
-startup, and submits and verifies one typed four-replica Inrou workspace before
-the opt-in full doctor runs.
+``up`` builds the current Kagami, fixed-FD Taira daemon, and CLI; asks Kagami
+for a fresh four-validator NPoS Nexus network using the canonical Taira chain
+id; validates all four configs; starts the peers; and proves finality with one
+signed ``iroha tx ping`` submission followed by the typed transaction-status
+waiter. An explicit ``--inrou-canary-dir`` also builds the native SoraFS ingest
+tool, creates one owner-only exact artifact stage, seeds both artifacts into
+every disjoint peer store before startup, and submits and verifies one typed
+four-replica Inrou workspace before the opt-in full doctor runs.
 The generated network lives in one marked directory and is replaced on the
 next ``up``.  There is no release authority, promotion state, evidence bundle,
 soak, or rollback workflow.
@@ -114,7 +113,7 @@ CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "iroha3d",
+        "iroha3d_taira",
         (),
         ("--sora", "--config", "--genesis-manifest-json", "--check-config"),
     ),
@@ -125,6 +124,9 @@ CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tx", "status"),
         ("--hash", "--wait", "--timeout-ms", "--poll-interval-ms", "--terminal-status"),
     ),
+)
+
+INROU_CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "iroha",
         ("taira", "inrou-stage"),
@@ -516,7 +518,7 @@ def command_uses_config(command: str, config: Path) -> bool:
         argv = shlex.split(command)
     except ValueError:
         return False
-    if not argv or Path(argv[0]).name != "iroha3d":
+    if not argv or Path(argv[0]).name != "iroha3d_taira":
         return False
     configs: list[str] = []
     for index, argument in enumerate(argv):
@@ -597,9 +599,9 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
                 "Taira teardown left peer PID files: "
                 + ", ".join(path.name for path in present_pid_paths)
             )
-        # Old Kagami bundles can carry executable stop scripts.  Do not hand
-        # one process-control authority until all four PID files, daemon
-        # argvs, and exact config paths prove that the live cohort is ours.
+        # The generated stop script has process-control authority. Do not run
+        # it until all four PID files, daemon argvs, and exact config paths
+        # prove that the live cohort is ours.
         require_running_cohort(target, run)
         stop = target / "stop.sh"
         if stop.is_symlink() or not stop.is_file():
@@ -626,10 +628,15 @@ def reset_network(root: Path, run: Runner) -> Path:
     return target
 
 
-def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
-    """Return the single current-workspace build used by ``up``."""
+def cargo_build_command(
+    profile: str,
+    target_dir: Path,
+    *,
+    include_inrou: bool = False,
+) -> list[str]:
+    """Return the current-workspace build needed by the selected smoke."""
 
-    return [
+    command = [
         str(REPO_ROOT / "scripts" / "cargo_fast.sh"),
         "--target-dir",
         str(target_dir),
@@ -652,11 +659,10 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
         "iroha_cli",
         "--bin",
         "iroha",
-        "-p",
-        "sorafs_node",
-        "--bin",
-        "sorafs-node",
     ]
+    if include_inrou:
+        command.extend(("-p", "sorafs_node", "--bin", "sorafs-node"))
+    return command
 
 
 def cargo_build_env() -> dict[str, str]:
@@ -668,8 +674,13 @@ def cargo_build_env() -> dict[str, str]:
     return env
 
 
-def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path, Path]:
-    """Build or locate the four exact-revision Taira binaries."""
+def binary_paths(
+    args: argparse.Namespace,
+    run: Runner,
+    *,
+    include_inrou: bool = False,
+) -> tuple[Path, Path, Path, Path | None]:
+    """Build or locate the exact-revision binaries needed by this invocation."""
 
     if args.bin_dir is not None and not args.no_build:
         fail("--bin-dir requires --no-build so a current build cannot be silently ignored")
@@ -677,7 +688,11 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
     if not args.no_build:
         print(f"Building current Taira binaries ({args.profile})...", flush=True)
         run(
-            cargo_build_command(args.profile, target_dir),
+            cargo_build_command(
+                args.profile,
+                target_dir,
+                include_inrou=include_inrou,
+            ),
             cwd=REPO_ROOT,
             env=cargo_build_env(),
             timeout=args.build_timeout_seconds,
@@ -688,10 +703,14 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
         if args.bin_dir is not None
         else target_dir / args.profile
     )
-    return tuple(
+    kagami, irohad, iroha = (
         require_executable(bin_dir / name)
-        for name in ("kagami", "iroha3d_taira", "iroha", "sorafs-node")
+        for name in ("kagami", "iroha3d_taira", "iroha")
     )
+    sorafs_node = (
+        require_executable(bin_dir / "sorafs-node") if include_inrou else None
+    )
+    return kagami, irohad, iroha, sorafs_node
 
 
 def help_has_option(help_text: str, option: str) -> bool:
@@ -704,21 +723,25 @@ def preflight_cli_surfaces(
     kagami: Path,
     irohad: Path,
     iroha: Path,
-    sorafs_node: Path,
+    sorafs_node: Path | None,
     run: Runner,
     *,
     full_doctor: bool,
 ) -> None:
     """Prove every compiled command used by ``up`` before replacing a cohort."""
 
-    binaries = {
+    binaries: dict[str, Path] = {
         "kagami": kagami,
-        "iroha3d": irohad,
+        "iroha3d_taira": irohad,
         "iroha": iroha,
-        "sorafs-node": sorafs_node,
     }
     surfaces = list(CLI_SURFACES)
+    if sorafs_node is not None:
+        binaries["sorafs-node"] = sorafs_node
+        surfaces.extend(INROU_CLI_SURFACES)
     if full_doctor:
+        if sorafs_node is None:
+            fail("full Taira doctor preflight requires the opt-in Inrou toolchain")
         surfaces.append(
             ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
         )
@@ -1637,7 +1660,12 @@ def up(
     target = network_dir(root)
     if target.is_symlink():
         fail(f"refusing symlinked network directory: {target}")
-    kagami, irohad, iroha, sorafs_node = binary_paths(args, run)
+    include_inrou = inrou_canary_workspace is not None
+    kagami, irohad, iroha, sorafs_node = binary_paths(
+        args,
+        run,
+        include_inrou=include_inrou,
+    )
     preflight_cli_surfaces(
         kagami,
         irohad,
@@ -1663,6 +1691,8 @@ def up(
         validate_configs(target, irohad, run)
         require_bundle_identity(target, roots)
         if inrou_canary_workspace is not None:
+            if sorafs_node is None:
+                fail("Taira Inrou canary requested without the native SoraFS binary")
             print("Building and pre-seeding the exact Taira Inrou stage...", flush=True)
             inrou_stage = prepare_inrou_stage(
                 target,
@@ -1844,7 +1874,11 @@ def parser() -> argparse.ArgumentParser:
     up_parser = commands.add_parser("up", help="replace, start, and verify the devnet")
     up_parser.add_argument("--profile", default="local-release", help="Cargo profile")
     up_parser.add_argument("--target-dir", type=Path, default=REPO_ROOT / "target")
-    up_parser.add_argument("--bin-dir", type=Path, help="directory containing all four binaries")
+    up_parser.add_argument(
+        "--bin-dir",
+        type=Path,
+        help="directory containing the three default binaries and optional sorafs-node",
+    )
     up_parser.add_argument("--no-build", action="store_true", help="use binaries already in --bin-dir")
     up_parser.add_argument(
         "--build-timeout-seconds",

@@ -785,6 +785,31 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         ),
         "trusted promotion forwarding",
     )
+    require_pattern(
+        qualification_source,
+        qcomp,
+        errors,
+        (
+            r"fn evaluate_stock_launcher_unavailable_v1\(.*?"
+            r"try_build_kagemusha_validator_qualification_v1\(\s*"
+            r"sources,\s*None,\s*None,\s*genesis,\s*None,\s*validator_id,\s*"
+            r"Some\(validator_signer\),\s*\)\?.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Unavailable\(reason\)\s*=>\s*\{\s*"
+            r"require_expected_stock_launcher_unavailable_reason_v1\(reason\)\s*\}.*?"
+            r"KagemushaValidatorQualificationOutcomeV1::Signed\(_\)\s*=>\s*Err\(\s*"
+            r'"stock launcher unexpectedly signed a Kagemusha validator qualification '
+            r'without trusted promotion inputs"\s*\.to_owned\(\),\s*\),.*?'
+            r"fn require_expected_stock_launcher_unavailable_reason_v1\(.*?"
+            r"match reason\s*\{\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::SnapshotBootstrap\s*\|\s*"
+            r"KagemushaValidatorQualificationUnavailableV1::MissingTrustedPromotionReservation\s*"
+            r"=>\s*\{\s*Ok\(\(\)\)\s*\}\s*"
+            r"reason\s*=>\s*Err\(format!\(\s*"
+            r'"stock launcher returned an unexpected Kagemusha qualification outcome: '
+            r'\{reason:\?\}"\s*\)\),'
+        ),
+        "stock-launcher fail-closed qualification outcome",
+    )
     check_config_branch = texts[NODE].split("if args.startup.check_config {", 1)[
         -1
     ].split("// Resolve deployment-owned executable providers", 1)[0]
@@ -842,7 +867,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")',
         "KagemushaAuthenticatedReleaseV4::verify",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
-        "if expected.len() != 17",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
+        "Self::Candidate => 17",
+        "Self::Promoted => 18",
+        "if inventory_state.includes_promotion_record() && expected.len() != 18",
         "ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy)",
         r'instruction_count\":1',
     )
@@ -853,10 +881,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"fn verify_exact_inventory_v4\(.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
-            r"if expected\.len\(\) != 17.*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.*?"
+            r"if inventory_state\.includes_promotion_record\(\) && expected\.len\(\) != 18.*?"
             r"fn recursive_step_verifier_commitment_v4\("
         ),
-        "17-file verifier inventory",
+        "18-file verifier inventory with both validation receipts",
     )
     authenticated_controller = texts[AUTHENTICATED_TOOL_CONTROLLER]
     promotion_publisher = texts[KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT]
@@ -940,7 +969,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         'const FINAL_NAME: &str = "promotion-record-v4.norito";',
         'const TEMP_PREFIX: &str = ".promotion-record-v4.norito.tmp.";',
         "const COMMIT_UNCERTAIN_EXIT: u8 = 75;",
-        "const CANDIDATE_FILES: [CandidateFileSpec; 16] = [",
+        "const CANDIDATE_FILES: [CandidateFileSpec; 17] = [",
         "fn canonical_report(stdout: &[u8], expected: &CanonicalReportV4)",
         "fn identity_from_file_checked(",
         "fn open_member(",
@@ -1085,11 +1114,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "pinned policy pre/post metadata, digest, parent, and pathname validation",
     )
     candidate_declarations = promotion_publisher.split(
-        "const CANDIDATE_FILES: [CandidateFileSpec; 16] = [", 1
+        "const CANDIDATE_FILES: [CandidateFileSpec; 17] = [", 1
     )[-1].split("const REPORT_ARTIFACTS:", 1)[0]
-    if candidate_declarations.count("CandidateFileSpec {") != 16:
+    if candidate_declarations.count("CandidateFileSpec {") != 17:
         errors.append(
-            f"{KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT}: candidate inventory declaration is not exact sixteen"
+            f"{KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT}: candidate inventory declaration is not exact seventeen"
         )
     candidate_entries = (
         *(f'name: "{name}"' for name in ARTIFACTS),
@@ -1101,6 +1130,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "name: BENCHMARK_NAME",
         "name: REVIEW_NAME",
         'name: "recursive-step-two-qualification-v4.norito"',
+        "name: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
     )
     for entry in candidate_entries:
         if candidate_declarations.count(entry) != 1:
@@ -1117,7 +1147,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         (
             r"if initial\.len\(\) != CANDIDATE_FILES\.len\(\).*?"
             r"for \(name, expected\) in initial.*?"
-            r"if !stable_identity\(expected, observed\).*?"
+            r"if !stable_candidate_identity\(name, expected, observed\).*?"
             r"let additions = current.*?"
             r"match additions\.as_slice\(\)\s*\{\s*"
             r"\[\] => Ok\(PublicationPhase::Candidate\),\s*"
@@ -1150,14 +1180,14 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"&self\.initial_identities\(\), &self\.current_identities\(\)\?\).*?"
             r"fn verify_committed\(&mut self\).*?"
             r"if self\.phase\(\)\? != PublicationPhase::Committed.*?"
-            r"exact seventeen-file post-state.*?"
+            r"exact eighteen-file post-state.*?"
             r"identity_from_file_checked\(held, true, Some\(\(name, bounds\)\)\)\?.*?"
             r"require_root_custody\(&self\.path\.join\(name\), false\)\?;.*?"
             r"open_member\(&self\.directory, name, bounds, true\)\?;.*?"
             r"require_root_custody\(&self\.path\.join\(FINAL_NAME\), false\)\?;.*?"
             r"open_member\(&self\.directory, FINAL_NAME, final_bounds, true\)\?"
         ),
-        "held and reopened exact sixteen-to-seventeen candidate validation",
+        "held and reopened exact seventeen-to-eighteen candidate validation",
     )
     require_pattern(
         candidate_snapshot,
@@ -1168,7 +1198,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"let names = inventory_names\(&self\.directory\)\?;.*?"
             r"for name in names\s*\{\s*"
             r"let bounds = inventoried_member_bounds\(&name\)\?;\s*"
-            r"let \(_, identity\) = open_member\(&self\.directory, &name, bounds, false\)\?;\s*"
+            r"let hash_contents\s*=\s*"
+            r"name == KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1;\s*"
+            r"let \(_, identity\) = open_member\(&self\.directory, &name, bounds, hash_contents\)\?;\s*"
             r"current\.insert\(name, identity\);"
         ),
         "regular-only bounded temporary and final inventory inspection",
@@ -1269,6 +1301,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"candidate_sha256: hex\(&candidate_sha256\),\s*"
             r"qualification_receipt_sha256: hex\(&qualification_sha256\),\s*"
             r"qualified_candidate_sha256: hex\(&qualified_candidate_sha256\),\s*"
+            r"internal_validation_receipt_sha256: hex\(&internal_validation_sha256\),\s*"
             r"promotion_record_sha256: hex\(&promotion_sha256\),\s*"
             r"release_policy_sha256: hex\(&policy_sha256\),\s*"
             r"authenticated_source_seal_projection_sha256: hex\(\s*"
@@ -1979,11 +2012,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         texts[BUNDLE],
         BUNDLE,
         errors,
-        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 17;",
+        "const FINAL_RELEASE_INVENTORY_COUNT_V4: usize = 18;",
         "fn final_release_inventory_v4() -> BTreeSet<String>",
+        "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1",
         "KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4",
         "if expected.len() != FINAL_RELEASE_INVENTORY_COUNT_V4",
-        "fn final_release_inventory_is_exact_and_includes_recursive_qualification_receipt()",
+        "fn final_release_inventory_is_exact_and_includes_both_receipts()",
     )
     require_pattern(
         texts[BUNDLE],
@@ -1991,10 +2025,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         (
             r"fn final_release_inventory_v4\(\).*?\.chain\(\[.*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.*?"
             r"KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.*?"
             r"\]\).*?\.collect\(\).*?impl PublicationDirectory"
         ),
-        "function-scoped 17-file producer inventory including the qualification receipt",
+        "function-scoped 18-file producer inventory including both validation receipts",
     )
     require_pattern(
         texts[MODEL],
@@ -2016,6 +2051,32 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"384 \* 1024;"
         ),
         "384 KiB absolute V4 proof-pair bound",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"FINAL_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",.*?'
+            r'"recursive-step-two-qualification-v4\.norito",.*?'
+            r'"promotion-record-v4\.norito",.*?'
+            r"\).*?MAX_RELEASE_INVENTORY_ENTRIES = len\(ARTIFACTS \+ FINAL_METADATA\).*?"
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES = 1024 \* 1024"
+        ),
+        "18-file readiness inventory with bounded internal-validation receipt",
+    )
+    require_pattern(
+        texts[READINESS],
+        READINESS,
+        errors,
+        (
+            r"BOUNDED_AUTHENTICATED_METADATA = \(.*?"
+            r'"internal-validation-receipt-v1\.norito",\s*'
+            r"MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,.*?"
+            r'\("promotion-record-v4\.norito", MAX_PROMOTION_RECORD_BYTES\),'
+        ),
+        "bounded opaque internal-validation receipt staging",
     )
     opaque_metadata_section = texts[READINESS].split(
         "BOUNDED_AUTHENTICATED_METADATA = (", 1
@@ -2060,7 +2121,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "inherited promotion gate differs from its reviewed SHA-256",
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
         'READINESS_SOURCE_CONTRACT = (',
-        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 128 * 1024",
+        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 136 * 1024",
         "authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}",
         "READINESS_SOURCE_PROVIDERS = (",
         "def pin_authenticated_reviewed_source_file(",
@@ -2668,7 +2729,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p iroha_core device_registration_ --lib",
         "cargo test -p iroha_core kagemusha_online_registration_ --lib",
         "cargo test -p iroha_core active_receiver_snapshot_ --lib",
-        "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
+        "cargo test -p iroha_core --features \"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab\" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_both_receipts",
         "cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib",
         "cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib",
         "cargo test -p iroha_core sequential_append_paths --lib",

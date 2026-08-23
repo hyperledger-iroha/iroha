@@ -541,6 +541,31 @@ pub fn hash_proof(proof: &ProofBox) -> [u8; 32] {
 pub fn hash_vk(vk: &VerifyingKeyBox) -> [u8; 32] {
     hash_vk_bytes(&vk.backend, &vk.bytes)
 }
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+fn relabel_halo2_ipa_open_verify_fixture(
+    proof: &ProofBox,
+    vk: &VerifyingKeyBox,
+    exact_backend: &str,
+) -> (ProofBox, VerifyingKeyBox) {
+    assert_eq!(proof.backend.as_str(), ZK_BACKEND_HALO2_IPA);
+    assert_eq!(vk.backend.as_str(), ZK_BACKEND_HALO2_IPA);
+    assert_eq!(
+        production_verify_backend_tag(exact_backend),
+        Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    );
+    assert_ne!(exact_backend, ZK_BACKEND_HALO2_IPA);
+
+    let exact_vk = VerifyingKeyBox::new(exact_backend.to_owned(), vk.bytes.clone());
+    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_canonical(&proof.bytes).expect("canonical Halo2 OpenVerifyEnvelope");
+    envelope.circuit_id = exact_backend.to_owned();
+    envelope.vk_hash = hash_vk(&exact_vk);
+    let exact_proof = ProofBox::new(
+        exact_backend.to_owned(),
+        norito::encode_canonical(&envelope).expect("encode exact Halo2 OpenVerifyEnvelope"),
+    );
+    (exact_proof, exact_vk)
+}
 pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
     hash_domain_separated_payload(b"iroha:zk:v1:vk", backend, bytes)
 }
@@ -6003,7 +6028,9 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if let Some(ok) = verify_with_registry(backend, proof, vk) {
         return ok;
     }
-    if backend == ZK_BACKEND_HALO2_IPA {
+    if production_verify_backend_tag(backend)
+        == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
         #[cfg(feature = "zk-halo2-ipa")]
         {
             return verify_halo2_ipa_envelope(proof, vk);
@@ -6018,18 +6045,6 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     #[cfg(feature = "zk-ipa-native")]
     if backend == "halo2/ipa/poly-open" {
         return verify_ipa_open_envelope(proof);
-    }
-    // Halo2 family (external halo2 backends)
-    if production_verify_backend_tag(backend)
-        == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
-    {
-        // Transparent IPA over Pasta (default-on)
-        #[cfg(feature = "zk-halo2-ipa")]
-        if backend.starts_with("halo2/pasta/ipa-") {
-            return verify_halo2_ipa(backend, proof, vk);
-        }
-        // Pasta and other built-ins handled here
-        return verify_halo2(backend, proof, vk);
     }
     // STARK/FRI family: native multi-fold verifier
     if is_stark_fri_v1_backend(backend) {
@@ -6123,6 +6138,22 @@ mod debug_backend_tests {
                 verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk)),
                 "fixture proof should verify for seed {seed}"
             );
+            #[cfg(feature = "zk-halo2-ipa")]
+            {
+                let (exact_proof, exact_vk) = relabel_halo2_ipa_open_verify_fixture(
+                    &proof,
+                    &vk,
+                    IVM_EXECUTION_V1_HALO2_BACKEND,
+                );
+                assert!(
+                    verify_backend(
+                        IVM_EXECUTION_V1_HALO2_BACKEND,
+                        &exact_proof,
+                        Some(&exact_vk),
+                    ),
+                    "exact IVM registry label should reach the IVM execution verifier for seed {seed}"
+                );
+            }
         }
     }
     #[cfg(feature = "zk-halo2-ipa")]

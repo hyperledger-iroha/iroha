@@ -1186,9 +1186,9 @@ impl Bus {
                 // `attach` publishes its sender before taking this buffer lock.
                 // Re-check under the lock so a frame which raced that publish
                 // cannot be stranded in the offline buffer until a later reconnect.
-                let tx_opt = match target {
-                    proto::Role::App => sess.app_tx.lock().await.clone(),
-                    proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
+                let tx_opt = match frame.dir {
+                    proto::Dir::AppToWallet => sess.wallet_tx.lock().await.clone(),
+                    proto::Dir::WalletToApp => sess.app_tx.lock().await.clone(),
                 };
                 if let Some(tx) = tx_opt {
                     delivered = tx.send(frame.clone()).await.is_ok();
@@ -1523,7 +1523,7 @@ impl Bus {
                     proto::Dir::WalletToApp => proto::Role::App,
                 };
                 if target == role {
-                    out.push(f);
+                    out.push_back(f);
                     *bytes = bytes.saturating_sub(l);
                 } else {
                     kept.push_back((f, l));

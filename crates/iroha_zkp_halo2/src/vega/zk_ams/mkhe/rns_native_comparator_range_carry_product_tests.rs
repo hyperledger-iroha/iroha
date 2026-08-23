@@ -425,14 +425,13 @@ fn chunk_witness_v1(
             }
         }
         4 => {
-            for coordinate in 0..coordinates {
-                let beta16 = values[BORROW_16_FINAL_COMMITMENT_V1][coordinate];
-                let beta17 = values[BORROW_17_FINAL_COMMITMENT_V1][coordinate];
-                a_l.extend([
-                    beta16,
-                    beta17,
-                    values[DIFFERENCE_TOP_FINAL_COMMITMENT_V1][coordinate],
-                ]);
+            for ((&beta16, &beta17), &difference_top) in values[BORROW_16_FINAL_COMMITMENT_V1]
+                .iter()
+                .zip(&values[BORROW_17_FINAL_COMMITMENT_V1])
+                .zip(&values[DIFFERENCE_TOP_FINAL_COMMITMENT_V1])
+                .take(coordinates)
+            {
+                a_l.extend([beta16, beta17, difference_top]);
                 a_r.extend([beta16 - Scalar::one(), beta17 - Scalar::one(), beta16]);
             }
         }

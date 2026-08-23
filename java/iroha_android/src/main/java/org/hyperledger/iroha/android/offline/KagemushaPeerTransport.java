@@ -36,6 +36,10 @@ public final class KagemushaPeerTransport {
     final byte[] archive = payload.archive();
     try {
       requireArchiveBound(archive);
+      if (archive.length > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES) {
+        throw new IllegalArgumentException(
+            "Kagemusha peer archive exceeds the text transport bound");
+      }
       final String value = payload.kind().textPrefix + ENCODER.encodeToString(archive);
       if (value.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_TEXT_ENVELOPE_BYTES) {
         throw new IllegalArgumentException("Kagemusha peer text exceeds its bound");
@@ -63,6 +67,10 @@ public final class KagemushaPeerTransport {
     final String body = value.substring(kind.textPrefix.length());
     final byte[] archive = decodeBase64Url(body);
     try {
+      if (archive.length > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES) {
+        throw new IllegalArgumentException(
+            "Kagemusha peer archive exceeds the text transport bound");
+      }
       if (!kind.textPrefix.concat(ENCODER.encodeToString(archive)).equals(value)) {
         throw new IllegalArgumentException("Kagemusha peer text is not canonical");
       }

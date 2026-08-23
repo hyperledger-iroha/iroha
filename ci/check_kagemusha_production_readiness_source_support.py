@@ -291,7 +291,7 @@ def runtime_projection_source_errors(
     require(model, MODEL, errors, "pub const KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT: usize = 4;")
     require_pattern(
         wrapper, NODE_RUNTIME_EFFECTIVE_CONFIG_PROJECTION_COMPONENT, errors,
-        (r"pub\(super\) fn build_kagemusha_runtime_effective_config_projection_v1\(\s*"
+        (r"pub fn build_kagemusha_runtime_effective_config_projection_v1\(\s*"
          r"config: &Config,\s*genesis: &GenesisBlock,\s*bootstrap: &GenesisV2Bootstrap,\s*"
          r"\) -> Result<VerifiedKagemushaV4RuntimeEffectiveConfigV1, String> \{\s*"
          r"VerifiedKagemushaV4RuntimeEffectiveConfigV1::derive\(config, genesis, bootstrap\)\s*\}"),
@@ -1099,8 +1099,10 @@ def canary_source_errors(
         (r"norito::encode_canonical\(self\).*?!= exact_evidence_bytes.*?"
          r"verify_evidence_signature\(&self\.signature, &self\.body\.issuer, "
          r"self\.body\.signing_hash\(\)\).*?"
-         r"verify_evidence_body\(\s*&self\.body,\s*authorization,\s*"
-         r"exact_authorization_bytes,\s*expectations,\s*receipt,\s*exact_receipt_bytes,"),
+         r"let verified = verify_evidence_body\(\s*&self\.body,\s*"
+         r"EvidenceVerificationInputs \{\s*authorization,\s*"
+         r"exact_authorization_bytes,\s*expectations,\s*receipt,\s*"
+         r"exact_receipt_bytes,\s*\},\s*\)\?;\s*Ok\(verified\)"),
         "exact issuer-signed canary evidence entrypoint",
     )
     require_pattern(
@@ -1118,13 +1120,24 @@ def canary_source_errors(
     )[0]
     require_pattern(
         evidence_body, MODEL_CANARY_EVIDENCE_COMPONENT, errors,
-        (r"decode_exact_finalized_block\(body\.finalized_block_wire\.as_bytes\(\).*?"
+        (r"let verified = verify_evidence_prerequisites\(body, &inputs\)\?;.*?"
+         r"verify_evidence_block_binding\(body, &verified\)\?;.*?"
+         r"let authorized_wire = verify_committed_canary\(body, &verified\)\?;.*?"
+         r"verify_evidence_finality\(\s*body,\s*inputs\.receipt,\s*"
+         r"inputs\.expectations,\s*&verified,\s*&authorized_wire,\s*\)\?;.*?"
+         r"fn verify_evidence_prerequisites\(.*?"
+         r"decode_exact_finalized_block\(body\.finalized_block_wire\.as_bytes\(\).*?"
          r"authorization\.verify_exact\(.*?block_time_unix_ms.*?"
          r"body\.canary_authorization != authorization_identity.*?"
-         r"body\.canary_transaction_intent != verified_authorization\.canary_transaction_intent\(\).*?"
-         r"body\.canary_transaction_wire != verified_authorization\.canary_transaction_wire\(\).*?"
-         r"body\.finalized_height >= verified_authorization\.expires_at_height\(\)\.get\(\).*?"
-         r"committed\.verify_inclusion_in_block\(&block\).*?committed_wire != authorized_wire.*?"
+         r"body\.canary_transaction_intent != authorization\.canary_transaction_intent\(\).*?"
+         r"body\.canary_transaction_wire != authorization\.canary_transaction_wire\(\).*?"
+         r"fn verify_evidence_block_binding\(.*?"
+         r"body\.finalized_height >= verified\.authorization\.expires_at_height\(\)\.get\(\).*?"
+         r"fn verify_committed_canary\(.*?"
+         r"committed\.verify_inclusion_in_block\(&verified\.block\).*?"
+         r"committed_wire != authorized_wire.*?"
+         r"body\.canary_transaction_wire\.matches_bytes\(&committed_wire\).*?"
+         r"fn verify_evidence_finality\(.*?"
          r"finality_proof_chain\s*\.first\(\).*?checked_add\(1\).*?"
          r"checked_add\(proof_count\).*?Some\(body\.finalized_height\).*?"
          r"BridgeFinalityVerifier::with_context\(.*?"

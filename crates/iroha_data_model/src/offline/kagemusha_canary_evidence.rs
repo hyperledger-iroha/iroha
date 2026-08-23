@@ -5,7 +5,7 @@ use std::{num::NonZeroU64, str::FromStr as _};
 use crate::{
     NetworkId,
     account::AccountId,
-    block::{BlockHeader, proofs::TrustedBlockProofAnchor},
+    block::{BlockHeader, SignedBlock, proofs::TrustedBlockProofAnchor},
     bridge::BridgeFinalityVerifier,
     isi::{Instruction as _, offline::RecordKagemushaTairaCanaryV4},
     metadata::Metadata,
@@ -28,7 +28,8 @@ use super::kagemusha_promotion_receipt::{
     KagemushaExactBytesDigestV1, KagemushaFinalizedBlockWireV1,
     KagemushaV4ActivationFinalityProofChainV1, KagemushaV4ActivationFinalityReceiptV1,
     KagemushaV4ActivationReceiptExpectationsV1, KagemushaV4PromotionBindingV1,
-    decode_exact_finalized_block, validate_finality_corridor_context,
+    KagemushaV4VerifiedActivationReceiptV1, decode_exact_finalized_block,
+    validate_finality_corridor_context,
 };
 
 /// Maximum canonical bytes accepted for one controller-signed canary permit.
@@ -1201,11 +1202,13 @@ impl KagemushaV4TairaCanaryEvidenceV1 {
         enforce_artifact_size(&body, KAGEMUSHA_V4_TAIRA_CANARY_EVIDENCE_MAX_BYTES)?;
         verify_evidence_body(
             &body,
-            authorization,
-            exact_authorization_bytes,
-            expectations,
-            receipt,
-            exact_receipt_bytes,
+            EvidenceVerificationInputs {
+                authorization,
+                exact_authorization_bytes,
+                expectations,
+                receipt,
+                exact_receipt_bytes,
+            },
         )?;
         if issuer.public_key() != &body.issuer {
             return Err(KagemushaV4TairaCanaryEvidenceValidationError::SignerMismatch);
@@ -1286,11 +1289,13 @@ impl KagemushaV4TairaCanaryEvidenceV1 {
         verify_evidence_signature(&self.signature, &self.body.issuer, self.body.signing_hash())?;
         let verified = verify_evidence_body(
             &self.body,
-            authorization,
-            exact_authorization_bytes,
-            expectations,
-            receipt,
-            exact_receipt_bytes,
+            EvidenceVerificationInputs {
+                authorization,
+                exact_authorization_bytes,
+                expectations,
+                receipt,
+                exact_receipt_bytes,
+            },
         )?;
         Ok(verified)
     }
@@ -1527,33 +1532,79 @@ fn validate_permit_binding(
     Ok(verified_receipt.finalized_height())
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "the canary verifier keeps every exact-byte, authorization, block, and finality binding in one auditable path"
-)]
+#[derive(Clone, Copy)]
+struct EvidenceVerificationInputs<'a> {
+    authorization: &'a KagemushaV4TairaCanaryAuthorizationV1,
+    exact_authorization_bytes: &'a [u8],
+    expectations: &'a KagemushaV4ActivationReceiptExpectationsV1,
+    receipt: &'a KagemushaV4ActivationFinalityReceiptV1,
+    exact_receipt_bytes: &'a [u8],
+}
+
+struct VerifiedEvidencePrerequisites {
+    block: SignedBlock,
+    block_time_unix_ms: u64,
+    authorization: KagemushaV4VerifiedTairaCanaryAuthorizationV1,
+    receipt: KagemushaV4VerifiedActivationReceiptV1,
+    authorization_identity: KagemushaExactBytesDigestV1,
+}
+
 fn verify_evidence_body(
     body: &KagemushaV4TairaCanaryEvidenceBodyV1,
-    authorization: &KagemushaV4TairaCanaryAuthorizationV1,
-    exact_authorization_bytes: &[u8],
-    expectations: &KagemushaV4ActivationReceiptExpectationsV1,
-    receipt: &KagemushaV4ActivationFinalityReceiptV1,
-    exact_receipt_bytes: &[u8],
+    inputs: EvidenceVerificationInputs<'_>,
 ) -> Result<KagemushaV4VerifiedTairaCanaryEvidenceV1, KagemushaV4TairaCanaryEvidenceValidationError>
 {
+    let verified = verify_evidence_prerequisites(body, &inputs)?;
+    let authorization_identity = verified.authorization_identity;
+    verify_evidence_block_binding(body, &verified)?;
+    let authorized_wire = verify_committed_canary(body, &verified)?;
+    verify_evidence_finality(
+        body,
+        inputs.receipt,
+        inputs.expectations,
+        &verified,
+        &authorized_wire,
+    )?;
+    verify_query_evidence(body, verified.block_time_unix_ms)?;
+
+    Ok(KagemushaV4VerifiedTairaCanaryEvidenceV1 {
+        promotion_id: body.promotion_id,
+        activation_expectations_artifact: body.activation_expectations_artifact,
+        activation_finality_receipt: body.activation_finality_receipt,
+        authorization_identity,
+        activation_finalized_height: body.activation_finalized_height,
+        activation_finalized_block_hash: body.activation_finalized_block_hash,
+        activation_transaction_intent: body.activation_transaction_intent,
+        finalized_height: body.finalized_height,
+        finalized_block_hash: body.finalized_block_hash,
+        canary_transaction_intent: body.canary_transaction_intent,
+        canary_transaction_wire: body.canary_transaction_wire,
+    })
+}
+
+fn verify_evidence_prerequisites(
+    body: &KagemushaV4TairaCanaryEvidenceBodyV1,
+    inputs: &EvidenceVerificationInputs<'_>,
+) -> Result<VerifiedEvidencePrerequisites, KagemushaV4TairaCanaryEvidenceValidationError> {
+    let EvidenceVerificationInputs {
+        authorization,
+        exact_authorization_bytes,
+        expectations,
+        receipt,
+        exact_receipt_bytes,
+    } = *inputs;
     body.validate_structure()?;
     let block = decode_exact_finalized_block(body.finalized_block_wire.as_bytes())
         .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding)?;
-    let block_header = block.header();
-    let block_time_unix_ms = duration_millis(block_header.creation_time())?;
-    let verified_authorization = authorization.verify_exact(
+    let block_time_unix_ms = duration_millis(block.header().creation_time())?;
+    let authorization = authorization.verify_exact(
         exact_authorization_bytes,
         expectations,
         receipt,
         exact_receipt_bytes,
         block_time_unix_ms,
     )?;
-    let verified_receipt = receipt
+    let receipt = receipt
         .verify(expectations)
         .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::ActivationReceipt)?;
     let authorization_identity = KagemushaExactBytesDigestV1::from_bytes(exact_authorization_bytes)
@@ -1569,22 +1620,42 @@ fn verify_evidence_body(
             .matches_bytes(exact_receipt_bytes)
         || body.canary_authorization != authorization_identity
         || body.issuer != *expectations.receipt_issuer()
-        || body.activation_transaction_intent != verified_receipt.activation_transaction_intent()
-        || body.activation_finalized_height != verified_receipt.finalized_height()
-        || body.activation_finalized_block_hash != verified_receipt.finalized_block_hash()
-        || body.canary_transaction_intent != verified_authorization.canary_transaction_intent()
-        || body.canary_transaction_wire != verified_authorization.canary_transaction_wire()
+        || body.activation_transaction_intent != receipt.activation_transaction_intent()
+        || body.activation_finalized_height != receipt.finalized_height()
+        || body.activation_finalized_block_hash != receipt.finalized_block_hash()
+        || body.canary_transaction_intent != authorization.canary_transaction_intent()
+        || body.canary_transaction_wire != authorization.canary_transaction_wire()
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::ActivationBinding);
     }
-    if body.finalized_height != block_header.height().get()
-        || body.finalized_block_hash != block.hash()
-        || body.finalized_height <= verified_receipt.finalized_height()
-        || body.finalized_height >= verified_authorization.expires_at_height().get()
+    Ok(VerifiedEvidencePrerequisites {
+        block,
+        block_time_unix_ms,
+        authorization,
+        receipt,
+        authorization_identity,
+    })
+}
+
+fn verify_evidence_block_binding(
+    body: &KagemushaV4TairaCanaryEvidenceBodyV1,
+    verified: &VerifiedEvidencePrerequisites,
+) -> Result<(), KagemushaV4TairaCanaryEvidenceValidationError> {
+    if body.finalized_height != verified.block.header().height().get()
+        || body.finalized_block_hash != verified.block.hash()
+        || body.finalized_height <= verified.receipt.finalized_height()
+        || body.finalized_height >= verified.authorization.expires_at_height().get()
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding);
     }
-    let transaction = verified_authorization.canary_transaction();
+    Ok(())
+}
+
+fn verify_committed_canary(
+    body: &KagemushaV4TairaCanaryEvidenceBodyV1,
+    verified: &VerifiedEvidencePrerequisites,
+) -> Result<Vec<u8>, KagemushaV4TairaCanaryEvidenceValidationError> {
+    let transaction = verified.authorization.canary_transaction();
     let transaction_creation = duration_millis(transaction.creation_time())?;
     let transaction_ttl = transaction
         .time_to_live()
@@ -1593,10 +1664,10 @@ fn verify_evidence_body(
     let transaction_wall_expiry = transaction_creation
         .checked_add(transaction_ttl)
         .ok_or(KagemushaV4TairaCanaryEvidenceValidationError::CanaryTransaction)?;
-    if block_time_unix_ms < transaction_creation
-        || block_time_unix_ms >= transaction_wall_expiry
-        || block_time_unix_ms < verified_authorization.authorized_at_unix_ms()
-        || block_time_unix_ms >= verified_authorization.expires_at_unix_ms()
+    if verified.block_time_unix_ms < transaction_creation
+        || verified.block_time_unix_ms >= transaction_wall_expiry
+        || verified.block_time_unix_ms < verified.authorization.authorized_at_unix_ms()
+        || verified.block_time_unix_ms >= verified.authorization.expires_at_unix_ms()
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::AuthorizationExpired);
     }
@@ -1607,9 +1678,10 @@ fn verify_evidence_body(
     if committed.merge_inclusion.is_some()
         || committed.result.0.is_err()
         || !committed.result.1.is_empty()
-        || !committed.verify_inclusion_in_block(&block)
+        || !committed.verify_inclusion_in_block(&verified.block)
         || committed_transaction.hash() != body.canary_transaction_intent
-        || block
+        || verified
+            .block
             .entrypoints_cloned()
             .filter(|entrypoint| entrypoint.hash() == committed.entrypoint_hash)
             .count()
@@ -1631,7 +1703,16 @@ fn verify_evidence_body(
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::CommittedTransaction);
     }
+    Ok(authorized_wire)
+}
 
+fn verify_evidence_finality(
+    body: &KagemushaV4TairaCanaryEvidenceBodyV1,
+    receipt: &KagemushaV4ActivationFinalityReceiptV1,
+    expectations: &KagemushaV4ActivationReceiptExpectationsV1,
+    verified: &VerifiedEvidencePrerequisites,
+    authorized_wire: &[u8],
+) -> Result<(), KagemushaV4TairaCanaryEvidenceValidationError> {
     let receipt_terminal = receipt
         .body
         .finality_proof_chain
@@ -1659,6 +1740,7 @@ fn verify_evidence_body(
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::Finality);
     }
+    let binding = expectations.binding();
     let mut finality_verifier = BridgeFinalityVerifier::with_context(
         binding.network_id,
         expectations
@@ -1684,15 +1766,15 @@ fn verify_evidence_body(
             .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Finality)?;
     }
     let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &block,
+        &verified.block,
         &final_extension.finality_artifact,
-        &committed.entrypoint_hash,
+        &body.committed_transaction.entrypoint_hash,
     )
     .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding)?;
     let entry_index = usize::try_from(anchor.entry_index())
         .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding)?;
     let Some(TransactionEntrypoint::External(block_transaction)) =
-        block.entrypoints_cloned().nth(entry_index)
+        verified.block.entrypoints_cloned().nth(entry_index)
     else {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding);
     };
@@ -1703,8 +1785,14 @@ fn verify_evidence_body(
     {
         return Err(KagemushaV4TairaCanaryEvidenceValidationError::BlockBinding);
     }
+    Ok(())
+}
 
-    let committed_digest = canonical_digest(committed)?;
+fn verify_query_evidence(
+    body: &KagemushaV4TairaCanaryEvidenceBodyV1,
+    block_time_unix_ms: u64,
+) -> Result<(), KagemushaV4TairaCanaryEvidenceValidationError> {
+    let committed_digest = canonical_digest(&body.committed_transaction)?;
     let proof_chain_digest = canonical_digest(&body.finality_proof_chain)?;
     if body.query.committed_transaction_norito != committed_digest
         || body.query.finalized_block_wire != body.finalized_block_wire_digest
@@ -1717,21 +1805,7 @@ fn verify_evidence_body(
         body.canary_transaction_intent,
         body.finalized_height,
         block_time_unix_ms,
-    )?;
-
-    Ok(KagemushaV4VerifiedTairaCanaryEvidenceV1 {
-        promotion_id: body.promotion_id,
-        activation_expectations_artifact: body.activation_expectations_artifact,
-        activation_finality_receipt: body.activation_finality_receipt,
-        authorization_identity,
-        activation_finalized_height: body.activation_finalized_height,
-        activation_finalized_block_hash: body.activation_finalized_block_hash,
-        activation_transaction_intent: body.activation_transaction_intent,
-        finalized_height: body.finalized_height,
-        finalized_block_hash: body.finalized_block_hash,
-        canary_transaction_intent: body.canary_transaction_intent,
-        canary_transaction_wire: body.canary_transaction_wire,
-    })
+    )
 }
 
 fn duration_millis(

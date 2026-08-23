@@ -357,7 +357,7 @@ fn zk1_envelope_pasta_ipa_verify_add_public() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(feature = "zk-halo2")]
+#[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn kaigi_roster_backend_accepts_valid_proof() {
     use halo2_proofs::{
@@ -419,6 +419,7 @@ fn kaigi_roster_backend_accepts_valid_proof() {
 
     let mut vk_env = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut vk_env, k);
+    zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-roster-v1");
     zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
     let mut prf_env = zk1::wrap_start();
@@ -426,14 +427,25 @@ fn kaigi_roster_backend_accepts_valid_proof() {
     zk1::wrap_append_instances_pasta_fp_cols(&inst_refs, &mut prf_env);
 
     let vk_box = VerifyingKeyBox::new(KAIGI_ROSTER_BACKEND.into(), vk_env);
-    let prf_box = ProofBox::new(KAIGI_ROSTER_BACKEND.into(), prf_env);
+    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        circuit_id: "halo2/pasta/ipa/kaigi-roster-v1".into(),
+        vk_hash: super::hash_vk(&vk_box),
+        public_inputs: b"kaigi-roster-v1".to_vec(),
+        proof_bytes: prf_env,
+        aux: Vec::new(),
+    };
+    let prf_box = ProofBox::new(
+        KAIGI_ROSTER_BACKEND.into(),
+        norito::encode_canonical(&envelope).expect("encode Kaigi roster OpenVerifyEnvelope"),
+    );
     assert!(
         super::verify_backend(KAIGI_ROSTER_BACKEND, &prf_box, Some(&vk_box)),
-        "kaigi roster backend should accept valid proof"
+        "exact Kaigi roster registry label should reach the roster verifier"
     );
 }
 
-#[cfg(feature = "zk-halo2")]
+#[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn kaigi_usage_backend_accepts_valid_proof() {
     use halo2_proofs::{
@@ -490,10 +502,21 @@ fn kaigi_usage_backend_accepts_valid_proof() {
     zk1::wrap_append_instances_pasta_fp_cols(&inst_refs, &mut prf_env);
 
     let vk_box = VerifyingKeyBox::new(KAIGI_USAGE_BACKEND.into(), vk_env);
-    let prf_box = ProofBox::new(KAIGI_USAGE_BACKEND.into(), prf_env);
+    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
+        vk_hash: super::hash_vk(&vk_box),
+        public_inputs: b"kaigi-usage-v1".to_vec(),
+        proof_bytes: prf_env,
+        aux: Vec::new(),
+    };
+    let prf_box = ProofBox::new(
+        KAIGI_USAGE_BACKEND.into(),
+        norito::encode_canonical(&envelope).expect("encode Kaigi usage OpenVerifyEnvelope"),
+    );
     assert!(
         super::verify_backend(KAIGI_USAGE_BACKEND, &prf_box, Some(&vk_box)),
-        "kaigi usage backend should accept valid proof"
+        "exact Kaigi usage registry label should reach the usage verifier"
     );
 }
 

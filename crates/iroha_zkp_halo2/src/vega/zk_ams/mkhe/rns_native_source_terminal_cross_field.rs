@@ -524,15 +524,11 @@ where
         zero_limb_bundle,
         cross_proof_digest,
     )?;
-    validate_global_aliases_v1(
-        transcript,
-        &source,
-        &terminal,
-        &zero_padding,
-        cross.point_evaluation_digests(),
-        cross.limb_relation_digests(),
-        cross.sumcheck_round_digests(),
-        [
+    let global_alias_digests = GlobalAliasDigestsV1 {
+        point_digests: cross.point_evaluation_digests(),
+        limb_digests: cross.limb_relation_digests(),
+        round_digests: cross.sumcheck_round_digests(),
+        derived: [
             formula_digest,
             opening_bundle_digest,
             aggregate_point_digest,
@@ -543,6 +539,13 @@ where
             cross_proof_digest,
             cross_link_digest,
         ],
+    };
+    validate_global_aliases_v1(
+        transcript,
+        &source,
+        &terminal,
+        &zero_padding,
+        global_alias_digests,
     )?;
 
     let anchor = ResidualAnchorV1::from_canonical_bytes_exact_v1(source.downstream())?;
@@ -1248,20 +1251,26 @@ fn expected_anchor_core_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     core
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "alias validation keeps every authenticated digest family explicit"
-)]
+struct GlobalAliasDigestsV1<'a> {
+    point_digests: &'a [[u8; DIGEST_BYTES_V1]],
+    limb_digests: &'a [[u8; DIGEST_BYTES_V1]],
+    round_digests: &'a [[u8; DIGEST_BYTES_V1]],
+    derived: [[u8; DIGEST_BYTES_V1]; 9],
+}
+
 fn validate_global_aliases_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,
     terminal: &RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     zero_padding: &RnsNativeZeroPaddingCommitmentPrerequisiteV1,
-    point_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_digests: &[[u8; DIGEST_BYTES_V1]],
-    round_digests: &[[u8; DIGEST_BYTES_V1]],
-    derived: [[u8; DIGEST_BYTES_V1]; 9],
+    digests: GlobalAliasDigestsV1<'_>,
 ) -> Result<(), RnsNativeSourceTerminalCrossFieldErrorV1> {
+    let GlobalAliasDigestsV1 {
+        point_digests,
+        limb_digests,
+        round_digests,
+        derived,
+    } = digests;
     let mut registry = DigestRegistryV1::new();
     for digest in [
         transcript.profile_manifest_digest(),

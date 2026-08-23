@@ -665,8 +665,8 @@ impl Figure9CompressionStep {
         shared_witness: &[Scalar],
     ) -> Result<[u32; SHA256_STATE_WORDS], Figure9SplitAdapterError> {
         let mut state = [0_u32; SHA256_STATE_WORDS];
-        for (word_index, word) in state.iter_mut().enumerate() {
-            for (bit, source) in sources[word_index].iter().enumerate() {
+        for (word, word_sources) in state.iter_mut().zip(sources) {
+            for (bit, source) in word_sources.iter().enumerate() {
                 if source.resolve(shared_witness)? {
                     *word |= 1 << bit;
                 }

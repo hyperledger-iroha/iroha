@@ -749,11 +749,7 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid context, proof length, aliases, or failed bounded allocation.
-    #[allow(
-        clippy::wrong_self_convention,
-        reason = "all canonical section encoders share a borrowed receiver API"
-    )]
-    pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    pub fn to_canonical_bytes_v1(self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge;
         let (mut bytes, total, proof_digest) =
@@ -996,11 +992,7 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
-    #[allow(
-        clippy::wrong_self_convention,
-        reason = "all canonical section encoders share a borrowed receiver API"
-    )]
-    pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    pub fn to_canonical_bytes_v1(self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs;
         let (mut bytes, total, proof_digest) =
@@ -1324,11 +1316,7 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
-    #[allow(
-        clippy::wrong_self_convention,
-        reason = "all canonical section encoders share a borrowed receiver API"
-    )]
-    pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    pub fn to_canonical_bytes_v1(self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
         let (mut bytes, total, proof_digest) =
@@ -1750,11 +1738,7 @@ impl<'a> ZkAmsMkheRnsNativeZeroPaddingSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
-    #[allow(
-        clippy::wrong_self_convention,
-        reason = "all canonical section encoders share a borrowed receiver API"
-    )]
-    pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    pub fn to_canonical_bytes_v1(self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding;
         let (mut bytes, total, proof_digest) =

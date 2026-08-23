@@ -1313,7 +1313,7 @@ fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, TokenStream
     let writes = needs
         .into_iter()
         .enumerate()
-        .filter(|&(_, needs_size)| needs_size)
+        .filter(|(_, needs_size)| *needs_size)
         .map(|(index, _)| {
             quote! {
                 norito::core::write_len_header(

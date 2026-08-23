@@ -403,7 +403,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1:
             "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",
             "--bin",
             "kagemusha_recursive_spend_v4_bundle",
-            "final_release_inventory_is_exact_and_includes_recursive_qualification_receipt",
+            "final_release_inventory_is_exact_and_includes_both_receipts",
         ],
         fuzz_target: None,
     },
@@ -1568,6 +1568,7 @@ pub(crate) mod tests {
             "data-model-post-canary-wire-splices",
             "workspace-tests",
             "workspace-strict-clippy",
+            "core-final-release-inventory",
             "connect-bridge-production-release-kat",
             "fuzz-release-bundle-parser",
             "fuzz-recursive-topology",
@@ -1601,6 +1602,10 @@ pub(crate) mod tests {
                 .filter(|argument| **argument == "--locked")
                 .count(),
             1
+        );
+        assert_eq!(
+            command("core-final-release-inventory").argv.last(),
+            Some(&"final_release_inventory_is_exact_and_includes_both_receipts")
         );
     }
 

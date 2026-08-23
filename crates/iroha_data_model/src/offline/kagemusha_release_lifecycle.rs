@@ -588,7 +588,10 @@ impl KagemushaV4ReleaseDeactivatedV1 {
 }
 
 /// Closed persisted lifecycle phase; absence is deliberately not a phase.
-#[allow(variant_size_differences)]
+///
+/// Payload-bearing phases use owned boxes so the phase discriminant stays
+/// uniformly small. Norito therefore encodes each payload in its own bounded,
+/// length-delimited owned-value frame.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -600,11 +603,11 @@ pub enum KagemushaV4ReleaseLifecyclePhaseV1 {
     /// Release is installed for canary execution but public issuance is disabled.
     Staged,
     /// Public issuance is enabled by complete signed post-canary evidence.
-    Enabled(KagemushaV4ReleaseEnabledV1),
+    Enabled(Box<KagemushaV4ReleaseEnabledV1>),
     /// A staged release was cancelled and can never be enabled.
-    Cancelled(KagemushaV4ReleaseCancelledV1),
+    Cancelled(Box<KagemushaV4ReleaseCancelledV1>),
     /// A formerly enabled release no longer permits new issuance.
-    Deactivated(KagemushaV4ReleaseDeactivatedV1),
+    Deactivated(Box<KagemushaV4ReleaseDeactivatedV1>),
 }
 
 /// Manifest-scoped consensus lifecycle record for one installed V4 release.
@@ -681,6 +684,25 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
     /// oversized state, a weak authority, an illegal terminal transition, or a
     /// predecessor digest that is not the exact canonical previous state.
     pub fn validate(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        self.validate_common_fields()?;
+        self.validate_phase_transition()?;
+        enforce_encoded_size(self, KAGEMUSHA_V4_RELEASE_LIFECYCLE_STATE_MAX_BYTES_V1)
+    }
+
+    /// Return the exact identity of the validated canonical lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaV4ReleaseLifecycleValidationError`] when validation
+    /// or canonical encoding fails.
+    pub fn exact_bytes_digest(
+        &self,
+    ) -> Result<KagemushaExactBytesDigestV1, KagemushaV4ReleaseLifecycleValidationError> {
+        self.validate()?;
+        self.canonical_digest_unchecked()
+    }
+
+    fn validate_common_fields(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
         if self.schema != KAGEMUSHA_V4_RELEASE_LIFECYCLE_STATE_SCHEMA_V1
             || self.version != KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1
             || self.staged_at_height == 0
@@ -711,14 +733,18 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
             &device_attestation_policy_norito,
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
         )?;
-        if self.promotion_binding.manifest_sha256 != self.artifact_binding.manifest_sha256
-            || self.promotion_binding.release_record_sha256 != self.release_record_norito.sha256
-            || !self
-                .promotion_binding
-                .device_attestation_policy_norito
-                .matches_bytes(&device_attestation_policy_norito)
+        if self.promotion_binding.manifest_sha256 != self.artifact_binding.manifest_sha256 {
+            return Err(invalid("lifecycle.manifest_identity"));
+        }
+        if self.promotion_binding.release_record_sha256 != self.release_record_norito.sha256 {
+            return Err(invalid("lifecycle.release_record_identity"));
+        }
+        if !self
+            .promotion_binding
+            .device_attestation_policy_norito
+            .matches_bytes(&device_attestation_policy_norito)
         {
-            return Err(invalid("lifecycle.release_identity"));
+            return Err(invalid("lifecycle.device_attestation_policy_identity"));
         }
         let Some(governance_policy) = self.governance_authority.controller().multisig_policy()
         else {
@@ -730,72 +756,85 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
         {
             return Err(invalid("lifecycle.governance_authority"));
         }
+        Ok(())
+    }
 
+    fn validate_phase_transition(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
         let staged_predecessor = self.with_phase(KagemushaV4ReleaseLifecyclePhaseV1::Staged);
         let staged_predecessor_id = staged_predecessor.canonical_digest_unchecked()?;
         match &self.phase {
             KagemushaV4ReleaseLifecyclePhaseV1::Staged => {}
             KagemushaV4ReleaseLifecyclePhaseV1::Enabled(enabled) => {
-                enabled.validate()?;
-                if enabled.expected_staged_lifecycle != staged_predecessor_id
-                    || enabled.enabled_at_height <= self.staged_at_height
-                    || enabled.enabled_at_unix_ms < self.staged_at_unix_ms
-                    || enabled.enable_transaction_intent == self.stage_transaction_intent
-                {
-                    return Err(invalid("lifecycle.enabled_transition"));
-                }
+                self.validate_enabled_transition(enabled, staged_predecessor_id)?;
             }
             KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(cancelled) => {
-                cancelled.validate()?;
-                if cancelled.cancellation.promotion_id != self.promotion_binding.promotion_id
-                    || cancelled.cancellation.manifest_sha256
-                        != self.promotion_binding.manifest_sha256
-                    || cancelled.cancellation.expected_predecessor_lifecycle
-                        != staged_predecessor_id
-                    || cancelled.cancelled_at_height <= self.staged_at_height
-                    || cancelled.cancelled_at_unix_ms < self.staged_at_unix_ms
-                    || cancelled.cancellation_transaction_intent == self.stage_transaction_intent
-                {
-                    return Err(invalid("lifecycle.cancelled_transition"));
-                }
+                self.validate_cancelled_transition(cancelled, staged_predecessor_id)?;
             }
             KagemushaV4ReleaseLifecyclePhaseV1::Deactivated(deactivated) => {
-                deactivated.validate()?;
-                if deactivated.deactivation.promotion_id != self.promotion_binding.promotion_id
-                    || deactivated.deactivation.manifest_sha256
-                        != self.promotion_binding.manifest_sha256
-                    || deactivated.enabled.expected_staged_lifecycle != staged_predecessor_id
-                    || deactivated.enabled.enabled_at_height <= self.staged_at_height
-                    || deactivated.enabled.enabled_at_unix_ms < self.staged_at_unix_ms
-                    || deactivated.enabled.enable_transaction_intent
-                        == self.stage_transaction_intent
-                {
-                    return Err(invalid("lifecycle.deactivated_transition"));
-                }
-                let enabled_predecessor = self.with_phase(
-                    KagemushaV4ReleaseLifecyclePhaseV1::Enabled(deactivated.enabled.clone()),
-                );
-                if deactivated.deactivation.expected_predecessor_lifecycle
-                    != enabled_predecessor.canonical_digest_unchecked()?
-                {
-                    return Err(invalid("lifecycle.deactivated_predecessor"));
-                }
+                self.validate_deactivated_transition(deactivated, staged_predecessor_id)?;
             }
         }
-        enforce_encoded_size(self, KAGEMUSHA_V4_RELEASE_LIFECYCLE_STATE_MAX_BYTES_V1)
+        Ok(())
     }
 
-    /// Return the exact identity of the validated canonical lifecycle state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KagemushaV4ReleaseLifecycleValidationError`] when validation
-    /// or canonical encoding fails.
-    pub fn exact_bytes_digest(
+    fn validate_enabled_transition(
         &self,
-    ) -> Result<KagemushaExactBytesDigestV1, KagemushaV4ReleaseLifecycleValidationError> {
-        self.validate()?;
-        self.canonical_digest_unchecked()
+        enabled: &KagemushaV4ReleaseEnabledV1,
+        staged_predecessor_id: KagemushaExactBytesDigestV1,
+    ) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        enabled.validate()?;
+        if enabled.expected_staged_lifecycle != staged_predecessor_id
+            || enabled.enabled_at_height <= self.staged_at_height
+            || enabled.enabled_at_unix_ms < self.staged_at_unix_ms
+            || enabled.enable_transaction_intent == self.stage_transaction_intent
+        {
+            return Err(invalid("lifecycle.enabled_transition"));
+        }
+        Ok(())
+    }
+
+    fn validate_cancelled_transition(
+        &self,
+        cancelled: &KagemushaV4ReleaseCancelledV1,
+        staged_predecessor_id: KagemushaExactBytesDigestV1,
+    ) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        cancelled.validate()?;
+        if cancelled.cancellation.promotion_id != self.promotion_binding.promotion_id
+            || cancelled.cancellation.manifest_sha256 != self.promotion_binding.manifest_sha256
+            || cancelled.cancellation.expected_predecessor_lifecycle != staged_predecessor_id
+            || cancelled.cancelled_at_height <= self.staged_at_height
+            || cancelled.cancelled_at_unix_ms < self.staged_at_unix_ms
+            || cancelled.cancellation_transaction_intent == self.stage_transaction_intent
+        {
+            return Err(invalid("lifecycle.cancelled_transition"));
+        }
+        Ok(())
+    }
+
+    fn validate_deactivated_transition(
+        &self,
+        deactivated: &KagemushaV4ReleaseDeactivatedV1,
+        staged_predecessor_id: KagemushaExactBytesDigestV1,
+    ) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        deactivated.validate()?;
+        if deactivated.deactivation.promotion_id != self.promotion_binding.promotion_id
+            || deactivated.deactivation.manifest_sha256 != self.promotion_binding.manifest_sha256
+            || deactivated.enabled.expected_staged_lifecycle != staged_predecessor_id
+            || deactivated.enabled.enabled_at_height <= self.staged_at_height
+            || deactivated.enabled.enabled_at_unix_ms < self.staged_at_unix_ms
+            || deactivated.enabled.enable_transaction_intent == self.stage_transaction_intent
+        {
+            return Err(invalid("lifecycle.deactivated_transition"));
+        }
+        let enabled_predecessor = self.with_phase(KagemushaV4ReleaseLifecyclePhaseV1::Enabled(
+            Box::new(deactivated.enabled.clone()),
+        ));
+        if deactivated.deactivation.expected_predecessor_lifecycle
+            != enabled_predecessor.canonical_digest_unchecked()?
+        {
+            return Err(invalid("lifecycle.deactivated_predecessor"));
+        }
+        Ok(())
     }
 
     fn with_phase(&self, phase: KagemushaV4ReleaseLifecyclePhaseV1) -> Self {
@@ -1003,6 +1042,36 @@ mod tests {
         let mut invalid_deactivate = deactivation;
         invalid_deactivate.reason = KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled;
         assert!(invalid_deactivate.validate().is_err());
+    }
+
+    #[test]
+    fn boxed_lifecycle_phase_payload_has_bounded_layout_and_canonical_roundtrip() {
+        assert!(
+            std::mem::size_of::<KagemushaV4ReleaseLifecyclePhaseV1>()
+                <= 2 * std::mem::size_of::<usize>(),
+            "lifecycle phase payloads must remain behind one-word indirections",
+        );
+        let phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(
+            KagemushaV4ReleaseCancelledV1 {
+                cancellation: cancellation(),
+                cancellation_transaction_intent: HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"boxed lifecycle cancellation"),
+                ),
+                cancelled_at_height: 1,
+                cancelled_at_unix_ms: 1,
+            },
+        ));
+        let bytes = norito::encode_canonical(&phase).expect("encode boxed lifecycle phase");
+        let decoded: KagemushaV4ReleaseLifecyclePhaseV1 = norito::decode_canonical_with_limits(
+            &bytes,
+            norito::canonical_decode_limits(bytes.len()),
+        )
+        .expect("decode boxed lifecycle phase");
+        assert_eq!(decoded, phase);
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("re-encode boxed lifecycle phase"),
+            bytes,
+        );
     }
 
     #[test]

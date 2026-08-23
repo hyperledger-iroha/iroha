@@ -885,7 +885,7 @@ jobs:
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
       - run: cargo test -p iroha_core active_receiver_snapshot_ --lib
-      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_recursive_qualification_receipt
+      - run: cargo test -p iroha_core --features "dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab" --bin kagemusha_recursive_spend_v4_bundle final_release_inventory_is_exact_and_includes_both_receipts
       - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
       - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
       - run: cargo test -p iroha_core sequential_append_paths --lib

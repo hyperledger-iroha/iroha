@@ -17949,7 +17949,11 @@ mod tests {
             .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint ticket")
             .expect("ticket bytes");
-        let ticket_bytes = minted.ticket.expect("ticket bytes present");
+        let ticket_bytes = minted
+            .frames
+            .into_iter()
+            .next()
+            .expect("ticket frame present");
         let ticket =
             iroha_crypto::soranet::pow::Ticket::parse(&ticket_bytes).expect("parse minted ticket");
         let signed = iroha_crypto::soranet::pow::SignedTicket::sign(

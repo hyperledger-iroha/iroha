@@ -1273,6 +1273,38 @@ impl norito::json::FastJsonWrite for LaneConfig {
     }
 }
 #[cfg(feature = "json")]
+fn ensure_lane_config_json_fields(
+    seen_fields: &BTreeSet<String>,
+) -> Result<(), norito::json::Error> {
+    const REQUIRED_FIELDS: [&str; 16] = [
+        "id",
+        "shard_id",
+        "dataspace_id",
+        "alias",
+        "description",
+        "visibility",
+        "lane_type",
+        "governance",
+        "settlement",
+        "storage",
+        "proof_scheme",
+        "manifest_policy",
+        "confidential_compute",
+        "scheduler",
+        "settlement_buffer",
+        "metadata",
+    ];
+    if let Some(missing_field) = REQUIRED_FIELDS
+        .into_iter()
+        .find(|field| !seen_fields.contains(*field))
+    {
+        return Err(norito::json::Error::Message(format!(
+            "missing required lane config field `{missing_field}`"
+        )));
+    }
+    Ok(())
+}
+#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneConfig {
     #[allow(
         clippy::too_many_lines,
@@ -1354,32 +1386,7 @@ impl norito::json::JsonDeserialize for LaneConfig {
             }
         }
         visitor.finish()?;
-        let required_fields = [
-            "id",
-            "shard_id",
-            "dataspace_id",
-            "alias",
-            "description",
-            "visibility",
-            "lane_type",
-            "governance",
-            "settlement",
-            "storage",
-            "proof_scheme",
-            "manifest_policy",
-            "confidential_compute",
-            "scheduler",
-            "settlement_buffer",
-            "metadata",
-        ];
-        if let Some(missing_field) = required_fields
-            .into_iter()
-            .find(|field| !seen_fields.contains(*field))
-        {
-            return Err(norito::json::Error::Message(format!(
-                "missing required lane config field `{missing_field}`"
-            )));
-        }
+        ensure_lane_config_json_fields(&seen_fields)?;
         lane.validate_policy_surface()
             .map_err(|error| norito::json::Error::Message(error.to_string()))?;
         Ok(lane)
