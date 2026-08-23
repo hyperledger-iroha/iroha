@@ -200,7 +200,7 @@ if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
     return Ok(None);
 }
 """,
-        "live Apply cleanup authority must derive from the exact neutral attestation and reject recovered substitution",
+        "live Apply reconciliation authority must derive from the exact neutral attestation and reject recovered substitution",
         errors,
     )
     _require_rust_token_sequence(
@@ -211,14 +211,14 @@ let ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) = &work.kind else {
     return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind);
 };
 """,
-        "live Apply cleanup authority must originate only from the live WAL carrier",
+        "live Apply reconciliation authority must originate only from the live WAL carrier",
         errors,
     )
     _require_rust_token_sequence(
         registry_impl_path,
         live_reconciliation,
         "apply.project_reconciliation(dispatch_key)",
-        "live Apply cleanup must retain the exact carrier key",
+        "live Apply reconciliation must retain the exact carrier key",
         errors,
     )
 
@@ -326,7 +326,7 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
             ".select_apply(ordinal)",
             ".prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
         ),
-        "live cleanup, complete Apply census, and neutral worker publication",
+        "live reconciliation, complete Apply census, and neutral worker publication",
     )
     _require_rust_token_sequence(
         scheduler_path,
@@ -337,7 +337,7 @@ if !reservation.preflight(&prepared) {
 }
 let executor_dispatch = executor
     .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
-    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
 reservation.commit(prepared, executor_dispatch);
 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
 """,
@@ -2429,7 +2429,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             effects_source,
             "consume_one",
             "fn consume_one<",
-            "\n    fn ensure_pending_tip_recovery_effect_is_local(",
+            "\n    fn bind_body_pipeline_owner(",
         )
         require_order(
             effects_path,

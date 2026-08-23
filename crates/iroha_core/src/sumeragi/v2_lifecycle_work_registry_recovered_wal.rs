@@ -3482,7 +3482,6 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             return None;
         };
         (work.digest == self.digest
-            && apply.carrier.is_recovered()
             && work.validates_at(self.address)
             && apply.validates_at(self.address, self.digest))
         .then_some(apply)

@@ -3226,7 +3226,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "d6ed8d045a8446c7f915babf543832727f77b485fbf233954c3645612792a47b"
+        "2d7cbd5e2c9bcd323c60925770d8a9406ea85877cacac7b6a323729df07e3bde"
     ),
     "preflight_effect_batch_frontier": (
         "d2debd37b0ef330c5dba99fd01e483e44edc4be3df5ccee02513ef7203f3f96d"
@@ -3246,7 +3246,27 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "step_pacemaker_once": (
         "c35c6e284b25bc13c1e08d351b5108be7ba72e51701b8beab9860765337bc163"
     ),
-    "step": "4cb1b0ed16376658416f5aa7fd1aa48865c468637b5cf5f53f65d03cb7bc06cf",
+    "step": "4e20148058bb31e701479b340112033023b2e2b8da1ec2677734d936f4053a15",
+}
+
+# Lifecycle Decision Apply uses a durable lifecycle corridor alongside the
+# runner Decision-cleanup fence. Bind the complete corridor: availability must
+# freeze all executor debt, dispatch must bind the exact pending-Kura carrier,
+# completion preparation must authenticate lineage, and finality may publish
+# only after those owners have drained.
+_PRODUCTION_LIFECYCLE_DECISION_APPLY_ITEM_SHA256 = {
+    "lifecycle_decision_apply_dispatch_available": (
+        "26ea20b9abab0f5ed47e1abf733e9dc09a6a2ae92d70864d54147fbf5a00d639"
+    ),
+    "prepare_lifecycle_decision_apply_executor_dispatch": (
+        "b5748f6b9deeffe97f35e4ad89bd9915452bff6c5a755a7f786f08895ecea4c4"
+    ),
+    "prepare_lifecycle_decision_apply_completion": (
+        "ac93c32e181e18f1a143e604486fce86063ecd7cf0f6a95c8fc919c6d5fa6e4d"
+    ),
+    "commit_lifecycle_decision_apply_finality": (
+        "3cfe8043de90ee70667bf2b9b99868f893f991ea537a3086f1c5270be3d37052"
+    ),
 }
 
 _PRODUCTION_EFFECT_SCHEDULER_HANDOFF_ITEM_SHA256 = {

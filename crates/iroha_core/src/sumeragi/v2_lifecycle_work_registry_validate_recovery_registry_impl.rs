@@ -2528,9 +2528,7 @@ impl ConcreteLifecycleWorkRegistry {
                     Some(RecoveredWalRegistrySlotV1::DecisionStore(address))
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
-                    if apply.carrier.is_recovered()
-                        && work.validates_at(address)
-                        && apply.validates_at(address, work.digest) =>
+                    if work.validates_at(address) && apply.validates_at(address, work.digest) =>
                 {
                     Some(RecoveredWalRegistrySlotV1::DecisionApply(address))
                 }

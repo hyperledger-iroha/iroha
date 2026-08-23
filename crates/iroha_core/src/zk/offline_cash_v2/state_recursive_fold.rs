@@ -856,8 +856,8 @@ pub(super) fn unpack_state_cells_v2(
     Ok(words)
 }
 
-mod sealed {
-    pub(super) trait Sealed {}
+pub(super) mod sealed {
+    pub(in crate::zk::offline_cash_v2) trait Sealed {}
 }
 
 /// Marker implemented only by uninhabited adapters in this source module.
