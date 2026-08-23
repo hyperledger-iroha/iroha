@@ -5376,8 +5376,7 @@ mod kagemusha_v4_artifact_contract_tests {
             .expect("valid terminal deactivation");
         assert!(!deactivated_state.issuance_enabled());
         assert_eq!(
-            deactivated_state.device_attestation_policy,
-            staged.device_attestation_policy,
+            deactivated_state.device_attestation_policy, staged.device_attestation_policy,
             "deactivation must retain the exact policy required for full redemption",
         );
 

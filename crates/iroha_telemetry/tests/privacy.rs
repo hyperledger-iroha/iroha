@@ -672,12 +672,10 @@ fn live_event_ingress_rejects_future_stale_and_excess_buckets() {
     let event = |timestamp_unix, mode| SoranetPrivacyEventV1 {
         timestamp_unix,
         mode,
-        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(
-            SoranetPrivacyEventHandshakeSuccessV1 {
-                rtt_ms: None,
-                active_circuits_after: None,
-            },
-        ),
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
     };
 
     assert!(matches!(

@@ -4,9 +4,9 @@ use norito::json::{self, Value};
 use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
 use soranet_pq::MlDsaSuite;
 use soranet_relay::token_tool::{
-    MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle,
-    encode_token_base64, encode_token_hex, inspect_token, mint_token, parse_hex_array,
-    parse_hex_bytes, parse_rfc3339, read_revocation_file,
+    MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle, encode_token_base64,
+    encode_token_hex, inspect_token, mint_token, parse_hex_array, parse_hex_bytes, parse_rfc3339,
+    read_revocation_file,
 };
 use std::{
     fmt,
@@ -1240,8 +1240,7 @@ mod tests {
         let dir = tempdir().expect("tmp");
         let path = dir.path().join("token.bin");
         fs::write(&path, encoded_token_fixture()).expect("write token");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
-            .expect("make token public");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("make token public");
         let error = read_admission_token_file(&path).expect_err("public token file must fail");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         make_owner_private(&path);
