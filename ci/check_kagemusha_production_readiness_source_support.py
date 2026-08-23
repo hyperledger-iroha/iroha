@@ -58,6 +58,12 @@ CORE_KAGEMUSHA_CANARY_COMPONENT = (
 )
 CORE_KAGEMUSHA_CANARY_INCLUDE = 'include!("offline/kagemusha_taira_canary.rs");'
 CORE_ISI_MOD = "crates/iroha_core/src/smartcontracts/isi/mod.rs"
+CORE_STATE = "crates/iroha_core/src/state.rs"
+CORE_COMMITTED_TX_CONTEXT = (
+    "crates/iroha_core/src/state/committed_transaction_context.rs"
+)
+CORE_BLOCK = "crates/iroha_core/src/block.rs"
+CORE_EXECUTOR = "crates/iroha_core/src/executor.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
 RECURSIVE_BACKEND = "crates/iroha_core/src/zk/kagemusha_v2.rs"
 RECURSION_ADAPTER = "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs"
@@ -246,6 +252,10 @@ def canary_source_errors(
     model_isi_mod: str,
     core_canary: str,
     core_isi_mod: str,
+    core_state: str,
+    core_committed_transaction_context: str,
+    core_block: str,
+    core_executor: str,
 ) -> list[str]:
     """Check the post-receipt canary, reservation, and four-validator liveness chain."""
     errors: list[str] = []
@@ -309,7 +319,8 @@ def canary_source_errors(
          r"canary_entrypoint_hash: Hash::from\(canary_transaction\.hash_as_entrypoint\(\)\).*?"
          r"SignatureOf::try_from_hash\(controller\.private_key\(\), body\.signing_hash\(\)\).*?"
          r"verify_for_execution\(.*?authorizer: &AccountId,.*?"
-         r"permit\.verify_for_execution\(\s*network_id,\s*authorizer,"),
+         r"permit\.verify_for_execution\(\s*network_id,\s*authorizer,.*?"
+         r"verify_reservation_signature\(.*?self\.body\.signing_hash\(\)"),
         "minimal controller-signed non-disclosing exact-call reservation",
     )
     forbid(
@@ -346,8 +357,9 @@ def canary_source_errors(
          r"TransactionAdmissionIntent::Ordinary.*?transaction\s*\.verify_signature\(\).*?"
          r"transaction\.hash\(\) != reservation\.canary_transaction_intent.*?"
          r"hash_as_entrypoint\(\).*?reservation\.canary_entrypoint_hash.*?"
-         r"time_to_live_ms == 0.*?wall_expiry > body\.expires_at_unix_ms.*?"
-         r"expires_at_height != body\.expires_at_height.*?"
+         r"transaction\s*\.time_to_live\(\).*?time_to_live_ms == 0.*?"
+         r"wall_expiry > body\.expires_at_unix_ms.*?"
+         r"transaction\s*\.expires_at_height\(\).*?expires_at_height != body\.expires_at_height.*?"
          r"transaction\.metadata\(\) != &expected_metadata.*?"
          r"Executable::Instructions\(instructions\).*?let \[instruction\].*?"
          r"downcast_ref::<RecordKagemushaTairaCanaryV4>\(\).*?"
@@ -394,6 +406,16 @@ def canary_source_errors(
          r"verify_evidence_body\(\s*&self\.body,\s*authorization,\s*"
          r"exact_authorization_bytes,\s*expectations,\s*receipt,\s*exact_receipt_bytes,"),
         "exact issuer-signed canary evidence entrypoint",
+    )
+    require_pattern(
+        canary, MODEL_CANARY_EVIDENCE_COMPONENT, errors,
+        (r"pub struct KagemushaV4VerifiedTairaCanaryEvidenceV1 \{.*?"
+         r"activation_expectations_artifact: KagemushaExactBytesDigestV1,.*?"
+         r"pub const fn activation_expectations_artifact\(&self\).*?"
+         r"self\.activation_expectations_artifact.*?"
+         r"Ok\(KagemushaV4VerifiedTairaCanaryEvidenceV1 \{.*?"
+         r"activation_expectations_artifact: body\.activation_expectations_artifact"),
+        "exact expectations provenance and canary anchor binding",
     )
     evidence_body = canary.split("fn verify_evidence_body(", 1)[-1].split(
         "fn canonical_digest", 1
@@ -449,24 +471,105 @@ def canary_source_errors(
         "dispatch_instruction::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>",
         "dispatch_instruction::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>",
     )
+    wire_boundary = "complete signed canary wire bound at all transaction boundaries"
     require_pattern(
         core_canary, CORE_KAGEMUSHA_CANARY_COMPONENT, errors,
-        (r"fn require_v4_promotion_binding\(.*?promotion_marker.*?binding_marker.*?"
+        (r"pub\(crate\) fn signed_kagemusha_taira_canary_wire_identity_v1\(.*?"
+         r"transaction: &SignedTransaction,.*?"
+         r"Result<Option<KagemushaExactBytesDigestV1>.*?"
+         r"Executable::Instructions\(instructions\) = transaction\.instructions\(\).*?"
+         r"let \[instruction\] = instructions\.as_ref\(\).*?"
+         r"downcast_ref::<RecordKagemushaTairaCanaryV4>\(\).*?"
+         r"transaction\.encode_wire_v1\(\).*?KagemushaExactBytesDigestV1::from_bytes\(&wire\)"
+         r".*?\.map\(Some\)"),
+        wire_boundary,
+    )
+    require_pattern(
+        core_state, CORE_STATE, errors,
+        (r"mod committed_transaction_context;.*?"
+         r"use committed_transaction_context::seed_committed_transaction_context;.*?"
+         r"pub\(crate\) kagemusha_taira_canary_wire_identity:\s*"
+         r"Option<KagemushaExactBytesDigestV1>.*?"
+         r"kagemusha_taira_canary_wire_identity: None.*?"
+         r"if block\.error\(entrypoint_index\)\.is_none\(\).*?"
+         r"let mut transaction = self\.transaction\(\);.*?"
+         r"crate::state::seed_committed_transaction_context\(\s*"
+         r"&mut transaction,\s*&tx,\s*entrypoint_index,\s*\)"),
+        wire_boundary,
+    )
+    require_pattern(
+        core_committed_transaction_context,
+        CORE_COMMITTED_TX_CONTEXT,
+        errors,
+        (r"pub\(crate\) fn seed_committed_transaction_context\(\s*"
+         r"state_transaction: &mut StateTransaction.*?"
+         r"transaction: &SignedTransaction,.*?entrypoint_index: usize,.*?"
+         r"state_transaction\.tx_call_hash\s*=\s*Some\(Hash::from\("
+         r"transaction\.hash_as_entrypoint\(\)\)\);.*?"
+         r"state_transaction\.current_tx_hash\s*=.*?"
+         r"AcceptedTransaction::prepare_signed_metadata\(transaction\)\.signed_hash.*?"
+         r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*"
+         r"signed_kagemusha_taira_canary_wire_identity_v1\(transaction\).*?"
+         r"\.expect\(\"committed canary wire must encode\"\).*?"
+         r"state_transaction\.current_entrypoint_index\s*=\s*"
+         r"Some\(u64::try_from\(entrypoint_index\)\.unwrap_or\(u64::MAX\)\)"),
+        wire_boundary,
+    )
+    require_pattern(
+        core_block, CORE_BLOCK, errors,
+        (r"fn validate_block_transaction_admission\(.*?"
+         r"canary_wire_identity\s*=\s*crate::smartcontracts::isi::offline::"
+         r"signed_kagemusha_taira_canary_wire_identity_v1\(tx\).*?"
+         r"map_err\(TransactionRejectionReason::Validation\).*?"
+         r"state_tx\.kagemusha_taira_canary_wire_identity\s*=\s*canary_wire_identity;.*?"
+         r"StateBlock::validate_stateful_admission\(tx, state_tx, Some\(routing\)\)"),
+        wire_boundary,
+    )
+    require_pattern(
+        core_executor, CORE_EXECUTOR, errors,
+        (r"pub fn execute_transaction\(.*?"
+         r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*None;.*?"
+         r"transaction\.authority\(\) != authority.*?"
+         r"state_transaction\.kagemusha_taira_canary_wire_identity\s*=\s*"
+         r"signed_kagemusha_taira_canary_wire_identity_v1\(&transaction\)\?;.*?"
+         r"state_transaction\.tx_call_hash = Some"),
+        wire_boundary,
+    )
+    require_pattern(
+        core_canary, CORE_KAGEMUSHA_CANARY_COMPONENT, errors,
+        (r"fn plan_v4_promotion_binding\(.*?"
+         r"plan_v4_promotion_id\(binding\.promotion_id, state_transaction\).*?"
+         r"fn require_v4_promotion_binding\(.*?promotion_marker.*?binding_marker.*?"
          r"fn plan_v4_taira_canary\(.*?canary_replay.*?fn commit_v4_taira_canary\(.*?"
+         r"fn v4_taira_canary_authorization_markers\(.*?wire_identity:.*?"
+         r"wire_identity\.validate\(\).*?exact_wire = kagemusha_v2_marker\(.*?"
+         r"KAGEMUSHA_V4_TAIRA_CANARY_AUTHORIZED_WIRE_DOMAIN.*?&wire_identity\.sha256.*?"
          r"fn plan_v4_taira_canary_authorization\(.*?"
+         r"reservation: &iroha_data_model::offline::KagemushaV4TairaCanaryReservationV1.*?"
+         r"norito::encode_canonical\(reservation\).*?exact_reservation = kagemusha_v2_marker\(.*?"
+         r"KAGEMUSHA_V4_TAIRA_CANARY_EXACT_RESERVATION_DOMAIN.*?"
+         r"promotion_id\.as_slice\(\).*?exact_call_hash\.as_ref\(\).*?&reservation_bytes.*?"
+         r"\(false, false, false, false\) => \{.*?"
          r"plan_v4_taira_canary\(promotion_id, state_transaction\).*?"
-         r"\(false, false\) => Ok\(Some\(\(slot, exact_call\)\)\).*?"
-         r"\(true, true\) => Ok\(None\).*?"
-         r"a different exact Taira canary call already occupies this promotion slot.*?"
-         r"fn require_v4_taira_canary_authorization\("),
-        "activation-bound idempotent exact-call reservation and one-shot marker",
+         r"Ok\(Some\(\(slot, exact_call, exact_wire, exact_reservation\)\)\).*?"
+         r"\(true, true, true, true\) => Ok\(None\).*?"
+         r"a different exact Taira canary reservation already occupies this promotion slot.*?"
+         r"fn commit_v4_taira_canary_authorization\(.*?"
+         r"exact_wire: Hash.*?exact_reservation: Hash.*?insert\(exact_wire, \(\)\).*?"
+         r"insert\(exact_reservation, \(\)\).*?"
+         r"fn require_v4_taira_canary_authorization\(.*?wire_identity:.*?"
+         r"get\(&exact_wire\)"),
+        "activation-bound exact reservation and signed-wire marker",
     )
     require_pattern(
         core_canary, CORE_KAGEMUSHA_CANARY_COMPONENT, errors,
         (r"impl Execute for RecordKagemushaTairaCanaryV4.*?"
          r"verify_for_execution\(\s*state_transaction\.network_id\(\),\s*authority,.*?"
          r"require_v4_promotion_binding\(binding, state_transaction\).*?"
-         r"state_transaction\.tx_call_hash.*?require_v4_taira_canary_authorization\(.*?"
+         r"state_transaction\.tx_call_hash.*?"
+         r"state_transaction\s*\.kagemusha_taira_canary_wire_identity\s*"
+         r"\.ok_or_else\(.*?"
+         r"require_v4_taira_canary_authorization\(.*?wire_identity.*?"
          r"plan_v4_taira_canary\(binding\.promotion_id, state_transaction\).*?"
          r"commit_v4_taira_canary\(marker, state_transaction\).*?"
          r"impl Execute for AuthorizeKagemushaTairaCanaryV4.*?"
@@ -474,10 +577,11 @@ def canary_source_errors(
          r"state_transaction\.network_id\(\),\s*authority,.*?"
          r"require_v4_promotion_binding\(binding, state_transaction\).*?"
          r"exact_call_hash = self\.reservation\.body\.canary_entrypoint_hash.*?"
-         r"plan_v4_taira_canary_authorization\(.*?"
-         r"if let Some\(\(slot, exact_call\)\).*?"
-         r"commit_v4_taira_canary_authorization\(slot, exact_call, state_transaction\)"),
-        "consensus-authorized minimal reservation and exact one-shot canary execution",
+         r"plan_v4_taira_canary_authorization\(.*?&self\.reservation.*?"
+         r"if let Some\(\(slot, exact_call, exact_wire, exact_reservation\)\).*?"
+         r"commit_v4_taira_canary_authorization\(\s*slot,\s*exact_call,\s*"
+         r"exact_wire,\s*exact_reservation,\s*state_transaction,"),
+        "consensus-authorized exact-wire one-shot canary execution",
     )
     forbid(
         core_canary.split("impl Execute for AuthorizeKagemushaTairaCanaryV4", 1)[-1],
@@ -523,16 +627,18 @@ def canary_source_errors(
     require_pattern(
         create, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
         (r"CANARY_AUTHORIZATION_FILE_NAME.*?preflight_root_owned_output\(&self\.output\).*?"
+         r"canonical_torii_origin\(&client\.torii_url\).*?"
          r"AuthenticatedCanaryHead::new.*?refresh\(&client.*?require_canary_expiry_margin.*?"
+         r"authorized_at_unix_ms = current_unix_ms\(\).*?load_root_custodied_key\(.*?"
          r"KagemushaV4TairaCanaryAuthorizationBodyV1 \{.*?"
          r"binding: loaded\.verified\.binding\(\)\.clone\(\).*?"
          r"activation_expectations_artifact:.*?activation_finality_receipt: receipt_digest.*?"
          r"canary_authority: client\.account\.clone\(\).*?"
          r"canonical_torii_origin: canonical_torii_origin\.clone\(\).*?"
          r"KagemushaV4TairaCanaryPermitV1::try_sign\(.*?"
-         r"RecordKagemushaTairaCanaryV4::new\(\s*permit\.clone\(\).*?"
          r"client\.add_transaction_nonce = true.*?"
          r"transaction_ttl = Some\(Duration::from_millis\(transaction_ttl_ms\)\).*?"
+         r"RecordKagemushaTairaCanaryV4::new\(\s*permit\.clone\(\).*?"
          r"TransactionAdmissionIntent::Ordinary.*?"
          r"KagemushaV4TairaCanaryAuthorizationV1::try_sign\(.*?"
          r"authenticated_head\.refresh\(&client.*?require_canary_expiry_margin.*?"
@@ -549,6 +655,22 @@ def canary_source_errors(
          r"verify_exact\(.*?fresh_time.*?"
          r"require_canary_authorization_wall_margin\(&verified, fresh_time\)"),
         "fresh post-head authorization publication verification",
+    )
+    require_pattern(
+        create, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
+        (r"publish_root_owned\(&self\.output, &bytes.*?context\.print_data\(&report\).*?"
+         r"PublicationError::CommitUncertain.*?published canary-authorization report failed"),
+        "canary authorization no-replace commit-uncertain reporting",
+    )
+    require_pattern(
+        rollout, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
+        (r"struct SubmitCanaryAuthorization.*?"
+         r"#\[arg\(long, required = true, action = clap::ArgAction::SetTrue\)\].*?"
+         r"impl SubmitCanaryAuthorization.*?if !self\.write_authorized.*?require_root\(\).*?"
+         r"struct SubmitCanary \{.*?"
+         r"#\[arg\(long, required = true, action = clap::ArgAction::SetTrue\)\].*?"
+         r"impl SubmitCanary \{.*?if !self\.write_authorized.*?require_root\(\)"),
+        "explicit write authorization before both canary network phases",
     )
     submit_auth = rollout.split("impl SubmitCanaryAuthorization", 1)[-1].split(
         "struct SubmitCanary", 1
@@ -586,12 +708,13 @@ def canary_source_errors(
          r"SignedTransaction::decode_all_versioned\(bytes\).*?encode_wire_v1\(\).*?!= bytes"),
         "exact minimal reservation transaction journal",
     )
-    submit = rollout.split("impl SubmitCanary", 1)[-1].split(
+    submit = rollout.split("impl SubmitCanary {", 1)[-1].split(
         "fn require_canary_wait_outcome", 1
     )[0]
     require_pattern(
         submit, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
-        (r"require_finalized_canary_authorization\(.*?"
+        (r"require_canary_client_binding\(&client, &authorization\).*?"
+         r"require_finalized_canary_authorization\(.*?"
          r"canary_transaction_wire\(\)\s*\.matches_bytes\(&exact_wire\).*?"
          r"prepared\.as_bytes\(\) != exact_wire\.as_slice\(\).*?"
          r"CANARY_SUBMISSION_JOURNAL_FILE_NAME.*?"
@@ -621,15 +744,28 @@ def canary_source_errors(
          r"fresh_head\s*\.refresh\(client.*?require_canary_expiry_margin.*?"
          r"verification_time_unix_ms = current_unix_ms\(\).*?"
          r"verify_canary_submission_journal_bytes\(.*?"
-         r"require_canary_authorization_wall_margin"),
+         r"require_canary_authorization_wall_margin.*?"
+         r"get_transaction_status_response_auto\(\s*"
+         r"authorization\.verified\.canary_transaction\(\)\.hash\(\).*?is_some\(\)"),
         "structural expired-journal reconciliation and fresh precommit publication",
+    )
+    require_pattern(
+        helpers, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
+        (r"fn require_canary_client_binding\(.*?"
+         r"client\.network_id != authorization\.verified\.network_id\(\).*?"
+         r"client\.account != &authorization\.artifact\.permit\(\)\.body\.canary_authority.*?"
+         r"canonical_torii_origin\(&client\.torii_url\).*?"
+         r"authorization\.verified\.canonical_torii_origin\(\)"),
+        "exact canary network authority and HTTPS origin client binding",
     )
     finalize = rollout.split("impl FinalizeCanaryEvidence", 1)[-1].split(
         "struct LoadedVerifiedExpectations", 1
     )[0]
     require_pattern(
         finalize, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
-        (r"CANARY_EVIDENCE_FILE_NAME.*?preflight_root_owned_output\(&self\.output\).*?"
+        (r"require_rollout_state_path\(\s*&self\.output,\s*"
+         r"expectations\.binding\(\)\.promotion_id,\s*CANARY_EVIDENCE_FILE_NAME,\s*\).*?"
+         r"preflight_root_owned_output\(&self\.output\).*?"
          r"CANARY_SUBMISSION_JOURNAL_FILE_NAME.*?"
          r"inspect_canary_submission_journal\(.*?!= SubmissionJournalObservation::Matching.*?"
          r"get_transaction_status_response_auto\(transaction\.hash\(\).*?"
@@ -641,6 +777,12 @@ def canary_source_errors(
          r"KagemushaV4TairaCanaryEvidenceV1::try_sign\(.*?"
          r"evidence\s*\.verify_exact\(.*?publish_root_owned\(&self\.output, &bytes"),
         "promotion-keyed full canary wire block proof evidence and issuer signature",
+    )
+    require_pattern(
+        finalize, KAGEMUSHA_ROLLOUT_COMPONENT, errors,
+        (r"publish_root_owned\(&self\.output, &bytes.*?context\.print_data\(&report\).*?"
+         r"PublicationError::CommitUncertain.*?published canary-evidence report failed"),
+        "canary evidence no-replace commit-uncertain reporting",
     )
     for section, minimum in ((submit_auth, 3), (submit, 4)):
         if section.count("CanarySubmissionUncertain") < minimum:
@@ -668,11 +810,26 @@ def canary_source_errors(
         "fn validate_liveness_torii_origin(", 1
     )[0]
     require_pattern(
+        liveness, MODEL_CANARY_LIVENESS_COMPONENT, errors,
+        (r"impl<'a> LivenessTrust<'a>.*?fn from_expectations\(.*?"
+         r"verified_canary\.promotion_id\(\) != expectations\.binding\(\)\.promotion_id.*?"
+         r"verified_canary\.activation_expectations_artifact\(\).*?"
+         r"!= expectations\.activation_expectations_artifact\(\).*?"
+         r"verified_canary\.activation_transaction_intent\(\).*?"
+         r"!= expectations\.activation_transaction_intent\(\).*?"
+         r"canary_anchor\.activation_finality_receipt\s*"
+         r"!= verified_canary\.activation_finality_receipt\(\).*?"
+         r"canary_anchor\.canary_authorization != verified_canary\.authorization_identity\(\).*?"
+         r"canary_anchor\.canary_transaction_intent\s*"
+         r"!= verified_canary\.canary_transaction_intent\(\).*?"
+         r"canary_anchor\.canary_transaction_wire != verified_canary\.canary_transaction_wire\(\).*?"
+         r"canary_anchor\.canary_finalized_height != verified_canary\.finalized_height\(\).*?"
+         r"canary_anchor\.canary_finalized_block_hash != verified_canary\.finalized_block_hash\(\)"),
+        "exact expectations provenance and canary anchor binding",
+    )
+    require_pattern(
         liveness_verify, MODEL_CANARY_LIVENESS_COMPONENT, errors,
-        (r"challenge\.binding != \*trust\.binding.*?"
-         r"challenge\.canary_anchor != \*trust\.canary_anchor.*?"
-         r"target\.validator_id != expected.*?"
-         r"request_started_at_unix_ms < challenge\.issued_at_unix_ms.*?"
+        (r"request_started_at_unix_ms < challenge\.issued_at_unix_ms.*?"
          r"response_completed_at_unix_ms >= challenge\.expires_at_unix_ms.*?"
          r"attestation\s*\.verify\(\).*?"
          r"attestation_body\.challenge != body\.endpoint_challenge.*?"
@@ -687,6 +844,15 @@ def canary_source_errors(
          r"validate_finality_corridor\(proof, trust\).*?verifier\s*\.verify\(proof\).*?"
          r"for observation in &body\.observations.*?if tip != expected"),
         "four signed validator identities with shared canary-rooted finality and exact tips",
+    )
+    require_pattern(
+        liveness_verify, MODEL_CANARY_LIVENESS_COMPONENT, errors,
+        (r"fn verify_challenge_with_trust\(.*?"
+         r"challenge\.body\.binding != \*trust\.binding.*?"
+         r"challenge\.body\.canary_anchor != \*trust\.canary_anchor.*?"
+         r"challenge\.body\.issuer != \*trust\.issuer.*?"
+         r"zip\(&trust\.validator_ids\).*?target\.validator_id != expected"),
+        "exact activation canary issuer and four-validator challenge binding",
     )
     require_pattern(
         liveness, MODEL_CANARY_LIVENESS_COMPONENT, errors,
@@ -705,7 +871,7 @@ def canary_source_errors(
     require_pattern(
         rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
         (r"pub\(super\) struct FinalizeValidatorLiveness.*?"
-         r"num_args = KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT.*?"
+         r"num_args = 4.*?"
          r"load_verified_canary_evidence\(.*?"
          r"CANARY_VALIDATOR_LIVENESS_EVIDENCE_FILE_NAME.*?"
          r"preflight_root_owned_output\(&self\.output\).*?"
@@ -727,6 +893,7 @@ def canary_source_errors(
          r"KagemushaV4TairaCanaryEvidenceV1::decode_canonical\(&exact_bytes\).*?"
          r"artifact\s*\.verify_exact\(.*?&authorization\.exact_bytes.*?&receipt\.exact_bytes.*?"
          r"finality_proof_chain\s*\.last\(\).*?"
+         r"activation_finality_receipt: KagemushaExactBytesDigestV1::from_bytes\(&receipt\.exact_bytes\).*?"
          r"canary_authorization: verified\.authorization_identity\(\).*?"
          r"canary_transaction_intent: verified\.canary_transaction_intent\(\).*?"
          r"canary_transaction_wire: authorization\.verified\.canary_transaction_wire\(\).*?"
@@ -734,21 +901,150 @@ def canary_source_errors(
          r"canary_finalized_block_hash: verified\.finalized_block_hash\(\)"),
         "liveness anchor derived only from exact verified canary evidence",
     )
+    liveness_collection = rollout_liveness.split("fn collect_validator_observations(", 1)[-1].split(
+        "enum AttestationFetch", 1
+    )[0]
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"build_liveness_http_client\(client\.torii_request_timeout\).*?"
+         r"collect_validator_observations\(\s*&http,\s*&challenge,"),
+        "zero inherited credentials across direct validator origins",
+    )
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"struct DirectLivenessHttp \{\s*client: HttpClient,\s*status_timeout: Duration,\s*\}.*?"
+         r"fn build_liveness_http_client\(configured_timeout: Duration\).*?"
+         r"configured_timeout == Duration::ZERO\s*\{\s*ATTESTATION_TIMEOUT\s*\} else \{\s*"
+         r"configured_timeout\.min\(ATTESTATION_TIMEOUT\).*?"
+         r"let status_timeout = timeout\.min\(STATUS_HINT_TIMEOUT\);.*?"
+         r"redirect\(reqwest::redirect::Policy::none\(\)\).*?"
+         r"retry\(reqwest::retry::never\(\)\).*?\.no_proxy\(\).*?"
+         r"connect_timeout\(status_timeout\).*?\.timeout\(timeout\).*?"
+         r"Ok\(DirectLivenessHttp \{\s*client,\s*status_timeout,\s*\}\).*?"
+         r"let configured_timeout = Duration::from_secs\(1\);.*?"
+         r"assert_eq!\(http\.status_timeout, configured_timeout\).*?"
+         r"assert_eq!\(status\.timeout\(\), Some\(&configured_timeout\)\)"),
+        "configured-or-60s direct client with non-expanding status timeout",
+    )
+    require_pattern(
+        liveness_collection, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"http: &DirectLivenessHttp,\s*"
+         r"challenge: &KagemushaV4PostCanaryValidatorLivenessChallengeV1.*?"
+         r"for target in challenge\.body\.targets\.clone\(\).*?"
+         r"let http = http\.clone\(\).*?"
+         r"collect_validator_observation\(\s*http,\s*target,.*?"
+         r"fn collect_validator_observation\(\s*http: DirectLivenessHttp,\s*"
+         r"target: KagemushaV4PostCanaryValidatorLivenessTargetV1.*?"
+         r"fetch_validator_status_height\(\s*&http\.client,\s*&target\.canonical_torii_origin,.*?"
+         r"http\.status_timeout,\s*\).*?"
+         r"fetch_validator_attestation\(\s*&http\.client,\s*&target,"),
+        "zero inherited credentials across direct validator origins",
+    )
+    if re.search(r"\bClient\b", liveness_collection) is not None:
+        errors.append(
+            f"{KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT}: ambient Client enters direct validator collection"
+        )
+    forbid(
+        liveness_collection, "direct validator collection transport isolation", errors,
+        ".get_status(", "base_client", "headers.clear()",
+    )
+    status_request = rollout_liveness.split("fn build_validator_status_request(", 1)[-1].split(
+        "fn fetch_validator_status_height", 1
+    )[0]
+    require_pattern(
+        status_request, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"http: &HttpClient,\s*canonical_torii_origin: &str,\s*status_timeout: Duration.*?"
+         r'format!\(\s*"\{\}\{\}/blocks"\s*,\s*canonical_torii_origin\s*,\s*'
+         r"iroha_torii_shared::uri::STATUS\s*\).*?"
+         r"http\.get\(url\)\s*\.timeout\(status_timeout\)\s*"
+         r"\.header\(ACCEPT, APPLICATION_JSON\)\s*"
+         r'\.header\(ACCEPT_ENCODING, "identity"\)\s*\.build\(\)'),
+        "direct validator status exact URL and two protocol headers",
+    )
+    if status_request.count(".header(") != 2:
+        errors.append(
+            f"{KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT}: direct validator status requires exact two protocol headers"
+        )
+    forbid(
+        status_request, "direct validator status credential isolation", errors,
+        ".headers(",
+    )
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"fn fetch_validator_status_height\(.*?current_unix_ms\(\).*?"
+         r"build_validator_status_request\(http, canonical_torii_origin, status_timeout\).*?"
+         r"let requested_url = request\.url\(\)\.clone\(\).*?"
+         r"http\s*\.execute\(request\).*?response\.url\(\) != &requested_url.*?"
+         r"read_status_hint_response\(response\).*?current_unix_ms\(\).*?"
+         r"norito::json::from_slice\(&exact_bytes\).*?"
+         r"norito::json::to_json\(&height\).*?canonical\.as_bytes\(\) != exact_bytes"),
+        "direct validator status bounded exact canonical scalar",
+    )
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"const STATUS_HINT_MAX_BYTES: usize = 32;.*?"
+         r"fn read_status_hint_response\(.*?response\.status\(\) != StatusCode::OK.*?"
+         r"get_all\(CONTENT_TYPE\).*?content_type != APPLICATION_JSON.*?"
+         r"content_types\.next\(\)\.is_some\(\).*?contains_key\(CONTENT_ENCODING\).*?"
+         r"length > u64::try_from\(STATUS_HINT_MAX_BYTES\).*?"
+         r"\.min\(STATUS_HINT_MAX_BYTES\).*?"
+         r"take\(u64::try_from\(STATUS_HINT_MAX_BYTES\)\?\.saturating_add\(1\)\).*?"
+         r"bytes\.is_empty\(\) \|\| bytes\.len\(\) > STATUS_HINT_MAX_BYTES"),
+        "bounded identity-encoded direct validator status response",
+    )
+    liveness_fetch = rollout_liveness.split("fn fetch_validator_attestation(", 1)[-1].split(
+        "fn build_validator_attestation_request", 1
+    )[0]
+    require_pattern(
+        liveness_fetch, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"build_validator_attestation_request\(http, target, challenge, height\).*?"
+         r"let url = request\.url\(\)\.clone\(\).*?http\s*\.execute\(request\).*?"
+         r"response\.url\(\) != &url.*?decode_canonical_with_limits\(.*?"
+         r"encode_canonical\(&attestation\).*?!= exact_bytes"),
+        "direct common-challenge collection with exact canonical attestations",
+    )
+    attestation_request = rollout_liveness.split(
+        "fn build_validator_attestation_request(", 1
+    )[-1].split("fn read_attestation_response", 1)[0]
+    require_pattern(
+        attestation_request, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"BRIDGE_FINALITY_ATTESTATION\s*\.path\(\).*?"
+         r"http\.get\(url\)\s*\.header\(ACCEPT, APPLICATION_NORITO\)\s*"
+         r'\.header\(ACCEPT_ENCODING, "identity"\)\s*'
+         r"\.header\(FINALITY_CHALLENGE_HEADER, hex::encode\(challenge\)\)\s*\.build\(\)"),
+        "direct validator attestation exact three protocol headers",
+    )
+    if attestation_request.count(".header(") != 3:
+        errors.append(
+            f"{KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT}: direct validator attestation requires exact three protocol headers"
+        )
+    forbid(
+        attestation_request, "direct validator attestation credential isolation", errors,
+        ".headers(",
+    )
     require_pattern(
         rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
         (r"OsRng\s*\.try_fill_bytes\(&mut nonce\).*?nonce != \[0; 32\].*?"
          r"redirect\(reqwest::redirect::Policy::none\(\)\).*?"
          r"retry\(reqwest::retry::never\(\)\).*?\.no_proxy\(\).*?"
          r"for target in challenge\.body\.targets\.clone\(\).*?"
-         r"BRIDGE_FINALITY_ATTESTATION\s*\.path\(\).*?"
-         r"\.header\(FINALITY_CHALLENGE_HEADER, hex::encode\(challenge\)\).*?"
-         r"response\.url\(\) != &url.*?content_type != APPLICATION_NORITO.*?"
+         r"attestation\.body\.challenge != endpoint_challenge.*?"
+         r"attestation\s*\.verify\(\)"),
+        "direct common-challenge collection with exact canonical attestations",
+    )
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"fn read_attestation_response\(.*?content_type != APPLICATION_NORITO.*?"
          r"contains_key\(CONTENT_ENCODING\).*?Cache-Control: no-store.*?"
-         r"take\(u64::try_from\(maximum\)\?\.saturating_add\(1\)\).*?"
-         r"decode_canonical_with_limits\(.*?encode_canonical\(&attestation\).*?!= exact_bytes.*?"
+         r"take\(u64::try_from\(maximum\)\?\.saturating_add\(1\)\)"),
+        "bounded identity-encoded no-store attestation response",
+    )
+    require_pattern(
+        rollout_liveness, KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT, errors,
+        (r"fn collect_shared_finality_chain\(.*?require_qualified_finality_context\(canary_proof.*?"
          r"BridgeFinalityVerifier::with_context\(.*?verifier\s*\.verify\(canary_proof\).*?"
          r"get_next_bridge_finality_proof\(height, &mut verifier\)"),
-        "direct bounded exact attestation collection with common challenge and anchored chain",
+        "canary-anchored contiguous shared finality collection",
     )
     return errors
 

@@ -8,6 +8,7 @@ use crate::{
     settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
+        isi::offline::signed_kagemusha_taira_canary_wire_identity_v1,
         ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
     },
     state::{
@@ -5968,9 +5969,7 @@ impl Executor {
     ///
     /// # Errors
     ///
-    /// - Failed to prepare the IVM runtime;
-    /// - Failed to execute the entrypoint of the IVM bytecode;
-    /// - Executor denied the operation.
+    /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
     #[allow(clippy::too_many_lines)]
     pub fn execute_transaction(
         &self,
@@ -5979,17 +5978,23 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
+        state_transaction.bind_privacy_transaction_intent_v1(None);
+        state_transaction.kagemusha_taira_canary_wire_identity = None;
         if transaction.authority() != authority {
             return Err(ValidationFail::InternalError(
-                "executor authority argument does not match signed transaction authority"
-                    .to_owned(),
+                "signed authority mismatch".into(),
             ));
         }
         trace!("Running transaction execution");
-        state_transaction.bind_privacy_transaction_intent_v1(None);
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+        state_transaction.kagemusha_taira_canary_wire_identity =
+            signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
+        let call_hash = transaction.hash_as_entrypoint();
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
+        let tx_hash = transaction.hash();
+        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let tx_bytes_len = to_bytes(transaction.payload())
             .map(|bytes| bytes.len())
             .map_err(|err| {
@@ -6022,11 +6027,6 @@ impl Executor {
             )
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
         }
-        // Bind the transaction call_hash for ISI event emitters to use in audit fields
-        let call_hash = transaction.hash_as_entrypoint();
-        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
-        let tx_hash = transaction.hash();
-        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());

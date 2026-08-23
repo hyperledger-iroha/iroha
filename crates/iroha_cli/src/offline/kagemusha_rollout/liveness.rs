@@ -26,17 +26,16 @@ use iroha::data_model::{
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use reqwest::{
     StatusCode,
-    blocking::{Client as HttpClient, Response as HttpResponse},
-    header::{
-        ACCEPT, ACCEPT_ENCODING, CACHE_CONTROL, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH,
-        CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue, TRANSFER_ENCODING,
-    },
+    blocking::{Client as HttpClient, Request as HttpRequest, Response as HttpResponse},
+    header::{ACCEPT, ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE},
 };
 use std::{collections::BTreeMap, io::Read as _, thread};
 
 const APPLICATION_NORITO: &str = "application/x-norito";
+const APPLICATION_JSON: &str = "application/json";
 const FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
 const STATUS_HINT_TIMEOUT: Duration = Duration::from_secs(10);
+const STATUS_HINT_MAX_BYTES: usize = 32;
 const ATTESTATION_TIMEOUT: Duration = Duration::from_secs(60);
 const TIP_RACE_RETRY_DELAY: Duration = Duration::from_millis(200);
 
@@ -125,12 +124,9 @@ impl FinalizeValidatorLiveness {
                 &canary.finality_proof,
             )
             .wrap_err("validator-liveness challenge failed pre-dispatch trust verification")?;
-        let response_headers = liveness_request_headers(&client.headers)?;
         let http = build_liveness_http_client(client.torii_request_timeout)?;
         let observations = collect_validator_observations(
-            &client,
             &http,
-            &response_headers,
             &challenge,
             endpoint_challenge,
             canary.anchor.canary_finalized_height,
@@ -450,57 +446,35 @@ fn random_nonzero_challenge_nonce() -> Result<[u8; 32]> {
     bail!("validator-liveness OS RNG returned an all-zero nonce repeatedly")
 }
 
-fn liveness_request_headers(
-    configured: &std::collections::HashMap<String, String>,
-) -> Result<HeaderMap> {
-    let mut headers = HeaderMap::new();
-    for (name, value) in configured {
-        if [
-            ACCEPT.as_str(),
-            ACCEPT_ENCODING.as_str(),
-            CONTENT_TYPE.as_str(),
-            CONTENT_ENCODING.as_str(),
-            CONTENT_LENGTH.as_str(),
-            TRANSFER_ENCODING.as_str(),
-            CONNECTION.as_str(),
-            HOST.as_str(),
-            FINALITY_CHALLENGE_HEADER,
-        ]
-        .iter()
-        .any(|reserved| name.eq_ignore_ascii_case(reserved))
-        {
-            continue;
-        }
-        let name = HeaderName::from_bytes(name.as_bytes())
-            .map_err(|_| eyre!("configured validator-liveness header name is invalid"))?;
-        let value = value
-            .parse::<HeaderValue>()
-            .map_err(|_| eyre!("configured validator-liveness header value is invalid"))?;
-        headers.insert(name, value);
-    }
-    Ok(headers)
+#[derive(Clone)]
+struct DirectLivenessHttp {
+    client: HttpClient,
+    status_timeout: Duration,
 }
 
-fn build_liveness_http_client(configured_timeout: Duration) -> Result<HttpClient> {
+fn build_liveness_http_client(configured_timeout: Duration) -> Result<DirectLivenessHttp> {
     let timeout = if configured_timeout == Duration::ZERO {
         ATTESTATION_TIMEOUT
     } else {
         configured_timeout.min(ATTESTATION_TIMEOUT)
     };
-    HttpClient::builder()
+    let status_timeout = timeout.min(STATUS_HINT_TIMEOUT);
+    let client = HttpClient::builder()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .no_proxy()
-        .connect_timeout(timeout.min(STATUS_HINT_TIMEOUT))
+        .connect_timeout(status_timeout)
         .timeout(timeout)
         .build()
-        .wrap_err("failed to build direct validator-liveness HTTPS client")
+        .wrap_err("failed to build direct validator-liveness HTTPS client")?;
+    Ok(DirectLivenessHttp {
+        client,
+        status_timeout,
+    })
 }
 
 fn collect_validator_observations(
-    base_client: &Client,
-    http: &HttpClient,
-    headers: &HeaderMap,
+    http: &DirectLivenessHttp,
     challenge: &KagemushaV4PostCanaryValidatorLivenessChallengeV1,
     endpoint_challenge: [u8; 32],
     canary_height: u64,
@@ -510,15 +484,11 @@ fn collect_validator_observations(
     let outcomes = thread::scope(|scope| {
         let mut handles = Vec::with_capacity(KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT);
         for target in challenge.body.targets.clone() {
-            let client = base_client.clone();
             let http = http.clone();
-            let headers = headers.clone();
             let expires_at_unix_ms = challenge.body.expires_at_unix_ms;
             handles.push(scope.spawn(move || {
                 collect_validator_observation(
-                    client,
                     http,
-                    headers,
                     target,
                     endpoint_challenge,
                     canary_height,
@@ -541,29 +511,22 @@ fn collect_validator_observations(
 }
 
 fn collect_validator_observation(
-    mut client: Client,
-    http: HttpClient,
-    headers: HeaderMap,
+    http: DirectLivenessHttp,
     target: KagemushaV4PostCanaryValidatorLivenessTargetV1,
     endpoint_challenge: [u8; 32],
     canary_height: u64,
     expires_at_unix_ms: u64,
 ) -> Result<KagemushaV4PostCanaryValidatorLivenessObservationV1> {
-    client.torii_url = url::Url::parse(&format!("{}/", target.canonical_torii_origin))
-        .wrap_err("failed to construct direct validator Torii URL")?;
-    client.torii_request_timeout = if client.torii_request_timeout == Duration::ZERO {
-        STATUS_HINT_TIMEOUT
-    } else {
-        client.torii_request_timeout.min(STATUS_HINT_TIMEOUT)
-    };
     loop {
         if current_unix_ms()? >= expires_at_unix_ms {
             bail!("validator-liveness challenge expired before all validators responded");
         }
-        let height = client
-            .get_status()
-            .wrap_err("failed to read direct validator status hint")?
-            .blocks;
+        let height = fetch_validator_status_height(
+            &http.client,
+            &target.canonical_torii_origin,
+            expires_at_unix_ms,
+            http.status_timeout,
+        )?;
         if height < canary_height {
             bail!("validator durable-tip hint is behind the finalized canary");
         }
@@ -571,8 +534,7 @@ fn collect_validator_observation(
             bail!("validator durable-tip hint is zero");
         };
         match fetch_validator_attestation(
-            &http,
-            &headers,
+            &http.client,
             &target,
             endpoint_challenge,
             height,
@@ -614,6 +576,99 @@ fn collect_validator_observation(
     }
 }
 
+fn build_validator_status_request(
+    http: &HttpClient,
+    canonical_torii_origin: &str,
+    status_timeout: Duration,
+) -> Result<HttpRequest> {
+    let url = url::Url::parse(&format!(
+        "{}{}/blocks",
+        canonical_torii_origin,
+        iroha_torii_shared::uri::STATUS
+    ))
+    .wrap_err("failed to construct validator status URL")?;
+    http.get(url)
+        .timeout(status_timeout)
+        .header(ACCEPT, APPLICATION_JSON)
+        .header(ACCEPT_ENCODING, "identity")
+        .build()
+        .wrap_err("failed to build direct validator status request")
+}
+
+fn fetch_validator_status_height(
+    http: &HttpClient,
+    canonical_torii_origin: &str,
+    expires_at_unix_ms: u64,
+    status_timeout: Duration,
+) -> Result<u64> {
+    let request_started_at_unix_ms = current_unix_ms()?;
+    if request_started_at_unix_ms >= expires_at_unix_ms {
+        bail!("validator-liveness challenge expired before status request dispatch");
+    }
+    let request = build_validator_status_request(http, canonical_torii_origin, status_timeout)?;
+    let requested_url = request.url().clone();
+    let response = http
+        .execute(request)
+        .wrap_err("failed to read direct validator status hint")?;
+    if response.url() != &requested_url {
+        bail!("validator status response changed origin or path");
+    }
+    let exact_bytes = read_status_hint_response(response)?;
+    if current_unix_ms()? >= expires_at_unix_ms {
+        bail!("validator status response completed after challenge expiry");
+    }
+    let height: u64 = norito::json::from_slice(&exact_bytes)
+        .map_err(|error| eyre!("invalid bounded validator status height JSON: {error}"))?;
+    let canonical = norito::json::to_json(&height)
+        .wrap_err("failed to re-encode validator status height JSON")?;
+    if canonical.as_bytes() != exact_bytes {
+        bail!("validator status height is not exact canonical JSON");
+    }
+    Ok(height)
+}
+
+fn read_status_hint_response(mut response: HttpResponse) -> Result<Vec<u8>> {
+    if response.status() != StatusCode::OK {
+        bail!(
+            "validator status returned HTTP status {}",
+            response.status()
+        );
+    }
+    let mut content_types = response.headers().get_all(CONTENT_TYPE).iter();
+    let content_type = content_types
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if content_type != APPLICATION_JSON || content_types.next().is_some() {
+        bail!("validator status has an invalid Content-Type");
+    }
+    if response.headers().contains_key(CONTENT_ENCODING) {
+        bail!("validator status must not carry Content-Encoding");
+    }
+    if response.content_length().is_some_and(|length| {
+        length > u64::try_from(STATUS_HINT_MAX_BYTES).expect("status response byte limit fits u64")
+    }) {
+        bail!("validator status exceeds its fixed byte ceiling");
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(16 * 1024)
+            .min(STATUS_HINT_MAX_BYTES),
+    )?;
+    response
+        .by_ref()
+        .take(u64::try_from(STATUS_HINT_MAX_BYTES)?.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read bounded validator status response")?;
+    if bytes.is_empty() || bytes.len() > STATUS_HINT_MAX_BYTES {
+        bail!("validator status response is empty or oversized");
+    }
+    Ok(bytes)
+}
+
 enum AttestationFetch {
     TipRace,
     Complete {
@@ -626,28 +681,19 @@ enum AttestationFetch {
 
 fn fetch_validator_attestation(
     http: &HttpClient,
-    headers: &HeaderMap,
     target: &KagemushaV4PostCanaryValidatorLivenessTargetV1,
     challenge: [u8; 32],
     height: NonZeroU64,
     expires_at_unix_ms: u64,
 ) -> Result<AttestationFetch> {
-    let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
-        .path()
-        .replace("{height}", &height.get().to_string());
-    let url = url::Url::parse(&format!("{}{path}", target.canonical_torii_origin))
-        .wrap_err("failed to construct validator finality-attestation URL")?;
+    let request = build_validator_attestation_request(http, target, challenge, height)?;
+    let url = request.url().clone();
     let request_started_at_unix_ms = current_unix_ms()?;
     if request_started_at_unix_ms >= expires_at_unix_ms {
         bail!("validator-liveness challenge expired before request dispatch");
     }
     let response = http
-        .get(url.clone())
-        .headers(headers.clone())
-        .header(ACCEPT, APPLICATION_NORITO)
-        .header(ACCEPT_ENCODING, "identity")
-        .header(FINALITY_CHALLENGE_HEADER, hex::encode(challenge))
-        .send()
+        .execute(request)
         .wrap_err("validator finality-attestation request failed")?;
     if response.url() != &url {
         bail!("validator finality-attestation response changed origin or path");
@@ -677,6 +723,25 @@ fn fetch_validator_attestation(
         exact_bytes,
         attestation,
     })
+}
+
+fn build_validator_attestation_request(
+    http: &HttpClient,
+    target: &KagemushaV4PostCanaryValidatorLivenessTargetV1,
+    challenge: [u8; 32],
+    height: NonZeroU64,
+) -> Result<HttpRequest> {
+    let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
+        .path()
+        .replace("{height}", &height.get().to_string());
+    let url = url::Url::parse(&format!("{}{path}", target.canonical_torii_origin))
+        .wrap_err("failed to construct validator finality-attestation URL")?;
+    http.get(url)
+        .header(ACCEPT, APPLICATION_NORITO)
+        .header(ACCEPT_ENCODING, "identity")
+        .header(FINALITY_CHALLENGE_HEADER, hex::encode(challenge))
+        .build()
+        .wrap_err("failed to build direct validator finality-attestation request")
 }
 
 fn read_attestation_response(mut response: HttpResponse) -> Result<Vec<u8>> {
@@ -778,25 +843,32 @@ fn collect_shared_finality_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read as _, Write as _};
 
-    #[test]
-    fn liveness_headers_replace_transport_control_fields() {
-        let configured = std::collections::HashMap::from([
-            ("X-API-Token".to_owned(), "runtime-secret".to_owned()),
-            ("Accept".to_owned(), "text/plain".to_owned()),
-            (FINALITY_CHALLENGE_HEADER.to_owned(), "stale".to_owned()),
-            ("Accept-Encoding".to_owned(), "gzip".to_owned()),
-        ]);
-        let headers = liveness_request_headers(&configured).expect("headers parse");
-        assert_eq!(
-            headers
-                .get("x-api-token")
-                .and_then(|value| value.to_str().ok()),
-            Some("runtime-secret")
+    fn fetch_status_fixture(content_type: &str, extra_headers: &str, body: &str) -> Result<u64> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let origin = format!("http://{}", listener.local_addr()?);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n{body}",
+            body.len(),
         );
-        assert!(!headers.contains_key(ACCEPT));
-        assert!(!headers.contains_key(ACCEPT_ENCODING));
-        assert!(!headers.contains_key(FINALITY_CHALLENGE_HEADER));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept status fixture request");
+            let mut request = [0_u8; 4_096];
+            stream
+                .read(&mut request)
+                .expect("read status fixture request");
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let http = build_liveness_http_client(Duration::from_secs(1))?;
+        let result = fetch_validator_status_height(
+            &http.client,
+            &origin,
+            current_unix_ms()?.saturating_add(5_000),
+            http.status_timeout,
+        );
+        server.join().expect("status fixture server exits");
+        result
     }
 
     #[test]
@@ -805,5 +877,126 @@ mod tests {
             random_nonzero_challenge_nonce().expect("OS RNG available"),
             [0; 32]
         );
+    }
+
+    #[test]
+    fn direct_validator_requests_carry_only_protocol_headers() {
+        let configured_timeout = Duration::from_secs(1);
+        let http = build_liveness_http_client(configured_timeout).expect("build direct client");
+        assert_eq!(http.status_timeout, configured_timeout);
+        assert_eq!(
+            build_liveness_http_client(Duration::ZERO)
+                .expect("build default direct client")
+                .status_timeout,
+            STATUS_HINT_TIMEOUT,
+        );
+        let status = build_validator_status_request(
+            &http.client,
+            "https://validator.example.test",
+            http.status_timeout,
+        )
+        .expect("build status request");
+        assert_eq!(
+            status.url().as_str(),
+            "https://validator.example.test/status/blocks"
+        );
+        assert_eq!(status.headers().len(), 2);
+        assert_eq!(status.timeout(), Some(&configured_timeout));
+        assert_eq!(status.headers().get(ACCEPT).unwrap(), APPLICATION_JSON);
+        assert_eq!(status.headers().get(ACCEPT_ENCODING).unwrap(), "identity");
+        assert!(
+            !status
+                .headers()
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+        assert!(
+            !status
+                .headers()
+                .contains_key(reqwest::header::PROXY_AUTHORIZATION)
+        );
+        assert!(!status.headers().contains_key(reqwest::header::COOKIE));
+
+        let target = KagemushaV4PostCanaryValidatorLivenessTargetV1 {
+            validator_id: PeerId::new(
+                KeyPair::from_seed(vec![0xA7; 32], iroha_crypto::Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            ),
+            canonical_torii_origin: "https://validator.example.test".to_owned(),
+        };
+        let attestation = build_validator_attestation_request(
+            &http.client,
+            &target,
+            [0x42; 32],
+            NonZeroU64::new(7).unwrap(),
+        )
+        .expect("build attestation request");
+        assert_eq!(attestation.headers().len(), 3);
+        assert_eq!(
+            attestation.headers().get(ACCEPT).unwrap(),
+            APPLICATION_NORITO
+        );
+        assert_eq!(
+            attestation.headers().get(ACCEPT_ENCODING).unwrap(),
+            "identity"
+        );
+        assert_eq!(
+            attestation
+                .headers()
+                .get(FINALITY_CHALLENGE_HEADER)
+                .unwrap(),
+            hex::encode([0x42; 32])
+        );
+        assert!(
+            !attestation
+                .headers()
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+        assert!(
+            !attestation
+                .headers()
+                .contains_key(reqwest::header::PROXY_AUTHORIZATION)
+        );
+        assert!(!attestation.headers().contains_key(reqwest::header::COOKIE));
+    }
+
+    #[test]
+    fn direct_status_height_requires_one_bounded_canonical_json_scalar() {
+        assert_eq!(
+            fetch_status_fixture(APPLICATION_JSON, "", "7").expect("canonical status height"),
+            7,
+        );
+        for (case, content_type, extra_headers, body) in [
+            ("trailing whitespace", APPLICATION_JSON, "", "7\n"),
+            (
+                "content type parameters",
+                "application/json; charset=utf-8",
+                "",
+                "7",
+            ),
+            (
+                "content encoding",
+                APPLICATION_JSON,
+                "Content-Encoding: gzip\r\n",
+                "7",
+            ),
+            (
+                "duplicate content type",
+                APPLICATION_JSON,
+                "Content-Type: application/json\r\n",
+                "7",
+            ),
+            (
+                "oversized scalar",
+                APPLICATION_JSON,
+                "",
+                "111111111111111111111111111111111",
+            ),
+        ] {
+            assert!(
+                fetch_status_fixture(content_type, extra_headers, body).is_err(),
+                "{case} must fail closed",
+            );
+        }
     }
 }

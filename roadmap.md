@@ -209,7 +209,7 @@ release execution:
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
   4,500,000-line working target. The current mutable-tree checkpoint counts
-  4,955,673 lines, 415,673 above the hard ceiling, with all per-file ratchets
+  4,964,649 lines, 424,649 above the hard ceiling, with all per-file ratchets
   reconciled. Recompute the exact count and gap after source freeze; do not
   redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,

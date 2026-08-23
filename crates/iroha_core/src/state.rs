@@ -126,6 +126,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
+    offline::KagemushaExactBytesDigestV1,
     oracle::{
         DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
         OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
@@ -336,11 +337,15 @@ use crate::{
 mod bounded_authority;
 mod canonical_history;
 mod committed_hash_journal;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod committed_transaction_context;
 mod da_hydration;
 mod lane_authority;
 mod tiered;
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
@@ -12899,6 +12904,8 @@ pub struct StateTransaction<'block, 'state> {
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
+    /// Complete signed-wire identity of an exact direct Kagemusha Taira canary transaction.
+    pub(crate) kagemusha_taira_canary_wire_identity: Option<KagemushaExactBytesDigestV1>,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
@@ -46339,6 +46346,7 @@ impl<'state> StateBlock<'state> {
             tx_call_hash: None,
             current_tx_hash: None,
             privacy_transaction_intent_binding: None,
+            kagemusha_taira_canary_wire_identity: None,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
@@ -50458,7 +50466,11 @@ impl<'state> StateBlock<'state> {
             if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
-                Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
+                crate::state::seed_committed_transaction_context(
+                    &mut transaction,
+                    &tx,
+                    entrypoint_index,
+                );
                 let contract_deployment_bootstrap =
                     crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
                         &transaction.world,
@@ -50498,18 +50510,6 @@ impl<'state> StateBlock<'state> {
         }
         self.resolve_queue_plan_pending_obligations_from_block(block)
             .expect("committed block must resolve exact QueuePlan pending application obligations");
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn seed_committed_transaction_context(
-        transaction: &mut StateTransaction<'_, '_>,
-        tx: &SignedTransaction,
-        entrypoint_index: usize,
-    ) {
-        transaction.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        transaction.current_tx_hash =
-            Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash);
-        transaction.current_entrypoint_index =
-            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
 }
 #[cfg(feature = "zk-preverify")]
@@ -50826,7 +50826,7 @@ mod committed_transaction_context_tests {
         )
         .with_instructions([Log::new(Level::INFO, "context".into())])
         .sign(ALICE_KEYPAIR.private_key());
-        StateBlock::seed_committed_transaction_context(&mut transaction, &signed, 7);
+        crate::state::seed_committed_transaction_context(&mut transaction, &signed, 7);
         assert_eq!(
             transaction.tx_call_hash,
             Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()))

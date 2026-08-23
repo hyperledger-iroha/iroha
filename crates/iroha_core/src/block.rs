@@ -3,8 +3,7 @@
 //! Operations on blocks:
 //!
 //! 1. Static analysis of the block. This is a _fallible_ operation
-//! 2. Execution of transactions and time triggers. This is an _infallible_ operation. If there are errors during
-//!    transaction execution, they are recorded in the block.
+//! 2. Execute transactions and time triggers infallibly, recording transaction errors in the block.
 //! 3. Voting
 //! 4. Pre-commit signatures check
 //! 5. Apply & commit
@@ -13,13 +12,11 @@
 //!
 //! Block lifecycle stages:
 //!
-//! 1. Block is created by the node ([`NewBlock`]). Such blocks are assumed to be valid and do not
-//!    require static validation to transform to [`ValidBlock`].
+//! 1. A node-created [`NewBlock`] is assumed valid and needs no static validation before [`ValidBlock`].
 //! 2. Block is received/deserialized from disk (as [`SignedBlock`]). Such blocks require static
 //!    validation before execution to transition to [`ValidBlock`].
-//! 3. Block is valid ([`ValidBlock`]). It is always created in pair with [`crate::state::StateBlock`]
-//!    containing the applied state changes from the block. Transaction errors are written to the
-//!    block.
+//! 3. [`ValidBlock`] pairs with [`crate::state::StateBlock`] containing applied state changes and
+//!    transaction errors.
 //! 4. Voting block ([`VotingBlock`]). Valid block might not have sufficient signatures to be committed.
 //!    Voting block is a wrappper around [`ValidBlock`] and its [`crate::state::StateBlock`] intended to
 //!    collect the signatures in order to transition to [`CommittedBlock`]
@@ -291,10 +288,13 @@ fn validate_block_transaction_admission(
     tx: &SignedTransaction,
     routing: crate::queue::RoutingDecision,
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
-    state_tx.bind_privacy_transaction_intent_v1(None);
     let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
         .map_err(TransactionRejectionReason::Validation)?;
+    let canary_wire_identity =
+        crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+    state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 fn commit_stateful_admission_sequence(

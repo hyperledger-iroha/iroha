@@ -455,12 +455,16 @@ impl KagemushaV4TairaCanaryReservationBodyV1 {
             || self.version != KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION
             || hash_is_zero(self.canary_transaction_intent.as_ref())
             || hash_is_zero(self.canary_entrypoint_hash.as_ref())
+            || Hash::from(self.canary_transaction_intent) != self.canary_entrypoint_hash
         {
             return Err(KagemushaV4TairaCanaryEvidenceValidationError::Authorization);
         }
-        self.canary_transaction_wire
-            .validate()
-            .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Authorization)
+        validate_identity_digest(
+            self.canary_transaction_wire,
+            KAGEMUSHA_V4_TAIRA_CANARY_AUTHORIZATION_MAX_BYTES,
+            "taira_canary.canary_transaction_wire",
+        )
+        .map_err(|_| KagemushaV4TairaCanaryEvidenceValidationError::Authorization)
     }
 }
 
@@ -1295,6 +1299,8 @@ impl KagemushaV4TairaCanaryEvidenceV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaV4VerifiedTairaCanaryEvidenceV1 {
     promotion_id: [u8; 32],
+    activation_expectations_artifact: KagemushaExactBytesDigestV1,
+    activation_finality_receipt: KagemushaExactBytesDigestV1,
     authorization_identity: KagemushaExactBytesDigestV1,
     activation_finalized_height: u64,
     activation_finalized_block_hash: HashOf<BlockHeader>,
@@ -1302,6 +1308,7 @@ pub struct KagemushaV4VerifiedTairaCanaryEvidenceV1 {
     finalized_height: u64,
     finalized_block_hash: HashOf<BlockHeader>,
     canary_transaction_intent: HashOf<SignedTransaction>,
+    canary_transaction_wire: KagemushaExactBytesDigestV1,
 }
 
 impl KagemushaV4VerifiedTairaCanaryEvidenceV1 {
@@ -1309,6 +1316,18 @@ impl KagemushaV4VerifiedTairaCanaryEvidenceV1 {
     #[must_use]
     pub const fn promotion_id(&self) -> [u8; 32] {
         self.promotion_id
+    }
+
+    /// Return the exact authenticated activation-expectations artifact identity.
+    #[must_use]
+    pub const fn activation_expectations_artifact(&self) -> KagemushaExactBytesDigestV1 {
+        self.activation_expectations_artifact
+    }
+
+    /// Return the exact activation-finality receipt identity.
+    #[must_use]
+    pub const fn activation_finality_receipt(&self) -> KagemushaExactBytesDigestV1 {
+        self.activation_finality_receipt
     }
 
     /// Return the exact controller authorization identity.
@@ -1351,6 +1370,12 @@ impl KagemushaV4VerifiedTairaCanaryEvidenceV1 {
     #[must_use]
     pub const fn canary_transaction_intent(&self) -> HashOf<SignedTransaction> {
         self.canary_transaction_intent
+    }
+
+    /// Return the exact authorization-bearing canary transaction wire identity.
+    #[must_use]
+    pub const fn canary_transaction_wire(&self) -> KagemushaExactBytesDigestV1 {
+        self.canary_transaction_wire
     }
 }
 
@@ -1691,6 +1716,8 @@ fn verify_evidence_body(
 
     Ok(KagemushaV4VerifiedTairaCanaryEvidenceV1 {
         promotion_id: body.promotion_id,
+        activation_expectations_artifact: body.activation_expectations_artifact,
+        activation_finality_receipt: body.activation_finality_receipt,
         authorization_identity,
         activation_finalized_height: body.activation_finalized_height,
         activation_finalized_block_hash: body.activation_finalized_block_hash,
@@ -1698,6 +1725,7 @@ fn verify_evidence_body(
         finalized_height: body.finalized_height,
         finalized_block_hash: body.finalized_block_hash,
         canary_transaction_intent: body.canary_transaction_intent,
+        canary_transaction_wire: body.canary_transaction_wire,
     })
 }
 
