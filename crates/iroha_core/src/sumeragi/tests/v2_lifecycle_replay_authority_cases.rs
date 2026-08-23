@@ -52,6 +52,55 @@ fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     }
 }
 #[test]
+fn timeout_certificate_retransmit_replay_rejects_pre_envelope_subject_key() {
+    let fixture = Fixture::new();
+    let case = fixture
+        .cases()
+        .into_iter()
+        .find(|case| case.stage.kind() == LifecycleStageKind::BroadcastTc)
+        .expect("fixture retains one timeout-certificate Broadcast");
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &case.authority.source else {
+        panic!("timeout-certificate row retains a direct Broadcast authority")
+    };
+    let wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) = &message.payload else {
+        panic!("BroadcastTc authority retains a timeout certificate")
+    };
+    let highest = certificate.highest_prepare_qc();
+    let pre_envelope_key = lifecycle_key(
+        fixture.context,
+        certificate.round,
+        highest.map(|qc| qc.proposal_round),
+        highest.map(|qc| block_subject(qc.subject)),
+        LifecyclePhase::BroadcastTc,
+        highest.map(|qc| execution_commitment(qc.execution_commitment)),
+    );
+
+    assert_ne!(case.key, pre_envelope_key);
+    assert_eq!(
+        case.key.subject(),
+        Some(timeout_certificate_envelope_subject(certificate))
+    );
+    case.authority
+        .validate_record(
+            fixture.context,
+            case.key,
+            case.work_class,
+            case.stage,
+            case.payload,
+        )
+        .expect("envelope-subject BroadcastTc key is canonical");
+    assert_eq!(
+        case.authority.validate_record(
+            fixture.context,
+            pre_envelope_key,
+            case.work_class,
+            case.stage,
+            case.payload,
+        ),
+        Err(ReplayAuthorityValidationError::RecordMismatch)
+    );
+}
+#[test]
 fn canonical_decoder_enforces_version_size_and_complete_input() {
     let fixture = Fixture::new();
     let mut authority = fixture
@@ -348,19 +397,16 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
     let certificate = &fixture.authenticated.request().certificate;
     let round = certificate.proposal_round;
     let subject = certificate.subject;
-    let tag = crate::sumeragi::v2_core::EventTag::new(
-        round.height,
-        round.view,
-        Generation::new(11),
-    );
+    let tag =
+        crate::sumeragi::v2_core::EventTag::new(round.height, round.view, Generation::new(11));
     let proposal = wire::Proposal {
         round,
         proposer: context.leader(round.view),
         subject,
         manifest: fixture.manifest.clone(),
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: vec![0xDA],
     };
     let proposal_source = BodyPipelineReplaySourceV1 {
@@ -409,12 +455,8 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
     ));
 
     let active_context = replay_context(round);
-    let receipt = DurableBodyReceipt::for_test(
-        context.id(),
-        round,
-        subject,
-        HashOf::new(&fixture.manifest),
-    );
+    let receipt =
+        DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&fixture.manifest));
     let payload = DurablePayloadReference::BodyFrame(
         durable_body_frame_reference(active_context, &receipt)
             .expect("fixture receipt has one durable body frame"),
@@ -459,13 +501,9 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
         payload_binding,
     )
     .expect("the complete QC is canonical Validate replay authority");
-    let candidate = candidate_from_authorized_projection(
-        active_context,
-        projected,
-        payload,
-        refined_authority,
-    )
-    .expect("the QC replay source joins the refined Validate candidate");
+    let candidate =
+        candidate_from_authorized_projection(active_context, projected, payload, refined_authority)
+            .expect("the QC replay source joins the refined Validate candidate");
     assert_eq!(
         candidate.key.execution_commitment(),
         Some(execution_commitment(certificate.execution_commitment))

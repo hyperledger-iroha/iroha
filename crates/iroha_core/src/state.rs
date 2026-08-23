@@ -11806,6 +11806,25 @@ impl<'state> StateBlock<'state> {
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
     }
+    /// Read an exact pending QueuePlan binding from the immutable parent WSV.
+    ///
+    /// Candidate-local QueuePlan controls are staged into this block overlay before execution.
+    /// They must not retroactively authorize an already-expired transaction, so callers that
+    /// need the original admission instant validate against `state_ref` rather than the overlay.
+    pub(crate) fn pending_queue_plan_binding_for_execution_at_block_start(
+        &self,
+        entrypoint: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+        execution_height: u64,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        let parent_state = self.state_ref.query_view();
+        State::pending_queue_plan_binding_for_execution(
+            &parent_state,
+            entrypoint,
+            routing_plan,
+            execution_height,
+        )
+    }
     fn freeze_axt_block_start(&mut self) {
         assert!(
             self.axt_block_start_snapshot.is_none(),
@@ -35539,6 +35558,25 @@ impl State {
             &mut world.smart_contract_state,
             obligation,
         )?;
+        world.commit();
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn replace_queue_plan_registry_owner_for_test(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        conflicting_binding_hash: Hash,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
+        let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash: conflicting_binding_hash,
+        };
+        let mut world = self.world.block();
+        world.smart_contract_state.insert(
+            registry_key,
+            Self::queue_plan_admission_registry_marker_payload(&conflicting_value)?,
+        );
         world.commit();
         Ok(())
     }

@@ -26,6 +26,7 @@ use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::collections::BTreeMap;
 use thiserror::Error;
+
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
 pub struct GenesisV2Bootstrap {
