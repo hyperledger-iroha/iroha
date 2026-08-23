@@ -1914,6 +1914,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         ),
         ("runner", "crates/iroha_core/src/sumeragi/v2_runner.rs"),
         (
+            "runner_test",
+            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
+        ),
+        (
             "ordinary_consumer",
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
         ),
@@ -3566,7 +3570,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "runner",
         decided_pre_admission,
-        "terminal recovery classifies current Serve as retained",
+        "terminal recovery classifies exact current Serve for guarded service",
         (
             "inbound.message().is_lane_local()",
             "BlockMessage::V2(message)",
@@ -3574,7 +3578,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "request.round.height < active_height",
             "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
             "request.round.height == active_height",
-            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
             "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
         ),
     )
@@ -3592,14 +3596,14 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "runner",
         decided_authorization,
-        "terminal recovery denies current-Serve dequeue authority",
+        "terminal recovery authorizes exact current-Serve service",
         (
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
             "DecidedLaneRecoveryIngressPreparation::HistoricalServe",
             "DecidedLaneRecoveryDrainAuthorization::HistoricalServe",
             "DecidedLaneRecoveryIngressPreparation::LeaderWireRetire",
             "DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire",
-            "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain",
-            "DecidedLaneRecoveryDrainDecision::Retain",
         ),
     )
     reject_tokens(
@@ -3612,20 +3616,126 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "prepare_exact(",
         ),
     )
+    decided_commit = item("runner", "commit_decided_lane_recovery_drain")
+    require_order(
+        "runner",
+        decided_commit,
+        "terminal current Serve binds ownership before guarded service",
+        (
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            "committer.bind_leader_wire()?",
+            "committer.commit_current_serve()?",
+            "DecidedLaneRecoveryDrainCommitOutcome::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::HistoricalServe",
+            "committer.bind_leader_wire()?",
+            "committer.commit_historical_serve()?",
+        ),
+    )
+    decided_height_scope = item("runner", "permits_height")
+    require_order(
+        "runner",
+        decided_height_scope,
+        "terminal certified Serve exact height scope",
+        (
+            "Self::Current => request == active",
+            "Self::Historical => request < active",
+        ),
+    )
+    decided_subject_scope = item("runner", "permits_subject")
+    require_order(
+        "runner",
+        decided_subject_scope,
+        "terminal current Serve exact decided-subject scope",
+        (
+            "Self::Current => request == decided",
+            "Self::Historical => true",
+        ),
+    )
+    decided_serve = item("runner", "commit_certified_serve")
+    require_order(
+        "runner",
+        decided_serve,
+        "terminal certified Serve guarded durable response",
+        (
+            "self.take_inbound()?",
+            "self.take_bound_leader_wire()?",
+            "message.validate_version()",
+            "ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
+            "scope.permits_height(request.round.height, self.executor.context().height)",
+            "if !scope.permits_subject(request.subject, self.decided_subject)",
+            "mark_leader_wire_volatile(self.receiver, &ingress_ownership)?",
+            "return Ok(())",
+            "let Some(reply_routes) = reply_routes",
+            "reply_routes.semantic_target() != &sender",
+            "let response_peer = sender.clone()",
+            "let terminal_ownership = ingress_ownership.clone()",
+            "serve_block_sync_while_guarded(",
+            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
+            "post_durable_history_response_on_reply_routes_with_permit(",
+            "response_peer",
+            "reply_routes",
+            "ingress_ownership",
+            "response",
+            "permit",
+            "finalize_bound_block_sync_serve(",
+            "|| mark_leader_wire_volatile(self.receiver, &terminal_ownership)",
+        ),
+    )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(
         "runner",
         decided_drain,
-        "live terminal drain retains current Serve before checked dequeue",
+        "live terminal drain directly serves authorized current recovery",
         (
+            "let decided_subject = executor",
+            ".local_proposal_directive()?",
+            ".decided_subject()",
             "receiver.try_recv_if_checked(",
             "prepare_decided_lane_recovery_ingress(inbound, executor.context().height)",
             "authorize_decided_lane_recovery_drain(preparation)",
-            "DecidedLaneRecoveryDrainDecision::Retain => false",
-            "DecidedLaneRecoveryDrainDecision::Authorized(candidate)",
             "authorization.replace(candidate)",
             "ProductionDecidedLaneRecoveryDrainCommitter",
+            "decided_subject,",
             "commit_decided_lane_recovery_drain(authorization, &mut committer)",
+        ),
+    )
+    reject_tokens(
+        "runner",
+        decided_drain,
+        "terminal recovery has no retained current-Serve branch",
+        (
+            "CurrentServeRetain",
+            "DecidedLaneRecoveryDrainDecision",
+        ),
+    )
+    current_serve_test = item(
+        "runner_test", "drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve"
+    )
+    require_order(
+        "runner_test",
+        current_serve_test,
+        "terminal current Serve height and decided-subject behavior",
+        (
+            "let subject = proposal_subject(b\"decided recovery exact subject\")",
+            "DecidedLaneRecoveryIngressPreparation::CurrentServe",
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            ".permits_height(context.height, context.height)",
+            "DecidedLaneRecoveryServeScope::Current.permits_subject(subject, subject)",
+            "proposal_subject(b\"losing decided recovery subject\")",
+            "DecidedLaneRecoveryServeScope::Historical.permits_subject(",
+        ),
+    )
+    current_serve_commit_test = item(
+        "runner_test", "terminal_current_serve_binds_leader_wire_before_guarded_service"
+    )
+    require_order(
+        "runner_test",
+        current_serve_commit_test,
+        "terminal current Serve checked commit behavior",
+        (
+            "DecidedLaneRecoveryDrainAuthorization::CurrentServe",
+            "DecidedLaneRecoveryDrainCommitOutcome::CurrentServe",
+            "assert_eq!(probe.0, [\"bind\", \"current\"])",
         ),
     )
     lifecycle_consumer = item("driver", "consume_prepared_ordinary_ingress_turn")
@@ -3665,7 +3775,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_ingress_barrier,
         "typed Apply ingress barrier",
         (
-            "Self::AwaitingCompletion | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
+            "Self::AwaitingCompletion | Self::AwaitingValidateSidecar | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
         ),
     )
     apply_yield_barriers = [
@@ -3709,8 +3819,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_tokens(
         "height_driver",
         decided_lane_recovery_projection,
-        "terminal-only decided-lane recovery ingress authority",
-        ("matches!(self, Self::ApplyTerminalSettled)",),
+        "decided Apply barrier recovery ingress authority",
+        ("Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled",),
     )
     apply_barrier_transition = item("height_driver", "observe_completion")
     require_tokens(
@@ -3750,13 +3860,31 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
 
     lifecycle_height_driver = item("height_driver", "drain_lifecycle_v2_ingress")
+    settled_apply_output_drain = item(
+        "height_driver", "settled_apply_output_drain_disposition"
+    )
+    require_order(
+        "height_driver",
+        settled_apply_output_drain,
+        "terminal Apply retained-output settlement",
+        (
+            "debug_assert!(producer_claim.apply_terminal_settled())",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "LifecycleV2IngressDrainDispositionV1::retry_before_producer(producer_claim)",
+            "RecoveredLifecycleOutputSettlementV1::Empty",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+        ),
+    )
     require_order(
         "height_driver",
         lifecycle_height_driver,
         "durable post-Apply drain cut",
         (
             "if producer_claim.apply_terminal_settled()",
-            "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+            "settle_one_recovered_lifecycle_output(",
+            "settled_apply_output_drain_disposition(",
             "let (context_id, height, output_guard)",
         ),
     )
@@ -4241,6 +4369,28 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     lifecycle_active = item("lifecycle_run_inner", "run_lifecycle_active_height")
+    _require_rust_token_sequence(
+        paths["lifecycle_run_inner"],
+        lifecycle_active,
+        """
+let directive = reconcile_executor_locked_body(executor, services)?;
+local_proposal
+    .state
+    .reconcile(LocalProposalOwner::from(directive));
+lane_work.retain_merge_sidecars_for_global_view(
+    directive.tag().view(),
+    directive.locked_subject(),
+    directive.decided_subject(),
+)?;
+executor.acknowledge_runner_decision_cleanup(
+    directive.tag(),
+    directive.decided_subject(),
+)?;
+""",
+        "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
+        errors,
+        count=3,
+    )
     require_order(
         "lifecycle_run_inner",
         lifecycle_active,
@@ -4254,6 +4404,55 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "build_verified_successor(",
             "into_parts_with_lifecycle_storage_authority(",
         ),
+    )
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_active,
+        "ordinary finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+        (
+            "let mut finalized_ingress_closed = false",
+            "loop",
+            "if rollover_ready",
+            "if !finalized_ingress_closed",
+            "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?",
+            "finalized_ingress_closed = true",
+            "drain_decided_lane_recovery_ingress(",
+            "dispatch_lane_work_effects(",
+            "drained.is_some()",
+            "if drained_terminal_ingress",
+            "continue",
+            "receiver.ensure_closed_drained_cut()",
+            "finalize_lifecycle_height(",
+        ),
+    )
+    _require_rust_token_sequence(
+        paths["lifecycle_run_inner"],
+        lifecycle_active,
+        "let mut finalized_ingress_closed = false;",
+        "ordinary finalization ingress close state must be initialized exactly once and never reopened",
+        errors,
+    )
+    ordinary_close = item(
+        "launch", "close_runner_ingress_for_finalized_drain"
+    )
+    _require_exact_rust_tokens(
+        paths["launch"],
+        ordinary_close,
+        """
+pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+    &self,
+    _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    receiver: &Arc<FairV2Ingress>,
+) -> Result<(), super::super::v2_runner::V2RunnerError> {
+    self.runner_activation.close_ingress(receiver)?;
+    if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+        return Err(super::super::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch);
+    }
+    Ok(())
+}
+""",
+        "ordinary finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
+        errors,
     )
     lifecycle_finalization = item("lifecycle_run_inner", "finalize_lifecycle_height")
     require_order(
@@ -5232,6 +5431,30 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "lane_work",
         ),
     )
+    pending_close = item(
+        "pending_lifecycle", "close_runner_ingress_for_finalized_drain"
+    )
+    _require_exact_rust_tokens(
+        paths["pending_lifecycle"],
+        pending_close,
+        """
+pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+    &self,
+    _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    receiver: &Arc<FairV2Ingress>,
+) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
+    self.runner_activation.close_ingress(receiver)?;
+    if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+        return Err(
+            crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
+        );
+    }
+    Ok(())
+}
+""",
+        "pending-Kura finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
+        errors,
+    )
     missing_pending = item("preactivation", "missing_pending_kura_replay")
     require_order(
         "preactivation",
@@ -5329,6 +5552,34 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "post_output.retire_lifecycle_stores()?",
             "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
         ),
+    )
+    require_order(
+        "pending_runner",
+        pending_live,
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+        (
+            "let mut finalized_ingress_closed = false",
+            "loop",
+            "if !rollover_ready",
+            "continue",
+            "if !finalized_ingress_closed",
+            "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?",
+            "finalized_ingress_closed = true",
+            "drain_decided_lane_recovery_ingress(",
+            "dispatch_lane_work_effects(",
+            "drained.is_some()",
+            "if drained_terminal_ingress",
+            "continue",
+            "receiver.ensure_closed_drained_cut()",
+            "activated.into_finalized_rollover(&mut active_runner)?",
+        ),
+    )
+    _require_rust_token_sequence(
+        paths["pending_runner"],
+        pending_live,
+        "let mut finalized_ingress_closed = false;",
+        "pending-Kura finalization ingress close state must be initialized exactly once and never reopened",
+        errors,
     )
     reject_tokens(
         "pending_runner",

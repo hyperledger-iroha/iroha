@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -214,8 +214,8 @@ release execution:
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
   4,500,000-line working target. The current mutable-tree checkpoint counts
-  4,964,649 lines, 424,649 above the hard ceiling, with all per-file ratchets
-  reconciled. Recompute the exact count and gap after source freeze; do not
+  4,975,825 lines, 435,825 above the hard ceiling, with 18 per-file findings
+  remaining. Recompute the exact count and gap after source freeze; do not
   redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
   security, consensus, SDK, or release-evidence behavior to close it. Keep
@@ -316,7 +316,7 @@ final-source enlarged-stack coordinator aggregate is 462/462. The production
 nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
 corridors, exact `iroha_core` test-target compile, reviewed include closure,
 and legacy-codec guard are green. Current merge reconciliation ratcheted five
-decreased-file baselines down and leaves 11 file-budget findings, including
+decreased-file baselines down and leaves 18 file-budget findings, including
 merged-tree Sumeragi growth; split work remains outstanding, and allowances
 must not increase. The include manifest contains 66 parents and 398 entries.
 The exact proof-ledger checker has only the separately

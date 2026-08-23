@@ -128,9 +128,17 @@ impl LifecycleProducerClaimDispositionV1 {
         matches!(self, Self::ApplyTerminalSettled)
     }
 
-    /// Return whether terminal recovery may consume decided-lane fair ingress.
+    /// Return whether decided Apply recovery may consume decided-lane fair ingress.
+    ///
+    /// The typed Apply dispatch proves that this height already owns an exact
+    /// durable Decision, even while its worker completion is still queued. Keep
+    /// certified-body service live across both sides of that completion so a
+    /// body-missing validator cannot deadlock the peers which can answer it.
     pub(super) const fn permits_decided_lane_recovery_ingress(self) -> bool {
-        matches!(self, Self::ApplyTerminalSettled)
+        matches!(
+            self,
+            Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled
+        )
     }
 
     fn observe_completion(
@@ -743,7 +751,7 @@ mod tests {
         assert!(claim.requires_yield());
         assert!(claim.blocks_runtime());
         assert!(claim.blocks_ingress());
-        assert!(!claim.permits_decided_lane_recovery_ingress());
+        assert!(claim.permits_decided_lane_recovery_ingress());
 
         let deferred = claim
             .observe_completion(&Completion::RecoveredDecisionApplyCompletionDeferred)

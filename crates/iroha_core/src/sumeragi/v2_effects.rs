@@ -2489,6 +2489,12 @@ type DurableDecision = (
     wire::BlockSubject,
     wire::ExecutionCommitment,
 );
+/// Exact local owner which installed one durable Decision before runner cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingRunnerDecisionCleanup {
+    decision: DurableDecision,
+    owner_tag: EventTag,
+}
 /// One atomic read of reducer state which can retire executor-owned work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeReconciliationFrontier {
@@ -3302,6 +3308,9 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    /// Newly installed live Decision whose exact Apply suffix cannot enter the
+    /// worker until the runner retires process-local proposal and lane owners.
+    pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
     pending_tip_recovery_attempts: u64,
     pending_tip_recovery_last_result: Option<PendingTipRecoveryAttemptResult>,
@@ -4298,6 +4307,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     pub(crate) fn ready_to_finish(&self) -> bool {
         !self.output_guard.restart_required()
             && self.finality_completion.is_some()
+            && self.pending_runner_decision_cleanup.is_none()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && !self.runtime.has_dormant_remote_proposal_replay()
@@ -4333,6 +4343,62 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     }
 }
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Release the live Decision-to-Apply fence after the runner synchronously
+    /// retires its process-local proposal lease and losing lane work.
+    pub(crate) fn acknowledge_runner_decision_cleanup(
+        &mut self,
+        runner_tag: EventTag,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), EffectExecutorError> {
+        let Some(pending) = self.pending_runner_decision_cleanup else {
+            return Ok(());
+        };
+        let decision = pending.decision;
+        let (retained_apply_count, exact_retained_apply_count) = self
+            .retained_effect_batch
+            .as_ref()
+            .into_iter()
+            .chain(self.parked_effect_batch.as_ref())
+            .flat_map(|batch| batch.effects.iter())
+            .fold((0_usize, 0_usize), |(count, exact_count), owned| {
+                let AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                } = &owned.effect
+                else {
+                    return (count, exact_count);
+                };
+                let exact = *tag == pending.owner_tag
+                    && *subject == decision.2
+                    && certificate.phase == wire::GlobalPhase::Commit
+                    && certificate.round == decision.0
+                    && certificate.proposal_round == decision.1
+                    && certificate.subject == decision.2
+                    && certificate.execution_commitment == decision.3;
+                (count + 1, exact_count + usize::from(exact))
+            });
+        let runtime_decision = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)?;
+        if runtime_decision != Some(decision)
+            || self.protected_decision != Some(decision)
+            || runner_tag != pending.owner_tag
+            || self.runtime.authoritative_tag() != Some(pending.owner_tag)
+            || pending.owner_tag.height() != decision.0.height
+            || decided_subject != Some(decision.2)
+            || retained_apply_count > 1
+            || retained_apply_count != exact_retained_apply_count
+        {
+            return Err(EffectExecutorError::Contract(
+                "runner Decision cleanup changed the exact Decision handoff".to_owned(),
+            ));
+        }
+        self.pending_runner_decision_cleanup = None;
+        Ok(())
+    }
+
     /// Restore one live lifecycle validation marker to the executor catalog.
     ///
     /// Durable validation has already fsynced this receipt. The move-only Ready
@@ -4727,6 +4793,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             reconciled_tag,
             protected_lock: None,
             protected_decision: None,
+            pending_runner_decision_cleanup: None,
             pending_tip_recovery: None,
             pending_tip_recovery_attempts: 0,
             pending_tip_recovery_last_result: None,
@@ -5330,7 +5397,39 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         effects: Vec<AdapterEffect>,
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
+        self.consume_effects_with_runner_decision_cleanup(effects, services, None)
+    }
+    /// Retain one reducer batch while optionally fencing its exact Apply until
+    /// the synchronous runner has retired process-local Decision losers.
+    fn consume_effects_with_runner_decision_cleanup<S: V2EffectServices>(
+        &mut self,
+        effects: Vec<AdapterEffect>,
+        services: &mut S,
+        pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
+    ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_runner_decision_cleanup.is_some() {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "reducer effects overtook pending runner Decision cleanup".to_owned(),
+                ),
+                services,
+            ));
+        }
+        if let Some(pending) = pending_runner_decision_cleanup {
+            if !Self::new_decision_batch_has_only_exact_apply(
+                &effects,
+                pending.decision,
+                Some(pending.owner_tag),
+            ) {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "new Decision Apply handoff changed its exact retained suffix".to_owned(),
+                    ),
+                    services,
+                ));
+            }
+        }
         let frontier = self
             .runtime
             .reconciliation_frontier()
@@ -5459,6 +5558,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
+        self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
         if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
             return Err(self.close_after_transferring_runtime_terminals(error, services));
         }
@@ -5472,6 +5572,59 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         Ok(count.saturating_add(lifecycle_handoffs))
+    }
+    fn new_decision_batch_has_only_exact_apply(
+        effects: &[AdapterEffect],
+        decision: DurableDecision,
+        authoritative_tag: Option<EventTag>,
+    ) -> bool {
+        let mut apply_count = 0usize;
+        for effect in effects {
+            let AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            } = effect
+            else {
+                continue;
+            };
+            apply_count = apply_count.saturating_add(1);
+            if apply_count > 1
+                || Some(*tag) != authoritative_tag
+                || *subject != decision.2
+                || certificate.phase != wire::GlobalPhase::Commit
+                || certificate.round != decision.0
+                || certificate.proposal_round != decision.1
+                || certificate.subject != decision.2
+                || certificate.execution_commitment != decision.3
+            {
+                return false;
+            }
+        }
+        true
+    }
+    fn plan_runner_decision_cleanup(
+        &self,
+        before: Option<DurableDecision>,
+        after: Option<DurableDecision>,
+    ) -> Result<Option<PendingRunnerDecisionCleanup>, EffectExecutorError> {
+        let (None, Some(decision)) = (before, after) else {
+            return Ok(None);
+        };
+        let owner_tag = self.runtime.authoritative_tag().ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "new Decision omitted its exact local runner owner".to_owned(),
+            )
+        })?;
+        if owner_tag.height() != decision.0.height {
+            return Err(EffectExecutorError::Contract(
+                "new Decision changed height across its local runner owner".to_owned(),
+            ));
+        }
+        Ok(Some(PendingRunnerDecisionCleanup {
+            decision,
+            owner_tag,
+        }))
     }
     fn plan_local_proposal_replay_consumptions(
         &self,
@@ -6765,9 +6918,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 break;
             };
             // Decision emits CommitQC before Apply. Keep Apply at the FIFO head until every
-            // lifecycle admission owner settles; other effects retain their batching behavior.
+            // lifecycle admission owner settles and the synchronous runner has retired its
+            // process-local proposal/lane owners; other effects retain their batching behavior.
             if matches!(&owned.effect, AdapterEffect::Apply { .. })
-                && (!self.pending_durable_validate_admissions.is_empty()
+                && (self.pending_runner_decision_cleanup.is_some()
+                    || !self.pending_durable_validate_admissions.is_empty()
                     || self.pending_live_wal_sign_admission.is_some()
                     || !self.pending_lifecycle_output_admissions.is_empty())
             {
@@ -6972,7 +7127,37 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         effects: Vec<AdapterEffect>,
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
+        self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
+    }
+    fn consume_pacemaker_effects_with_runner_decision_cleanup<S: V2EffectServices>(
+        &mut self,
+        effects: Vec<AdapterEffect>,
+        services: &mut S,
+        pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
+    ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_runner_decision_cleanup.is_some() {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "pacemaker effects overtook pending runner Decision cleanup".to_owned(),
+                ),
+                services,
+            ));
+        }
+        if let Some(pending) = pending_runner_decision_cleanup
+            && !Self::new_decision_batch_has_only_exact_apply(
+                &effects,
+                pending.decision,
+                Some(pending.owner_tag),
+            )
+        {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "pacemaker Decision Apply handoff changed its exact retained suffix".to_owned(),
+                ),
+                services,
+            ));
+        }
         let frontier = self
             .runtime
             .reconciliation_frontier()
@@ -7000,6 +7185,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
             return Err(self.close(error, services));
         }
+        self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
         if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
             return Err(self.close_after_transferring_runtime_terminals(error, services));
         }
@@ -7026,6 +7212,21 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_runner_decision_cleanup.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services, false)
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
+            return Ok(if count == 0 {
+                EffectExecutorStep::Idle
+            } else {
+                EffectExecutorStep::Advanced { effects: count }
+            });
+        }
         if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services, false)
@@ -7048,6 +7249,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.publish_external_lifecycle_owners() {
             return Err(self.close(error, services));
         }
+        let decision_before_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -7073,8 +7279,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
+        let decision_after_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let pending_runner_decision_cleanup = self
+            .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+            .map_err(|error| self.close(error, services))?;
         match step {
             None | Some(RuntimeStep::Idle) => {
+                self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
                 if self.retained_effect_batch.is_none() && self.parked_effect_batch.is_some() {
                     self.restore_parked_effect_batch()
                         .map_err(|error| self.close(error, services))?;
@@ -7088,7 +7303,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 Ok(EffectExecutorStep::Idle)
             }
             Some(RuntimeStep::Advanced(effects)) => {
-                let count = self.consume_pacemaker_effects(effects, services)?;
+                let count = self.consume_pacemaker_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                )?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }
@@ -7100,6 +7319,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_runner_decision_cleanup.is_some()
+            && self.retained_effect_batch.is_none()
+            && self.parked_effect_batch.is_none()
+        {
+            return Ok(EffectExecutorStep::Idle);
+        }
         if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services, true)
@@ -7112,6 +7337,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             if count != 0 {
                 return Ok(EffectExecutorStep::Advanced { effects: count });
             }
+            if self.pending_runner_decision_cleanup.is_some() {
+                return Ok(EffectExecutorStep::Idle);
+            }
             if self.retained_effect_batch.is_some() && self.parked_effect_batch.is_none() {
                 self.park_retained_effect_batch()
                     .map_err(|error| self.close(error, services))?;
@@ -7122,6 +7350,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.publish_external_lifecycle_owners() {
             return Err(self.close(error, services));
         }
+        let decision_before_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
         let wal_step = self
             .output_guard
             .begin_fail_stop_operation()
@@ -7148,15 +7381,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
+        let decision_after_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let pending_runner_decision_cleanup = self
+            .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+            .map_err(|error| self.close(error, services))?;
         match step {
             RuntimeStep::Idle => {
+                self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
                 }
                 Ok(EffectExecutorStep::Idle)
             }
             RuntimeStep::Advanced(effects) => {
-                let count = self.consume_effects(effects, services)?;
+                let count = self.consume_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                )?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }

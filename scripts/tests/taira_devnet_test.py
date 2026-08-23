@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -49,6 +50,14 @@ class FakeRuntime:
         self.mcp_protocol_version = "taira-test-protocol-v1"
         self.requests: list[tuple[str, object | None]] = []
         self.api_port = module.DEFAULT_API_PORT
+        self.help_options = {
+            option
+            for _binary, _subcommands, options in module.CLI_SURFACES
+            for option in options
+        } | {"--public-root", "--json"}
+        self.sumeragi_status_http = 200
+        self.restart_required_peer: int | None = None
+        self.sumeragi_blocker_peer: int | None = None
         self.ping_stdout = json.dumps({"hash": "hash:" + "a" * 64 + "#ABCD"})
         self.status_stdout = json.dumps(
             {"hash": "a" * 64, "terminal_kind": "Applied"}
@@ -61,6 +70,13 @@ class FakeRuntime:
     ) -> subprocess.CompletedProcess[str]:
         values = tuple(str(value) for value in command)
         self.commands.append(values)
+        if "--help" in values:
+            return subprocess.CompletedProcess(
+                values,
+                0,
+                "\n".join(sorted(self.help_options)),
+                "",
+            )
         if "localnet" in values:
             target = Path(values[values.index("--out-dir") + 1])
             api_port = int(values[values.index("--base-api-port") + 1])
@@ -148,6 +164,19 @@ class FakeRuntime:
         for index in range(module.PEER_COUNT):
             if f":{self.api_port + index}/" not in url:
                 continue
+            if url.endswith("v1/sumeragi/status"):
+                if self.sumeragi_status_http != 200:
+                    return self.sumeragi_status_http, None
+                blocker = (
+                    {"blocker": "application_pending", "details": None}
+                    if index == self.sumeragi_blocker_peer
+                    else None
+                )
+                return 200, {
+                    "protocol_version": 4,
+                    "restart_required": index == self.restart_required_peer,
+                    "liveness": {"blocker": blocker},
+                }
             if index == self.unhealthy_peer and url.endswith("readyz"):
                 return 503, None
             if url.endswith(("health", "readyz")):
@@ -197,7 +226,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(report["final_height"], 2)
         self.assertEqual(report["transaction_hash"], "a" * 64)
         self.assertEqual(report["terminal_status"], "Applied")
-        kagami = next(command for command in runtime.commands if "localnet" in command)
+        kagami = next(command for command in runtime.commands if "--out-dir" in command)
         self.assertIn("--fresh-random-keys", kagami)
         self.assertEqual(kagami[kagami.index("--peers") + 1], "4")
         self.assertEqual(kagami[kagami.index("--sora-profile") + 1], "nexus")
@@ -216,15 +245,15 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertTrue(
             all(command.count(str(self.bin_dir / "iroha3d")) == 1 for command in config_checks)
         )
-        self.assertEqual(sum("ping" in command for command in runtime.commands), 1)
-        self.assertEqual(sum("status" in command for command in runtime.commands), 1)
+        self.assertEqual(sum("--no-wait" in command for command in runtime.commands), 1)
+        self.assertEqual(sum("--wait" in command for command in runtime.commands), 1)
         self.assertEqual(sum("doctor" in command for command in runtime.commands), 0)
-        ping = next(command for command in runtime.commands if "ping" in command)
+        ping = next(command for command in runtime.commands if "--no-wait" in command)
         self.assertIn("--machine", ping)
         self.assertIn("--fee-payer", ping)
         self.assertIn("tx", ping)
         self.assertIn("--no-wait", ping)
-        status = next(command for command in runtime.commands if "status" in command)
+        status = next(command for command in runtime.commands if "--wait" in command)
         self.assertIn("--wait", status)
         self.assertEqual(status[status.index("--hash") + 1], "a" * 64)
         self.assertEqual(status[status.index("--terminal-status") + 1], "applied")
@@ -239,8 +268,15 @@ class TairaDevnetTests(unittest.TestCase):
         ]
         self.assertEqual(
             mcp_methods,
-            ["initialize", "notifications/initialized", "tools/list"],
+            ["initialize", "notifications/initialized", "tools/list"]
+            * module.PEER_COUNT,
         )
+        mcp_roots = {
+            url.removesuffix("v1/mcp")
+            for url, payload in runtime.requests
+            if url.endswith("v1/mcp") and payload is None
+        }
+        self.assertEqual(mcp_roots, set(module.torii_roots(module.DEFAULT_API_PORT)))
 
     def test_default_deadline_matches_the_generated_transaction_window(self) -> None:
         args = module.parser().parse_args(
@@ -266,7 +302,7 @@ class TairaDevnetTests(unittest.TestCase):
             with self.assertRaisesRegex(module.DevnetError, "required_above=0"):
                 module.up(args, run=runtime.run, request=runtime.request)
 
-        self.assertFalse(any("ping" in command for command in runtime.commands))
+        self.assertFalse(any("--no-wait" in command for command in runtime.commands))
 
     def test_fresh_generation_has_no_hidden_wall_clock_deadline(self) -> None:
         calls: list[dict[str, object]] = []
@@ -323,7 +359,7 @@ class TairaDevnetTests(unittest.TestCase):
     def test_check_is_read_only_and_down_needs_no_release_confirmation(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
-        ping_count = sum("ping" in command for command in runtime.commands)
+        ping_count = sum("--no-wait" in command for command in runtime.commands)
         state = self.root / "state"
 
         check_args = module.parser().parse_args(
@@ -331,7 +367,7 @@ class TairaDevnetTests(unittest.TestCase):
         )
         report = module.check(check_args, run=runtime.run, request=runtime.request)
         self.assertEqual(report["height"], 2)
-        self.assertEqual(sum("ping" in command for command in runtime.commands), ping_count)
+        self.assertEqual(sum("--no-wait" in command for command in runtime.commands), ping_count)
 
         down_args = module.parser().parse_args(["--dir", str(state), "down"])
         self.assertTrue(module.down(down_args, run=runtime.run)["stopped"])
@@ -438,6 +474,55 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
             module.check(args, run=runtime.run, request=runtime.request)
 
+    def test_down_does_not_run_legacy_stop_before_exact_process_ownership(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        runtime.process_commands[10_000] = (
+            f"/fake/iroha3d --sora --config {target / 'peer0.toml'}.backup"
+        )
+        stop_count = sum(
+            command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+            for command in runtime.commands
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "down"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "not the sole running process"):
+            module.down(args, run=runtime.run)
+
+        self.assertEqual(
+            sum(
+                command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+                for command in runtime.commands
+            ),
+            stop_count,
+        )
+        self.assertTrue((target / "peer0.pid").is_file())
+
+    def test_status_fail_stop_and_watchdog_blockers_are_terminal_when_exposed(self) -> None:
+        cases = (("restart", 1, None), ("blocker", None, 2))
+        for label, restart_peer, blocker_peer in cases:
+            with self.subTest(label=label):
+                runtime = FakeRuntime()
+                runtime.restart_required_peer = restart_peer
+                runtime.sumeragi_blocker_peer = blocker_peer
+                message = "requires restart" if restart_peer is not None else "liveness blocker"
+
+                with self.assertRaisesRegex(module.DevnetError, message):
+                    module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+                self.assertEqual(runtime.process_commands, {})
+
+    def test_unavailable_operator_status_does_not_replace_portable_smoke(self) -> None:
+        runtime = FakeRuntime()
+        runtime.sumeragi_status_http = 401
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertEqual(report["terminal_status"], "Applied")
+
     def test_check_rejects_bundle_identity_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
@@ -486,7 +571,11 @@ class TairaDevnetTests(unittest.TestCase):
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args("--full-doctor"), run=runtime.run, request=runtime.request)
-        doctor = [command for command in runtime.commands if "doctor" in command]
+        doctor = [
+            command
+            for command in runtime.commands
+            if "doctor" in command and "--public-root" in command
+        ]
         self.assertEqual(len(doctor), 1)
         self.assertEqual(doctor[0][doctor[0].index("--public-root") + 1], "http://127.0.0.1:29080/")
 
@@ -555,6 +644,72 @@ class TairaDevnetTests(unittest.TestCase):
             module.up(args, run=runtime.run, request=runtime.request)
         self.assertEqual(runtime.commands, [])
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "running cohort\n")
+
+    def test_cargo_fast_no_sccache_build_removes_conflicting_environment(self) -> None:
+        target_dir = self.root / "target"
+        bin_dir = target_dir / "local-release"
+        bin_dir.mkdir(parents=True)
+        for name in ("kagami", "iroha3d", "iroha"):
+            executable(bin_dir / name)
+        args = module.parser().parse_args(
+            [
+                "--dir",
+                str(self.root / "state"),
+                "up",
+                "--target-dir",
+                str(target_dir),
+            ]
+        )
+        calls: list[dict[str, object]] = []
+
+        def run(
+            command: list[str] | tuple[str, ...],
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            calls.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CARGO_INCREMENTAL": "1",
+                "RUSTC_WRAPPER": "sccache",
+                "TAIRA_TEST_ENV_RETAINED": "yes",
+            },
+        ):
+            module.binary_paths(args, run)
+
+        build_env = calls[0]["env"]
+        self.assertIsInstance(build_env, dict)
+        assert isinstance(build_env, dict)
+        self.assertNotIn("CARGO_INCREMENTAL", build_env)
+        self.assertNotIn("RUSTC_WRAPPER", build_env)
+        self.assertEqual(build_env["TAIRA_TEST_ENV_RETAINED"], "yes")
+
+    def test_compiled_surface_preflight_precedes_destructive_replacement(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        sentinel = target / "preserve-before-preflight"
+        sentinel.write_text("live cohort\n", encoding="utf-8")
+        runtime.help_options.remove("--terminal-status")
+        stop_count = sum(
+            command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+            for command in runtime.commands
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "compiled CLI surface"):
+            module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "live cohort\n")
+        self.assertEqual(
+            sum(
+                command[0] == "/bin/bash" and command[1].endswith("/stop.sh")
+                for command in runtime.commands
+            ),
+            stop_count,
+        )
+        self.assertEqual(len(runtime.process_commands), module.PEER_COUNT)
 
     def test_http_request_accepts_plain_text_health_response(self) -> None:
         class PlainResponse:
@@ -734,6 +889,15 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(names(config_root, "*.py"), set())
         self.assertFalse((REPO_ROOT / "defaults" / "kagami" / "iroha3-taira").exists())
+        self.assertFalse(
+            (
+                REPO_ROOT
+                / "crates"
+                / "iroha_kagami"
+                / "examples"
+                / "taira_kaigi_localnet.rs"
+            ).exists()
+        )
         self.assertEqual(names(REPO_ROOT / ".github" / "workflows"), set())
         self.assertEqual(names(REPO_ROOT / "ci"), set())
         self.assertEqual(

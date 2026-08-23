@@ -216,7 +216,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
     CertifiedFetchCapacityPending,
     /// Ordinary certified-Fetch Phase A queued one durable body persistence command.
     CertifiedFetchQueued,
-    /// Ordinary certified-Fetch Phase A retained the queue occurrence for retry.
+    /// Certified-response classification or Phase A retained the queue occurrence for retry.
     CertifiedFetchRetry,
     /// Existing Ready lifecycle work retained priority over ordinary Fetch Phase A.
     CertifiedFetchCompetingReady,
@@ -1518,7 +1518,21 @@ impl LaunchedProductionLifecycleV1 {
         let expected_context = lifecycle_context_for_ingress(self.executor.context());
         let contextual = match cut.narrow_to_lifecycle(expected_context) {
             Ok(contextual) => contextual,
-            Err((_error, retained)) => {
+            Err((FairIngressQueueCutError::QueueCutChanged, retained)) => {
+                iroha_logger::debug!(
+                    "certified-response fair-ingress ownership changed during narrowing; retrying"
+                );
+                drop(retained);
+                drop(runner);
+                return ProductionLifecycleIngressTurnV1::Selected(
+                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                );
+            }
+            Err((error, retained)) => {
+                iroha_logger::error!(
+                    ?error,
+                    "certified-response fair-ingress cut failed structural narrowing"
+                );
                 self.close_output_for_restart();
                 drop(retained);
                 drop(runner);
@@ -1542,6 +1556,16 @@ impl LaunchedProductionLifecycleV1 {
                     .classify_selected_certified_body_response_owner(&cut)
                 {
                     Ok(owner) => owner,
+                    Err(LifecycleIngressSelectorError::QueueCutChanged) => {
+                        iroha_logger::debug!(
+                            "certified-response fair-ingress census changed during ownership classification; retrying"
+                        );
+                        drop(cut);
+                        drop(runner);
+                        return ProductionLifecycleIngressTurnV1::Selected(
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                        );
+                    }
                     Err(error) => {
                         let reason = error.detail();
                         iroha_logger::error!(
@@ -1570,6 +1594,15 @@ impl LaunchedProductionLifecycleV1 {
                     SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner => {
                         let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
                             Ok(selector) => selector,
+                            Err(LifecycleIngressSelectorError::QueueCutChanged) => {
+                                iroha_logger::debug!(
+                                    "ordinary certified-Fetch fair-ingress census changed during selector capture; retrying"
+                                );
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                                );
+                            }
                             Err(error) => {
                                 let reason = error.detail();
                                 iroha_logger::error!(
@@ -1591,6 +1624,15 @@ impl LaunchedProductionLifecycleV1 {
                             .prepare_recovered_decision_fetch_from_selected_cut(cut)
                         {
                             Ok(selector) => selector,
+                            Err(LifecycleIngressSelectorError::QueueCutChanged) => {
+                                iroha_logger::debug!(
+                                    "recovered Fetch fair-ingress census changed during selector preparation; retrying"
+                                );
+                                drop(runner);
+                                return ProductionLifecycleIngressTurnV1::Selected(
+                                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+                                );
+                            }
                             Err(error) => {
                                 let reason = error.detail();
                                 iroha_logger::error!(

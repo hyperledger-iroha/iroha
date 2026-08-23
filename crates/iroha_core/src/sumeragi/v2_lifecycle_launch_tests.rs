@@ -1256,6 +1256,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "&mut self.launched.executor",
             "&mut self.launched.services",
             "local_proposal",
+            "fn close_runner_ingress_for_finalized_drain(",
+            "receiver: &Arc<FairV2Ingress>",
+            "self.runner_activation.close_ingress(receiver)?",
+            "Arc::ptr_eq(",
         ],
     );
     assert_forbidden_source_tokens(
@@ -1364,6 +1368,13 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
             "if ready_to_finish && !rollover_ready",
+            "if rollover_ready",
+            "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
+            "let drained_terminal_ingress = activated.with_runner_runtime(\n                &mut active_runner,\n                |_owner, executor, services, _local_proposal| {\n                    let drained = drain_decided_lane_recovery_ingress(",
+            "if drained_terminal_ingress",
+            "continue;",
+            "ensure_closed_drained_cut()",
+            "finalize_lifecycle_height(",
         ],
     );
 
@@ -1775,6 +1786,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "ingress_ready: Arc<AtomicBool>",
             "block_ingress: Arc<FairV2Ingress>",
             "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+            "fn close_ingress(",
+            "Finalized rollover uses this to establish a finite ingress cut",
             "fn retire(",
             "retire_lifecycle_runner_ingress(&self.ingress_ready, &self.block_ingress, launched_ingress)",
             "fn retire_lifecycle_runner_ingress(",
@@ -1799,9 +1812,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_token_count(
         activated_runner,
         "self.ingress_ready.store(false, Ordering::Release)",
-        1,
+        2,
     );
-    assert_source_token_count(activated_runner, "self.block_ingress.close()", 1);
+    assert_source_token_count(activated_runner, "self.block_ingress.close()", 2);
     let helper = &activated_runner
         [source_token_position(activated_runner, "fn retire_lifecycle_runner_ingress(")..];
     assert_source_tokens_in_order(
@@ -2556,6 +2569,110 @@ fn authenticated_current_serve_queue_refresh_retries_without_closing_output() {
             "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ],
     );
+}
+
+#[test]
+fn certified_response_queue_refresh_retries_without_closing_output() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let response_path = source_region(
+        driver,
+        "if !selected_ingress_is_certified_body_response",
+        "fn drive_recovered_ingress_selector",
+    );
+
+    let narrowing = source_region(
+        response_path,
+        "let expected_context = lifecycle_context_for_ingress(self.executor.context());",
+        "match contextual",
+    );
+    let narrowing_retry = source_region(
+        narrowing,
+        "Err((FairIngressQueueCutError::QueueCutChanged, retained))",
+        "Err((error, retained))",
+    );
+    assert_source_tokens_in_order(
+        narrowing_retry,
+        &[
+            "drop(retained);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!narrowing_retry.contains("close_output_for_restart()"));
+
+    let ownership = source_region(
+        response_path,
+        "let response_owner = match self",
+        "match response_owner",
+    );
+    let ownership_retry = source_region(
+        ownership,
+        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        ownership_retry,
+        &[
+            "drop(cut);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!ownership_retry.contains("close_output_for_restart()"));
+
+    let ordinary = source_region(
+        response_path,
+        "SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner",
+        "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
+    );
+    let ordinary_retry = source_region(
+        ordinary,
+        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        ordinary_retry,
+        &[
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!ordinary_retry.contains("close_output_for_restart()"));
+
+    let recovered = source_region(
+        response_path,
+        "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
+        "self.drive_recovered_ingress_selector(selector, runner)",
+    );
+    let recovered_retry = source_region(
+        recovered,
+        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        recovered_retry,
+        &[
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
+        ],
+    );
+    assert!(!recovered_retry.contains("close_output_for_restart()"));
+
+    for structural_failure in [
+        source_region(narrowing, "Err((error, retained))", "};"),
+        source_region(ownership, "Err(error)", "};"),
+        source_region(ordinary, "Err(error)", "};"),
+        source_region(recovered, "Err(error)", "};"),
+    ] {
+        assert_source_tokens_in_order(
+            structural_failure,
+            &[
+                "close_output_for_restart();",
+                "drop(runner);",
+                "ProductionLifecycleIngressSelectionV1::RestartRequired",
+            ],
+        );
+    }
 }
 
 #[test]

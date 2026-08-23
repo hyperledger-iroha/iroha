@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,42 @@ MAX_LOG_TAIL_BYTES = 64 * 1024
 MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 MAX_MARKER_BYTES = 128
 MAX_PID_FILE_BYTES = 32
+BUILD_ENV_REMOVALS = ("CARGO_INCREMENTAL", "RUSTC_WRAPPER")
+
+# Keep this inventory beside the commands that consume the surfaces.  A
+# successful `--help` is not sufficient: clap still accepts an existing parent
+# command when one of the leaf options used below has drifted away.
+CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "kagami",
+        ("localnet",),
+        (
+            "--out-dir",
+            "--fresh-random-keys",
+            "--sora-profile",
+            "--consensus-mode",
+            "--peers",
+            "--bind-host",
+            "--public-host",
+            "--chain-id",
+            "--base-api-port",
+            "--base-p2p-port",
+            "--block-cadence-ms",
+        ),
+    ),
+    (
+        "iroha3d",
+        (),
+        ("--sora", "--config", "--genesis-manifest-json", "--check-config"),
+    ),
+    ("iroha", (), ("--config", "--machine", "--output-format", "--fee-payer")),
+    ("iroha", ("tx", "ping"), ("--no-wait", "--log-level", "--msg")),
+    (
+        "iroha",
+        ("tx", "status"),
+        ("--hash", "--wait", "--timeout-ms", "--poll-interval-ms", "--terminal-status"),
+    ),
+)
 
 
 class DevnetError(RuntimeError):
@@ -315,10 +352,23 @@ def read_peer_pid(path: Path) -> int:
 
 
 def command_uses_config(command: str, config: Path) -> bool:
-    """Return whether one process command line names the exact peer config."""
+    """Return whether one daemon argv owns exactly one exact peer config."""
 
-    value = str(config)
-    return f"--config {value}" in command or f"--config={value}" in command
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not argv or Path(argv[0]).name != "iroha3d":
+        return False
+    configs: list[str] = []
+    for index, argument in enumerate(argv):
+        if argument == "--config":
+            if index + 1 >= len(argv):
+                return False
+            configs.append(argv[index + 1])
+        elif argument.startswith("--config="):
+            configs.append(argument.removeprefix("--config="))
+    return configs == [str(config)]
 
 
 def require_running_cohort(target: Path, run: Runner) -> None:
@@ -326,6 +376,9 @@ def require_running_cohort(target: Path, run: Runner) -> None:
 
     pids: list[int] = []
     for index in range(PEER_COUNT):
+        config = target / f"peer{index}.toml"
+        if config.is_symlink() or not config.is_file():
+            fail(f"generated peer config is missing or unsafe: {config}")
         pids.append(read_peer_pid(target / f"peer{index}.pid"))
     if len(set(pids)) != PEER_COUNT:
         fail("generated peer PID files do not identify four distinct processes")
@@ -374,11 +427,26 @@ def stop_network(root: Path, run: Runner, *, tolerate_failure: bool = False) -> 
             return
         if not target.is_dir():
             fail(f"network path is not a directory: {target}")
+        pid_paths = [target / f"peer{index}.pid" for index in range(PEER_COUNT)]
+        present_pid_paths = [
+            path for path in pid_paths if path.exists() or path.is_symlink()
+        ]
+        if not present_pid_paths:
+            require_stopped_cohort(target, run)
+            return
+        if len(present_pid_paths) != PEER_COUNT:
+            fail(
+                "Taira teardown left peer PID files: "
+                + ", ".join(path.name for path in present_pid_paths)
+            )
+        # Old Kagami bundles can carry executable stop scripts.  Do not hand
+        # one process-control authority until all four PID files, daemon
+        # argvs, and exact config paths prove that the live cohort is ours.
+        require_running_cohort(target, run)
         stop = target / "stop.sh"
-        if stop.is_symlink():
-            fail(f"refusing symlinked stop script: {stop}")
-        if stop.is_file():
-            run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
+        if stop.is_symlink() or not stop.is_file():
+            fail(f"generated Taira network is incomplete: missing safe {stop.name}")
+        run(["/bin/bash", str(stop)], cwd=stop.parent, timeout=30)
         require_stopped_cohort(target, run)
     except (DevnetError, subprocess.TimeoutExpired) as error:
         if not tolerate_failure:
@@ -429,6 +497,15 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
     ]
 
 
+def cargo_build_env() -> dict[str, str]:
+    """Return an environment consistent with ``cargo_fast --no-sccache``."""
+
+    env = os.environ.copy()
+    for name in BUILD_ENV_REMOVALS:
+        env.pop(name, None)
+    return env
+
+
 def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path]:
     """Build or locate Kagami, iroha3d, and iroha from one profile directory."""
 
@@ -440,6 +517,7 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
         run(
             cargo_build_command(args.profile, target_dir),
             cwd=REPO_ROOT,
+            env=cargo_build_env(),
             timeout=args.build_timeout_seconds,
             capture_output=False,
         )
@@ -451,6 +529,43 @@ def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Pat
     return tuple(
         require_executable(bin_dir / name) for name in ("kagami", "iroha3d", "iroha")
     )
+
+
+def help_has_option(help_text: str, option: str) -> bool:
+    """Match one complete long option without accepting a longer lookalike."""
+
+    return re.search(rf"(?<![\w-]){re.escape(option)}(?![\w-])", help_text) is not None
+
+
+def preflight_cli_surfaces(
+    kagami: Path,
+    irohad: Path,
+    iroha: Path,
+    run: Runner,
+    *,
+    full_doctor: bool,
+) -> None:
+    """Prove every compiled command used by ``up`` before replacing a cohort."""
+
+    binaries = {"kagami": kagami, "iroha3d": irohad, "iroha": iroha}
+    surfaces = list(CLI_SURFACES)
+    if full_doctor:
+        surfaces.append(
+            ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
+        )
+    for binary_name, subcommands, required_options in surfaces:
+        command = [str(binaries[binary_name]), *subcommands, "--help"]
+        completed = run(command, cwd=REPO_ROOT, timeout=20)
+        help_text = "\n".join((completed.stdout or "", completed.stderr or ""))
+        missing = [
+            option for option in required_options if not help_has_option(help_text, option)
+        ]
+        if missing:
+            surface = " ".join((binary_name, *subcommands))
+            fail(
+                f"compiled CLI surface `{surface}` is missing current options: "
+                + ", ".join(missing)
+            )
 
 
 def generate_network(
@@ -571,6 +686,36 @@ def read_height(root: str, request: Request) -> int:
     return payload
 
 
+def check_sumeragi_status(root: str, request: Request) -> None:
+    """Fail on authoritative restart or watchdog blockers when JSON is exposed."""
+
+    url = root + "v1/sumeragi/status"
+    status, payload = request(url, None)
+    # Operator status can be protected or unavailable during early startup.
+    # Health, readiness, height convergence, and the signed smoke remain the
+    # mandatory portable surface; inspect the richer status whenever Torii
+    # actually exposes its current JSON representation.
+    if status != 200:
+        return
+    if not isinstance(payload, dict):
+        fail(f"invalid Sumeragi status response from {root} (HTTP {status})")
+    restart_required = payload.get("restart_required")
+    if not isinstance(restart_required, bool):
+        fail(f"Sumeragi status omitted boolean restart_required at {root}")
+    if restart_required:
+        fail(f"Sumeragi consensus requires restart at {root}")
+    liveness = payload.get("liveness")
+    if not isinstance(liveness, dict):
+        fail(f"Sumeragi status omitted liveness diagnostics at {root}")
+    blocker = liveness.get("blocker")
+    if blocker is None:
+        return
+    blocker_name = blocker.get("blocker") if isinstance(blocker, dict) else None
+    if not isinstance(blocker_name, str) or not blocker_name:
+        fail(f"Sumeragi status returned an invalid liveness blocker at {root}")
+    fail(f"Sumeragi liveness blocker at {root}: {blocker_name}")
+
+
 def wait_for_cluster(
     roots: Sequence[str],
     timeout: float,
@@ -583,6 +728,12 @@ def wait_for_cluster(
     deadline = time.monotonic() + timeout
     last = "not reachable"
     while time.monotonic() < deadline:
+        # These probes ignore an unavailable/protected status route but make a
+        # published fail-stop or watchdog blocker terminal immediately.  Keep
+        # them outside the retryable readiness block so a serious consensus
+        # diagnosis is not hidden behind a generic convergence timeout.
+        for root in roots:
+            check_sumeragi_status(root, request)
         try:
             for root in roots:
                 for endpoint in ("health", "readyz"):
@@ -673,6 +824,13 @@ def check_mcp(root: str, request: Request) -> None:
         fail(f"MCP tools/list returned no tools at {url} (HTTP {status})")
 
 
+def check_all_mcp(roots: Sequence[str], request: Request) -> None:
+    """Verify the live MCP handshake and curated tools on every validator."""
+
+    for root in roots:
+        check_mcp(root, request)
+
+
 def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
     """Run the broad public-product diagnostic only when explicitly requested."""
 
@@ -726,7 +884,17 @@ def up(
     """Replace the disposable network and prove one signed transaction finalizes."""
 
     root = managed_root(args.dir, create=True)
+    target = network_dir(root)
+    if target.is_symlink():
+        fail(f"refusing symlinked network directory: {target}")
     kagami, irohad, iroha = binary_paths(args, run)
+    preflight_cli_surfaces(
+        kagami,
+        irohad,
+        iroha,
+        run,
+        full_doctor=args.full_doctor,
+    )
     target = reset_network(root, run)
     roots = torii_roots(args.base_api_port)
     try:
@@ -820,7 +988,7 @@ def up(
         require_applied_transaction(waited, transaction_hash)
         print("Signed smoke reached Applied; waiting for four-peer convergence...", flush=True)
         final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
-        check_mcp(roots[0], request)
+        check_all_mcp(roots, request)
         if args.full_doctor:
             run_full_doctor(target, iroha, roots[0], run)
     except (DevnetError, subprocess.TimeoutExpired, KeyboardInterrupt) as error:
@@ -862,7 +1030,7 @@ def check(
     require_bundle_identity(target, roots)
     require_running_cohort(target, run)
     heights = wait_for_cluster(roots, args.timeout_seconds, request)
-    check_mcp(roots[0], request)
+    check_all_mcp(roots, request)
     if args.full_doctor:
         iroha = require_executable(args.iroha.expanduser().absolute())
         run_full_doctor(target, iroha, roots[0], run)

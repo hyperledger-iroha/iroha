@@ -293,6 +293,23 @@ impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1 {
 }
 
 impl ProductionLifecycleActivatedRunnerAuthorityV1 {
+    /// Close physical admission without consuming the activated runner owner.
+    ///
+    /// Finalized rollover uses this to establish a finite ingress cut, drain
+    /// every already-admitted terminal recovery occurrence, and only then
+    /// consume the authority through [`Self::retire`].
+    pub(in crate::sumeragi) fn close_ingress(
+        &self,
+        launched_ingress: &Arc<FairV2Ingress>,
+    ) -> Result<(), V2RunnerError> {
+        self.ingress_ready.store(false, Ordering::Release);
+        self.block_ingress.close();
+        if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
+            return Err(V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        Ok(())
+    }
+
     /// Consume the exact readiness owner before lifecycle gate retirement.
     pub(in crate::sumeragi) fn retire(
         self,

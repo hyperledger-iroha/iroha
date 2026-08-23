@@ -71,6 +71,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
+    "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
     "crates/iroha_core/src/snapshot.rs",
     "crates/iroha_core/src/state.rs",
     "crates/iroha_core/src/kura.rs",
@@ -78,7 +79,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 74
+) == 75
 
 
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
@@ -359,6 +360,69 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);",
         "let finalization_ready = ready_to_finish;",
         "runner lifecycle finalization preflight must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "executor.acknowledge_runner_decision_cleanup(",
+        "executor.acknowledge_runner_decision_cleanup_removed(",
+        "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "if !finalized_ingress_closed {",
+        "if false {",
+        "ordinary finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "if drained_terminal_ingress {",
+        "if false {",
+        "ordinary finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
+        "receiver\n                .ensure_closed_drained_cut()",
+        "receiver\n                .is_empty()",
+        "ordinary finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn close_runner_ingress_for_finalized_drain(",
+        "self.runner_activation.close_ingress(receiver)?;",
+        "let _ = receiver;",
+        "ordinary finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn run_pending_active_height(",
+        "if !finalized_ingress_closed {",
+        "if false {",
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn run_pending_active_height(",
+        "if drained_terminal_ingress {",
+        "if false {",
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "fn run_pending_active_height(",
+        "receiver\n            .ensure_closed_drained_cut()",
+        "receiver\n            .is_empty()",
+        "pending-Kura finalization must close ingress and finitely drain terminal recovery before consuming finalized rollover",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "fn close_runner_ingress_for_finalized_drain(",
+        "self.runner_activation.close_ingress(receiver)?;",
+        "let _ = receiver;",
+        "pending-Kura finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
@@ -694,9 +758,9 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
         "fn permits_decided_lane_recovery_ingress(",
-        "matches!(self, Self::ApplyTerminalSettled)",
-        "false",
-        "terminal-only decided-lane recovery ingress authority",
+        "Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled",
+        "Self::ApplyTerminalSettled",
+        "decided Apply barrier recovery ingress authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
@@ -725,6 +789,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "if producer_claim.apply_terminal_settled() {",
         "if producer_claim.requires_yield() {",
         "durable post-Apply drain cut",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+        "fn settled_apply_output_drain_disposition(",
+        "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)",
+        "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
+        "terminal Apply retained-output settlement",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
@@ -968,41 +1039,65 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn prepare_decided_lane_recovery_ingress(",
         "if request.round.height == active_height {\n"
-        "        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;\n"
+        "        return DecidedLaneRecoveryIngressPreparation::CurrentServe;\n"
         "    }",
         "if request.round.height == active_height {\n"
         "        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;\n"
         "    }",
-        "terminal recovery classifies current Serve as retained",
+        "terminal recovery classifies exact current Serve for guarded service",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn authorize_decided_lane_recovery_drain(",
-        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
-        "            DecidedLaneRecoveryDrainDecision::Retain\n"
+        "DecidedLaneRecoveryIngressPreparation::CurrentServe => {\n"
+        "            DecidedLaneRecoveryDrainAuthorization::CurrentServe\n"
         "        }",
-        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
-        "            DecidedLaneRecoveryDrainDecision::Authorized(\n"
-        "                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
-        "            )\n"
+        "DecidedLaneRecoveryIngressPreparation::CurrentServe => {\n"
+        "            DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire\n"
         "        }",
-        "terminal recovery denies current-Serve dequeue authority",
+        "terminal recovery authorizes exact current-Serve service",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn drain_decided_lane_recovery_ingress(",
-        "DecidedLaneRecoveryDrainDecision::Retain => false,",
-        "DecidedLaneRecoveryDrainDecision::Retain => true,",
-        "live terminal drain retains current Serve before checked dequeue",
+        "fn permits_height(",
+        "Self::Current => request == active,",
+        "Self::Current => request <= active,",
+        "terminal certified Serve exact height scope",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn authorize_decided_lane_recovery_drain(",
-        ") -> DecidedLaneRecoveryDrainDecision {\n    match preparation {",
-        ") -> DecidedLaneRecoveryDrainDecision {\n"
-        "    let _legacy = CertifiedServeAdmission;\n"
-        "    match preparation {",
-        "terminal recovery cannot mint coordinator-owned Serve authority",
+        "fn permits_subject(",
+        "Self::Current => request == decided,",
+        "Self::Current => true,",
+        "terminal current Serve exact decided-subject scope",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn commit_certified_serve(",
+        "if !scope.permits_height(request.round.height, self.executor.context().height) {",
+        "if false {",
+        "terminal certified Serve guarded durable response",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn commit_certified_serve(",
+        "mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;",
+        "let _ = &ingress_ownership;",
+        "terminal certified Serve guarded durable response",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn commit_certified_serve(",
+        "|| mark_leader_wire_volatile(self.receiver, &terminal_ownership),",
+        "|| Ok(()),",
+        "terminal certified Serve guarded durable response",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(",
+        "committer.commit_current_serve()?;",
+        "committer.commit_historical_serve()?;",
+        "terminal current Serve binds ownership before guarded service",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -1345,7 +1440,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn drain_decided_lane_recovery_ingress(",
         "commit_decided_lane_recovery_drain(authorization, &mut committer)",
         "commit_unchecked_decided_lane_recovery_drain(authorization, &mut committer)",
-        "live terminal drain retains current Serve before checked dequeue",
+        "live terminal drain directly serves authorized current recovery",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -2751,7 +2846,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 364
+) == 378
 
 
 @pytest.mark.parametrize(

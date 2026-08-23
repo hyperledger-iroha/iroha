@@ -114,6 +114,7 @@ fn bound_test_apply_ownership(
 #[derive(Default)]
 struct FakeRuntime {
     steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
+    pacemaker_steps: VecDeque<Result<Option<RuntimeStep<AdapterEffect>>, String>>,
     completions: Vec<RuntimeCompletion>,
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
@@ -312,6 +313,25 @@ impl EffectRuntime for FakeRuntime {
         now: Instant,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step_effects(now)
+    }
+    fn step_pacemaker_effects(
+        &mut self,
+        _now: Instant,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        assert!(!self.panic_step, "model safety-WAL pacemaker step panic");
+        if self.scheduler_ownership_ready {
+            return Err("fake runtime scheduler owner was not consumed".to_owned());
+        }
+        let step = self.pacemaker_steps.pop_front().unwrap_or(Ok(None));
+        if matches!(&step, Ok(Some(RuntimeStep::Advanced(_))))
+            && let Some(decision) = self.decision_on_next_step.take()
+        {
+            self.decided_body = Some(decision);
+        }
+        if matches!(&step, Ok(Some(_))) && !self.omit_scheduler_ownership {
+            self.scheduler_ownership_ready = true;
+        }
+        step
     }
     fn take_effect_ownership(
         &mut self,

@@ -764,6 +764,22 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         self.launched.owner.settle_producer_turn_advanced(attempted)
     }
 
+    /// Close new physical ingress while retaining the no-clock lifecycle for
+    /// a finite terminal-recovery drain before finalized rollover.
+    pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+        &self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        receiver: &Arc<FairV2Ingress>,
+    ) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
+        self.runner_activation.close_ingress(receiver)?;
+        if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+            return Err(
+                crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
+            );
+        }
+        Ok(())
+    }
+
     /// Consume a live interrupted-tip height during orderly operator shutdown.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_clean_shutdown(

@@ -228,7 +228,7 @@ let mut next_block_sync_attempt =
             lifecycle_runner_path,
             active_height,
             """
-let discovery_was_outstanding = if apply_completion_barrier {
+let discovery_was_outstanding = if lane_only_completion_barrier {
     block_sync_request.is_some()
 } else {
     activated.with_runner_runtime(

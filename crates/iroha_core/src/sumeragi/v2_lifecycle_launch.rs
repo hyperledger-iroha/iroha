@@ -2222,6 +2222,20 @@ impl ActivatedProductionLifecycleV1 {
         self.launched.ready_for_finalized_rollover()
     }
 
+    /// Close new physical ingress while retaining the activated lifecycle for
+    /// a finite terminal-recovery drain before finalized rollover.
+    pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
+        &self,
+        _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        receiver: &Arc<FairV2Ingress>,
+    ) -> Result<(), super::super::v2_runner::V2RunnerError> {
+        self.runner_activation.close_ingress(receiver)?;
+        if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
+            return Err(super::super::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch);
+        }
+        Ok(())
+    }
+
     /// Consume an active, possibly non-final height for orderly operator exit.
     ///
     /// Durable WAL, body, and lifecycle rows remain untouched for cold replay.
