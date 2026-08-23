@@ -2276,14 +2276,15 @@ fn quotient_coefficient_intervals<F>(
 }
 
 fn aggregate_slope_coefficient_intervals() -> [IntegerInterval; 2 * LIMBS - 1] {
-    let limb_maxima: [BigInt; LIMBS] = LIMB_WIDTHS.map(|bits| (BigInt::from(1) << bits) - 1);
+    let limb_maxima: [BigInt; LIMBS] =
+        LIMB_WIDTHS.map(|bits| (BigInt::from(1) << bits) - BigInt::from(1));
     let products: [BigInt; 2 * LIMBS - 1] = std::array::from_fn(|coefficient| {
         (0..LIMBS)
             .filter_map(|left| {
                 coefficient
                     .checked_sub(left)
                     .filter(|right| *right < LIMBS)
-                    .map(|right| &limb_maxima[left] * &limb_maxima[right])
+                    .map(|right| limb_maxima[left].clone() * &limb_maxima[right])
             })
             .fold(BigInt::from(0), |sum, term| sum + term)
     });

@@ -28,12 +28,14 @@ macro_rules! norito_json {
 }
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
+#[cfg(test)]
 use halo2_proofs::{
+    SerdeFormat,
     halo2curves::{
         ff::PrimeField as _,
         pasta::{EqAffine as Halo2Curve, Fp as Halo2Scalar},
     },
-    plonk::{create_proof, keygen_pk, keygen_vk},
+    plonk::{VerifyingKey, create_proof, keygen_pk, keygen_vk},
     poly::commitment::ParamsProver,
     poly::ipa::{
         commitment::{IPACommitmentScheme, ParamsIPA},
@@ -56,6 +58,8 @@ use iroha_core::zk::confidential_v2::{
     self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
     ConfidentialUnshieldOutputV3,
 };
+#[cfg(test)]
+use iroha_core::zk::hash_vk;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
     derive_keyset_from_slice,
@@ -188,6 +192,8 @@ use std::{
 // Production receives the evidence through decoded instructions instead;
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
+use iroha_data_model::proof::VerifyingKeyBox;
+#[cfg(test)]
 use iroha_data_model::{da::types::DaRentQuote, isi::settlement::FxCorridorOracleEvidence};
 use iroha_primitives::{
     json::Json,
@@ -197,10 +203,12 @@ use iroha_primitives::{
         derive_gateway_hosts_with_profile,
     },
 };
+use kaigi_zk::empty_roster_root_hash;
+#[cfg(test)]
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
-    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
-    roster_root_limbs,
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID, KAIGI_ROSTER_CIRCUIT_K,
+    KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1, KaigiRosterJoinCircuit, compute_commitment,
+    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, roster_root_limbs,
 };
 use kotodama_lang::{encoding, instruction, metadata::ProgramMetadata, syscalls};
 use napi::{
@@ -216,6 +224,7 @@ use norito::{
     core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
+#[cfg(test)]
 use rand_core_06::OsRng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, ChunkStoreError, FilePlan, InMemoryPayload,
@@ -277,7 +286,9 @@ use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
-const KAIGI_ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
+#[cfg(test)]
+const KAIGI_VK_REGISTRY_BACKEND: &str = "halo2/ipa";
+#[cfg(test)]
 const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
@@ -937,6 +948,7 @@ fn parse_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     out.copy_from_slice(bytes);
     Ok(out)
 }
+#[cfg(test)]
 fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha-js:kaigi:roster-join:v1");
@@ -976,17 +988,41 @@ fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
     bytes.copy_from_slice(decoded.as_slice());
     Ok(Hash::prehashed(bytes))
 }
+#[cfg(test)]
 fn usize_to_u32_len(len: usize, context: &str) -> u32 {
     u32::try_from(len).unwrap_or_else(|_| panic!("{context} length exceeds u32::MAX"))
 }
+#[cfg(test)]
 fn zk1_append_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
     buf.extend_from_slice(&tag);
     buf.extend_from_slice(&usize_to_u32_len(payload.len(), "zk1 tlv payload").to_le_bytes());
     buf.extend_from_slice(payload);
 }
+#[cfg(test)]
 fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
     zk1_append_tlv(buf, *b"PROF", proof);
 }
+#[cfg(test)]
+fn zk1_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
+    zk1_append_tlv(buf, *b"IPAK", &k.to_le_bytes());
+}
+#[cfg(test)]
+fn zk1_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
+    zk1_append_tlv(buf, *b"CID1", circuit_id.as_bytes());
+}
+#[cfg(test)]
+fn zk1_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Halo2Curve>) {
+    zk1_append_tlv(buf, *b"H2VK", &vk.to_bytes(SerdeFormat::Processed));
+}
+#[cfg(test)]
+fn kaigi_roster_vk_box(verifying_key: &VerifyingKey<Halo2Curve>) -> VerifyingKeyBox {
+    let mut bytes = ZK1_ENVELOPE_PREFIX.to_vec();
+    zk1_append_ipa_k(&mut bytes, KAIGI_ROSTER_CIRCUIT_K);
+    zk1_append_circuit_id(&mut bytes, KAIGI_ROSTER_CANONICAL_CIRCUIT_ID);
+    zk1_append_vk_pasta(&mut bytes, verifying_key);
+    VerifyingKeyBox::new(KAIGI_VK_REGISTRY_BACKEND.to_owned(), bytes)
+}
+#[cfg(test)]
 fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     if columns.is_empty() {
         return;
@@ -1006,7 +1042,8 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     }
     zk1_append_tlv(buf, *b"I10P", payload.as_slice());
 }
-fn build_kaigi_roster_join_proof_bytes(
+#[cfg(test)]
+fn build_kaigi_roster_join_candidate_proof_bytes(
     seed: &[u8],
     roster_root: &Hash,
 ) -> napi::Result<JsKaigiRosterJoinProof> {
@@ -1071,12 +1108,12 @@ fn build_kaigi_roster_join_proof_bytes(
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
-        vk_hash: [0u8; 32],
-        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_DESC.to_vec(),
+        vk_hash: hash_vk(&kaigi_roster_vk_box(&verifying_key)),
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: zk1,
         aux: Vec::new(),
     };
-    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+    let encoded = norito::encode_canonical(&envelope).map_err(|err| {
         napi::Error::new(
             napi::Status::GenericFailure,
             format!("failed to encode Kaigi roster proof envelope: {err}"),
@@ -1089,7 +1126,8 @@ fn build_kaigi_roster_join_proof_bytes(
         proof: Buffer::from(encoded),
     })
 }
-/// Build a Halo2/IPA Kaigi roster-join proof for `ZkRosterV1` joins.
+/// Reject Kaigi roster-join proof construction while the V1 statement lacks
+/// signed-participant binding.
 #[napi(js_name = "buildKaigiRosterJoinProof")]
 #[allow(clippy::needless_pass_by_value)]
 pub fn build_kaigi_roster_join_proof(
@@ -1102,8 +1140,11 @@ pub fn build_kaigi_roster_join_proof(
             "seed must be non-empty",
         ));
     }
-    let roster_root = parse_kaigi_roster_root_hex(roster_root_hex)?;
-    build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
+    let _ = parse_kaigi_roster_root_hex(roster_root_hex)?;
+    Err(napi::Error::new(
+        napi::Status::GenericFailure,
+        "Kaigi ZkRosterV1 proof construction is unavailable until the circuit binds the signed participant authority",
+    ))
 }
 fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
     if seed.len() != 32 {
@@ -14009,17 +14050,35 @@ seiyaku Privacy {
         }
     }
     #[test]
-    fn build_kaigi_roster_join_proof_emits_envelope() {
-        let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
-            .expect("build proof");
+    fn kaigi_roster_join_candidate_builder_emits_strict_envelope() {
+        let proof =
+            build_kaigi_roster_join_candidate_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
+                .expect("build candidate proof");
         assert_eq!(proof.commitment.len(), Hash::LENGTH);
         assert_eq!(proof.nullifier.len(), Hash::LENGTH);
         assert_eq!(proof.roster_root.len(), Hash::LENGTH);
         assert!(!proof.proof.is_empty());
         let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_from_bytes(proof.proof.as_ref()).expect("decode envelope");
+            norito::decode_canonical(proof.proof.as_ref()).expect("decode canonical envelope");
         assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
-        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
+        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1);
+        assert_ne!(envelope.vk_hash, [0u8; Hash::LENGTH]);
+    }
+    #[test]
+    fn public_kaigi_roster_join_builder_fails_closed() {
+        let err = build_kaigi_roster_join_proof(
+            Uint8Array::from(vec![0x42; 32]),
+            Some(hex::encode(<[u8; Hash::LENGTH]>::from(
+                empty_roster_root_hash(),
+            ))),
+        )
+        .err()
+        .expect("production roster proof builder must be unavailable");
+        assert!(
+            err.reason
+                .contains("binds the signed participant authority"),
+            "unexpected error: {err}"
+        );
     }
     #[test]
     fn lane_relay_envelope_sample_uses_checked_validator_generation() {

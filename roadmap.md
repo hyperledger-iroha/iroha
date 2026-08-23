@@ -12,6 +12,44 @@ Completed history lives in [`status.md`](./status.md).
 
 ## ZK algorithm release qualification
 
+- Keep FASTPQ ledger qualification blocked until its proof boundary uses a
+  commitment and transcript with at least 128-bit security. Cross-check the
+  dense-MDS Goldilocks `x^7` permutation against an independent implementation
+  or replace it with a standardized commitment, and produce a quantitative
+  proof for the implemented quadratic-bound FRI schedule. The current catalogue
+  now honestly declares extension degree `1`, zero grinding, and a 32-bit
+  target; that is a diagnostic ceiling, not ledger release qualification.
+- Keep non-null IVM `AXT_VERIFY_DS_PROOF` admission fail closed until the exact
+  source roots and transaction set are matched to an authoritative finalized/QC
+  source-state statement. Before releasing handle-backed remote spend, either
+  make the issuer authentication cover the exact intent, proof, and effective
+  amount or give those facts an independently anchored binding with at least
+  128-bit security; the current handle signature plus roughly 32-bit FASTPQ
+  metadata is not a release authorization boundary.
+- Keep ZK-ACE proving, verification, and activation unavailable until its four
+  public commitment words come from independent domain-separated invocations
+  (or an equivalently strong replacement) with at least 128-bit collision
+  binding. Regenerate the wider AIR schedule, trace domain, masks, FRI profile,
+  profile digest, proof fixtures, and quantitative certificate before removing
+  the fail-closed engine flag.
+- Add an explicit degree bound and bounded-degree terminal polynomial check to
+  private generic native-STARK AIR profiles. `blowup_log2` must affect verified
+  geometry rather than only transcript metadata. Keep the exact-root public
+  Binding profile capped at `n_log2 = 12` in the meantime.
+- Keep BFV public-padding-only native verification disabled until commitments
+  and degree proofs for every hidden trace column are bound into the sampled AIR
+  relation. Continue using governed full-material replay, which reconstructs
+  and exactly matches the complete trace and composition roots.
+- Keep Kaigi `ZkRosterV1` join admission unavailable until a versioned roster
+  circuit binds the canonical signed participant authority (and, if required by
+  the final replay policy, the Kaigi action/session context) as authenticated
+  public input. Regenerate the deterministic verifier key, exact schema, JS/SDK
+  builders, registry fixtures, and front-run/cross-authority negative tests as
+  one profile change. Do not treat the existing arbitrary account witness or a
+  copied NIZK as bearer authorization. Usage proofs and host-signed lifecycle
+  operations are separate and remain valid.
+- Decide whether the currently unreachable
+  `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
 - Once the in-progress Halo2 tree compiles, run the focused native-STARK and
   FASTPQ regressions, then the full workspace test and strict all-target Clippy
   matrices from one settled candidate.
@@ -25239,11 +25277,21 @@ signed ancestor-linked solid-block header proof,
 - Run the candidate and the approved, source-and-lock-authenticated benchmark
   baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
   pinned runner and retain the workflow evidence for the `<=5%` threshold. The
+  workflow now creates a source-, lockfile-, and Criterion-sample-bound JSON
+  receipt, checksums the complete base/candidate Criterion tree, and uploads it
+  with the runner/toolchain record; no accepted run exists yet. The
   unauthenticated July predecessor is not a V1 input and must not be recovered,
   rebuilt, or reintroduced as compatibility evidence. Until the controlled
   workflow completes, no reproducible 5% comparison is claimed.
-- Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
-  .NET 8 environment; `dotnet` is unavailable on this host.
+- Execute `.github/workflows/numeric_v1_calibration.yml` for both mandatory
+  release profiles and retain its attested archives: Apple M1 Ultra
+  (`Mac13,2`, arm64) and AWS Graviton3 `c7g.4xlarge`. The general Kotodama
+  `<=5%` comparison is not a substitute for either Numeric V1 calibration
+  archive, and neither release-profile archive is currently available.
+- The current C# Numeric V1 and contract-manifest SDK gate is complete on
+  .NET SDK 8.0.419 (`80/80`); it is no longer an environment blocker. The
+  remaining release gates are the controlled performance/calibration evidence,
+  current-source native builds, and the cross-platform SDK qualification above.
 
 ## Privacy, ZK, and FHE
 

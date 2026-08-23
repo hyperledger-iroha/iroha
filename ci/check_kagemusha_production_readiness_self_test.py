@@ -529,6 +529,7 @@ report_artifacts.append({'purpose': 'topup_finality_roster', 'file_name': 'topup
     'sha256': 'a' * 64, 'payload_size_bytes': None, 'payload_sha256': None})
 verifier_report = {'status': 'verified', 'envelope_sha256': '1' * 64, 'manifest_body_sha256': '2' * 64, 'candidate_sha256': '3' * 64,
     'qualification_receipt_sha256': '4' * 64, 'qualified_candidate_sha256': '7' * 64,
+    'internal_validation_receipt_sha256': '8' * 64,
     'authenticated_source_seal_projection_sha256': 'b' * 64, 'reviewed_cargo_binary_sha256': 'c' * 64,
     'reviewed_rustc_binary_sha256': 'd' * 64, 'promotion_record_sha256': '6' * 64, 'release_policy_sha256': '5' * 64,
     'generator_binary_sha256': 'e' * 64, 'sealed_candidate_build_report_sha256': 'f' * 64,
@@ -537,11 +538,13 @@ verifier_report = {'status': 'verified', 'envelope_sha256': '1' * 64, 'manifest_
     'recursive_step_verifier_commitment': '9' * 64, 'artifacts': report_artifacts}
 try:
     validate_kagami_verification_report(verifier_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
-        policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64, ios_candidate_sha256='3' * 64)
+        policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64,
+        internal_validation_receipt_sha256='8' * 64, ios_candidate_sha256='3' * 64)
     invalid_report = dict(verifier_report)
     invalid_report['status'] = 'unverified'
     validate_kagami_verification_report(invalid_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
-        policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64, ios_candidate_sha256='3' * 64)
+        policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64,
+        internal_validation_receipt_sha256='8' * 64, ios_candidate_sha256='3' * 64)
 except ValueError as error:
     if 'did not report one verified' not in str(error):
         errors.append(f'authenticated report self-test failed unexpectedly: {error}')
@@ -559,12 +562,21 @@ for field in (
     try:
         validate_kagami_verification_report(mismatched_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
             policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64,
-            ios_candidate_sha256='3' * 64)
+            internal_validation_receipt_sha256='8' * 64, ios_candidate_sha256='3' * 64)
     except ValueError as error:
         if 'differs from the manifest' not in str(error):
             errors.append(f'authenticated report {field} self-test failed unexpectedly: {error}')
     else:
         errors.append(f'self-test failed to reject a mismatched Kagami report {field}')
+try:
+    validate_kagami_verification_report(verifier_report, directory=Path('/release') / ('1' * 64), manifest=report_manifest,
+        policy_sha256='5' * 64, promotion_record_sha256='6' * 64, qualification_receipt_sha256='4' * 64,
+        internal_validation_receipt_sha256='0' * 64, ios_candidate_sha256='3' * 64)
+except ValueError as error:
+    if 'different internal-validation receipt' not in str(error):
+        errors.append(f'internal-validation report binding self-test failed unexpectedly: {error}')
+else:
+    errors.append('self-test failed to reject a mismatched internal-validation receipt report')
 try:
     with tempfile.TemporaryDirectory(prefix='kagemusha-catalog-pin-self-test-') as temporary:
         catalog_root = Path(temporary).resolve(strict=True)
@@ -619,6 +631,9 @@ baseline = {
     MODEL_COMPONENT: read(MODEL_COMPONENT, []),
     MODEL_VERIFIER_COMPONENT: read(MODEL_VERIFIER_COMPONENT, []),
     MODEL_PROMOTION_RECEIPT_COMPONENT: read(MODEL_PROMOTION_RECEIPT_COMPONENT, []),
+    MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT: read(
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT, []
+    ),
     MODEL_CANARY_EVIDENCE_COMPONENT: read(MODEL_CANARY_EVIDENCE_COMPONENT, []),
     MODEL_CANARY_LIVENESS_COMPONENT: read(MODEL_CANARY_LIVENESS_COMPONENT, []),
     MODEL_ISI_OFFLINE: read(MODEL_ISI_OFFLINE, []),
@@ -1259,6 +1274,16 @@ static_mutations = (
         '        unchecked_artifact_input_size(\n            bytes,\n            KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES,',
         'reject an unbounded promotion reservation decoder',
         ('reservation decode',)),
+    (MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        '        self.body.validate()?;\n        self.signature',
+        '        self.signature',
+        'reject an internal-validation receipt without signed-body validation',
+        ('internal-validation receipt canonical signature/body validation',)),
+    (MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        '            "final_release_inventory_is_exact_and_includes_both_receipts",',
+        '            "retired_final_release_inventory_test",',
+        'reject a stale internal-validation final-inventory command',
+        ('exact internal-validation final-inventory command',)),
     (MODEL_CANARY_EVIDENCE_COMPONENT,
         'verify_authorization_signature(\n            &self.signature,',
         'unchecked_authorization_signature(\n            &self.signature,',
@@ -2169,6 +2194,11 @@ static_mutations = (
         '',
         'reject an unbounded internal-validation receipt',
         ('bounded opaque internal-validation receipt staging',)),
+    (READINESS,
+        '        raise ValueError("Kagami verified a different internal-validation receipt")',
+        '        pass',
+        'reject a verifier report that ignores the staged internal-validation receipt',
+        ('internal-validation report digest binding',)),
     (KAGEMUSHA_PROMOTION_PUBLISHER_COMPONENT,
         '[(name, identity)] if valid_temp_name(name) => {',
         '[(name, identity)] if name.starts_with(TEMP_PREFIX) => {',

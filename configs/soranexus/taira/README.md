@@ -56,6 +56,11 @@ generated local endpoint. It uses the same three standard binaries as the
 default devnet and requires no Inrou workspace or SoraFS preseed. The
 first-release devnet interface has no `--inrou-canary-dir` option.
 
+The dedicated daemon's config validation, help, and version commands are
+offline introspection surfaces: they never open or consume the inherited
+runtime-signer descriptor. Every node-starting invocation still requires the
+exact descriptor and compiled Taira profile.
+
 Use already-built binaries when iterating on orchestration:
 
 ```bash

@@ -451,15 +451,6 @@ function ensureSm2Native(native) {
   return native;
 }
 
-function ensureKaigiRosterNative(native) {
-  if (!native || typeof native.buildKaigiRosterJoinProof !== "function") {
-    throw new Error(
-      "Kaigi roster proof helper unavailable; build iroha_js_host with `npm run build:native` before using privacy-mode Kaigi joins",
-    );
-  }
-  return native;
-}
-
 function ensureConfidentialV2Native(native, operation) {
   if (!native || typeof native[operation] !== "function") {
     throw new Error(
@@ -570,9 +561,9 @@ export function verifySm2(message, signature, publicKey, distid) {
 }
 
 /**
- * Build the proof artefacts required for a `Kaigi::JoinKaigi` `ZkRosterV1` join.
+ * Reject roster proof construction while `ZkRosterV1` lacks signed-participant binding.
  * @param {{seed: ArrayBufferView | ArrayBuffer | Buffer, rosterRootHex?: string | null}} options
- * @returns {{commitment: Buffer, nullifier: Buffer, rosterRoot: Buffer, proof: Buffer, commitmentHex: string, nullifierHex: string, rosterRootHex: string, proofBase64: string}}
+ * @returns {never}
  */
 export function buildKaigiRosterJoinProof(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -582,31 +573,9 @@ export function buildKaigiRosterJoinProof(options) {
   if (seed.length === 0) {
     throw new Error("seed must not be empty");
   }
-  const native = ensureKaigiRosterNative(resolveNativeBinding());
-  const result = native.buildKaigiRosterJoinProof(
-    seed,
-    options.rosterRootHex ?? options.roster_root_hex ?? null,
+  throw new Error(
+    "Kaigi ZkRosterV1 proof construction is unavailable until the circuit binds the signed participant authority",
   );
-  const commitment = Buffer.from(result.commitment);
-  const nullifier = Buffer.from(result.nullifier);
-  const rosterRoot = Buffer.from(result.rosterRoot ?? result.roster_root);
-  const proof = Buffer.from(result.proof);
-  if (commitment.length !== 32 || nullifier.length !== 32 || rosterRoot.length !== 32) {
-    throw new Error("native Kaigi roster proof helper returned invalid digest lengths");
-  }
-  if (proof.length === 0) {
-    throw new Error("native Kaigi roster proof helper returned an empty proof");
-  }
-  return {
-    commitment,
-    nullifier,
-    rosterRoot,
-    proof,
-    commitmentHex: commitment.toString("hex"),
-    nullifierHex: nullifier.toString("hex"),
-    rosterRootHex: rosterRoot.toString("hex"),
-    proofBase64: proof.toString("base64"),
-  };
 }
 
 /**

@@ -1021,10 +1021,10 @@ __device__ __forceinline__ Bn254Value bn254_to_canonical(const Bn254Value& value
     return out;
 }
 
-__device__ __forceinline__ uint64_t poseidon_pow5(uint64_t x) {
+__device__ __forceinline__ uint64_t poseidon_pow7(uint64_t x) {
     uint64_t x2 = f_mul(x, x);
     uint64_t x4 = f_mul(x2, x2);
-    return f_mul(x4, x);
+    return f_mul(f_mul(x4, x2), x);
 }
 
 __device__ void poseidon_apply_mds(uint64_t state[POSEIDON_STATE_WIDTH]) {
@@ -1046,7 +1046,7 @@ __device__ void poseidon_full_round(
     const uint64_t rc[POSEIDON_STATE_WIDTH]
 ) {
     for (unsigned int idx = 0; idx < POSEIDON_STATE_WIDTH; ++idx) {
-        state[idx] = poseidon_pow5(f_add(state[idx], rc[idx]));
+        state[idx] = poseidon_pow7(f_add(state[idx], rc[idx]));
     }
     poseidon_apply_mds(state);
 }
@@ -1058,7 +1058,7 @@ __device__ void poseidon_partial_round(
     for (unsigned int idx = 0; idx < POSEIDON_STATE_WIDTH; ++idx) {
         state[idx] = f_add(state[idx], rc[idx]);
     }
-    state[0] = poseidon_pow5(state[0]);
+    state[0] = poseidon_pow7(state[0]);
     poseidon_apply_mds(state);
 }
 

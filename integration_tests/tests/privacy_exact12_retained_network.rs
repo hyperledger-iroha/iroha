@@ -1,8 +1,8 @@
 #![cfg(feature = "privacy-release-evidence")]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Enforced four-peer DA/RBC, activation, adversarial-proof, state-replay, exact-finality, and
-//! restart gate for the six retained exact-12 native engines: ZK-ACE, Anonymous PGC, VeRange,
-//! Bootle/Lantern, FCMP++, and the private-IVM note protocol.
+//! restart gate for five available retained exact-12 native engines, plus fail-closed ZK-ACE
+//! capability and production-builder coverage.
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -18,8 +18,7 @@ use iroha::{
             privacy::{
                 BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyProofManagedPoolV1,
                 RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
-                RegisterPrivacyZkAcePolicyV1, RotatePrivacyBootleLanternIssuerPolicyV1,
-                SubmitPrivacyProofV1,
+                RotatePrivacyBootleLanternIssuerPolicyV1, SubmitPrivacyProofV1,
             },
         },
         metadata::Metadata,
@@ -31,10 +30,11 @@ use iroha::{
         },
         privacy::{
             PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
-            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1,
-            PrivacyPoolIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
+            PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
+            PrivacyConsensusLimitsV1, PrivacyExact12CapabilityManifestV1,
+            PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -44,7 +44,10 @@ use iroha::{
 };
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::{
+        CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
+        compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
+    },
     privacy_release_evidence::{
         PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
         build_privacy_release_bootle_lantern_network_action_v1,
@@ -68,8 +71,7 @@ const VERANGE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VeRangeTransp
 const BOOTLE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
 const FCMP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
 const IVM_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-const PROTOCOLS: [PrivacyProtocolIdV1; 6] = [
-    ZK_ACE_PROTOCOL,
+const AVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 5] = [
     PGC_PROTOCOL,
     VERANGE_PROTOCOL,
     BOOTLE_PROTOCOL,
@@ -160,6 +162,20 @@ fn assert_protocol_expectations(
             row.activation
         );
     }
+    let zk_ace = protocol_row(snapshot, ZK_ACE_PROTOCOL)?;
+    ensure!(
+        zk_ace.compiled_profile
+            == PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ),
+        "{context}: ZK-ACE compiled status is not fail-closed: {:?}",
+        zk_ace.compiled_profile
+    );
+    ensure!(
+        zk_ace.activation.is_none(),
+        "{context}: unavailable ZK-ACE unexpectedly has an activation: {:?}",
+        zk_ace.activation
+    );
     Ok(())
 }
 async fn wait_for_all_peer_protocols(
@@ -710,6 +726,20 @@ fn action_context(
 async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart()
 -> Result<()> {
     init_instruction_registry();
+    ensure!(
+        compiled_privacy_profile_v1(ZK_ACE_PROTOCOL)
+            == Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: ZK_ACE_PROTOCOL,
+            }),
+        "ZK-ACE unexpectedly became governance-available"
+    );
+    ensure!(
+        compiled_privacy_profile_snapshot_result_v1(ZK_ACE_PROTOCOL)
+            == PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ),
+        "local ZK-ACE capability result is not the exact fail-closed status"
+    );
     let context = stringify!(
         canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart
     );
@@ -830,7 +860,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let genesis_hash = canonical_genesis_hash(&client)?;
-        let compiled_profiles = PROTOCOLS
+        let compiled_profiles = AVAILABLE_PROTOCOLS
             .iter()
             .copied()
             .map(|protocol| {
@@ -870,7 +900,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "register exact retained exact-12 activations",
         )
         .await?;
-        let proposed_expectations = PROTOCOLS
+        let proposed_expectations = AVAILABLE_PROTOCOLS
             .iter()
             .copied()
             .zip(compiled_profiles.iter().copied())
@@ -969,28 +999,20 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let fcmp_asset_for_builder = fcmp_asset.clone();
         let ivm_asset_for_builder = ivm_asset.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
-            let zk = build_privacy_release_zk_ace_network_action_v1(
-                zk_context.clone(),
-                ALICE_ID.clone(),
-                reserve_for_builder.clone(),
-                zk_asset_for_builder.clone(),
-                19,
-                [0x31; 32],
-                [0x32; 32],
-                &signing_key,
-            )
-            .map_err(|error| eyre!("build canonical ZK-ACE action: {error:?}"))?;
-            let zk_replay = build_privacy_release_zk_ace_network_action_v1(
-                zk_context,
-                ALICE_ID.clone(),
-                reserve_for_builder.clone(),
-                zk_asset_for_builder,
-                19,
-                [0x31; 32],
-                [0x33; 32],
-                &signing_key,
-            )
-            .map_err(|error| eyre!("build fresh ZK-ACE replay action: {error:?}"))?;
+            ensure!(
+                build_privacy_release_zk_ace_network_action_v1(
+                    zk_context,
+                    ALICE_ID.clone(),
+                    reserve_for_builder.clone(),
+                    zk_asset_for_builder,
+                    19,
+                    [0x31; 32],
+                    [0x32; 32],
+                    &signing_key,
+                )
+                .is_err(),
+                "disabled ZK-ACE release builder admitted a production action"
+            );
             let pgc = build_privacy_release_anonymous_pgc_network_action_v1(
                 pgc_context,
                 pgc_asset_for_builder.clone(),
@@ -1083,8 +1105,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             )
             .map_err(|error| eyre!("build nullifier replay private-IVM action: {error:?}"))?;
             Ok::<_, eyre::Report>((
-                zk,
-                zk_replay,
                 pgc,
                 pgc_replay,
                 pre_verange,
@@ -1098,8 +1118,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             ))
         });
         let (
-            zk,
-            zk_replay,
             pgc,
             pgc_replay,
             pre_verange,
@@ -1114,15 +1132,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .await
             .map_err(|_| eyre!("retained exact-12 proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained exact-12 prover task failed: {error}"))??;
-        ensure!(
-            zk.policy == zk_replay.policy
-                && zk.statement.replay_nullifier == zk_replay.statement.replay_nullifier,
-            "fresh ZK-ACE replay did not preserve policy and replay nullifier"
-        );
-        ensure!(
-            zk.transaction.hash() != zk_replay.transaction.hash(),
-            "independently randomized ZK-ACE proofs produced the same transaction"
-        );
         ensure!(
             pgc.bootstrap == pgc_replay.bootstrap
                 && pgc.bootstrap_proof == pgc_replay.bootstrap_proof
@@ -1161,8 +1170,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             );
         }
         for (label, transaction) in [
-            ("canonical ZK-ACE", &zk.transaction),
-            ("fresh ZK-ACE replay", &zk_replay.transaction),
             ("canonical Anonymous-PGC", &pgc.transaction),
             ("stale-head Anonymous-PGC", &pgc_replay.transaction),
             ("pre-activation VeRange", &pre_verange.transaction),
@@ -1209,7 +1216,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             &all_clients,
             &[zk_asset_at_alice.clone(), zk_asset_at_reserve.clone()],
             &[Some(Quantity::from(100_u32)), None],
-            "pre-activation rejection must preserve ZK-ACE public balances",
+            "pre-activation and unavailable-ZK-ACE paths must preserve public balances",
         )
         .await?;
         submit_instructions(
@@ -1229,7 +1236,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .copied()
             .map(|compiled| active_activation(compiled, registration_height, activation_height))
             .collect::<Vec<_>>();
-        let active_expectations = PROTOCOLS
+        let active_expectations = AVAILABLE_PROTOCOLS
             .iter()
             .copied()
             .zip(compiled_profiles.iter().copied())
@@ -1251,12 +1258,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         // every governed policy/bootstrap in its own consensus action so the
         // PGC proof is bound to the exact action index zero and no setup path
         // relies on a local-only budget bypass.
-        submit_instructions(
-            &client,
-            vec![RegisterPrivacyZkAcePolicyV1::new(zk.policy.clone()).into()],
-            "register authoritative ZK-ACE policy",
-        )
-        .await?;
         submit_instructions(
             &client,
             vec![RegisterPrivacyBootleLanternIssuerPolicyV1::new(bootle.policy.clone()).into()],
@@ -1287,11 +1288,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "bootstrap authoritative private-IVM pool",
         )
         .await?;
-        let corrupted_zk = independently_resign_corrupted_proof(
-            &client,
-            &zk.transaction,
-            "corrupted ZK-ACE proof",
-        )?;
         let corrupted_pgc = independently_resign_corrupted_proof(
             &client,
             &pgc.transaction,
@@ -1318,15 +1314,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "corrupted private-IVM proof",
         )?;
         let cross_profile_adversaries = [
-            (
-                "ZK-ACE target with Anonymous-PGC proof",
-                independently_resign_cross_profile_proof(
-                    &client,
-                    &zk.transaction,
-                    &pgc.transaction,
-                )?,
-                "native ZK-ACE verification failed",
-            ),
             (
                 "Anonymous-PGC target with VeRange proof",
                 independently_resign_cross_profile_proof(
@@ -1364,20 +1351,16 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 "native FCMP++ verification failed",
             ),
             (
-                "private-IVM target with ZK-ACE proof",
+                "private-IVM target with Anonymous-PGC proof",
                 independently_resign_cross_profile_proof(
                     &client,
                     &ivm.transaction,
-                    &zk.transaction,
+                    &pgc.transaction,
                 )?,
                 "native private-IVM verification failed",
             ),
         ];
         let wrong_statement_digest_adversaries = [
-            (
-                "ZK-ACE wrong statement digest",
-                independently_resign_wrong_statement_digest(&client, &zk.transaction)?,
-            ),
             (
                 "Anonymous-PGC wrong statement digest",
                 independently_resign_wrong_statement_digest(&client, &pgc.transaction)?,
@@ -1399,13 +1382,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 independently_resign_wrong_statement_digest(&client, &ivm.transaction)?,
             ),
         ];
-        let two_submit = independently_sign_two_submit_transaction(&client, &zk.transaction)?;
+        let two_submit = independently_sign_two_submit_transaction(&client, &pgc.transaction)?;
         let adversarial_transactions = [
-            (
-                "corrupted ZK-ACE",
-                &corrupted_zk,
-                "native ZK-ACE verification failed",
-            ),
             (
                 "corrupted Anonymous-PGC",
                 &corrupted_pgc,
@@ -1518,7 +1496,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         )
         .await?;
         for (label, transaction) in [
-            ("ZK-ACE", &zk.transaction),
             ("Anonymous-PGC", &pgc.transaction),
             ("VeRange", &verange.transaction),
             ("Bootle/Lantern", &bootle.transaction),
@@ -1545,7 +1522,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map(|(_, peer)| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         for (label, transaction) in [
-            ("ZK-ACE", &zk.transaction),
             ("Anonymous-PGC", &pgc.transaction),
             ("VeRange", &verange.transaction),
             ("Bootle/Lantern", &bootle.transaction),
@@ -1569,8 +1545,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         wait_for_asset_quantities(
             &healthy_clients,
             &[zk_asset_at_alice.clone(), zk_asset_at_reserve.clone()],
-            &[Some(Quantity::from(81_u32)), Some(Quantity::from(19_u32))],
-            "canonical ZK-ACE transfer must apply atomically",
+            &[Some(Quantity::from(100_u32)), None],
+            "disabled ZK-ACE must not change public balances",
         )
         .await?;
         let canonical_height = client
@@ -1588,7 +1564,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
              committed height {canonical_height}"
         );
         for (label, transaction) in [
-            ("ZK-ACE", &zk.transaction),
             ("Anonymous-PGC", &pgc.transaction),
             ("VeRange", &verange.transaction),
             ("Bootle/Lantern", &bootle.transaction),
@@ -1646,7 +1621,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         )
         .await?;
         for (label, transaction) in [
-            ("ZK-ACE", &zk.transaction),
             ("Anonymous-PGC", &pgc.transaction),
             ("VeRange", &verange.transaction),
             ("Bootle/Lantern", &bootle.transaction),
@@ -1666,11 +1640,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             "restarted peer derived a different canonical genesis hash"
         );
         for (label, transaction, expected_reasons) in [
-            (
-                "ZK-ACE stable-nullifier replay",
-                &zk_replay.transaction,
-                &["ZK-ACE replay nullifier was already consumed"][..],
-            ),
             (
                 "Anonymous-PGC stale-head replay",
                 &pgc_replay.transaction,
@@ -1709,8 +1678,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         wait_for_asset_quantities(
             &recovered_clients,
             &[zk_asset_at_alice.clone(), zk_asset_at_reserve.clone()],
-            &[Some(Quantity::from(81_u32)), Some(Quantity::from(19_u32))],
-            "fresh state replays must preserve post-ZK-ACE public balances",
+            &[Some(Quantity::from(100_u32)), None],
+            "fresh state replays and disabled ZK-ACE must preserve public balances",
         )
         .await?;
         submit_instructions(
@@ -1748,7 +1717,6 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         .await?;
         for (label, transaction) in [
             ("pre-activation VeRange", &pre_verange.transaction),
-            ("corrupted ZK-ACE", &corrupted_zk),
             ("corrupted Anonymous-PGC", &corrupted_pgc),
             ("corrupted VeRange", &corrupted_verange),
             ("corrupted Bootle/Lantern", &corrupted_bootle),
@@ -1785,8 +1753,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         wait_for_asset_quantities(
             &recovered_clients,
             &[zk_asset_at_alice, zk_asset_at_reserve],
-            &[Some(Quantity::from(81_u32)), Some(Quantity::from(19_u32))],
-            "post-restart adversarial and stale-policy failures remain atomic",
+            &[Some(Quantity::from(100_u32)), None],
+            "post-restart failures and disabled ZK-ACE remain atomic",
         )
         .await?;
         let (final_height, final_subject) = exact_transaction_block_subject(

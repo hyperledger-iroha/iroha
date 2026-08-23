@@ -2577,6 +2577,7 @@ type DurableDecision = (
     wire::BlockSubject,
     wire::ExecutionCommitment,
 );
+/// Exact local owner which installed one durable Decision before runner cleanup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingRunnerDecisionCleanup {
     decision: DurableDecision,
@@ -2775,6 +2776,11 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
+    /// Return whether live pacemaker clocks crossed their one-shot activation.
+    /// Synthetic test runtimes are permanently unarmed unless they override it.
+    fn live_clocks_are_armed(&self) -> bool {
+        false
+    }
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -3082,6 +3088,10 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
+    fn live_clocks_are_armed(&self) -> bool {
+        self.lifecycle_live_clocks_are_armed()
+    }
+
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -3467,6 +3477,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
     durable_validate_retry_seals:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+    /// Inert exact markers for Validate rows published directly by the lifecycle body pipeline.
     published_lifecycle_validate_retry_markers: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         PublishedLifecycleValidateRetryMarkerV1,
@@ -3509,6 +3520,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    /// Newly installed live Decision whose exact Apply suffix cannot enter the
+    /// worker until the runner retires process-local proposal and lane owners.
     pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     live_lifecycle_decision_apply: Option<LiveLifecycleDecisionApplyOwnerV1>,
     live_lifecycle_validate_successor: Option<LiveLifecycleValidateSuccessorOwnerV1>,

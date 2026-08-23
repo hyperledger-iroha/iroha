@@ -473,14 +473,25 @@ fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
     let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
     let witness = &material.proof_input_material.witness_material;
     assert!(
-        verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+        !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
             bytes,
             material.proof_input_material.statement_hash,
             material.arithmetic_trace_material_digest,
             witness.slot_index,
             witness.bound_mode,
         ),
-        "public-padding BFV verifier must accept a generated native AIR envelope without private trace rows"
+        "public-padding-only BFV verification must fail closed without the hidden trace"
+    );
+    assert!(
+        verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
+            bytes,
+            &StarkVerifierLimits::default(),
+            material.proof_input_material.statement_hash,
+            material.arithmetic_trace_material_digest,
+            witness.slot_index,
+            witness.bound_mode,
+        ),
+        "full-material verification still needs the public-padding structural precheck"
     );
     assert!(
         !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(

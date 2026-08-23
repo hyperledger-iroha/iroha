@@ -1,10 +1,10 @@
-//! Poseidon2 permutation over the Goldilocks field (p = 2^64 - 2^32 + 1).
+//! Poseidon permutation over the Goldilocks field (p = 2^64 - 2^32 + 1).
 //!
-//! The constants are generated from the reference Grain LFSR as implemented in
-//! `poseidon-primitives` (commit `0.2.0`, parameters pinned to
-//! `ark-poseidon2` commit `3f2b7fe`). Generation script lives under
-//! `target-codex/poseidon_gen` and mirrors the canonical Poseidon2 parameter
-//! tables for width 3, rate 2.
+//! The round structure is the original Poseidon construction: every round uses
+//! the same dense MDS matrix, with the S-box applied to every word in full
+//! rounds and only the first word in partial rounds. The Goldilocks field uses
+//! an `x^7` S-box because 7 is coprime to `p - 1`; `x^5` is not a permutation
+//! over this field.
 use core::convert::TryFrom;
 const MODULUS: u64 = 0xffff_ffff_0000_0001;
 /// Goldilocks field modulus (2^64 - 2^32 + 1).
@@ -15,9 +15,17 @@ const MODULUS_U128: u128 = MODULUS as u128;
 pub const STATE_WIDTH: usize = 3;
 /// Poseidon rate (r = 2).
 pub const RATE: usize = 2;
+/// Bijective S-box exponent for the Goldilocks field.
+pub const SBOX_EXPONENT: u64 = 7;
+/// Stable identifier for the exact FASTPQ permutation construction.
+///
+/// The constants asset digest is bound separately by `fastpq_prover`'s
+/// canonical profile digest.
+pub const PERMUTATION_PROFILE_ID: &str =
+    "dense-mds-poseidon:goldilocks:x7:width3:rate2:full8:partial57:v1";
 const FULL_ROUNDS_HALF: usize = 4;
 const PARTIAL_ROUNDS: usize = 57;
-// Canonical Poseidon2 round constants followed by the MDS matrix, encoded as
+// Pinned round constants followed by the MDS matrix, encoded as
 // fixed-width little-endian words and decoded entirely at compile time.
 const POSEIDON_TABLE_BYTES: &[u8; 1_632] =
     include_bytes!("assets/poseidon2_goldilocks_width3_v1.bin");
@@ -59,10 +67,10 @@ const POSEIDON_TABLES: (
     [[u64; STATE_WIDTH]; FULL_ROUNDS_HALF * 2 + PARTIAL_ROUNDS],
     [[u64; STATE_WIDTH]; STATE_WIDTH],
 ) = decode_poseidon_tables(POSEIDON_TABLE_BYTES);
-/// Round constants for the canonical Poseidon2 permutation.
+/// Pinned round constants for the FASTPQ Poseidon permutation.
 pub const ROUND_CONSTANTS: [[u64; STATE_WIDTH]; FULL_ROUNDS_HALF * 2 + PARTIAL_ROUNDS] =
     POSEIDON_TABLES.0;
-/// MDS matrix for the canonical Poseidon2 permutation.
+/// Pinned MDS matrix for the FASTPQ Poseidon permutation.
 pub const MDS: [[u64; STATE_WIDTH]; STATE_WIDTH] = POSEIDON_TABLES.1;
 #[inline]
 fn add(a: u64, b: u64) -> u64 {
@@ -109,10 +117,10 @@ fn mul(a: u64, b: u64) -> u64 {
     reduce_wide(lo, hi)
 }
 #[inline]
-fn pow5(x: u64) -> u64 {
+fn pow7(x: u64) -> u64 {
     let x2 = mul(x, x);
     let x4 = mul(x2, x2);
-    mul(x4, x)
+    mul(mul(x4, x2), x)
 }
 fn apply_mds(state: &mut [u64; STATE_WIDTH]) {
     let s0 = state[0];
@@ -135,7 +143,7 @@ fn apply_mds(state: &mut [u64; STATE_WIDTH]) {
 }
 fn full_round(state: &mut [u64; STATE_WIDTH], rc: &[u64; STATE_WIDTH]) {
     for (word, constant) in state.iter_mut().zip(rc.iter()) {
-        *word = pow5(add(*word, *constant));
+        *word = pow7(add(*word, *constant));
     }
     apply_mds(state);
 }
@@ -143,7 +151,7 @@ fn partial_round(state: &mut [u64; STATE_WIDTH], rc: &[u64; STATE_WIDTH]) {
     for (word, constant) in state.iter_mut().zip(rc.iter()) {
         *word = add(*word, *constant);
     }
-    state[0] = pow5(state[0]);
+    state[0] = pow7(state[0]);
     apply_mds(state);
 }
 fn permute(state: &mut [u64; STATE_WIDTH]) {
@@ -161,7 +169,7 @@ fn permute(state: &mut [u64; STATE_WIDTH]) {
         round += 1;
     }
 }
-/// Compute a Poseidon2 hash over the provided Goldilocks field elements.
+/// Compute a Poseidon hash over the provided Goldilocks field elements.
 ///
 /// The sponge uses rate 2, capacity 1, and absorbs the message using classical
 /// +1 padding (a single `1` element appended after the payload).
@@ -184,7 +192,7 @@ pub fn hash_field_elements(elements: &[u64]) -> u64 {
     permute(&mut state);
     state[0]
 }
-/// Apply the canonical Poseidon permutation to the supplied state.
+/// Apply the pinned FASTPQ dense-MDS Poseidon permutation to the supplied state.
 pub fn permute_state(state: &mut [u64; STATE_WIDTH]) {
     permute(state);
 }
@@ -267,10 +275,113 @@ impl Default for PoseidonSponge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_pow5(x: u64) -> u64 {
+        let x2 = mul(x, x);
+        let x4 = mul(x2, x2);
+        mul(x4, x)
+    }
+
+    fn legacy_permute(state: &mut [u64; STATE_WIDTH]) {
+        for (round, constants) in ROUND_CONSTANTS.iter().enumerate() {
+            for (word, constant) in state.iter_mut().zip(constants) {
+                *word = add(*word, *constant);
+            }
+            if round < FULL_ROUNDS_HALF || round >= FULL_ROUNDS_HALF + PARTIAL_ROUNDS {
+                for word in state.iter_mut() {
+                    *word = legacy_pow5(*word);
+                }
+            } else {
+                state[0] = legacy_pow5(state[0]);
+            }
+            apply_mds(state);
+        }
+    }
+
+    fn legacy_hash_field_elements(elements: &[u64]) -> u64 {
+        let mut state = [0u64; STATE_WIDTH];
+        let mut chunks = elements.chunks_exact(RATE);
+        for chunk in &mut chunks {
+            for (idx, &value) in chunk.iter().enumerate() {
+                state[idx] = add(state[idx], value);
+            }
+            legacy_permute(&mut state);
+        }
+        let remainder = chunks.remainder();
+        let mut block = [0u64; RATE];
+        block[..remainder.len()].copy_from_slice(remainder);
+        block[remainder.len()] = 1;
+        for (idx, &value) in block.iter().enumerate() {
+            state[idx] = add(state[idx], value);
+        }
+        legacy_permute(&mut state);
+        state[0]
+    }
+
     #[test]
     fn poseidon_hash_known_vector() {
         let digest = hash_field_elements(&[1, 2, 3]);
-        assert_eq!(digest, 0x42ea_af13_b5f9_03b1);
+        assert_eq!(digest, 0x1401_190e_df34_0f2e);
+    }
+    #[test]
+    fn poseidon_permutation_known_vectors() {
+        let mut zero = [0, 0, 0];
+        permute_state(&mut zero);
+        assert_eq!(
+            zero,
+            [
+                0xe254_019b_5071_13dc,
+                0x470d_9a5f_4ccf_4713,
+                0x0b85_c77b_b418_f897,
+            ]
+        );
+        let mut ascending = [0, 1, 2];
+        permute_state(&mut ascending);
+        assert_eq!(
+            ascending,
+            [
+                0x5130_5b72_fcf9_4721,
+                0xf756_8ae5_dba4_fb92,
+                0x3d65_13a5_6273_3629,
+            ]
+        );
+    }
+    #[test]
+    fn former_fifth_root_collision_is_rejected() {
+        // Under the former x^5 S-box, the first full round mapped 1 and this
+        // non-trivial fifth root of unity to the same value. Since its first
+        // round constant is subtracted from both messages, the two complete
+        // sponge hashes collided as well.
+        let left = 0xfcaa_2103_f664_126c;
+        let right = 0x0b1d_872c_9712_cbed;
+        let first_constant = ROUND_CONSTANTS[0][0];
+        assert_ne!(left, right);
+        assert!(left < FIELD_MODULUS && right < FIELD_MODULUS);
+        assert_eq!(
+            legacy_pow5(add(left, first_constant)),
+            legacy_pow5(add(right, first_constant))
+        );
+        assert_eq!(
+            legacy_hash_field_elements(&[left, 0]),
+            0xd531_eb7d_e55b_545a
+        );
+        assert_eq!(
+            legacy_hash_field_elements(&[right, 0]),
+            0xd531_eb7d_e55b_545a
+        );
+        assert_eq!(hash_field_elements(&[left, 0]), 0xf0ec_69fb_cdb7_5c7a);
+        assert_eq!(hash_field_elements(&[right, 0]), 0xa4d4_3cce_28fe_3a5c);
+    }
+    #[test]
+    fn sbox_exponent_is_coprime_to_field_group_order() {
+        fn gcd(mut left: u64, mut right: u64) -> u64 {
+            while right != 0 {
+                (left, right) = (right, left % right);
+            }
+            left
+        }
+        assert_eq!(gcd(5, FIELD_MODULUS - 1), 5);
+        assert_eq!(gcd(SBOX_EXPONENT, FIELD_MODULUS - 1), 1);
     }
     #[test]
     fn squeeze_multiple_elements() {

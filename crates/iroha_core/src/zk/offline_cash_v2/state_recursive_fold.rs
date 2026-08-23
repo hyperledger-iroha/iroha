@@ -16,7 +16,7 @@
 //! proof verification. In particular, this module grants no recursion, STATE,
 //! GuardBundle, artifact, persistence, readiness, or release authority.
 
-use core::fmt;
+use core::{convert::Infallible, fmt};
 
 use halo2_proofs::halo2curves::{
     CurveAffine,
@@ -489,6 +489,89 @@ impl OpaqueStateBgh19ProofV2 {
     }
 }
 
+/// Ownership-only failure for the paired recursive-fold result carrier.
+///
+/// No variant represents BGH19 verification or acceptance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StateRecursiveFoldResultOwnershipErrorV2 {
+    /// The first claimed output was not the Eq accumulator.
+    EqClaimedOutputParityMismatch,
+    /// The second claimed output was not the Ep accumulator.
+    EpClaimedOutputParityMismatch,
+    /// No recursive verifier can consume the ownership-bound result.
+    VerificationUnavailable,
+}
+
+impl fmt::Display for StateRecursiveFoldResultOwnershipErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::EqClaimedOutputParityMismatch => {
+                "offline-cash V2 Eq recursive-fold claimed output has wrong parity"
+            }
+            Self::EpClaimedOutputParityMismatch => {
+                "offline-cash V2 Ep recursive-fold claimed output has wrong parity"
+            }
+            Self::VerificationUnavailable => {
+                "offline-cash V2 recursive-fold result verification is unavailable"
+            }
+        })
+    }
+}
+
+impl std::error::Error for StateRecursiveFoldResultOwnershipErrorV2 {}
+
+/// Exact Eq-then-Ep opaque fold transcripts and their unverified claimed outputs.
+///
+/// This owner is deliberately neither `Clone` nor `Copy`. Canonical codecs and
+/// parity order are enforced, but no relation between a transcript, its inputs,
+/// and its claimed output is verified here.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct UnverifiedStateRecursiveFoldResultPairV2 {
+    eq_proof: OpaqueStateBgh19ProofV2,
+    eq_claimed_output: CanonicalStateAccumulatorV2,
+    ep_proof: OpaqueStateBgh19ProofV2,
+    ep_claimed_output: CanonicalStateAccumulatorV2,
+}
+
+impl UnverifiedStateRecursiveFoldResultPairV2 {
+    /// Own one exact Eq-then-Ep pair without interpreting either BGH19 transcript.
+    pub(super) fn from_eq_then_ep(
+        eq_proof: OpaqueStateBgh19ProofV2,
+        eq_claimed_output: CanonicalStateAccumulatorV2,
+        ep_proof: OpaqueStateBgh19ProofV2,
+        ep_claimed_output: CanonicalStateAccumulatorV2,
+    ) -> Result<Self, StateRecursiveFoldResultOwnershipErrorV2> {
+        if eq_claimed_output.parity() != StateRecursiveFoldParityV2::Eq {
+            return Err(StateRecursiveFoldResultOwnershipErrorV2::EqClaimedOutputParityMismatch);
+        }
+        if ep_claimed_output.parity() != StateRecursiveFoldParityV2::Ep {
+            return Err(StateRecursiveFoldResultOwnershipErrorV2::EpClaimedOutputParityMismatch);
+        }
+        Ok(Self {
+            eq_proof,
+            eq_claimed_output,
+            ep_proof,
+            ep_claimed_output,
+        })
+    }
+
+    pub(super) const fn eq_proof(&self) -> &OpaqueStateBgh19ProofV2 {
+        &self.eq_proof
+    }
+
+    pub(super) const fn eq_claimed_output(&self) -> &CanonicalStateAccumulatorV2 {
+        &self.eq_claimed_output
+    }
+
+    pub(super) const fn ep_proof(&self) -> &OpaqueStateBgh19ProofV2 {
+        &self.ep_proof
+    }
+
+    pub(super) const fn ep_claimed_output(&self) -> &CanonicalStateAccumulatorV2 {
+        &self.ep_claimed_output
+    }
+}
+
 /// One structurally decoded fold input. Its origin is not authenticated here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StateRecursiveFoldInputV2 {
@@ -690,6 +773,57 @@ pub(super) fn assemble_provenance_bound_state_six_input_set_v2(
         parent_1,
         guard,
     }
+}
+
+/// Move-only ownership link from exact semantic-parent/GuardBundle provenance
+/// to the paired opaque fold transcripts and their unverified claimed outputs.
+///
+/// The six inputs remain inside their provenance-bound owner and are exposed
+/// only as ordered borrowed views. Co-ownership records the dependency without
+/// claiming that either BGH19 transcript produces its claimed output.
+pub(super) struct ProvenanceBoundStateRecursiveFoldResultV2 {
+    inputs: ProvenanceBoundStateSixInputSetV2,
+    result: UnverifiedStateRecursiveFoldResultPairV2,
+}
+
+impl ProvenanceBoundStateRecursiveFoldResultV2 {
+    pub(super) const fn inputs(&self) -> &ProvenanceBoundStateSixInputSetV2 {
+        &self.inputs
+    }
+
+    pub(super) const fn result(&self) -> &UnverifiedStateRecursiveFoldResultPairV2 {
+        &self.result
+    }
+
+    /// Exact borrowed Eq order retained by the provenance-bound input owner.
+    pub(super) fn eq_inputs(
+        &self,
+    ) -> [StateRecursiveFoldInputRefV2<'_>; STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] {
+        self.inputs.eq_inputs()
+    }
+
+    /// Exact borrowed Ep order retained by the provenance-bound input owner.
+    pub(super) fn ep_inputs(
+        &self,
+    ) -> [StateRecursiveFoldInputRefV2<'_>; STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] {
+        self.inputs.ep_inputs()
+    }
+}
+
+/// Consume the exact provenance-bound six-input owner and unverified fold result
+/// pair into one non-authorizing carrier without duplicating accumulator arrays.
+pub(super) fn assemble_provenance_bound_state_recursive_fold_result_v2(
+    inputs: ProvenanceBoundStateSixInputSetV2,
+    result: UnverifiedStateRecursiveFoldResultPairV2,
+) -> ProvenanceBoundStateRecursiveFoldResultV2 {
+    ProvenanceBoundStateRecursiveFoldResultV2 { inputs, result }
+}
+
+/// Fail closed before an ownership-bound claimed result can cross verification.
+pub(super) fn fail_closed_provenance_bound_state_recursive_fold_result_v2(
+    _candidate: ProvenanceBoundStateRecursiveFoldResultV2,
+) -> Result<Infallible, StateRecursiveFoldResultOwnershipErrorV2> {
+    Err(StateRecursiveFoldResultOwnershipErrorV2::VerificationUnavailable)
 }
 
 /// Structurally valid six-input envelope. It is deliberately named unverified.

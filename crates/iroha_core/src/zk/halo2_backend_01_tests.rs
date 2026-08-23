@@ -366,8 +366,8 @@ fn kaigi_roster_backend_accepts_valid_proof() {
         transcript::{Blake2bWrite, Challenge255},
     };
     use kaigi_zk::{
-        KAIGI_ROSTER_CIRCUIT_K, compute_commitment, compute_nullifier, empty_roster_root_hash,
-        roster_root_limbs,
+        KAIGI_ROSTER_CIRCUIT_K, KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1, compute_commitment,
+        compute_nullifier, empty_roster_root_hash, roster_root_limbs,
     };
     use rand_core_06::OsRng;
 
@@ -431,7 +431,7 @@ fn kaigi_roster_backend_accepts_valid_proof() {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         circuit_id: "halo2/pasta/ipa/kaigi-roster-v1".into(),
         vk_hash: super::hash_vk(&vk_box),
-        public_inputs: b"kaigi-roster-v1".to_vec(),
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: prf_env,
         aux: Vec::new(),
     };
@@ -454,8 +454,8 @@ fn kaigi_usage_backend_accepts_valid_proof() {
         transcript::{Blake2bWrite, Challenge255},
     };
     use kaigi_zk::{
-        KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KaigiUsageCommitmentCircuit,
-        compute_usage_commitment,
+        KAIGI_USAGE_BACKEND, KAIGI_USAGE_CIRCUIT_K, KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1,
+        KaigiUsageCommitmentCircuit, compute_usage_commitment,
     };
     use rand_core_06::OsRng;
 
@@ -506,7 +506,7 @@ fn kaigi_usage_backend_accepts_valid_proof() {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         circuit_id: "halo2/pasta/ipa/kaigi-usage-v1".into(),
         vk_hash: super::hash_vk(&vk_box),
-        public_inputs: b"kaigi-usage-v1".to_vec(),
+        public_inputs: KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: prf_env,
         aux: Vec::new(),
     };
@@ -564,9 +564,9 @@ fn preverify_basic() {
     let vk_commitment = [1u8; 32];
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: "halo2/ipa:preverify-basic".to_owned(),
+        circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.to_owned(),
         vk_hash: vk_commitment,
-        public_inputs: vec![1],
+        public_inputs: IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: vec![2],
         aux: Vec::new(),
     };

@@ -875,6 +875,44 @@ fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
         HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())
     })
 }
+/// Return the one canonical outer-envelope schema for a production Halo2 circuit.
+///
+/// Halo2 authenticates the instance columns inside the backend proof, but it
+/// does not see the surrounding [`iroha_data_model::zk::OpenVerifyEnvelope`].
+/// Keeping this mapping closed prevents valid proofs from being relabelled with
+/// arbitrary non-empty schema bytes.
+fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> {
+    let canonical = normalize_halo2_ipa_circuit_id(circuit_id)?;
+    match canonical.as_str() {
+        IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1),
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID => {
+            Some(confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2)
+        }
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+        confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
+            Some(confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1)
+        }
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-roster-v1" => Some(kaigi_zk::KAIGI_ROSTER_PUBLIC_INPUTS_SCHEMA_V1),
+        #[cfg(feature = "zk-halo2")]
+        "halo2/pasta/ipa/kaigi-usage-v1" => Some(kaigi_zk::KAIGI_USAGE_PUBLIC_INPUTS_SCHEMA_V1),
+        _ => None,
+    }
+}
+
+fn halo2_ipa_public_inputs_schema_hash_v1(circuit_id: &str) -> Option<[u8; 32]> {
+    halo2_ipa_public_inputs_schema_v1(circuit_id)
+        .map(|schema| iroha_crypto::Hash::new(schema).into())
+}
 /// Backend material prepared by the strict first-release verifying-key validator.
 ///
 /// This contains only bounded, already-validated parameters. Callers retain the
@@ -1022,6 +1060,15 @@ pub(crate) fn validate_and_prepare_verifying_key_record_v1(
                 return Err(
                     "Halo2 IPA verifying-key circuit is not admitted for the registry backend"
                         .to_owned(),
+                );
+            }
+            let expected_schema_hash = halo2_ipa_public_inputs_schema_hash_v1(&record.circuit_id)
+                .ok_or_else(|| {
+                "Halo2 IPA circuit has no canonical public-input schema".to_owned()
+            })?;
+            if record.public_inputs_schema_hash != expected_schema_hash {
+                return Err(
+                    "Halo2 IPA verifying-key public-input schema hash is not canonical".to_owned(),
                 );
             }
         }
@@ -5522,6 +5569,14 @@ fn preverify_open_verify_envelope_metadata(
     {
         return Err(PreverifyResult::MalformedProof);
     }
+    if expected_tag == iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&envelope.circuit_id) else {
+            return Err(PreverifyResult::MalformedProof);
+        };
+        if envelope.public_inputs.as_slice() != expected_schema {
+            return Err(PreverifyResult::MalformedProof);
+        }
+    }
     if expected_tag == iroha_data_model::zk::BackendTag::Stark {
         if !stark_open_verify_circuit_id_matches_backend(&proof.backend, &envelope.circuit_id) {
             return Err(PreverifyResult::MalformedProof);
@@ -5764,6 +5819,12 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
         return false;
     }
     if !halo2_open_verify_circuit_id_matches_backend(proof.backend.as_str(), &env.circuit_id) {
+        return false;
+    }
+    let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&env.circuit_id) else {
+        return false;
+    };
+    if env.public_inputs.as_slice() != expected_schema {
         return false;
     }
     let expected_vk_hash = hash_vk(vk_box);
@@ -6024,10 +6085,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if !is_production_verify_backend_label(backend) {
         return false;
     }
-    // Prefer built-in registry when available
-    if let Some(ok) = verify_with_registry(backend, proof, vk) {
-        return ok;
-    }
+    // All production Halo2 labels share one authenticated outer-envelope boundary.
     if production_verify_backend_tag(backend)
         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
@@ -6039,6 +6097,10 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
         {
             return false;
         }
+    }
+    // Prefer built-in registry when available.
+    if let Some(ok) = verify_with_registry(backend, proof, vk) {
+        return ok;
     }
     // Native IPA polynomial-open verifier (transparent, no external libs)
     // Backend tag: "halo2/ipa/poly-open" with proof bytes = Norito `OpenVerifyEnvelope`.
@@ -6140,6 +6202,18 @@ mod debug_backend_tests {
             );
             #[cfg(feature = "zk-halo2-ipa")]
             {
+                let mut wrong_schema: iroha_data_model::zk::OpenVerifyEnvelope =
+                    norito::decode_canonical(&proof.bytes).expect("fixture envelope");
+                wrong_schema.public_inputs = b"noncanonical-but-nonzero-schema".to_vec();
+                let wrong_schema_proof = ProofBox::new(
+                    ZK_BACKEND_HALO2_IPA.to_owned(),
+                    norito::encode_canonical(&wrong_schema).expect("encode wrong-schema proof"),
+                );
+                assert!(
+                    !verify_backend(ZK_BACKEND_HALO2_IPA, &wrong_schema_proof, Some(&vk)),
+                    "generic Halo2 verifier must reject altered outer schema for seed {seed}"
+                );
+
                 let (exact_proof, exact_vk) = relabel_halo2_ipa_open_verify_fixture(
                     &proof,
                     &vk,
@@ -6153,8 +6227,84 @@ mod debug_backend_tests {
                     ),
                     "exact IVM registry label should reach the IVM execution verifier for seed {seed}"
                 );
+                let mut exact_wrong_schema: iroha_data_model::zk::OpenVerifyEnvelope =
+                    norito::decode_canonical(&exact_proof.bytes).expect("exact fixture envelope");
+                exact_wrong_schema.public_inputs = b"different-nonzero-schema".to_vec();
+                let exact_wrong_schema_proof = ProofBox::new(
+                    IVM_EXECUTION_V1_HALO2_BACKEND.to_owned(),
+                    norito::encode_canonical(&exact_wrong_schema)
+                        .expect("encode exact wrong-schema proof"),
+                );
+                assert!(
+                    !verify_backend(
+                        IVM_EXECUTION_V1_HALO2_BACKEND,
+                        &exact_wrong_schema_proof,
+                        Some(&exact_vk),
+                    ),
+                    "exact Halo2 verifier must reject altered outer schema for seed {seed}"
+                );
             }
         }
+    }
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn halo2_ivm_execution_rejects_legacy_unauthenticated_inner_headers() {
+        use halo2_proofs::halo2curves::ff::PrimeField as _;
+        use iroha_zkp_halo2::{FLAG_LOOKUPS, Halo2ProofEnvelope};
+
+        let fixture = test_utils::halo2_ivm_execution_envelope(
+            iroha_crypto::Hash::new(b"legacy-inner-header/code"),
+            iroha_crypto::Hash::new(b"legacy-inner-header/overlay"),
+            iroha_crypto::Hash::new(b"legacy-inner-header/events"),
+            iroha_crypto::Hash::new(b"legacy-inner-header/gas-policy"),
+        );
+        let proof = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
+        let vk = fixture
+            .vk_box(ZK_BACKEND_HALO2_IPA)
+            .expect("fixture must include a verifying key");
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk)));
+
+        let mut outer: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.bytes).expect("fixture envelope");
+        let (raw_proof, columns) = zkparse::strict_proof_and_instances(&outer.proof_bytes)
+            .expect("fixture must use strict ZK1");
+        let public_inputs: Vec<[u8; 32]> = columns
+            .iter()
+            .map(|column| {
+                let [value] = column.as_slice() else {
+                    panic!("IVM fixture columns must contain one row");
+                };
+                let mut bytes = [0_u8; 32];
+                bytes.copy_from_slice(value.to_repr().as_ref());
+                bytes
+            })
+            .collect();
+        assert_eq!(public_inputs.len(), 16);
+
+        let legacy_headers = [(13, 0, 0), (0, 13, FLAG_LOOKUPS)];
+        let mut encoded_headers = Vec::new();
+        for (n_in, n_out, flags) in legacy_headers {
+            let legacy = Halo2ProofEnvelope::new(
+                u8::try_from(IVM_EXECUTION_V1_IPA_K).expect("IVM IPA k fits u8"),
+                n_in,
+                n_out,
+                flags,
+                public_inputs.clone(),
+                raw_proof.clone(),
+            )
+            .expect("legacy header shape");
+            outer.proof_bytes = legacy.to_bytes();
+            encoded_headers.push(outer.proof_bytes.clone());
+            let legacy_proof = ProofBox::new(
+                ZK_BACKEND_HALO2_IPA.to_owned(),
+                norito::encode_canonical(&outer).expect("encode legacy-carrier proof"),
+            );
+            assert!(
+                !verify_backend(ZK_BACKEND_HALO2_IPA, &legacy_proof, Some(&vk)),
+                "production verification must reject the unauthenticated legacy inner header"
+            );
+        }
+        assert_ne!(encoded_headers[0], encoded_headers[1]);
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
@@ -7440,19 +7590,11 @@ mod stark_prover_tests {
         for backend in [
             ZK_BACKEND_STARK_FRI_V1,
             iroha_crypto::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
-            "stark/fri/poseidon2-goldilocks",
         ] {
             let prefixed_alias = format!("{backend}:{canonical}");
             let slash_alias = format!("{backend}/{canonical}");
             for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
-                let vk_payload = consensus_stark_vk!(
-                    circuit_id.clone(),
-                    if backend.contains("/poseidon2-") {
-                        STARK_HASH_POSEIDON2_V1
-                    } else {
-                        STARK_HASH_SHA256_V1
-                    }
-                );
+                let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
                 let vk_box = VerifyingKeyBox::new(
                     backend.to_owned(),
                     norito::to_bytes(&vk_payload).expect("encode BFV alias STARK VK payload"),
@@ -8129,6 +8271,22 @@ pub fn verify_backend_with_timing_guardrails(
             );
             return REJECTED_VERIFY_REPORT;
         }
+        let Some(expected_schema) = halo2_ipa_public_inputs_schema_v1(&env.circuit_id) else {
+            iroha_logger::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 circuit has no canonical outer public-input schema"
+            );
+            return REJECTED_VERIFY_REPORT;
+        };
+        if env.public_inputs.as_slice() != expected_schema {
+            iroha_logger::debug!(
+                backend,
+                circuit_id = env.circuit_id.as_str(),
+                "halo2 OpenVerifyEnvelope public-input schema is not canonical"
+            );
+            return REJECTED_VERIFY_REPORT;
+        }
     }
     if is_stark_fri_v1_backend(backend) {
         if !guardrails.stark_enabled {
@@ -8278,7 +8436,7 @@ mod guardrails_tests {
             backend: BackendTag::Halo2IpaPasta,
             circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.to_owned(),
             vk_hash: [0x11; 32],
-            public_inputs: vec![0xAA; 32],
+            public_inputs: IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
             proof_bytes: vec![0xBB; 10],
             aux: Vec::new(),
         }
@@ -8581,10 +8739,13 @@ mod guardrails_tests {
     }
     #[test]
     fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 5] = [
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
             ("empty circuit id", |env| env.circuit_id.clear()),
             ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
             ("empty public inputs", |env| env.public_inputs.clear()),
+            ("wrong nonzero public-input schema", |env| {
+                env.public_inputs = b"noncanonical-but-nonzero-schema".to_vec()
+            }),
             ("empty proof bytes", |env| env.proof_bytes.clear()),
             ("auxiliary bytes", |env| env.aux = b"ignored-hint".to_vec()),
         ];
@@ -9022,6 +9183,47 @@ mod halo2_ipa_alias_tests {
             assert!(
                 halo2_open_verify_circuit_id_matches_backend(backend, backend),
                 "concrete Halo2 backend must admit only its own production circuit {backend}"
+            );
+        }
+    }
+    #[cfg(all(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn every_production_halo2_circuit_has_one_canonical_outer_schema() {
+        for circuit_id in HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+            let schema = halo2_ipa_public_inputs_schema_v1(circuit_id)
+                .unwrap_or_else(|| panic!("missing canonical schema for {circuit_id}"));
+            assert!(
+                !schema.is_empty(),
+                "empty canonical schema for {circuit_id}"
+            );
+        }
+        for backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1
+            .iter()
+            .copied()
+            .filter(|backend| {
+                verifier_backend_registry_tag_v1(backend)
+                    == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+                    && *backend != ZK_BACKEND_HALO2_IPA
+            })
+        {
+            let canonical = normalize_halo2_ipa_circuit_id(backend)
+                .unwrap_or_else(|| panic!("failed to normalize exact Halo2 backend {backend}"));
+            assert_eq!(
+                halo2_ipa_public_inputs_schema_v1(backend),
+                halo2_ipa_public_inputs_schema_v1(&canonical),
+                "exact Halo2 backend and canonical circuit must select the same schema"
+            );
+        }
+        for alias in [
+            IVM_EXECUTION_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-execution-v1",
+            IVM_EXECUTION_V1_HALO2_BACKEND,
+            IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        ] {
+            assert_eq!(
+                halo2_ipa_public_inputs_schema_v1(alias),
+                Some(IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1),
+                "generic and exact Halo2 normalization must select the same schema for {alias}"
             );
         }
     }
@@ -11972,8 +12174,6 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    use halo2_backend::Scalar;
-    use iroha_zkp_halo2::Halo2ProofEnvelope;
     let reject = |reason: &'static str| {
         iroha_logger::debug!(backend, reason, "halo2 ipa proof rejected");
         false
@@ -12010,36 +12210,16 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         Ok(None) => {}
         Err(()) => return reject("invalid verifying key CID1 payload"),
     }
-    // Parse proof payload + instances via shared helper
-    let parsed_envelope = Halo2ProofEnvelope::from_bytes(proof.bytes.as_slice())
-        .ok()
-        .and_then(|env| {
-            let mut columns = Vec::with_capacity(env.public_inputs.len());
-            for chunk in &env.public_inputs {
-                let mut repr = <Scalar as ff::PrimeField>::Repr::default();
-                repr.as_mut().copy_from_slice(chunk);
-                let scalar = Option::from(<Scalar as ff::PrimeField>::from_repr(repr))?;
-                columns.push(vec![scalar]);
-            }
-            Some((env.proof, columns, env.header))
-        });
-    let (proof_payload, inst_cols, envelope_header) = if let Some((payload, cols, header)) =
-        parsed_envelope
-    {
-        (payload, cols, Some(header))
-    } else {
-        let (payload, cols) = match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
+    // Production proofs use one strict ZK1 carrier. The older binary envelope
+    // has caller-controlled `n_in`, `n_out`, and `flags` header fields that are
+    // not absorbed by Halo2's transcript, so accepting it would leave multiple
+    // unauthenticated encodings for the same proof and instance columns.
+    let (proof_payload, inst_cols) =
+        match zkparse::strict_proof_and_instances(proof.bytes.as_slice()) {
             Ok(x) => x,
             Err(_) => return reject("invalid ZK1 proof envelope payload"),
         };
-        (payload, cols, None)
-    };
-    let col_refs: Vec<&[Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
-    if let Some(header) = envelope_header
-        && params.k() != u32::from(header.k)
-    {
-        return reject("proof header k does not match verifying key IPAK");
-    }
+    let col_refs: Vec<&[halo2_backend::Scalar]> = inst_cols.iter().map(Vec::as_slice).collect();
     // These canonical identifiers already carry the `/ipa/` component.
     // Dispatch them before the legacy built-in normalization below removes
     // that component; otherwise exact circuit predicates can never match and
@@ -12512,11 +12692,17 @@ mod preverify_tests {
         circuit_id: &str,
         vk_hash: [u8; 32],
     ) -> ProofBox {
+        let public_inputs = if envelope_backend == BackendTag::Halo2IpaPasta {
+            halo2_ipa_public_inputs_schema_v1(circuit_id)
+                .map_or_else(|| vec![0x55; 32], |schema| schema.to_vec())
+        } else {
+            vec![0x55; 32]
+        };
         let envelope = OpenVerifyEnvelope {
             backend: envelope_backend,
             circuit_id: circuit_id.to_owned(),
             vk_hash,
-            public_inputs: vec![0x55; 32],
+            public_inputs,
             proof_bytes: vec![0xAA, 0xBB, 0xCC],
             aux: Vec::new(),
         };
@@ -12791,6 +12977,13 @@ mod preverify_tests {
                 "all_zero_public_inputs",
                 mutate_preverify_envelope(proof.clone(), |envelope| {
                     envelope.public_inputs = vec![0; 4];
+                }),
+                PreverifyResult::MalformedProof,
+            ),
+            (
+                "wrong_nonzero_public_input_schema",
+                mutate_preverify_envelope(proof.clone(), |envelope| {
+                    envelope.public_inputs = b"noncanonical-but-nonzero-schema".to_vec();
                 }),
                 PreverifyResult::MalformedProof,
             ),

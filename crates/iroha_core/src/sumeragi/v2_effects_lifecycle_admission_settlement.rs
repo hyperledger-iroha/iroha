@@ -1817,8 +1817,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )?;
-        Ok(())
+        )
     }
 }
 

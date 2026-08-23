@@ -4567,13 +4567,17 @@ mod connect_session_tests {
         assert!(resp.0.app_uri.contains(&sid_str));
         assert!(resp.0.wallet_uri.contains("&relay="));
         assert!(resp.0.app_uri.contains("&relay="));
-        let encoded_network_id = urlencoding::encode(
-            "hash:445E0F6E4B393BFB5FA7688DA17D509A9B4F8DFC9032DE25C65C83DD7C7FBF7D#6120",
-        );
-        let expected_query = format!("network_id={encoded_network_id}&");
-        assert!(resp.0.wallet_uri.contains(&expected_query));
-        assert!(resp.0.app_uri.contains(&expected_query));
-        assert!(!resp.0.wallet_uri.contains("chain_id="));
+        const CANONICAL_NETWORK_ID: &str =
+            "hash:445E0F6E4B393BFB5FA7688DA17D509A9B4F8DFC9032DE25C65C83DD7C7FBF7D#6120";
+        for uri in [&resp.0.wallet_uri, &resp.0.app_uri] {
+            let parsed = url::Url::parse(uri).expect("valid Connect URI");
+            let network_ids = parsed
+                .query_pairs()
+                .filter_map(|(key, value)| (key == "network_id").then(|| value.into_owned()))
+                .collect::<Vec<_>>();
+            assert_eq!(network_ids, vec![CANONICAL_NETWORK_ID.to_owned()]);
+            assert!(!parsed.query_pairs().any(|(key, _)| key == "chain_id"));
+        }
     }
     routing_test! { async connect_session_rejects_hex_sid
         let network_id = network_id(b"connect-session-genesis");
