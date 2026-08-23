@@ -2076,10 +2076,6 @@ fn autonomous_retirement_payload_for_routes(
     );
     let reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash:
-            crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                entrypoint_hash.clone(),
-            ),
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"geometry-retirement-queue-plan-admission-binding",

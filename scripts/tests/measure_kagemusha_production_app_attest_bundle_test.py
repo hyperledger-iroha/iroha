@@ -91,6 +91,124 @@ class CaptureBundleMeasurementTest(unittest.TestCase):
             self.assertEqual(observed["application_identifier"], "ABCDEFGHIJ.org.example.capture")
             self.assertRegex(str(observed["executable_sha256"]), r"^[0-9a-f]{64}$")
 
+    def test_measurement_rejects_inputs_changed_during_codesign(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Capture.app"
+            app.mkdir(mode=0o700)
+            executable = app / "Capture"
+            executable.write_bytes(b"reviewed-capture-executable")
+            executable.chmod(0o700)
+            (app / "Info.plist").write_bytes(
+                plistlib.dumps(
+                    {
+                        "CFBundleExecutable": "Capture",
+                        "CFBundleIdentifier": "org.example.capture",
+                        "CFBundleVersion": "1",
+                    }
+                )
+            )
+            (app / "Info.plist").chmod(0o600)
+            entitlements = root / "entitlements.plist"
+            entitlements.write_bytes(
+                plistlib.dumps(
+                    {
+                        "application-identifier": "ABCDEFGHIJ.org.example.capture",
+                        "com.apple.developer.team-identifier": "ABCDEFGHIJ",
+                        "com.apple.developer.devicecheck.appattest-environment": "production",
+                    }
+                )
+            )
+            entitlements.chmod(0o600)
+
+            def codesign_details(_app: Path) -> dict[str, str]:
+                entitlements.write_bytes(
+                    plistlib.dumps(
+                        {
+                            "application-identifier": "ABCDEFGHIJ.org.example.capture",
+                            "com.apple.developer.team-identifier": "ABCDEFGHIJ",
+                            "com.apple.developer.devicecheck.appattest-environment": "development",
+                        }
+                    )
+                )
+                return {
+                    "Identifier": "org.example.capture",
+                    "TeamIdentifier": "ABCDEFGHIJ",
+                    "CDHash": "0123456789abcdef0123456789abcdef01234567",
+                }
+
+            with (
+                mock.patch.object(
+                    measure, "_codesign_details", side_effect=codesign_details
+                ),
+                self.assertRaisesRegex(
+                    measure.MeasurementError, "inputs changed during measurement"
+                ),
+            ):
+                measure.measure_bundle(
+                    app, entitlements, "ABCDEFGHIJ", "org.example.capture"
+                )
+
+    def test_measurement_rejects_app_swap_during_final_rereads(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Capture.app"
+            replacement = root / "Replacement.app"
+            info_payload = plistlib.dumps(
+                {
+                    "CFBundleExecutable": "Capture",
+                    "CFBundleIdentifier": "org.example.capture",
+                    "CFBundleVersion": "1",
+                }
+            )
+            executable_payload = b"reviewed-capture-executable"
+            for bundle in (app, replacement):
+                bundle.mkdir(mode=0o700)
+                (bundle / "Info.plist").write_bytes(info_payload)
+                (bundle / "Info.plist").chmod(0o600)
+                (bundle / "Capture").write_bytes(executable_payload)
+                (bundle / "Capture").chmod(0o700)
+            entitlements = root / "entitlements.plist"
+            entitlements.write_bytes(
+                plistlib.dumps(
+                    {
+                        "application-identifier": "ABCDEFGHIJ.org.example.capture",
+                        "com.apple.developer.team-identifier": "ABCDEFGHIJ",
+                        "com.apple.developer.devicecheck.appattest-environment": "production",
+                    }
+                )
+            )
+            entitlements.chmod(0o600)
+            details = {
+                "Identifier": "org.example.capture",
+                "TeamIdentifier": "ABCDEFGHIJ",
+                "CDHash": "0123456789abcdef0123456789abcdef01234567",
+            }
+            regular_bytes = measure._regular_bytes
+            read_count = 0
+
+            def swap_on_last_reread(path: Path, label: str, maximum: int) -> bytes:
+                nonlocal read_count
+                read_count += 1
+                if read_count == 6:
+                    app.rename(root / "Original.app")
+                    replacement.rename(app)
+                return regular_bytes(path, label, maximum)
+
+            with (
+                mock.patch.object(measure, "_codesign_details", return_value=details),
+                mock.patch.object(
+                    measure, "_regular_bytes", side_effect=swap_on_last_reread
+                ),
+                self.assertRaisesRegex(
+                    measure.MeasurementError, "capture app changed during measurement"
+                ),
+            ):
+                measure.measure_bundle(
+                    app, entitlements, "ABCDEFGHIJ", "org.example.capture"
+                )
+            self.assertEqual(read_count, 6)
+
     def test_private_output_is_create_new_and_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "measurement.json"

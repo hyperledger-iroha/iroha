@@ -480,6 +480,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
     let worker_source = concat!(
         include_str!("v2_worker.rs"),
+        include_str!("v2_worker_services_impl.rs"),
         include_str!("v2_worker/effect_services_impl.rs")
     );
     let effects_source = include_str!("v2_effects.rs");
@@ -616,20 +617,19 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert!(!launch.contains("reply_route_source_capacity()"));
+    assert!(!launch.contains("restore_lifecycle_ordinal_source"));
     assert_source_tokens_in_order(
         launch,
         &[
             "service.matches_lifecycle_launch(",
             "binding.storage_paths_for_launch(inputs.kura.as_ref())",
             ".prepare_leader_wire_launch(launch_storage.wal_path())",
-            "lifecycle_ordinal_authorities_after_high_watermark(",
-            "self.coordinator.high_water",
-            "RuntimeLifecycleOrdinalSource::from_authority(",
+            "lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".open_gate(",
             "self.body_store\n                        .as_ref()",
             "leader_wire_restore.scheduler_ordinal_high_watermark()",
-            ".bind_live_lifecycle_ordinal_authority(",
+            ".bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
             "ProductionLeaderWireIngressBindingV1::bind(",
             ".body_store\n            .take()",
             ".into_serialized_runtime(",
@@ -646,8 +646,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let take_apply = source_token_position(launch, ".apply_service\n            .take()");
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
-        2,
-        "lifecycle restore and service startup must share the exact auxiliary capacity"
+        1,
+        "only service startup consumes the exact auxiliary capacity after ordinal restoration retired"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -808,6 +808,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "V2EffectExecutor::open_with_body_store(",
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis)",
+            ".recovered_published_validate_retry_markers()",
+            ".install_recovered_published_lifecycle_validate_retry_marker(",
             "ProductionV2Services::start_with_apply_service(",
         ],
     );
@@ -839,10 +841,12 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "services: ProductionV2Services",
             "pending_kura_apply_replay:",
             "recovered_local_proposal_attempt:",
-            "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+            "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
+            "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
             "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
         ],
     );
+    assert!(!launched_fields.contains("recovered_lifecycle_sign_completion:"));
     let leader_wire_drop = source_region(
         &source,
         "impl ProductionLeaderWireIngressBindingV1 {",
@@ -1359,9 +1363,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         lifecycle_run_inner_source,
         &[
             "executor.ready_to_finish()",
-            "if !ready_to_finish || producer_turn.is_some()",
+            "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
-            "let finalization_ready = ready_to_finish",
+            "let finalization_ready =",
             "activated.ready_for_finalized_rollover(&mut active_runner)",
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
@@ -1863,6 +1867,8 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let registry_source = include_str!("v2_lifecycle_work_registry.rs");
     let coordinator_source = include_str!("v2_lifecycle_coordinator.rs");
     let worker_source = include_str!("v2_worker.rs");
+    let worker_completion_source = include_str!("v2_worker_completion.rs");
+    let worker_io_execution_source = include_str!("v2_worker_io_execution.rs");
     let worker_tests_source = include_str!("tests/v2_worker_recovered_lifecycle_output_cases.rs");
     let launch_source = include_str!("v2_lifecycle_launch.rs");
     let effects_tests_source = include_str!("tests/v2_effects_main_04.rs");
@@ -1977,7 +1983,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         ],
     );
     let parked_completion = source_region(
-        worker_source,
+        worker_completion_source,
         "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
         "/// Result of atomically returning one guarded missing-sidecar Apply",
     );
@@ -1998,7 +2004,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         ],
     );
     let signer = source_region(
-        worker_source,
+        worker_io_execution_source,
         "fn sign_recovered_lifecycle_task(",
         "fn recover_outbound_proposal_payload(",
     );
@@ -2059,7 +2065,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     assert_source_tokens_in_order(
         settlement,
         &[
-            "recovered_lifecycle_sign_completion.take()",
+            "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
             "prepare_recovered_lifecycle_sign_completion(authority)",
             "prepare_recovered_lifecycle_sign_broadcast_successor(",
             "prepare_recovered_lifecycle_sign_broadcast_transition(",
@@ -2087,10 +2093,10 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         refanout,
         &[
             "if exact_ready != self.coordinator.ready_index",
-            "work_class == LifecycleWorkClass::Broadcast",
+            "record.work_class != LifecycleWorkClass::Broadcast",
             "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
             "attest_ready_recovered_lifecycle_signed_broadcast",
-            "for ready_ordinal in &exact_ready",
+            "let factory = AuthenticatedSchedulerInputsFactory::new()",
             "attest_ready_recovered_lifecycle_sign(",
             "self.coordinator.plan_turn(inputs)",
             "project_claimed_recovered_lifecycle_signed_broadcast_output",
@@ -2125,10 +2131,12 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         launched,
         &[
             "services: ProductionV2Services",
-            "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+            "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
+            "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
             "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
         ],
     );
+    assert!(!launched.contains("recovered_lifecycle_sign_completion:"));
     assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed();
     assert_recovered_proposal_prepare_wal_settlement_is_restart_closed();
     assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart_closed();
@@ -2144,7 +2152,7 @@ fn assert_recovered_vote_broadcast_and_sign_settlement_is_restart_closed() {
     assert_source_tokens_in_order(
         settlement,
         &[
-            "recovered_lifecycle_sign_completion.take()",
+            "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
             "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
             "preview.is_vote_broadcast_and_sign_shape()",
             "prepare_recovered_lifecycle_sign_broadcast_and_sign_successor(",
@@ -2180,7 +2188,7 @@ fn assert_recovered_proposal_prepare_wal_settlement_is_restart_closed() {
     assert_source_tokens_in_order(
         settlement,
         &[
-            "recovered_lifecycle_sign_completion.take()",
+            "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
             "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
             "RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
             "preview.project_proposal_exact_output_authority()",
@@ -2199,7 +2207,7 @@ fn assert_recovered_proposal_prepare_wal_settlement_is_restart_closed() {
         settlement,
         &[
             "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
-            "*recovered_lifecycle_sign_completion = Some(completion)",
+            "Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
         ],
     );
     assert_forbidden_source_tokens(settlement, &["output.abort_before_publication()"]);
@@ -2225,7 +2233,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     assert_source_tokens_in_order(
         settlement,
         &[
-            "recovered_lifecycle_sign_completion.take()",
+            "PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)",
             "prepare_recovered_lifecycle_sign_completion_with_body(executor, authority)",
             "preview.project_proposal_exact_output_authority()",
             "capture_recovered_lifecycle_proposal_exact_output(output_authority)",
@@ -2242,7 +2250,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
         settlement,
         &[
             "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(authority)",
-            "*recovered_lifecycle_sign_completion = Some(completion)",
+            "Some(PendingLifecycleCompletionV1::RecoveredSign(completion))",
             "drop(output);",
         ],
     );
@@ -2271,7 +2279,7 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
         .find("self.coordinator.plan_turn(inputs)")
         .expect("coordinator claim exists");
     let output = dispatch
-        .find("census.select_fetch(ordinal)")
+        .find(".select_fetch(ordinal)")
         .expect("the selected Fetch owns exact output");
     let executor = dispatch
         .find("prepare_recovered_decision_fetch_request_registration(owner)")
@@ -2305,7 +2313,11 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
 
 #[test]
 fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completion_classifier() {
-    let worker = include_str!("v2_worker.rs");
+    let worker = [
+        include_str!("v2_worker.rs"),
+        include_str!("v2_worker_services_impl.rs"),
+    ]
+    .concat();
     let generic = worker
         .split_once("fn take_io_completion(")
         .expect("generic completion selector exists")
@@ -2373,6 +2385,40 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
 }
 
 #[test]
+fn registered_validate_sidecar_barrier_services_only_lane_transport_before_yield() {
+    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let barrier = source_region(
+        run_inner,
+        "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
+        "let discovery_was_outstanding = if lane_only_completion_barrier",
+    );
+    assert_source_tokens_in_order(
+        barrier,
+        &[
+            "if lane_only_completion_barrier",
+            "drain_lane_relay_ingress(",
+            "lane_work.schedule_retransmission()?",
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)",
+        ],
+    );
+    assert!(!barrier.contains("advance_executor("));
+
+    let post_drain = source_region(
+        run_inner,
+        "producer_claim = drain_disposition.producer_claim();",
+        "let (ready_to_finish, lifecycle_yield)",
+    );
+    assert_source_tokens_in_order(
+        post_drain,
+        &[
+            "if drain_disposition.requires_yield()",
+            "wake_rx.recv_timeout(IDLE_POLL)",
+            "continue;",
+        ],
+    );
+}
+
+#[test]
 fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() {
     let driver = include_str!("v2_lifecycle_turn_driver.rs");
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
@@ -2414,6 +2460,108 @@ fn authenticated_current_serve_context_drift_fails_closed_instead_of_retrying() 
         ],
     );
     assert!(!driver.contains("OrdinaryRetained"));
+}
+
+#[test]
+fn authenticated_current_serve_queue_refresh_retries_without_closing_output() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let narrowing = source_region(
+        driver,
+        "let expected_context = lifecycle_context_for_ingress(executor.context());",
+        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
+    );
+    let retry = source_region(
+        narrowing,
+        "Err((FairIngressQueueCutError::QueueCutChanged, retained))",
+        "Err((error, retained))",
+    );
+    assert_source_tokens_in_order(
+        retry,
+        &[
+            "drop(retained);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
+        ],
+    );
+    assert!(!retry.contains("close_admission_for_restart()"));
+
+    let structural_failure = source_region(
+        driver,
+        "Err((error, retained))",
+        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
+    );
+    assert_source_tokens_in_order(
+        structural_failure,
+        &[
+            "close_admission_for_restart()",
+            "drop(retained);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ],
+    );
+
+    let selector_capture = source_region(
+        driver,
+        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
+        "let (dequeue, target)",
+    );
+    let selector_retry = source_region(
+        selector_capture,
+        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        selector_retry,
+        &[
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
+        ],
+    );
+    assert!(!selector_retry.contains("close_admission_for_restart()"));
+
+    let selector_structural_failure = source_region(
+        driver,
+        "authenticated current Certified-Serve selector capture failed closed",
+        "let (dequeue, target)",
+    );
+    assert_source_tokens_in_order(
+        selector_structural_failure,
+        &[
+            "close_admission_for_restart()",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ],
+    );
+
+    let exact_dequeue = source_region(driver, "let (dequeue, target)", "let ready_ledger =");
+    let exact_dequeue_retry = source_region(
+        exact_dequeue,
+        "Err(CertifiedServeExactDequeueErrorV1::Queue(",
+        "Err(error)",
+    );
+    assert_source_tokens_in_order(
+        exact_dequeue_retry,
+        &[
+            "FairIngressQueueCutError::QueueCutChanged",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
+        ],
+    );
+    assert!(!exact_dequeue_retry.contains("close_admission_for_restart()"));
+
+    let exact_dequeue_structural_failure = source_region(
+        driver,
+        "Certified-Serve exact dequeue failed closed",
+        "let ready_ledger =",
+    );
+    assert_source_tokens_in_order(
+        exact_dequeue_structural_failure,
+        &[
+            "close_admission_for_restart()",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ],
+    );
 }
 
 #[test]
@@ -2562,7 +2710,7 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
     assert!(!tail.contains("Result<"));
     assert!(!tail.contains(".is_err()"));
 
-    let worker = include_str!("v2_worker.rs");
+    let worker = include_str!("v2_worker_completion.rs");
     let guarded = worker
         .split_once("impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {")
         .expect("recovered Fetch completion has one armed guard")

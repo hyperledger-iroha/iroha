@@ -8,6 +8,7 @@ fn completion_selection_stops_batch(
     matches!(
         selection,
         super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied
     )
 }
 
@@ -34,15 +35,22 @@ fn ingress_restart_error(output_guard: &ConsensusOutputGuard) -> V2RunnerError {
 ///
 /// A non-eligible target is minted only after a typed lifecycle transaction
 /// queues asynchronous work. Claimed work retains the coordinator's sole
-/// non-Producer lease; terminal replay retains a separate serialized worker
-/// barrier without a lease. Pass-through turns preserve the exact target until
-/// its typed Completion path advances or releases it.
+/// non-Producer lease; terminal replay and a registered Validate sidecar wait
+/// retain separate serialized barriers without a lease. Pass-through turns
+/// preserve the exact target until its typed Completion path advances or
+/// releases it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     /// No authenticated in-flight lifecycle lease blocks ProducerTurn planning.
     Eligible,
     /// A queued worker or parked worker result must advance through Completion.
     AwaitingCompletion,
+    /// A registered Validate sidecar wait permits only its lane transport to progress.
+    AwaitingValidateSidecar,
+    /// A typed Decision Apply owns the terminal barrier until Kura and LedgerV1 settle.
+    AwaitingApplyCompletion,
+    /// Recovered Apply settled the reducer terminal; only durable rollover may follow.
+    ApplyTerminalSettled,
     /// A no-lease terminal replay worker must finish before finalization.
     AwaitingReplayCompletion,
 }
@@ -84,15 +92,45 @@ impl LifecycleProducerClaimDispositionV1 {
 
     /// Return whether the outer height must yield before ProducerTurn planning.
     pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
-        !matches!(self, Self::Eligible)
+        matches!(
+            self,
+            Self::AwaitingCompletion
+                | Self::AwaitingValidateSidecar
+                | Self::AwaitingApplyCompletion
+                | Self::AwaitingReplayCompletion
+        )
     }
 
-    /// Return whether this target must yield after one Runtime turn, before Ingress.
+    /// Return whether this target must yield before fresh Ingress.
     const fn blocks_ingress(self) -> bool {
         matches!(
             self,
-            Self::AwaitingCompletion | Self::AwaitingReplayCompletion
+            Self::AwaitingCompletion
+                | Self::AwaitingValidateSidecar
+                | Self::AwaitingApplyCompletion
+                | Self::ApplyTerminalSettled
+                | Self::AwaitingReplayCompletion
         )
+    }
+
+    /// Return whether only exact lane transport may run before Completion settles.
+    pub(super) const fn blocks_runtime(self) -> bool {
+        matches!(
+            self,
+            Self::AwaitingValidateSidecar
+                | Self::AwaitingApplyCompletion
+                | Self::ApplyTerminalSettled
+        )
+    }
+
+    /// Return whether recovered Apply has crossed its exact terminal settlement.
+    pub(super) const fn apply_terminal_settled(self) -> bool {
+        matches!(self, Self::ApplyTerminalSettled)
+    }
+
+    /// Return whether terminal recovery may consume decided-lane fair ingress.
+    pub(super) const fn permits_decided_lane_recovery_ingress(self) -> bool {
+        matches!(self, Self::ApplyTerminalSettled)
     }
 
     fn observe_completion(
@@ -117,11 +155,13 @@ impl LifecycleProducerClaimDispositionV1 {
             (
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(
-                    Dispatch::ValidateQueued { .. }
-                    | Dispatch::ApplyQueued { .. }
-                    | Dispatch::SignQueued { .. },
+                    Dispatch::ValidateQueued { .. } | Dispatch::SignQueued { .. },
                 )),
             ) => Ok(Self::AwaitingCompletion),
+            (
+                Self::Eligible,
+                Completion::CompletionIoDispatch(Ok(Dispatch::ApplyQueued { .. })),
+            ) => Ok(Self::AwaitingApplyCompletion),
             (
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(Dispatch::FetchDispatched { .. })),
@@ -145,25 +185,35 @@ impl LifecycleProducerClaimDispositionV1 {
                 // completion owner across the outer producer boundary.
                 Ok(Self::Eligible)
             }
-            (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyDeferred)
-            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyRequeued)
-            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyCompletionDeferred)
-            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry) => {
+            (Self::AwaitingApplyCompletion, Completion::RecoveredDecisionApplyDeferred)
+            | (Self::AwaitingApplyCompletion, Completion::RecoveredDecisionApplyRequeued)
+            | (
+                Self::AwaitingApplyCompletion,
+                Completion::RecoveredDecisionApplyCompletionDeferred,
+            ) => Ok(Self::AwaitingApplyCompletion),
+            (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry)
+            | (Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
                 Ok(Self::AwaitingCompletion)
             }
-            (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
-                // The Validate row is atomically settled on an external
-                // merge-sidecar wait before its registration is retained. No
-                // active lifecycle lease crosses that wait, and its response
-                // must be allowed through Ingress before the exact
-                // registration can wake.
-                Ok(Self::Eligible)
+            (
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
+                Completion::LifecycleValidateSidecarWaiting,
+            ) => {
+                // Registration moved the exact Validate row to an external
+                // sidecar wait and released the coordinator lease. Keep
+                // Producer and ordinary lifecycle ingress blocked while the
+                // lane-only barrier admits its authenticated response.
+                Ok(Self::AwaitingValidateSidecar)
             }
             (
                 Self::AwaitingCompletion,
                 Completion::RecoveredLifecycleSignCompletion(SignCompletion::Broadcast(
                     SignSettlement::Retry,
                 )),
+            )
+            | (
+                Self::AwaitingCompletion,
+                Completion::RecoveredLifecycleSignCompletion(SignCompletion::Retry),
             )
             | (
                 Self::AwaitingCompletion,
@@ -181,7 +231,13 @@ impl LifecycleProducerClaimDispositionV1 {
                 Self::AwaitingCompletion,
                 Completion::RecoveredDecisionFetchCompletion(FetchSettlement::Retry(_)),
             ) => Ok(Self::AwaitingCompletion),
-            (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyApplied)
+            (Self::AwaitingApplyCompletion, Completion::RecoveredDecisionApplyApplied) => {
+                Ok(Self::ApplyTerminalSettled)
+            }
+            (
+                Self::AwaitingCompletion,
+                Completion::RecoveredLifecycleSignCompletion(SignCompletion::Superseded),
+            )
             | (
                 Self::AwaitingCompletion,
                 Completion::RecoveredLifecycleSignCompletion(SignCompletion::Broadcast(
@@ -203,7 +259,7 @@ impl LifecycleProducerClaimDispositionV1 {
             | (Self::AwaitingCompletion, Completion::CertifiedFetchBodyPersisted)
             | (Self::AwaitingCompletion, Completion::LifecycleValidatePublished)
             | (
-                Self::Eligible | Self::AwaitingCompletion,
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
                 Completion::LifecycleValidateSidecarWoken,
             )
             | (Self::AwaitingCompletion, Completion::CertifiedServeClaimedCompleted) => {
@@ -216,7 +272,7 @@ impl LifecycleProducerClaimDispositionV1 {
                 Ok(Self::Eligible)
             }
             (
-                Self::Eligible | Self::AwaitingCompletion,
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingApplyCompletion,
                 Completion::CertifiedServeReplayCompleted,
             ) => Ok(self),
             (
@@ -269,6 +325,7 @@ impl LifecycleProducerClaimDispositionV1 {
 pub(in crate::sumeragi) struct LifecycleV2IngressDrainDispositionV1 {
     producer_claim: LifecycleProducerClaimDispositionV1,
     retry_before_producer: bool,
+    terminal_settlement_stops_runtime: bool,
 }
 
 impl LifecycleV2IngressDrainDispositionV1 {
@@ -276,6 +333,17 @@ impl LifecycleV2IngressDrainDispositionV1 {
         Self {
             producer_claim,
             retry_before_producer: false,
+            terminal_settlement_stops_runtime: false,
+        }
+    }
+
+    const fn after_terminal_settlement(
+        producer_claim: LifecycleProducerClaimDispositionV1,
+    ) -> Self {
+        Self {
+            producer_claim,
+            retry_before_producer: false,
+            terminal_settlement_stops_runtime: true,
         }
     }
 
@@ -283,6 +351,7 @@ impl LifecycleV2IngressDrainDispositionV1 {
         Self {
             producer_claim,
             retry_before_producer: true,
+            terminal_settlement_stops_runtime: false,
         }
     }
 
@@ -294,6 +363,11 @@ impl LifecycleV2IngressDrainDispositionV1 {
     /// Return whether this batch must yield before fresh Producer planning.
     pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
         self.retry_before_producer || self.producer_claim.requires_yield()
+    }
+
+    /// Return whether terminal settlement must precede all ordinary runtime service.
+    pub(in crate::sumeragi) const fn terminal_settlement_stops_runtime(self) -> bool {
+        self.terminal_settlement_stops_runtime
     }
 }
 
@@ -312,7 +386,26 @@ fn recovered_output_drain_disposition(
             ))
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            Some(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                producer_claim,
+            ))
+        }
+    }
+}
+
+fn settled_apply_output_drain_disposition(
+    settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> LifecycleV2IngressDrainDispositionV1 {
+    debug_assert!(producer_claim.apply_terminal_settled());
+    match settlement {
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            LifecycleV2IngressDrainDispositionV1::retry_before_producer(producer_claim)
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
         }
     }
 }
@@ -344,6 +437,27 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     limit: usize,
     mut producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
+    if producer_claim.apply_terminal_settled() {
+        // Applied is already the exact reducer terminal. Drain only retained,
+        // authenticated output rows required by the finalization census; do
+        // not reopen generic Completion, Runtime, Ingress, or Producer work.
+        // A validator that originated a transaction can retain such an output
+        // after its peers have crossed Apply, so skipping this bounded drain
+        // would leave it permanently short of successor activation.
+        let settlement = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                    owner, executor, services,
+                )
+                .map_err(V2RunnerError::from)
+            },
+        )?;
+        return Ok(settled_apply_output_drain_disposition(
+            settlement,
+            producer_claim,
+        ));
+    }
     let (context_id, height, output_guard) =
         activated.with_runner_runtime(runner, |_owner, executor, services, _local_proposal| {
             (
@@ -355,22 +469,24 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
 
     let mut outer_turns = outer_ingress_turns(limit, context_id, height);
     while let Some(current_turn) = outer_turns.next_current() {
-        let recovered_output_settlement = activated.with_runner_runtime(
-            runner,
-            |owner, executor, services, _local_proposal| {
-                super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-                    owner, executor, services,
-                )
-                .map_err(V2RunnerError::from)
-            },
-        )?;
-        if let Some(disposition) =
-            recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
-        {
-            // A preceding completion may have exposed this exact ordinal as
-            // the new Ready minimum. Settle it before the turn driver can
-            // acquire a registry-backed lease for the cold-only carrier.
-            return Ok(disposition);
+        if !producer_claim.blocks_runtime() {
+            let recovered_output_settlement = activated.with_runner_runtime(
+                runner,
+                |owner, executor, services, _local_proposal| {
+                    super::super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                        owner, executor, services,
+                    )
+                    .map_err(V2RunnerError::from)
+                },
+            )?;
+            if let Some(disposition) =
+                recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
+            {
+                // A preceding completion may have exposed this exact ordinal as
+                // the new Ready minimum. Settle it before the turn driver can
+                // acquire a registry-backed lease for the cold-only carrier.
+                return Ok(disposition);
+            }
         }
         match current_turn.target() {
             LifecycleRunnerRankTarget::Completion => {
@@ -424,7 +540,11 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         // Settlement makes the adjacent ProducerTurn Ready.
                         // Let run_inner claim it before any Runtime or
                         // Ingress owner can add another Serve to the census.
-                        return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                        return Ok(
+                            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                                producer_claim,
+                            ),
+                        );
                     }
                     if selected.restart_required() || output_guard.restart_required() {
                         return Err(V2RunnerError::RestartRequired);
@@ -432,6 +552,13 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
+                if producer_claim.blocks_runtime() {
+                    // A typed Apply or registered Validate sidecar wait can
+                    // advance outside this batch. Its exact Completion owner
+                    // is the sole progress target; ordinary runtime ingress
+                    // remains inert until that barrier settles.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                }
                 let (installed_terminal, lifecycle_yield) = activated.with_runner_runtime(
                     runner,
                     |owner, executor, services, _local_proposal| {
@@ -548,19 +675,24 @@ mod tests {
         };
 
         let claim = LifecycleProducerClaimDispositionV1::initial();
+        let completed = recovered_output_drain_disposition(
+            RecoveredLifecycleOutputSettlementV1::Completed,
+            claim,
+        )
+        .expect("completed output stops the ordinary runtime suffix");
         assert_eq!(
-            recovered_output_drain_disposition(
-                RecoveredLifecycleOutputSettlementV1::Completed,
-                claim,
-            ),
-            Some(LifecycleV2IngressDrainDispositionV1::ready(claim))
+            completed,
+            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(claim)
         );
+        assert!(completed.terminal_settlement_stops_runtime());
+        assert!(!completed.requires_yield());
         let retained = recovered_output_drain_disposition(
             RecoveredLifecycleOutputSettlementV1::SourceRetained,
             claim,
         )
         .expect("source-retained output requires a timed retry");
         assert!(retained.requires_yield());
+        assert!(!retained.terminal_settlement_stops_runtime());
         assert_eq!(
             retained,
             LifecycleV2IngressDrainDispositionV1::retry_before_producer(claim)
@@ -580,12 +712,123 @@ mod tests {
         assert!(completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted
         ));
+        assert!(completion_selection_stops_batch(
+            &ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied
+        ));
         assert!(!completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted
         ));
         assert!(!completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::RestartRequired
         ));
+    }
+
+    #[test]
+    fn typed_apply_claim_blocks_runtime_until_terminal_settlement() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+            RecoveredLifecycleOutputSettlementV1,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::initial()
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ApplyQueued { ordinal: 7 },
+            )))
+            .expect("eligible Apply dispatch mints its terminal barrier");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+        );
+        assert!(claim.requires_yield());
+        assert!(claim.blocks_runtime());
+        assert!(claim.blocks_ingress());
+        assert!(!claim.permits_decided_lane_recovery_ingress());
+
+        let deferred = claim
+            .observe_completion(&Completion::RecoveredDecisionApplyCompletionDeferred)
+            .expect("missing-sidecar retry retains the exact Apply barrier");
+        assert_eq!(deferred, claim);
+        let settled = deferred
+            .observe_completion(&Completion::RecoveredDecisionApplyApplied)
+            .expect("Applied crosses the persistent terminal barrier");
+        assert_eq!(
+            settled,
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+        );
+        assert!(!settled.requires_yield());
+        assert!(settled.blocks_runtime());
+        assert!(settled.blocks_ingress());
+        assert!(settled.apply_terminal_settled());
+        assert!(settled.permits_decided_lane_recovery_ingress());
+
+        for completed in [
+            RecoveredLifecycleOutputSettlementV1::Empty,
+            RecoveredLifecycleOutputSettlementV1::Deferred,
+            RecoveredLifecycleOutputSettlementV1::Completed,
+        ] {
+            let disposition = settled_apply_output_drain_disposition(completed, settled);
+            assert_eq!(disposition.producer_claim(), settled);
+            assert!(disposition.terminal_settlement_stops_runtime());
+            assert!(!disposition.requires_yield());
+        }
+        let retained = settled_apply_output_drain_disposition(
+            RecoveredLifecycleOutputSettlementV1::SourceRetained,
+            settled,
+        );
+        assert_eq!(retained.producer_claim(), settled);
+        assert!(!retained.terminal_settlement_stops_runtime());
+        assert!(retained.requires_yield());
+    }
+
+    #[test]
+    fn registered_validate_sidecar_wait_opens_only_lane_transport() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+        };
+
+        let awaiting = LifecycleProducerClaimDispositionV1::initial()
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ValidateQueued { ordinal: 7 },
+            )))
+            .expect("eligible Validate dispatch mints its Completion target");
+        assert_eq!(
+            awaiting,
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+        );
+        let registration_pending = awaiting
+            .observe_completion(&Completion::LifecycleValidateDeferred)
+            .expect("pre-registration deferral retains the guarded completion");
+        assert_eq!(registration_pending, awaiting);
+        assert!(registration_pending.blocks_ingress());
+
+        let waiting = registration_pending
+            .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
+            .expect("durable external wait installs its lane-only barrier");
+        assert_eq!(
+            waiting,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        );
+        assert!(waiting.requires_yield());
+        assert!(waiting.blocks_runtime());
+        assert!(waiting.blocks_ingress());
+        assert!(!waiting.permits_decided_lane_recovery_ingress());
+        assert_eq!(
+            waiting.observe_completion(&Completion::LifecycleValidateSidecarWaiting),
+            Ok(LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar),
+            "polling the same external wait must preserve its lane-only barrier"
+        );
+        assert_eq!(
+            LifecycleProducerClaimDispositionV1::initial()
+                .observe_completion(&Completion::LifecycleValidateSidecarWaiting),
+            Ok(LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar),
+            "cold-open registration must install the same lane-only barrier"
+        );
+        assert_eq!(
+            waiting.observe_completion(&Completion::LifecycleValidateSidecarWoken),
+            Ok(LifecycleProducerClaimDispositionV1::Eligible)
+        );
     }
 
     #[test]
@@ -608,42 +851,24 @@ mod tests {
             claim,
             LifecycleProducerClaimDispositionV1::AwaitingCompletion
         );
-        let claim = claim
+        let retry_claim = claim
+            .observe_completion(&Completion::RecoveredLifecycleSignCompletion(
+                SignCompletion::Retry,
+            ))
+            .expect("transient runtime debt retains the exact Sign target");
+        assert_eq!(retry_claim, claim);
+        let superseded_claim = retry_claim
+            .observe_completion(&Completion::RecoveredLifecycleSignCompletion(
+                SignCompletion::Superseded,
+            ))
+            .expect("durable supersession cancellation clears the Sign target");
+        assert!(!superseded_claim.requires_yield());
+        let applied_claim = claim
             .observe_completion(&Completion::RecoveredLifecycleSignCompletion(
                 SignCompletion::Broadcast(SignSettlement::Applied),
             ))
             .expect("matching Sign completion clears the target");
-        assert!(!claim.requires_yield());
-    }
-
-    #[test]
-    fn deferred_validate_sidecar_wait_releases_ingress_for_its_response() {
-        use super::super::super::v2_lifecycle_coordinator::{
-            ProductionCompletionDispatchV1 as Dispatch,
-            ProductionLifecycleCompletionSelectionV1 as Completion,
-        };
-
-        let claim = LifecycleProducerClaimDispositionV1::initial()
-            .observe_completion(&Completion::CompletionIoDispatch(Ok(
-                Dispatch::ValidateQueued { ordinal: 1 },
-            )))
-            .expect("eligible Validate dispatch mints the Completion target");
-        assert_eq!(
-            claim,
-            LifecycleProducerClaimDispositionV1::AwaitingCompletion
-        );
-
-        let claim = claim
-            .observe_completion(&Completion::LifecycleValidateDeferred)
-            .expect("external sidecar wait releases the Completion target");
-        assert_eq!(claim, LifecycleProducerClaimDispositionV1::Eligible);
-        assert!(!claim.requires_yield());
-        assert!(!claim.blocks_ingress());
-
-        assert_eq!(
-            claim.observe_completion(&Completion::LifecycleValidateSidecarWoken),
-            Ok(LifecycleProducerClaimDispositionV1::Eligible)
-        );
+        assert!(!applied_claim.requires_yield());
     }
 
     #[test]

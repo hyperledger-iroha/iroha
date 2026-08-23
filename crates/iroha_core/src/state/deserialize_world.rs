@@ -1112,43 +1112,16 @@ fn parse_world(
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, json::Error> {
-    let has_pre_release_commit_qcs = map.contains_key("commit_qcs");
     if let Some(actual) = map.source_order.as_ref() {
         let expected = canonical_world_field_order();
-        let order_is_exact = if has_pre_release_commit_qcs {
-            const POST_RELEASE_AXT_FIELDS: &[&str] = &[
-                "axt_policies",
-                "axt_handle_counters",
-                "axt_asset_incarnations",
-                "axt_replay_ledger",
-                "axt_handle_budget_ledger",
-            ];
-            let mut legacy_expected: Vec<&str> = expected
-                .iter()
-                .map(String::as_str)
-                .filter(|key| !POST_RELEASE_AXT_FIELDS.contains(key))
-                .collect();
-            legacy_expected
-                .iter()
-                .position(|key| *key == "merge_hint_roots")
-                .is_some_and(|index| {
-                    legacy_expected.insert(index, "commit_qcs");
-                    actual
-                        .iter()
-                        .map(String::as_str)
-                        .eq(legacy_expected.iter().copied())
-                })
-        } else {
-            if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
-                return Err(json::Error::InvalidField {
-                    field: format!("world.{unknown}"),
-                    message: "unknown field is not permitted in a signed first-release snapshot"
-                        .to_owned(),
-                });
-            }
-            actual == expected
-        };
-        if !order_is_exact {
+        if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
+            return Err(json::Error::InvalidField {
+                field: format!("world.{unknown}"),
+                message: "unknown field is not permitted in a signed first-release snapshot"
+                    .to_owned(),
+            });
+        }
+        if actual != expected {
             return Err(json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "snapshot world fields are not in canonical schema order".to_owned(),
@@ -1207,17 +1180,10 @@ fn parse_world(
     let viral_binding_claims = take_required(&mut map, "viral_binding_claims")?;
     let viral_escrows = take_required(&mut map, "viral_escrows")?;
     let viral_bonus_paid = take_required(&mut map, "viral_bonus_paid")?;
-    let axt_policies: Storage<DataSpaceId, AxtPolicyEntry> = if has_pre_release_commit_qcs {
-        Storage::default()
-    } else {
-        take_required(&mut map, "axt_policies")?
-    };
+    let axt_policies: Storage<DataSpaceId, AxtPolicyEntry> =
+        take_required(&mut map, "axt_policies")?;
     let axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord> =
-        if has_pre_release_commit_qcs {
-            Storage::default()
-        } else {
-            take_required(&mut map, "axt_handle_counters")?
-        };
+        take_required(&mut map, "axt_handle_counters")?;
     {
         let counters = axt_handle_counters.view();
         for (_, record) in counters.iter() {
@@ -1230,11 +1196,7 @@ fn parse_world(
         }
     }
     let axt_asset_incarnations: Storage<AssetDefinitionId, AxtAssetIncarnationV1> =
-        if has_pre_release_commit_qcs {
-            Storage::default()
-        } else {
-            take_required(&mut map, "axt_asset_incarnations")?
-        };
+        take_required(&mut map, "axt_asset_incarnations")?;
     {
         let definitions = asset_definitions.view();
         let incarnations = axt_asset_incarnations.view();
@@ -1254,31 +1216,21 @@ fn parse_world(
                 });
             }
         }
-        if !has_pre_release_commit_qcs {
-            for (asset_definition_id, _) in definitions.iter() {
-                if incarnations.get(asset_definition_id).is_none() {
-                    return Err(json::Error::InvalidField {
-                        field: "world.axt_asset_incarnations".to_owned(),
-                        message: format!(
-                            "registered asset definition {asset_definition_id} has no AXT incarnation"
-                        ),
-                    });
-                }
+        for (asset_definition_id, _) in definitions.iter() {
+            if incarnations.get(asset_definition_id).is_none() {
+                return Err(json::Error::InvalidField {
+                    field: "world.axt_asset_incarnations".to_owned(),
+                    message: format!(
+                        "registered asset definition {asset_definition_id} has no AXT incarnation"
+                    ),
+                });
             }
         }
     }
     let axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord> =
-        if has_pre_release_commit_qcs {
-            Storage::default()
-        } else {
-            take_required(&mut map, "axt_replay_ledger")?
-        };
+        take_required(&mut map, "axt_replay_ledger")?;
     let axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord> =
-        if has_pre_release_commit_qcs {
-            Storage::default()
-        } else {
-            take_required(&mut map, "axt_handle_budget_ledger")?
-        };
+        take_required(&mut map, "axt_handle_budget_ledger")?;
     {
         let ledger = axt_handle_budget_ledger.view();
         for (key, record) in ledger.iter() {
@@ -1534,11 +1486,6 @@ fn parse_world(
     let proofs = take_optional_default(&mut map, "proofs")?;
     let proof_tags = take_optional_default(&mut map, "proof_tags")?;
     let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-    if has_pre_release_commit_qcs {
-        map.remove("commit_qcs")
-            .expect("presence was checked")
-            .require_empty_pre_release_commit_qcs()?;
-    }
     let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
     let contract_code = take_optional_default(&mut map, "contract_code")?;
     let contract_code_uploads = take_required(&mut map, "contract_code_uploads")?;

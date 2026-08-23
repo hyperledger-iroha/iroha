@@ -356,10 +356,11 @@ impl Chunker {
             self.offset += 1;
             self.current_len += 1;
             self.current_hash = roll(self.current_hash, byte, self.table);
-            let min_reached = self.current_len >= self.profile.min_size;
+            // Batch mode starts mask checks after consuming the mandatory prefix.
+            let past_minimum = self.current_len > self.profile.min_size;
             let max_reached = self.current_len >= self.profile.max_size;
             let matches_mask = (self.current_hash & self.profile.break_mask) == 0;
-            if max_reached || (min_reached && matches_mask) {
+            if max_reached || (past_minimum && matches_mask) {
                 let chunk = Chunk {
                     offset: self.chunk_start,
                     length: self.current_len,
@@ -634,6 +635,32 @@ mod tests {
             chunker.feed(&input[idx..end], |chunk| actual.push(chunk));
             idx = end;
         }
+        chunker.finish(|chunk| actual.push(chunk));
+        assert_eq!(expected, actual);
+    }
+    #[test]
+    fn streaming_matches_batch_when_mask_matches_at_minimum_size() {
+        let profile = ChunkProfile {
+            min_size: 1,
+            target_size: 2,
+            max_size: 3,
+            break_mask: 1,
+        };
+        let break_byte = (u8::MIN..=u8::MAX)
+            .find(|&byte| roll(0, byte, gear_table()) & profile.break_mask == 0)
+            .expect("gear table must contain an entry matching a one-bit mask");
+        let input = [break_byte; 2];
+        let expected = chunk_bytes_with_profile(profile, &input);
+        assert_eq!(
+            expected,
+            vec![Chunk {
+                offset: 0,
+                length: 2,
+            }]
+        );
+        let mut chunker = Chunker::with_profile(profile);
+        let mut actual = Vec::new();
+        chunker.feed(&input, |chunk| actual.push(chunk));
         chunker.finish(|chunk| actual.push(chunk));
         assert_eq!(expected, actual);
     }

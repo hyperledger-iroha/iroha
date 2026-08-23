@@ -10,11 +10,11 @@ It builds the current `kagami`, `iroha3d`, and `iroha` binaries, replaces the
 previous script-owned bundle under `dist/taira-devnet/`, generates exactly four
 fresh-key NPoS validators for the canonical Taira chain, validates every peer
 configuration, starts the peers, and waits for all four nodes to become ready.
-It then submits one blocking signed `iroha tx ping`, requires all four committed
-heights to advance and converge, and checks that the generated MCP endpoint can
-initialize and list tools. The build uses the repository's stable local metadata
-and shared target cache, so unrelated worktree metadata does not force a cold
-rebuild.
+It then submits one signed `iroha tx ping`, waits for its typed `Applied` status,
+requires all four committed heights to advance and converge, and checks that the
+generated MCP endpoint can initialize and list tools. The build uses the
+repository's stable local metadata and shared target cache, so unrelated
+worktree metadata does not force a cold rebuild.
 
 There is no release authority, source-closure ceremony, evidence archive,
 promotion state, 24-hour soak, host service installation, or predecessor
@@ -30,7 +30,9 @@ python3 scripts/taira_devnet.py check
 
 `check` binds the listeners to the generated Taira chain, genesis hash,
 loopback ports, and the four exact PID/config pairs; unrelated services on the
-same ports cannot satisfy it.
+same ports cannot satisfy it. It reads the Torii base port from the generated
+`client.toml`, so an `up` started with a custom `--base-api-port` needs no
+repeated port argument.
 
 Stop it while retaining generated configs and logs:
 
@@ -95,15 +97,12 @@ authorization headers in this repository.
 - `config.toml` and `genesis.json` are canonical profile fixtures consumed by
   compiled Kagami/config/genesis tests. They are not inputs to the disposable
   generator.
-- `privacy_bootstrap_plan.json`, `privacy_rollout_plan_v1.json`, and
-  `validate_privacy_bootstrap.py` remain coupled to Kagami's compiled privacy
-  bootstrap feature.
+- `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
+  coupled to Kagami's compiled privacy bootstrap feature.
 - `dns_records.json`, `explorer.runtime-config.json`, `sorafs_sites.json`, and
   `taira-canary-client.example.toml` describe the live public profile.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge
   installer remain the public-ingress configuration surface.
-- `check_sorafs_rollout.sh`, `verify_soraswap_rollout.sh`, and
-  `check_inrou_host_prereqs.sh` are application checks, not deployment gates.
 
 The retired reset, release, evidence, host-supervision, and soak scripts are
 intentionally gone. New deployment behavior belongs in the compiled Kagami,

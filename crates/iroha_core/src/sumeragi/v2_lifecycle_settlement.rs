@@ -54,6 +54,68 @@ impl LifecycleCoordinator {
     pub(super) fn reduce_settle_body_parent_for_continuation(&mut self, lease: TurnLease) {
         self.reduce_settle_turn_inner(lease, TurnOutcome::Advanced, None, true);
     }
+    /// Cancel one certified-progress-superseded recovered Sign and release its
+    /// transient Consensus output reservation in the same staged successor.
+    pub(super) fn reduce_cancel_superseded_sign(&mut self, lease: TurnLease) {
+        if self.fault.is_some()
+            || self.active_lease.as_ref() != Some(&lease)
+            || !matches!(
+                (
+                    lease.work_class(),
+                    lease.key().phase(),
+                    lease.stage().kind()
+                ),
+                (
+                    LifecycleWorkClass::SignVote,
+                    super::LifecyclePhase::Prepare,
+                    LifecycleStageKind::SignPrepareVote,
+                ) | (
+                    LifecycleWorkClass::SignVote,
+                    super::LifecyclePhase::Commit,
+                    LifecycleStageKind::SignCommitVote,
+                ) | (
+                    LifecycleWorkClass::SignProposal,
+                    super::LifecyclePhase::Proposal,
+                    LifecycleStageKind::SignProposal,
+                ) | (
+                    LifecycleWorkClass::SignTimeout,
+                    super::LifecyclePhase::Timeout,
+                    LifecycleStageKind::SignTimeoutVote,
+                )
+            )
+        {
+            return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
+        }
+        let Some(reservation) = lease.output_reservation() else {
+            return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
+        };
+        let class = super::CapacityClass::Consensus;
+        let Some(&generation) = self.capacity_generation.get(&class) else {
+            return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
+        };
+        let valid_reservation = reservation.class() == class
+            && reservation.wait_token().observed_generation() == generation
+            && self
+                .capacity_used
+                .get(&class)
+                .and_then(|used| used.checked_add(1))
+                .is_some_and(|reserved| reserved <= self.capacity_geometry.limit(class));
+        let Some(next_generation) = generation.checked_add(1) else {
+            return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
+        };
+        if !valid_reservation {
+            return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
+        }
+        let mut unreserved = lease;
+        unreserved.output_reservation = None;
+        self.active_lease = Some(unreserved.clone());
+        self.capacity_generation.insert(class, next_generation);
+        self.reduce_settle_turn(
+            unreserved,
+            TurnOutcome::Terminal(TerminalOutcome::Cancelled),
+            None,
+        );
+    }
     fn reduce_settle_turn_inner(
         &mut self,
         lease: TurnLease,

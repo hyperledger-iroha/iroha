@@ -80,9 +80,6 @@ const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
-const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;
-const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;
-const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
 fn format_toml_integer_u64(value: u64) -> String {
@@ -115,9 +112,6 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
 }
 fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
     match spec.slug {
-        "iroha3-taira" => {
-            include_str!("kagami_profiles/taira_nexus_topology.toml")
-        }
         "iroha3-nexus" => {
             include_str!("kagami_profiles/nexus_topology.toml")
         }
@@ -248,12 +242,6 @@ fn write_profile_bundle(
     };
     let verify_out = run_verify(spec, kagami_bin, &genesis_path, vrf_seed_hex.as_deref())?;
     fs::write(bundle_root.join("verify.txt"), verify_out)?;
-    if spec.slug == "iroha3-taira" {
-        fs::write(
-            bundle_root.join("sorafs_sites.json"),
-            b"{\n  \"version\": 1,\n  \"sites\": []\n}\n",
-        )?;
-    }
     let compose = render_docker_compose(spec, &peers);
     fs::write(bundle_root.join("docker-compose.yml"), compose)?;
     let readme = render_readme(
@@ -733,6 +721,7 @@ fn run_verify(
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
+#[cfg(test)]
 fn render_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -748,6 +737,7 @@ fn render_config(
         published_private_key_rendering(spec),
     )
 }
+#[cfg(test)]
 fn render_peer_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
@@ -869,68 +859,8 @@ submitters = [{telemetry_submitters}]
             )
         });
     let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
-    let sorafs_site_bindings = if spec.slug == "iroha3-taira" {
-        include_str!("kagami_profiles/sorafs_site_bindings.toml")
-    } else {
-        ""
-    };
-    let taira_nexus_overrides = if spec.slug == "iroha3-taira" {
-        let discriminant = spec
-            .chain_discriminant
-            .expect("Taira profile must pin its chain discriminant");
-        let fee_sink_account_id = account_literal_string_for_chain_discriminant(
-            iroha_config::parameters::defaults::nexus::fees::FEE_SINK_ACCOUNT_ID,
-            discriminant,
-        );
-        let stake_escrow_account_id = account_literal_string_for_chain_discriminant(
-            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
-            discriminant,
-        );
-        let slash_sink_account_id = account_literal_string_for_chain_discriminant(
-            &iroha_config::parameters::defaults::nexus::staking::slash_sink_account_id(),
-            discriminant,
-        );
-        let gas_tech_account_id = account_literal_string_for_chain_discriminant(
-            iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID,
-            discriminant,
-        );
-        format!(
-            r#"
-[nexus.fees]
-fee_asset_id = "xor#universal"
-fee_sink_account_id = "{fee_sink_account_id}"
-
-[nexus.staking]
-stake_asset_id = "xor#universal"
-stake_escrow_account_id = "{stake_escrow_account_id}"
-slash_sink_account_id = "{slash_sink_account_id}"
-
-[pipeline.gas]
-tech_account_id = "{gas_tech_account_id}"
-"#
-        )
-    } else {
-        String::new()
-    };
-    let taira_mcp_overrides = if spec.slug == "iroha3-taira" {
-        include_str!("kagami_profiles/torii_mcp.toml")
-    } else {
-        ""
-    };
-    let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {
-        format!(
-            "\nmax_frame_bytes = {TAIRA_MAX_FRAME_BYTES}\n\
-             max_frame_bytes_block_sync = {TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC}\n\
-             max_frame_bytes_tx_gossip = {TAIRA_MAX_FRAME_BYTES_TX_GOSSIP}"
-        )
-    } else {
-        String::new()
-    };
-    let max_transactions = if spec.slug == "iroha3-taira" {
-        96
-    } else {
-        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get()
-    };
+    let max_transactions =
+        iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get();
     let max_payload_bytes =
         iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get();
     let nexus_topology = rendered_nexus_topology(spec);
@@ -1002,20 +932,17 @@ body_source_bytes = {body_source_bytes}
 
 [network]
 address = "{network_address}"
-public_address = "{network_public_address}"{taira_network_frame_overrides}
+public_address = "{network_public_address}"
 
 [torii]
 address = "{torii_address}"
 max_content_len = {torii_max_content_len}
-{taira_mcp_overrides}
 
 [streaming]
 identity_public_key = "{stream_pub}"
 {streaming_private_key}
-{sorafs_site_bindings}
 
 {nexus_topology}
-{taira_nexus_overrides}
 {governance_overrides}{genesis_section_spacing}[genesis]
 public_key = "{genesis_pk}"
 file = "genesis.signed.nrt"
@@ -1037,13 +964,9 @@ file = "genesis.signed.nrt"
         body_source_bytes = body_source_bytes,
         network_address = network_address,
         network_public_address = network_public_address,
-        taira_network_frame_overrides = taira_network_frame_overrides,
         torii_address = torii_address,
         torii_max_content_len = torii_max_content_len,
-        sorafs_site_bindings = sorafs_site_bindings,
         nexus_topology = nexus_topology,
-        taira_nexus_overrides = taira_nexus_overrides,
-        taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
         genesis_section_spacing = genesis_section_spacing,
         genesis_pk = genesis_public_key,
@@ -1091,11 +1014,6 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
             let service = format!("iroha-{}-{peer_index}", spec.slug);
             let config_file = peer_config_file_name(peer_index);
             let command = r#"["iroha3d", "--sora", "--config", "/config/config.toml"]"#;
-            let site_bindings_volume = if spec.slug == "iroha3-taira" {
-                "\n      - ./sorafs_sites.json:/config/sorafs_sites.json:ro"
-            } else {
-                ""
-            };
             let p2p_port = peer
                 .address
                 .rsplit_once(':')
@@ -1118,7 +1036,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     volumes:
       - ./{config_file}:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
-      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{site_bindings_volume}{runtime_secrets_volume}
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{runtime_secrets_volume}
     ports:
       - "{torii_port}:{torii_port}"
       - "{p2p_port}:{p2p_port}"
@@ -1181,11 +1099,6 @@ fn render_readme(
     let chain_discriminant_line = spec.chain_discriminant.map_or_else(String::new, |value| {
         format!("- chain discriminant: {value}\n")
     });
-    let site_bindings_file = if spec.slug == "iroha3-taira" {
-        "- sorafs_sites.json — empty version-1 named-host binding document loaded, validated, and cached at Torii startup\n"
-    } else {
-        ""
-    };
     let nexus_regeneration_arg = if spec.profile_flag == "iroha3-nexus" {
         format!(
             " --nexus-xor-asset-definition-id {}",
@@ -1202,9 +1115,6 @@ fn render_readme(
         "\n"
     };
     let topology_note = match spec.slug {
-        "iroha3-taira" => {
-            "- topology: 7 logical lanes over 5 physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`); governance and zk are lanes in `universal`, not dataspaces\n- physical-deployment limit: this deterministic sample uses one 7-peer harness to validate config/genesis binding; it does not provision five disjoint server cohorts or per-dataspace manifests and is not evidence of a deployable physical topology\n\n"
-        }
         "iroha3-nexus" => {
             "- topology: 3 logical lanes (`core`, `governance`, `zk`) in the single physical `universal` dataspace\n"
         }
@@ -1230,7 +1140,7 @@ Files:
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
-{site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
+- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 {runtime_key_note}Regenerate:
 - cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
 "#,
@@ -1245,7 +1155,6 @@ Files:
         profile = spec.profile_flag,
         verify_vrf_seed_arg = verify_vrf_seed_arg,
         nexus_regeneration_arg = nexus_regeneration_arg,
-        site_bindings_file = site_bindings_file,
         runtime_key_note = runtime_key_note,
     )
 }
@@ -1414,14 +1323,6 @@ const PROFILES: &[ProfileSpec] = &[
         chain_discriminant: None,
         min_peers: 4,
         requires_seed: false,
-    },
-    ProfileSpec {
-        slug: "iroha3-taira",
-        profile_flag: "iroha3-taira",
-        chain_id: "iroha3-taira",
-        chain_discriminant: Some(369),
-        min_peers: 7,
-        requires_seed: true,
     },
     ProfileSpec {
         slug: "iroha3-nexus",
@@ -1608,16 +1509,16 @@ mod tests {
     }
     #[test]
     fn config_contains_expected_keys() {
-        let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let rendered = render_config(
-            &PROFILES[2],
+            &PROFILES[1],
             &peers,
             genesis_key.public_key(),
             GENESIS_EXPECTED_HASH_PLACEHOLDER,
         );
-        assert!(rendered.contains(PROFILES[2].chain_id));
+        assert!(rendered.contains(PROFILES[1].chain_id));
         assert!(rendered.contains("chain_discriminant = 753"));
         assert!(rendered.contains("viral_incentive_pool_account"));
         assert!(rendered.contains(peers[0].public_key.as_str()));
@@ -1753,58 +1654,6 @@ mod tests {
         }
 
         let (lane_count, lanes, dataspaces, rules) = parsed_topology(&PROFILES[1]);
-        assert_eq!(lane_count, 7);
-        assert_eq!(
-            lanes,
-            [
-                (0, "core".to_owned(), "universal".to_owned()),
-                (1, "governance".to_owned(), "universal".to_owned()),
-                (2, "zk".to_owned(), "universal".to_owned()),
-                (3, "dpn".to_owned(), "dpn".to_owned()),
-                (4, "external-poc".to_owned(), "is".to_owned()),
-                (5, "boi-mobile".to_owned(), "is2".to_owned()),
-                (6, "cbsi".to_owned(), "cbsi".to_owned()),
-            ]
-        );
-        assert_eq!(
-            dataspaces,
-            [
-                ("universal".to_owned(), 0),
-                ("dpn".to_owned(), 10),
-                ("is".to_owned(), 6_647_857_470_246_403_404),
-                ("is2".to_owned(), 8_477_022_798_449_861_195),
-                ("cbsi".to_owned(), 20),
-            ]
-        );
-        assert_eq!(rules.len(), 19);
-        assert_eq!(
-            rules.first(),
-            Some(&(3, "dpn".to_owned(), Some("*@dpn".to_owned()), None))
-        );
-        assert_eq!(
-            rules.get(1),
-            Some(&(4, "is".to_owned(), Some("*@wonderland.is".to_owned()), None,))
-        );
-        assert_eq!(
-            rules.get(17),
-            Some(&(
-                1,
-                "universal".to_owned(),
-                None,
-                Some("governance".to_owned()),
-            ))
-        );
-        assert_eq!(
-            rules.get(18),
-            Some(&(
-                2,
-                "universal".to_owned(),
-                None,
-                Some("smartcontract::deploy".to_owned()),
-            ))
-        );
-
-        let (lane_count, lanes, dataspaces, rules) = parsed_topology(&PROFILES[2]);
         assert_eq!(lane_count, 3);
         assert_eq!(
             lanes,
@@ -1842,7 +1691,7 @@ mod tests {
 
     #[test]
     fn checked_in_profile_topologies_match_the_generator() {
-        for spec in [&PROFILES[1], &PROFILES[2]] {
+        for spec in [&PROFILES[1]] {
             let expected = rendered_nexus_topology(spec)
                 .parse::<toml::Table>()
                 .expect("rendered topology must be valid TOML");
@@ -1914,7 +1763,7 @@ mod tests {
     }
     #[test]
     fn published_profiles_keep_runtime_keys_outside_production_configs() {
-        for profile in [&PROFILES[1], &PROFILES[2]] {
+        for profile in [&PROFILES[1]] {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
                 &format!("config-{}-public-only-genesis", profile.slug),
@@ -1999,7 +1848,7 @@ mod tests {
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
     #[test]
-    fn rendered_dev_and_taira_text_preserves_canonical_spacing() {
+    fn rendered_dev_text_preserves_canonical_spacing() {
         let genesis_key = deterministic_keypair("canonical-spacing-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
@@ -2025,61 +1874,14 @@ mod tests {
         );
         assert!(dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
         assert!(!dev_config.contains("lane_count = 3\n\n\n\n\n[genesis]"));
-
-        let taira_peers = build_peers(&PROFILES[1]).expect("build deterministic Taira peers");
-        let taira_readme = render_readme(
-            &PROFILES[1],
-            &taira_peers,
-            genesis_key.public_key(),
-            Some("ABCD"),
-            None,
-        );
-        assert!(
-            taira_readme.contains("is not evidence of a deployable physical topology\n\n- peers:")
-        );
-        assert!(
-            taira_readme
-                .contains("startup fails closed when a required file is absent.\n\n\nRegenerate:")
-        );
-        let taira_config = render_config(
-            &PROFILES[1],
-            &taira_peers,
-            genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
-        assert!(taira_config.contains("submitters = []\n\n\n[genesis]"));
-        assert!(!taira_config.contains("submitters = []\n\n\n\n[genesis]"));
-    }
-    #[test]
-    fn taira_readme_mentions_chain_discriminant() {
-        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
-        let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519)
-            .expect("derive deterministic genesis key");
-        let readme = render_readme(
-            &PROFILES[1],
-            &peers,
-            genesis_key.public_key(),
-            Some("ABCD"),
-            None,
-        );
-        assert!(readme.contains("- chain discriminant: 369"));
-        assert!(readme.contains(
-            "kagami verify --profile iroha3-taira --genesis genesis.json \
-             --vrf-seed-hex ABCD"
-        ));
-        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
-        assert!(!readme.contains("--nexus-xor-asset-definition-id"));
-        assert!(readme.contains("7 logical lanes over 5 physical dataspaces"));
-        assert!(readme.contains("governance and zk are lanes in `universal`"));
-        assert!(readme.contains("does not provision five disjoint server cohorts"));
     }
     #[test]
     fn nexus_readme_regeneration_includes_asset_definition_id() {
-        let peers = build_peers(&PROFILES[2]).expect("build deterministic peers");
+        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("readme-nexus-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let readme = render_readme(
-            &PROFILES[2],
+            &PROFILES[1],
             &peers,
             genesis_key.public_key(),
             Some("ABCD"),
@@ -2153,12 +1955,12 @@ mod tests {
     fn invalid_nexus_identity_is_preflighted_before_profile_mutation() {
         let temp = tempdir().expect("temp dir");
         let output = temp.path().join("profiles");
-        let bundle = output.join(PROFILES[2].slug);
+        let bundle = output.join(PROFILES[1].slug);
         fs::create_dir_all(&bundle).expect("create existing Nexus bundle");
         fs::write(bundle.join("sentinel"), b"preserve").expect("write Nexus sentinel");
         let error = generate(KagamiProfileOptions {
             output: output.clone(),
-            profiles: vec![PROFILES[2].slug.to_owned()],
+            profiles: vec![PROFILES[1].slug.to_owned()],
             kagami_override: Some(temp.path().join("unused-kagami")),
             nexus_xor_asset_definition_id: Some("xor#universal".to_owned()),
         })
@@ -2261,210 +2063,6 @@ mod tests {
         }
     }
     #[test]
-    fn taira_peer_configs_pin_reviewed_network_frame_corridor() {
-        let max_transaction_bytes = usize::try_from(
-            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
-        )
-        .expect("transaction maximum fits usize");
-        let admission_certificate_bytes =
-            iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
-        let duplicated_plan_and_envelope_headroom = 2 * 1024 * 1024;
-        assert!(
-            TAIRA_MAX_FRAME_BYTES_TX_GOSSIP
-                >= max_transaction_bytes
-                    + admission_certificate_bytes
-                    + duplicated_plan_and_envelope_headroom,
-            "Taira transaction gossip must fit one maximum transaction, its QueuePlan certificate, the duplicated routing plan, and framing"
-        );
-        assert!(
-            TAIRA_MAX_FRAME_BYTES_TX_GOSSIP < TAIRA_MAX_FRAME_BYTES,
-            "the topic-specific plaintext cap must remain below the global P2P frame corridor"
-        );
-        let frame_caps = [
-            ("max_frame_bytes", TAIRA_MAX_FRAME_BYTES),
-            (
-                "max_frame_bytes_block_sync",
-                TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC,
-            ),
-            ("max_frame_bytes_tx_gossip", TAIRA_MAX_FRAME_BYTES_TX_GOSSIP),
-        ];
-        let taira = &PROFILES[1];
-        let peers = build_peers(taira).expect("build deterministic Taira peers");
-        let genesis_key =
-            deterministic_keypair("config-taira-frame-caps-genesis", Algorithm::Ed25519)
-                .expect("derive deterministic Taira genesis key");
-        let bundle = tempdir().expect("Taira frame-cap config bundle");
-        write_peer_configs(
-            taira,
-            &peers,
-            genesis_key.public_key(),
-            bundle.path(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            published_private_key_rendering(taira),
-        )
-        .expect("write every Taira peer config alias");
-        let mut checked_aliases = 0_usize;
-        for peer_index in 0..peers.len() {
-            for file_name in [
-                peer_config_file_name(peer_index),
-                format!("peer{peer_index}.toml"),
-            ] {
-                let path = bundle.path().join(file_name);
-                let rendered = fs::read_to_string(&path).expect("read Taira peer config alias");
-                let table = rendered
-                    .parse::<toml::Table>()
-                    .expect("Taira peer config alias must be valid TOML");
-                let network = table
-                    .get("network")
-                    .and_then(toml::Value::as_table)
-                    .expect("Taira peer config alias must contain [network]");
-                for &(key, expected) in &frame_caps {
-                    assert_eq!(
-                        network.get(key).and_then(toml::Value::as_integer),
-                        Some(i64::try_from(expected).expect("Taira frame cap must fit i64")),
-                        "{} must pin the reviewed Taira {key}",
-                        path.display()
-                    );
-                }
-                checked_aliases += 1;
-            }
-        }
-        assert_eq!(
-            checked_aliases, 14,
-            "Taira must emit exactly 14 peer aliases"
-        );
-        for profile in [&PROFILES[0], &PROFILES[2]] {
-            let peers = build_peers(profile).expect("build non-Taira deterministic peers");
-            let genesis_key = deterministic_keypair(
-                &format!("config-{}-frame-caps-genesis", profile.slug),
-                Algorithm::Ed25519,
-            )
-            .expect("derive non-Taira deterministic genesis key");
-            for peer_index in 0..peers.len() {
-                let rendered = render_peer_config(
-                    profile,
-                    &peers,
-                    peer_index,
-                    genesis_key.public_key(),
-                    GENESIS_EXPECTED_HASH_PLACEHOLDER,
-                );
-                let table = rendered
-                    .parse::<toml::Table>()
-                    .expect("non-Taira peer config must be valid TOML");
-                let network = table
-                    .get("network")
-                    .and_then(toml::Value::as_table)
-                    .expect("non-Taira peer config must contain [network]");
-                for &(key, _) in &frame_caps {
-                    assert!(
-                        !network.contains_key(key),
-                        "profile {} peer {peer_index} must not inherit Taira-only {key}",
-                        profile.slug
-                    );
-                }
-            }
-        }
-    }
-    #[test]
-    fn taira_peer_configs_bind_raw_protocol_accounts_to_profile_discriminant() {
-        fn nested_string<'a>(
-            table: &'a toml::Table,
-            parent: &str,
-            child: &str,
-            key: &str,
-        ) -> &'a str {
-            table
-                .get(parent)
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get(child))
-                .and_then(toml::Value::as_table)
-                .and_then(|table| table.get(key))
-                .and_then(toml::Value::as_str)
-                .unwrap_or_else(|| panic!("missing {parent}.{child}.{key}"))
-        }
-        let taira = &PROFILES[1];
-        let discriminant = taira
-            .chain_discriminant
-            .expect("Taira profile must pin its chain discriminant");
-        let expected = [
-            (
-                "nexus",
-                "fees",
-                "fee_sink_account_id",
-                account_literal_string_for_chain_discriminant(
-                    iroha_config::parameters::defaults::nexus::fees::FEE_SINK_ACCOUNT_ID,
-                    discriminant,
-                ),
-            ),
-            (
-                "nexus",
-                "staking",
-                "stake_escrow_account_id",
-                account_literal_string_for_chain_discriminant(
-                    &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
-                    discriminant,
-                ),
-            ),
-            (
-                "nexus",
-                "staking",
-                "slash_sink_account_id",
-                account_literal_string_for_chain_discriminant(
-                    &iroha_config::parameters::defaults::nexus::staking::slash_sink_account_id(),
-                    discriminant,
-                ),
-            ),
-            (
-                "pipeline",
-                "gas",
-                "tech_account_id",
-                account_literal_string_for_chain_discriminant(
-                    iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID,
-                    discriminant,
-                ),
-            ),
-        ];
-        let peers = build_peers(taira).expect("build deterministic Taira peers");
-        let genesis_key =
-            deterministic_keypair("config-taira-protocol-accounts-genesis", Algorithm::Ed25519)
-                .expect("derive deterministic Taira genesis key");
-        let bundle = tempdir().expect("Taira protocol-account config bundle");
-        write_peer_configs(
-            taira,
-            &peers,
-            genesis_key.public_key(),
-            bundle.path(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            published_private_key_rendering(taira),
-        )
-        .expect("write every Taira peer config alias");
-        let _taira_chain = ChainDiscriminantGuard::enter(discriminant);
-        let mut checked_aliases = 0_usize;
-        for peer_index in 0..peers.len() {
-            for file_name in [
-                peer_config_file_name(peer_index),
-                format!("peer{peer_index}.toml"),
-            ] {
-                let path = bundle.path().join(file_name);
-                let table = fs::read_to_string(&path)
-                    .expect("read Taira peer config alias")
-                    .parse::<toml::Table>()
-                    .expect("Taira peer config alias must be valid TOML");
-                for (parent, child, key, expected_literal) in &expected {
-                    let literal = nested_string(&table, parent, child, key);
-                    assert_eq!(literal, expected_literal, "{} {key}", path.display());
-                    let parsed = iroha_data_model::account::AccountId::parse_encoded(literal)
-                        .unwrap_or_else(|error| {
-                            panic!("{} {key} must be canonical: {error}", path.display())
-                        });
-                    assert_eq!(parsed.canonical(), literal, "{} {key}", path.display());
-                }
-                checked_aliases += 1;
-            }
-        }
-        assert_eq!(checked_aliases, 14, "Taira must emit exactly 14 aliases");
-    }
-    #[test]
     fn all_profile_configs_scale_body_ingress_for_the_complete_committee() {
         let authenticated_non_validator_sources =
             iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
@@ -2505,41 +2103,6 @@ mod tests {
         }
     }
     #[test]
-    fn taira_config_pins_site_nexus_and_mcp_policy() {
-        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
-        let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519)
-            .expect("derive deterministic genesis key");
-        let rendered = render_config(
-            &PROFILES[1],
-            &peers,
-            genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
-        assert!(rendered.contains("[sorafs.gateway.site_bindings]"));
-        assert!(rendered.contains("path = \"/config/sorafs_sites.json\""));
-        assert!(rendered.contains("max_bytes = 1048576"));
-        assert!(rendered.contains("max_sites = 1024"));
-        assert!(rendered.contains("[sumeragi.block]\nmax_transactions = 96\n"));
-        assert!(rendered.contains(
-            "[torii.mcp]\nenabled = true\nprofile = \"writer\"\nexpose_operator_routes = false\nallow_tool_prefixes = [\"iroha.\"]\n",
-        ));
-        assert!(rendered.contains("[nexus.fees]\nfee_asset_id = \"xor#universal\"\n"));
-        assert!(rendered.contains("[nexus.staking]\nstake_asset_id = \"xor#universal\"\n"));
-        let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
-        let dev_genesis_key =
-            deterministic_keypair("config-dev-policy-genesis", Algorithm::Ed25519)
-                .expect("derive deterministic dev genesis key");
-        let dev = render_config(
-            &PROFILES[0],
-            &dev_peers,
-            dev_genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
-        assert!(!dev.contains("[torii.mcp]"));
-        assert!(!dev.contains("[nexus.fees]"));
-        assert!(!dev.contains("[nexus.staking]"));
-    }
-    #[test]
     fn profiles_do_not_emit_backend_offline_capability_switches() {
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic generic peers");
@@ -2571,40 +2134,6 @@ mod tests {
                 );
             }
         }
-    }
-    #[test]
-    fn taira_compose_mounts_config_backed_site_bindings_without_runtime_env() {
-        let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
-        let rendered = render_docker_compose(&PROFILES[1], &peers);
-        assert!(
-            rendered.contains("./sorafs_sites.json:/config/sorafs_sites.json:ro"),
-            "Taira compose must mount the startup-configured binding document"
-        );
-        assert!(!rendered.contains("IROHA_SORAFS_SITE_BINDINGS_FILE"));
-        assert_eq!(
-            rendered
-                .matches("/run/secrets/iroha:/run/secrets/iroha:ro")
-                .count(),
-            peers.len(),
-            "each production validator must receive the runtime key directory read-only"
-        );
-        let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
-        let dev_compose = render_docker_compose(&PROFILES[0], &dev_peers);
-        assert!(
-            !dev_compose.contains("sorafs_sites.json"),
-            "profiles without a configured binding document must not mount one"
-        );
-        assert!(!dev_compose.contains("/run/secrets/iroha"));
-        let genesis_key = deterministic_keypair("readme-taira-sites", Algorithm::Ed25519)
-            .expect("derive deterministic genesis key");
-        let readme = render_readme(
-            &PROFILES[1],
-            &peers,
-            genesis_key.public_key(),
-            Some("ABCD"),
-            None,
-        );
-        assert!(readme.contains("sorafs_sites.json"));
     }
     #[test]
     fn compose_launches_every_signed_topology_member_with_unique_config() {

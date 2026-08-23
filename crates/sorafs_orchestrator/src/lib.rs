@@ -5681,6 +5681,9 @@ fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
         multi_fetch::MultiSourceError::InvalidPlan(_) => "invalid_plan",
         multi_fetch::MultiSourceError::NoHealthyProviders { .. } => "no_healthy_providers",
         multi_fetch::MultiSourceError::NoCompatibleProviders { .. } => "no_compatible_providers",
+        multi_fetch::MultiSourceError::NoPolicyEligibleProviders { .. } => {
+            "no_policy_eligible_providers"
+        }
         multi_fetch::MultiSourceError::ExhaustedRetries { .. } => "exhausted_retries",
         multi_fetch::MultiSourceError::ObserverFailed { .. } => "observer_failed",
         multi_fetch::MultiSourceError::InternalInvariant(_) => "internal_invariant",
@@ -6105,6 +6108,15 @@ mod tests {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::Mutex as AsyncMutex;
+    #[test]
+    fn error_reason_classifies_score_policy_exclusion() {
+        let error = multi_fetch::MultiSourceError::NoPolicyEligibleProviders {
+            chunk_index: 0,
+            providers: vec![multi_fetch::ProviderId::new("denied")],
+        };
+
+        assert_eq!(error_reason(&error), "no_policy_eligible_providers");
+    }
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }

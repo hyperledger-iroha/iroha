@@ -1,3 +1,227 @@
+#[derive(Clone, Copy)]
+struct AutonomousTestRouter {
+    route: RoutingDecision,
+}
+
+impl crate::queue::LaneRouter for AutonomousTestRouter {
+    fn try_route(
+        &self,
+        _transaction: &dyn crate::queue::TransactionRoutingView,
+    ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+        Ok(self.route)
+    }
+}
+
+fn prepare_autonomous_test_lane(
+    adapter: &mut V2LaneWorkAdapter,
+    keys: &[KeyPair],
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) {
+    enable_multilane_nexus(adapter, keys, lane_id, dataspace_id);
+}
+
+fn autonomous_test_fixture(
+    mode: wire::ConsensusMode,
+    author: bool,
+) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+    let local_validator_index = if author { 0 } else { 1 };
+    fixture_at_height_inner_with_kura_and_local_index(
+        mode,
+        9,
+        true,
+        locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
+        Some(local_validator_index),
+    )
+}
+
+fn assert_autonomous_test_role(
+    adapter: &V2LaneWorkAdapter,
+    keys: &[KeyPair],
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    author: bool,
+) {
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("plan deterministic autonomous lane slot");
+    assert!(
+        keys.iter()
+            .any(|key| key.public_key() == adapter.local_peer.public_key()),
+        "the local fixture peer belongs to the frozen validator keys"
+    );
+    assert_eq!(
+        adapter.local_peer == slot.author,
+        author,
+        "the fixture must bind its local peer before claiming the autonomous lifecycle generation"
+    );
+}
+
+fn install_autonomous_test_queue(
+    adapter: &mut V2LaneWorkAdapter,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    journal_path: &std::path::Path,
+) -> Arc<Queue> {
+    let queue = Arc::new(Queue::test_with_router_for_routes(
+        iroha_config::parameters::actual::Queue::default(),
+        &iroha_primitives::time::TimeSource::new_system(),
+        Arc::new(AutonomousTestRouter {
+            route: RoutingDecision::new(lane_id, dataspace_id),
+        }),
+        &[(lane_id, dataspace_id)],
+    ));
+    let manifests = adapter.state.lane_manifests.read().clone();
+    queue.install_lane_manifests(&manifests);
+    // Retain the explicit test router across the same generation check
+    // performed before production reservation selection.
+    queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());
+    queue
+        .install_lane_reservation_journal(journal_path, 1024 * 1024)
+        .expect("install autonomous queue reservation journal");
+    let plan_journal_path = journal_path.with_extension("plans.norito");
+    queue
+        .install_plan_journal(&plan_journal_path, 1024 * 1024, true)
+        .expect("install autonomous queue plan journal");
+    queue
+        .replay_plan_journal(adapter.state.as_ref())
+        .expect("replay autonomous queue plan journal");
+    adapter
+        .install_lane_drain_queue(Arc::clone(&queue))
+        .expect("install autonomous production queue");
+    queue
+}
+
+fn enqueue_autonomous_test_transactions(
+    adapter: &V2LaneWorkAdapter,
+    queue: &Queue,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    count: usize,
+) -> Vec<TransactionEntrypoint> {
+    (0..count)
+        .map(|index| {
+            let seed = u8::try_from(index)
+                .expect("autonomous fixture index fits u8")
+                .saturating_add(0xA0);
+            let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("deterministic autonomous transaction key");
+            let authority = AccountId::new(key.public_key().clone());
+            if adapter
+                .state
+                .view()
+                .world()
+                .accounts()
+                .get(&authority)
+                .is_none()
+            {
+                let mut world = adapter.state.world.block();
+                world.accounts.insert(
+                    authority.clone(),
+                    AccountValue::new(AccountDetails::default()),
+                );
+                world.commit();
+            }
+            let transaction = TransactionBuilder::new(
+                adapter.context.network_id,
+                AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                format!("autonomous lane fixture {index}"),
+            )])
+            .sign(key.private_key());
+            let accepted =
+                crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+            let entrypoint = accepted.entrypoint().clone();
+            let routing_plan = queue
+                .route_plan_with_state(&accepted, adapter.state.as_ref())
+                .expect("resolve autonomous fixture routing plan");
+            assert_eq!(
+                routing_plan.coordinator_route(),
+                RoutingDecision::new(lane_id, dataspace_id),
+                "the exact committed Nexus generation must retain the autonomous test router"
+            );
+            let admission_context = queue
+                .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
+                .expect("capture autonomous fixture admission context");
+            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                adapter.state.network_id_ref(),
+                accepted.entrypoint(),
+                &routing_plan,
+                admission_context,
+                queue.queue_plan_admission_timestamp_ms(),
+            )
+            .expect("build autonomous fixture global admission binding");
+            queue
+                .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                    accepted,
+                    adapter.state.as_ref(),
+                    routing_plan,
+                    &binding,
+                )
+                .expect("durably enqueue globally bound autonomous lane transaction");
+            install_autonomous_fixture_queue_plan_registry_value(adapter.state.as_ref(), &binding);
+            entrypoint
+        })
+        .collect()
+}
+
+fn install_autonomous_fixture_queue_plan_registry_value(
+    state: &State,
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+) {
+    state
+        .install_queue_plan_pending_binding_for_test(binding)
+        .expect("install complete autonomous fixture QueuePlan owner evidence");
+}
+
+fn autonomous_test_candidate_limits(
+    max_transactions: usize,
+    max_queue_scan: usize,
+) -> CandidateLimits {
+    autonomous_test_candidate_limits_with_payload(max_transactions, 4 * 1024 * 1024, max_queue_scan)
+}
+
+fn autonomous_test_candidate_limits_with_payload(
+    max_transactions: usize,
+    max_payload_bytes: usize,
+    max_queue_scan: usize,
+) -> CandidateLimits {
+    CandidateLimits::new(
+        NonZeroUsize::new(max_transactions).expect("non-zero transaction limit"),
+        NonZeroUsize::new(max_payload_bytes).expect("non-zero payload limit"),
+        NonZeroUsize::new(max_queue_scan).expect("non-zero queue scan limit"),
+    )
+    .expect("valid autonomous candidate limits")
+}
+
+fn autonomous_route_quota_for_test(
+    adapter: &V2LaneWorkAdapter,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    total: usize,
+) -> usize {
+    let routes = adapter
+        .state
+        .consensus_lane_routes_at_height(adapter.context.height)
+        .into_keys()
+        .collect::<Vec<_>>();
+    let route_index = routes
+        .iter()
+        .position(|route| *route == (lane_id, dataspace_id))
+        .expect("independent route is active");
+    let rotation = usize::try_from(adapter.context.height.saturating_sub(1)).unwrap_or(usize::MAX)
+        % routes.len();
+    V2LaneWorkAdapter::autonomous_route_quota(total, routes.len(), route_index, rotation)
+}
+
 #[test]
 fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
@@ -1324,10 +1548,6 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(local_signer_quor
     ));
     let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
         version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash:
-            crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                entrypoint.hash(),
-            ),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"direct-decision-queue-plan-admission-binding",

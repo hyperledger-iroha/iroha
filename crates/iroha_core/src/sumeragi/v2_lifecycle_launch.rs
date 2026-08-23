@@ -41,6 +41,8 @@ pub(in crate::sumeragi) use turn_driver::{
     ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
+use super::authority::lifecycle_ordinal_authorities_after_high_watermark;
+use super::selector::SelectedCertifiedBodyResponseOwnerV1;
 use super::{
     CertifiedFetchBodyPersistenceCompletionError, PreparedLifecycleIngressSelector,
     ProductionCompletionDispatchErrorV1, ProductionCompletionDispatchV1,
@@ -52,7 +54,10 @@ use super::{
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
     RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
-    work_registry::RecoveredDecisionApplyTerminalPublicationError,
+    work_registry::{
+        RecoveredDecisionApplyTerminalPublicationError,
+        RecoveredLifecycleSignCancellationPublicationError,
+    },
 };
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
@@ -832,6 +837,99 @@ impl LaunchedProductionLifecycleV1 {
             Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
         Ok(true)
     }
+    /// Durably cancel one authenticated recovered Sign whose reducer fence was
+    /// superseded by certified progress.
+    ///
+    /// The current adapter state is already the certified successor and is not
+    /// rewound. This transaction terminalizes only the exact claimed Sign row,
+    /// removes its concrete carrier after LedgerV1 fsync, and then acknowledges
+    /// the dedicated worker completion.
+    fn settle_superseded_recovered_lifecycle_sign(&mut self) -> bool {
+        let Self {
+            owner,
+            services,
+            pending_lifecycle_completion,
+            ..
+        } = self;
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_recovered_sign(pending_lifecycle_completion)
+        else {
+            iroha_logger::error!(
+                "superseded recovered Sign cancellation lost its parked completion"
+            );
+            return false;
+        };
+        macro_rules! restart {
+            ($reason:literal) => {{
+                iroha_logger::error!($reason);
+                owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(completion);
+                return false;
+            }};
+        }
+        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+            restart!("superseded recovered Sign cancellation lost its durable owner");
+        }
+        let Some(lease) = owner.coordinator.active_lease.clone() else {
+            restart!("superseded recovered Sign cancellation lost its active lease");
+        };
+        let key = completion.dispatch_key();
+        let Some(cancellation) = owner
+            .registry
+            .registry()
+            .prepare_recovered_lifecycle_sign_cancellation(&owner.coordinator, &lease, key)
+        else {
+            restart!("superseded recovered Sign cancellation carrier preflight failed");
+        };
+        let mut staged = owner.coordinator.stage_durable_transaction();
+        staged.reduce_cancel_superseded_sign(lease.clone());
+        if staged.fault.is_some() {
+            drop(cancellation);
+            restart!("superseded recovered Sign cancellation staging failed");
+        }
+        let output_guard = services.lifecycle_output_guard();
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            drop(cancellation);
+            restart!("superseded recovered Sign cancellation found output closed");
+        };
+        let published = owner
+            .registry
+            .registry_mut()
+            .publish_recovered_lifecycle_sign_cancellation(
+                cancellation,
+                &owner.coordinator,
+                &staged,
+                &lease,
+                || owner.coordinator.persist_exact_staged_successor(&staged),
+            );
+        match published {
+            Ok(()) => {}
+            Err(RecoveredLifecycleSignCancellationPublicationError::Preflight(cancellation)) => {
+                drop(cancellation);
+                drop(operation);
+                restart!("superseded recovered Sign cancellation changed before publication");
+            }
+            Err(RecoveredLifecycleSignCancellationPublicationError::Publication(
+                error,
+                cancellation,
+            )) => {
+                iroha_logger::error!(
+                    %error,
+                    "superseded recovered Sign cancellation LedgerV1 publication failed"
+                );
+                drop(cancellation);
+                drop(operation);
+                restart!("superseded recovered Sign cancellation failed closed");
+            }
+        }
+        owner.coordinator = staged;
+        completion.acknowledge_after_publication();
+        operation.complete();
+        true
+    }
     /// Preflight the parked Sign's exact adapter successor.
     ///
     /// This deliberately drops the publication-inert preview before returning.
@@ -1443,70 +1541,136 @@ impl LaunchedProductionLifecycleV1 {
                 }
             }
         }
-        let RecoveredDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
-            unreachable!("recovered Apply result variants are exhausted above")
-        };
-        if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
+        settle_applied_decision_apply_completion(owner, executor, completion)
+    }
+}
+
+/// Settle one applied live-or-recovered Decision carrier through the shared durable cut.
+pub(in crate::sumeragi) fn settle_applied_decision_apply_completion(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    completion: PreparedRecoveredDecisionApplyCompletionV1,
+) -> Result<
+    ProductionRecoveredDecisionApplyCompletionV1,
+    ProductionRecoveredDecisionApplyCompletionErrorV1,
+> {
+    settle_applied_decision_apply_completion_with_status(
+        owner,
+        executor,
+        completion,
+        RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight,
+    )
+}
+
+/// Settle pending-Kura Apply while retaining status for no-clock activation.
+fn settle_pending_kura_applied_decision_apply_completion(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    completion: PreparedRecoveredDecisionApplyCompletionV1,
+) -> Result<
+    ProductionRecoveredDecisionApplyCompletionV1,
+    ProductionRecoveredDecisionApplyCompletionErrorV1,
+> {
+    settle_applied_decision_apply_completion_with_status(
+        owner,
+        executor,
+        completion,
+        RecoveredDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum RecoveredDecisionApplyStatusPublicationV1 {
+    PublishActiveHeight,
+    DeferUntilPendingKuraActivation,
+}
+
+fn settle_applied_decision_apply_completion_with_status(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    completion: PreparedRecoveredDecisionApplyCompletionV1,
+    status_publication: RecoveredDecisionApplyStatusPublicationV1,
+) -> Result<
+    ProductionRecoveredDecisionApplyCompletionV1,
+    ProductionRecoveredDecisionApplyCompletionErrorV1,
+> {
+    macro_rules! restart {
+        ($failure:expr) => {{
+            owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+            return Err($failure);
+        }};
+    }
+    let RecoveredDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
+        unreachable!("deferred Apply completion cannot enter the applied settlement cut")
+    };
+    if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
+        restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
+    }
+    let Some(lease) = owner.coordinator.active_lease.clone() else {
+        restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
+    };
+    let Some((transition, authority)) = owner
+        .registry
+        .prepare_recovered_decision_apply_terminal_transition(&owner.coordinator, &lease, applied)
+    else {
+        restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Completion);
+    };
+    let adapter = match executor.prepare_recovered_decision_apply_completion(authority) {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            iroha_logger::error!(
+                %error,
+                status = ?executor.status(),
+                "recovered Apply executor completion preflight failed closed"
+            );
+            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Executor)
         }
-        let Some(lease) = owner.coordinator.active_lease.clone() else {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
-        };
-        let Some((transition, authority)) = owner
-            .registry
-            .prepare_recovered_decision_apply_terminal_transition(
-                &owner.coordinator,
-                &lease,
-                applied,
-            )
-        else {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Completion);
-        };
-        let adapter = match executor.prepare_recovered_decision_apply_completion(authority) {
-            Ok(adapter) => adapter,
-            Err(_) => restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Executor),
-        };
-        let mut staged = owner.coordinator.stage_durable_transaction();
-        staged.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
-        if staged.fault.is_some() {
+    };
+    let mut staged = owner.coordinator.stage_durable_transaction();
+    staged.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
+    if staged.fault.is_some() {
+        restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Registry);
+    }
+    let published = owner
+        .registry
+        .publish_recovered_decision_apply_terminal_transition(
+            transition,
+            &owner.coordinator,
+            &staged,
+            &lease,
+            || owner.coordinator.persist_exact_staged_successor(&staged),
+        );
+    match published {
+        Ok(()) => {}
+        Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(transition)) => {
+            iroha_logger::error!("recovered Apply terminal registry preflight failed closed");
+            drop(transition);
             restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Registry);
         }
-        let published = owner
-            .registry
-            .publish_recovered_decision_apply_terminal_transition(
-                transition,
-                &owner.coordinator,
-                &staged,
-                &lease,
-                || owner.coordinator.persist_exact_staged_successor(&staged),
+        Err(RecoveredDecisionApplyTerminalPublicationError::Publication(error, transition)) => {
+            iroha_logger::error!(
+                %error,
+                "recovered Apply terminal LedgerV1 publication failed closed"
             );
-        match published {
-            Ok(()) => {}
-            Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(transition)) => {
-                iroha_logger::error!("recovered Apply terminal registry preflight failed closed");
-                drop(transition);
-                restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Registry);
-            }
-            Err(RecoveredDecisionApplyTerminalPublicationError::Publication(error, transition)) => {
-                iroha_logger::error!(
-                    %error,
-                    "recovered Apply terminal LedgerV1 publication failed closed"
-                );
-                drop(transition);
-                restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Ledger);
-            }
+            drop(transition);
+            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Ledger);
         }
-        owner.coordinator = staged;
-        let finality = adapter.commit_after_durable_settlement();
-        let status = executor.commit_recovered_decision_apply_finality(finality);
-        let settled = completion.acknowledge_after_owner_settlement();
-        assert!(
-            matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
-            "borrowed recovered Apply result cannot change before acknowledgement"
-        );
-        super::super::status::set_v2_status(status);
-        Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     }
+    owner.coordinator = staged;
+    let finality = adapter.commit_after_durable_settlement();
+    let status = executor.commit_recovered_decision_apply_finality(finality);
+    let settled = completion.acknowledge_after_owner_settlement();
+    assert!(
+        matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
+        "borrowed recovered Apply result cannot change before acknowledgement"
+    );
+    if matches!(
+        status_publication,
+        RecoveredDecisionApplyStatusPublicationV1::PublishActiveHeight
+    ) {
+        super::super::status::set_v2_status(status);
+    }
+    Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
 }
 /// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
 #[derive(Debug, Error)]
@@ -2551,18 +2715,13 @@ impl ProductionLifecycleOwnerV1 {
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?
             .prepare_leader_wire_launch(launch_storage.wal_path())
             .map_err(|error| ProductionLifecycleLaunchErrorV1::LeaderWire(error.to_owned()))?;
-        // First-release production has no worker-owned scheduler to restore.
-        // The runtime and coordinator must retain restricted views over the
-        // same actor-global authority so durable admission and live ingress
-        // reserve from one ordinal namespace. Advance that shared authority
-        // through every restored leader-wire high-watermark before either
-        // owner can admit work.
-        let (runtime_lifecycle_ordinal_authority, coordinator_lifecycle_ordinal_authority) =
-            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
-                self.coordinator.high_water,
-            );
+        // Runtime ingress and durable coordinator rows share one ordinal
+        // authority. Seed it after the recovered LedgerV1 cut, then advance it
+        // through every leader-wire high-watermark before either side opens.
+        let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+            lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water);
         let lifecycle_ordinals =
-            RuntimeLifecycleOrdinalSource::from_authority(runtime_lifecycle_ordinal_authority);
+            RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority);
         if let Some(high_watermark) = leader_wire_launch.restored_producer_ordinal_high_watermark()
         {
             lifecycle_ordinals
@@ -2582,7 +2741,7 @@ impl ProductionLifecycleOwnerV1 {
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
             .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         self.coordinator
-            .bind_live_lifecycle_ordinal_authority(coordinator_lifecycle_ordinal_authority)
+            .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
             .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         let leader_wire_ingress_binding = ProductionLeaderWireIngressBindingV1::bind(
             Arc::clone(&inputs.leader_wire_ingress),
@@ -2629,6 +2788,19 @@ impl ProductionLifecycleOwnerV1 {
         if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref() {
             executor
                 .install_authenticated_genesis_body(authenticated_genesis)
+                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
+        }
+        for (effect, pending, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_published_validate_retry_markers()
+        {
+            executor
+                .install_recovered_published_lifecycle_validate_retry_marker(
+                    effect,
+                    pending,
+                    durable_receipt,
+                )
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
         if !body_store

@@ -1913,9 +1913,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => {
-            matches!(key, "commit_qcs" | "consensus_evidence" | "vrf_epochs")
-        }
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }

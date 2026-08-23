@@ -3482,6 +3482,7 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             return None;
         };
         (work.digest == self.digest
+            && apply.carrier.is_recovered()
             && work.validates_at(self.address)
             && apply.validates_at(self.address, self.digest))
         .then_some(apply)
@@ -4152,34 +4153,25 @@ impl ConcreteLifecycleWorkRegistry {
             .carrier
             .project_store_successor(verified, adapter.body_authority(), adapter.store_effect())
             .ok_or(RecoveredDecisionFetchStorePreparationErrorV1::InvalidStoreProjection)?;
-        let store_ordinal = coordinator
-            .high_water
-            .checked_add(1)
-            .ok_or(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision)?;
-        let store_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let store_address = ConcreteWorkAddress::new(lease.owner(), store_ordinal, store_slot)
-            .ok_or(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision)?;
-        if self.entries.contains_key(&store_address)
-            || self
-                .entries
-                .keys()
-                .filter(|address| address.owner == lease.owner())
-                .count()
-                != 1
-            || !store.validates_at(coordinator.active_context, store_address, store.digest())
+        if self
+            .entries
+            .keys()
+            .filter(|address| address.owner == lease.owner())
+            .count()
+            != 1
+            || !store.is_exact(verified)
         {
             return Err(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision);
         }
         Ok(PreparedRecoveredDecisionFetchStoreSuccessor {
             registry: self,
             fetch_address,
-            store_address,
             store,
             adapter,
         })
     }
 }
-impl<'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
+impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
     /// Project the exact child while retaining registry and adapter borrows.
     pub(super) fn project_for_body_transition(
         &self,
@@ -4188,7 +4180,6 @@ impl<'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
     ) -> Result<CandidateAdmission, SealedBodySuccessorProjectionError> {
         if self.fetch_address.owner != lease.owner()
             || self.fetch_address.ordinal != lease.ordinal()
-            || self.store_address.owner != lease.owner()
         {
             return Err(SealedBodySuccessorProjectionError::ForeignParent);
         }
@@ -4196,6 +4187,52 @@ impl<'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
             .candidate_for_transition(verified)
             .ok_or(SealedBodySuccessorProjectionError::InvalidCarrier)
     }
+    /// Bind the registry replacement to the exact shared-ordinal staged row.
+    pub(super) fn bind_staged_child(
+        self,
+        coordinator: &LifecycleCoordinator,
+        child_ordinal: u128,
+        child_slot: PhysicalSlotId,
+        child_digest: super::LifecycleDigest,
+    ) -> Result<
+        BoundRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+        RecoveredDecisionFetchStorePreparationErrorV1,
+    > {
+        let Some(record) = coordinator.records.get(&child_ordinal) else {
+            return Err(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision);
+        };
+        let Some(store_address) = ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)
+        else {
+            return Err(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision);
+        };
+        if record.owner != self.fetch_address.owner
+            || record.state != super::LifecycleState::Ready
+            || record.physical_slots.len() != 1
+            || record.physical_slots.get(&child_slot) != Some(&child_digest)
+            || self.registry.entries.contains_key(&store_address)
+            || self
+                .registry
+                .entries
+                .keys()
+                .filter(|address| address.owner == self.fetch_address.owner)
+                .count()
+                != 1
+            || !self
+                .store
+                .validates_at(coordinator.active_context, store_address, child_digest)
+        {
+            return Err(RecoveredDecisionFetchStorePreparationErrorV1::ChildCollision);
+        }
+        Ok(BoundRecoveredDecisionFetchStoreSuccessor {
+            registry: self.registry,
+            fetch_address: self.fetch_address,
+            store_address,
+            store: self.store,
+            adapter: self.adapter,
+        })
+    }
+}
+impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
     /// Replace the exact WAL Fetch carrier with its dedicated Store carrier.
     pub(super) fn commit_after_publication(
         self,
@@ -4316,29 +4353,18 @@ impl ConcreteLifecycleWorkRegistry {
                 RecoveredLifecycleSignBroadcastPreparationErrorV1::InvalidBroadcastProjection,
             );
         }
-        let broadcast_ordinal = coordinator
-            .high_water
-            .checked_add(1)
-            .ok_or(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision)?;
-        let broadcast_slot = PhysicalSlotId::for_capacity(CapacityClass::Consensus, 0);
-        let broadcast_address =
-            ConcreteWorkAddress::new(lease.owner(), broadcast_ordinal, broadcast_slot)
-                .ok_or(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision)?;
-        if self.entries.contains_key(&broadcast_address)
-            || self
-                .entries
-                .keys()
-                .filter(|address| address.owner == lease.owner())
-                .count()
-                != 1
-            || !broadcast.validates_at(verified, broadcast_address, broadcast.digest())
+        if self
+            .entries
+            .keys()
+            .filter(|address| address.owner == lease.owner())
+            .count()
+            != 1
         {
             return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision);
         }
         Ok(PreparedRecoveredLifecycleSignBroadcastSuccessor {
             registry: self,
             sign_address,
-            broadcast_address,
             broadcast,
             verified: verified.clone(),
             adapter,
@@ -4429,8 +4455,9 @@ impl ConcreteLifecycleWorkRegistry {
             |_| RecoveredLifecycleSignBroadcastAndSignPreparationErrorV1::InvalidCombinedProjection,
         )?;
         let (projected_key, successor) = match &sign.kind {
-            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => sign
-                .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
+            ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                sign.project_authenticated_signed_broadcast_and_sign(verified, projection_authority)
+            }
             ConcreteLifecycleWorkKind::DurableRecoveredWalSign(sign) => sign
                 .repair
                 .project_authenticated_signed_broadcast_and_sign(verified, projection_authority),
@@ -4463,7 +4490,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
-impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
+impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
     /// Project the exact Broadcast candidate while retaining every owner.
     pub(super) fn project_for_transition(
         &self,
@@ -4472,19 +4499,62 @@ impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
     ) -> Result<CandidateAdmission, SealedBodySuccessorProjectionError> {
         if self.sign_address.owner != lease.owner()
             || self.sign_address.ordinal != lease.ordinal()
-            || self.broadcast_address.owner != lease.owner()
             || self.verified.context() != verified.context()
             || self.verified.proofs_of_possession() != verified.proofs_of_possession()
-            || !self.broadcast.validates_at(
-                verified,
-                self.broadcast_address,
-                self.broadcast.digest(),
-            )
+            || self.broadcast.candidate().causal_root != lease.owner().causal_root()
         {
             return Err(SealedBodySuccessorProjectionError::ForeignParent);
         }
         Ok(self.broadcast.candidate().clone())
     }
+    /// Bind the registry replacement to the exact shared-ordinal staged row.
+    pub(super) fn bind_staged_child(
+        self,
+        coordinator: &LifecycleCoordinator,
+        child_ordinal: u128,
+        child_slot: PhysicalSlotId,
+        child_digest: super::LifecycleDigest,
+    ) -> Result<
+        BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+        RecoveredLifecycleSignBroadcastPreparationErrorV1,
+    > {
+        let Some(record) = coordinator.records.get(&child_ordinal) else {
+            return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision);
+        };
+        let Some(broadcast_address) =
+            ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)
+        else {
+            return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision);
+        };
+        if record.owner != self.sign_address.owner
+            || record.state != super::LifecycleState::Ready
+            || record.physical_slots.len() != 1
+            || record.physical_slots.get(&child_slot) != Some(&child_digest)
+            || self.registry.entries.contains_key(&broadcast_address)
+            || self
+                .registry
+                .entries
+                .keys()
+                .filter(|address| address.owner == self.sign_address.owner)
+                .count()
+                != 1
+            || !self
+                .broadcast
+                .validates_at(&self.verified, broadcast_address, child_digest)
+        {
+            return Err(RecoveredLifecycleSignBroadcastPreparationErrorV1::ChildCollision);
+        }
+        Ok(BoundRecoveredLifecycleSignBroadcastSuccessor {
+            registry: self.registry,
+            sign_address: self.sign_address,
+            broadcast_address,
+            broadcast: self.broadcast,
+            verified: self.verified,
+            adapter: self.adapter,
+        })
+    }
+}
+impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
     /// Replace the exact recovered Sign carrier with its durable Broadcast child.
     pub(super) fn commit_after_publication(
         self,

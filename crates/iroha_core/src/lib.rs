@@ -1044,12 +1044,13 @@ mod tests {
         torii_proxy::{
             QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
             TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
+            TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
             TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
             ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
-            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
-            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiProxyTransactionAdmissionV2,
+            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -1057,7 +1058,7 @@ mod tests {
     use iroha_data_model::nexus::{DataSpaceId, LaneId};
     use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
-    use iroha_data_model::transaction::TransactionBuilder;
+    use iroha_data_model::transaction::{TransactionBuilder, TransactionEntrypoint};
     use iroha_data_model::{Level, NetworkId, isi::Log};
     use iroha_p2p::{
         ClassifyTopic,
@@ -2185,6 +2186,73 @@ mod tests {
                     + TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             );
         assert!(worst_response_wire <= TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1);
+    }
+    #[test]
+    fn torii_proxy_submit_decode_budget_covers_ten_mib_transaction_carrier() {
+        const TRANSACTION_BODY_BYTES: usize = 10 * 1024 * 1024;
+        let (account, keypair) = gen_account_in("wonderland");
+        let mut builder = TransactionBuilder::new(
+            test_network_id(b"ten-mib-torii-proxy-submit"),
+            account,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(1));
+        let transaction = builder
+            .with_instructions([Log::new(Level::INFO, "P".repeat(TRANSACTION_BODY_BYTES))])
+            .sign(keypair.private_key());
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let message = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+            request_id: Hash::new(b"ten-mib-torii-proxy-submit-request"),
+            deadline_unix_ms: 1_900_000_000_000,
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV4::SubmitTransaction {
+                transaction: TransactionEntrypoint::External(transaction),
+                expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
+                admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+                admission_binding: None,
+            },
+        }));
+        let encoded = ncore::to_bytes(&message).expect("encode 10 MiB proxy submission");
+        let view = ncore::from_bytes_view(&encoded).expect("inspect 10 MiB proxy submission");
+        let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+            view.as_bytes(),
+            encoded.len(),
+            view.flags(),
+        )
+        .expect("select proxy submission decode policy")
+        .expect("proxy submission installs explicit decode limits");
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1
+        );
+        let decoded = ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits)
+            .expect("decode exact 10 MiB proxy submission within its explicit allocation cap");
+        let NetworkMessage::ToriiProxyRequest(decoded) = decoded else {
+            panic!("decoded proxy submission changed its network-message variant");
+        };
+        let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &decoded.request
+        else {
+            panic!("decoded proxy submission changed its request kind");
+        };
+        let TransactionEntrypoint::External(transaction) = transaction else {
+            panic!("decoded proxy submission changed its transaction entrypoint");
+        };
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("decoded proxy submission changed its executable kind");
+        };
+        let log = instructions
+            .first()
+            .and_then(|instruction| instruction.as_any().downcast_ref::<Log>())
+            .expect("decoded proxy submission preserves its Log carrier");
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(log.level, Level::INFO);
+        assert_eq!(log.msg.len(), TRANSACTION_BODY_BYTES);
+        assert!(log.msg.as_bytes().iter().all(|byte| *byte == b'P'));
     }
     #[test]
     fn authoritative_v2_safety_uses_dedicated_topic() {

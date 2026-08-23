@@ -46,6 +46,32 @@ fn autonomous_lane_output_matches_payload_identity(
         _ => false,
     }
 }
+
+/// Compare one producer-authenticated payload with its canonical Kura carrier.
+///
+/// The global block hint is advisory and is attached only after finality. Exact
+/// output can therefore still own the pre-finality, hint-free representation
+/// while Kura exposes the otherwise byte-identical anchored representation.
+/// Promotion is deliberately one-way: an existing or conflicting hint is never
+/// discarded or replaced, and every non-advisory field must remain exactly
+/// equal after the payload's own authenticated attachment check.
+fn autonomous_payload_matches_canonical_carrier(
+    candidate: &crate::lane_consensus::LaneExecutablePayloadV1,
+    canonical: &crate::lane_consensus::LaneExecutablePayloadV1,
+    network_id: iroha_data_model::NetworkId,
+    epoch: u64,
+) -> bool {
+    if candidate == canonical {
+        return true;
+    }
+    let Some(hint) = canonical.origin_proposal.payload_block_hint else {
+        return false;
+    };
+    candidate.origin_proposal.payload_block_hint.is_none()
+        && candidate
+            .attach_global_hint_exact(hint, network_id, epoch)
+            .is_ok_and(|anchored| anchored == *canonical)
+}
 fn autonomous_lane_output_has_exact_retirement_source(
     message: &BlockMessage,
     artifact: &wire::finality::V2FinalityArtifact,
@@ -372,7 +398,12 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                 let descriptor = &payload.origin_proposal.descriptor;
                 if payload.producer != *local_peer
                     || descriptor.proposal_height != proposal_height
-                    || payload != canonical_payload
+                    || !autonomous_payload_matches_canonical_carrier(
+                        payload,
+                        canonical_payload,
+                        network_id,
+                        epoch,
+                    )
                 {
                     return Err(
                         "autonomous-lane payload lacks the successor's local retransmit authority"
@@ -389,7 +420,12 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .ok_or_else(|| {
                         "autonomous-lane payload has no durable reconstruction artifact".to_owned()
                     })?;
-                if durable.executable_payload != *payload {
+                if !autonomous_payload_matches_canonical_carrier(
+                    &durable.executable_payload,
+                    canonical_payload,
+                    network_id,
+                    epoch,
+                ) {
                     return Err(
                         "autonomous-lane payload differs from its durable reconstruction artifact"
                             .to_owned(),

@@ -2106,7 +2106,7 @@ impl Kura {
                     &mut bound.index,
                     &bound.namespace.data_path,
                     &bound.namespace.index_path,
-                    Self::decode_lane_block_execution_input_artifact,
+                    norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
                     "lane block execution input",
                 )
             }

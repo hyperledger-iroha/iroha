@@ -196,7 +196,7 @@ pub(in crate::sumeragi) struct LiveValidateApplyRegistryReservation<'registry> {
     parent_address: ConcreteWorkAddress,
     child_address: ConcreteWorkAddress,
     child_digest: LifecycleDigest,
-    _detached_parent: ConcreteLifecycleWork,
+    work: ConcreteLifecycleWork,
 }
 /// Pre-fsync Apply publication retaining the reservation and staged adapter.
 #[must_use = "a live Validate-to-Apply registry publication awaits LedgerV1 fsync"]
@@ -209,6 +209,13 @@ pub(super) struct PreparedLiveValidateApplyRegistryPublication<'registry, 'adapt
 pub(super) struct LiveValidateApplyRegistryPublicationError<'registry, 'adapter> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidateApplyPublication<'adapter>,
+    reason: &'static str,
+}
+impl LiveValidateApplyRegistryPublicationError<'_, '_> {
+    /// Return the closed preflight stage which rejected the publication.
+    pub(super) const fn reason(&self) -> &'static str {
+        self.reason
+    }
 }
 /// Pre-fsync live registry publication using the recovered-WAL exclusive
 /// detached-parent/child-vacancy reservation.
@@ -545,6 +552,9 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
             _adapter: adapter,
         } = self;
         let Some(predecessor) = registry.validate_sign_predecessor_authority() else {
+            iroha_logger::error!(
+                "Ready Validate Sign sealing rejected the installed predecessor authority"
+            );
             return Err(ReadyDurableValidateSignPreAdmissionError {
                 failure: ReadyDurableValidateSignPreAdmissionFailure::PreWal {
                     _preview: Self {
@@ -557,6 +567,9 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
         let adapter = match adapter.bind_validate_sign_predecessor(predecessor) {
             Ok(adapter) => adapter,
             Err(adapter) => {
+                iroha_logger::error!(
+                    "Ready Validate Sign sealing rejected the adapter successor binding"
+                );
                 return Err(ReadyDurableValidateSignPreAdmissionError {
                     failure: ReadyDurableValidateSignPreAdmissionFailure::PreWal {
                         _preview: Self {
@@ -959,10 +972,11 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
+                reason: "registry coordinates",
             });
         }
         let receipt = receipt.expect("validated Apply preflight retains its durable body");
-        let adapter = match adapter.prepare_registry_work(
+        let mut adapter = match adapter.prepare_registry_work(
             LiveValidateApplyWorkProjectionPermit::new(admission_candidate),
             &receipt,
         ) {
@@ -971,6 +985,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 return Err(LiveValidateApplyRegistryPublicationError {
                     _registry: registry,
                     _adapter: adapter,
+                    reason: "adapter work projection",
                 });
             }
         };
@@ -978,28 +993,66 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
+                reason: "projected registry work",
             });
         }
         let child_address = child_address.expect("exact Apply coordinates retain one child");
-        let PreparedReadyDurableValidateExecution {
-            registry,
-            address: parent_address,
-            outcome_kind: _,
-            lease: _,
-            validated_catalog_authority: _,
-        } = registry;
+        let parent_address = registry.address;
         let detached_parent = registry
+            .registry
             .entries
             .remove(&parent_address)
             .expect("prechecked validated Validate parent remains installed");
         debug_assert!(detached_parent.validates_at(parent_address));
+        let Some(prepared_work) = adapter.take_registry_work() else {
+            assert!(
+                registry
+                    .registry
+                    .entries
+                    .insert(parent_address, detached_parent)
+                    .is_none(),
+                "failed Apply extraction restores the sole Validate parent"
+            );
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: "missing prepared registry work",
+            });
+        };
+        let work =
+            match prepared_work.into_typed_concrete(detached_parent, child_address, child_digest) {
+                Ok(work) => work,
+                Err((prepared_work, detached_parent)) => {
+                    assert!(
+                        registry
+                            .registry
+                            .entries
+                            .insert(parent_address, detached_parent)
+                            .is_none(),
+                        "failed typed Apply join restores the sole Validate parent"
+                    );
+                    adapter.restore_registry_work(prepared_work);
+                    return Err(LiveValidateApplyRegistryPublicationError {
+                        _registry: registry,
+                        _adapter: adapter,
+                        reason: "typed Validate-to-Apply carrier",
+                    });
+                }
+            };
+        let PreparedReadyDurableValidateExecution {
+            registry,
+            address: _,
+            outcome_kind: _,
+            lease: _,
+            validated_catalog_authority: _,
+        } = registry;
         Ok(PreparedLiveValidateApplyRegistryPublication {
             reservation: LiveValidateApplyRegistryReservation {
                 registry,
                 parent_address,
                 child_address,
                 child_digest,
-                _detached_parent: detached_parent,
+                work,
             },
             adapter,
         })
@@ -1013,14 +1066,14 @@ impl PreparedLiveValidateApplyRegistryPublication<'_, '_> {
     }
 }
 impl LiveValidateApplyRegistryReservation<'_> {
-    /// Install prechecked ordinary Apply work at the reserved child address.
-    fn install_live_apply(self, work: ConcreteLifecycleWork) {
+    /// Install the prechecked typed Apply work at the reserved child address.
+    pub(in crate::sumeragi) fn install_live_apply(self) {
         let Self {
             registry,
             parent_address,
             child_address,
             child_digest,
-            _detached_parent: _,
+            work,
         } = self;
         debug_assert_ne!(parent_address, child_address);
         debug_assert!(!registry.entries.contains_key(&parent_address));
@@ -1437,6 +1490,17 @@ pub(super) struct PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter> {
 pub(super) struct PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     fetch_address: ConcreteWorkAddress,
+    store: super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1,
+    adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
+}
+/// Recovered Fetch successor rebound to its exact staged Store row.
+///
+/// The child address comes from the coordinator's shared ordinal reservation;
+/// no process-local registry address is guessed before durable staging.
+#[must_use = "bound recovered Decision Store successor has not been published"]
+pub(super) struct BoundRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    fetch_address: ConcreteWorkAddress,
     store_address: ConcreteWorkAddress,
     store: super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1,
     adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
@@ -1448,6 +1512,18 @@ pub(super) struct PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapt
 /// carrier, while the preview keeps the serialized runtime borrowed.
 #[must_use = "recovered signed Broadcast successor has not been published"]
 pub(super) struct PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    sign_address: ConcreteWorkAddress,
+    broadcast: super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+    verified: VerifiedHeightContext,
+    adapter: crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter>,
+}
+/// Recovered Sign successor rebound to its exact staged Broadcast row.
+///
+/// Durable staging supplies the shared scheduler ordinal before this token can
+/// replace the installed Sign carrier.
+#[must_use = "bound recovered signed Broadcast successor has not been published"]
+pub(super) struct BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     sign_address: ConcreteWorkAddress,
     broadcast_address: ConcreteWorkAddress,
@@ -2052,6 +2128,14 @@ impl<'adapter> PreparedCertifiedFetchStoreSuccessor<'_, 'adapter> {
     }
 }
 impl<'adapter> PreparedDurableStoreValidateSuccessor<'_, 'adapter> {
+    /// Borrow the exact Validate effect emitted by the direct adapter preview.
+    pub(super) const fn validate_effect(&self) -> &AdapterEffect {
+        &self.validate_effect
+    }
+    /// Borrow the ordinal-free pending binding projected from the Store row.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        &self.validate_pending
+    }
     /// Project the exact Validate candidate while retaining its Store registry cut.
     ///
     /// The candidate is derived only from the Store-projected pending binding,
@@ -2334,10 +2418,9 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
 
     /// Run the complete adapter publication preflight without consuming the registry cut.
     ///
-    /// This is used only to prove that a local-body completion reaches one of
-    /// the two terminal no-successor branches before its exact
-    /// `LocalProposalReady` command becomes observable in runtime ingress.
-    /// Dropping the returned adapter publication is inert.
+    /// Test fixtures use this to classify the exact Ready completion against
+    /// a production-shaped adapter before invoking the production dispatcher.
+    /// The complete preview remains private, and dropping it is inert.
     pub(in crate::sumeragi) fn preflight_adapter_publication_kind(
         &self,
         adapter: &mut SumeragiV2Adapter,

@@ -592,6 +592,7 @@ mod output_recovery_tests {
         verified: &VerifiedHeightContext,
         keys: &[KeyPair],
         parent_ordinal: u128,
+        child_ordinal: u128,
         corrupt_certificate: bool,
     ) -> (LifecycleLedgerV1, DurableBodyReceipt) {
         let round = wire::ConsensusRound {
@@ -706,7 +707,7 @@ mod output_recovery_tests {
             )
             .expect("project cold invalid-body Report candidate");
         assert_eq!(validate_candidate.causal_root, report_candidate.causal_root);
-        let child_ordinal = parent_ordinal + 1;
+        assert!(child_ordinal > parent_ordinal);
         let owner = OwnerId::new(validate_candidate.causal_root, parent_ordinal);
         let parent = LifecycleLedgerRecordV1::new(
             validate_candidate.key,
@@ -766,7 +767,7 @@ mod output_recovery_tests {
             &verified,
             RecoveredWalStartupProjectionV1::None,
         )
-            .expect("authenticate Broadcast cold output");
+        .expect("authenticate Broadcast cold output");
         let output = recovered.entries.get(&7).expect("retain exact ordinal");
         assert_eq!(output.ordinal(), 7);
         assert_eq!(output.owner(), ledger.records()[0].owner());
@@ -806,10 +807,7 @@ mod output_recovery_tests {
             owner.causal_root().digest(),
             parent_case.payload,
             parent_case.authority,
-            DurableContinuation::successor(
-                DurableContinuationEdge::SignPrepareToBroadcast,
-                36,
-            ),
+            DurableContinuation::successor(DurableContinuationEdge::SignPrepareToBroadcast, 36),
         )
         .expect("construct historical SignPrepareVote parent");
         let child = LifecycleLedgerRecordV1::new(
@@ -825,17 +823,9 @@ mod output_recovery_tests {
             DurableContinuation::None,
         )
         .expect("construct historical BroadcastPrepareVote child");
-        let ledger = LifecycleLedgerV1::new(
-            context,
-            36,
-            vec![parent, child],
-            BTreeMap::new(),
-        )
-        .expect("construct historical signed-Broadcast ledger");
-        assert!(has_durable_sign_predecessor(
-            &ledger,
-            &ledger.records()[1]
-        ));
+        let ledger = LifecycleLedgerV1::new(context, 36, vec![parent, child], BTreeMap::new())
+            .expect("construct historical signed-Broadcast ledger");
+        assert!(has_durable_sign_predecessor(&ledger, &ledger.records()[1]));
 
         let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
             &ledger,
@@ -923,7 +913,7 @@ mod output_recovery_tests {
     #[test]
     fn cold_output_recovery_accepts_exact_invalid_body_parent_qc_and_marker() {
         let (verified, keys) = verified_fixture();
-        let (ledger, durable) = invalid_body_ledger(&verified, &keys, 10, false);
+        let (ledger, durable) = invalid_body_ledger(&verified, &keys, 10, 11, false);
         let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
             &ledger,
             &verified,
@@ -947,9 +937,26 @@ mod output_recovery_tests {
     }
 
     #[test]
+    fn cold_output_recovery_accepts_invalid_body_lineage_across_shared_ordinal_gap() {
+        let (verified, keys) = verified_fixture();
+        let (ledger, durable) = invalid_body_ledger(&verified, &keys, 20, 23, false);
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("authenticate invalid-body Report after intervening runtime ordinals");
+        let report = recovered.entries.get(&23).expect("retain exact report row");
+        assert!(report.authenticates_settlement(&verified));
+        assert!(report.exactly_matches_rejected_body_outcome(
+            &DurableBodyValidationOutcome::rejected_for_test(durable)
+        ));
+    }
+
+    #[test]
     fn cold_output_recovery_rejects_invalid_body_with_corrupt_prepare_qc() {
         let (verified, keys) = verified_fixture();
-        let (ledger, _durable) = invalid_body_ledger(&verified, &keys, 12, true);
+        let (ledger, _durable) = invalid_body_ledger(&verified, &keys, 12, 13, true);
         assert!(matches!(
             PreparedLifecycleOutputRecoveryV1::assemble(
                 &ledger,

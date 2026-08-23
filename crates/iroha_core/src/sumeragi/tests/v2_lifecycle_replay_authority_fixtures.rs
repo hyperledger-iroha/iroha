@@ -551,57 +551,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_execution_commit
         .prepare_qc
         .execution_commitment
 }
-/// Build one pending certified-Fetch candidate from its real verified fixture inputs.
-pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_pending_certified_fetch_candidate_fixture(
-    verified: &crate::sumeragi::v2::VerifiedHeightContext,
-    effect: &AdapterEffect,
-    pending: &PendingRuntimeEffectBinding,
-) -> Option<CandidateAdmission> {
-    let context = super::super::projection::lifecycle_context(verified.context());
-    let projected = super::super::projection::authority_free_admission_projection(
-        context, verified, effect, pending,
-    )
-    .ok()?;
-    let AdapterEffect::FetchBody {
-        tag,
-        manifest: Some(manifest),
-        certified_sources,
-        certificate: Some(certificate),
-        ..
-    } = effect
-    else {
-        return None;
-    };
-    if verified.verify_quorum_certificate(certificate).is_err()
-        || !certified_sources.iter().eq(verified
-            .context()
-            .roster
-            .iter()
-            .map(|entry| &entry.validator))
-    {
-        return None;
-    }
-    let authority = canonical_replay_authority(
-        context,
-        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
-            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
-            origin: BodyPipelineOriginV1::Certified {
-                certificate: certificate.clone(),
-                manifest: manifest.clone(),
-                fetch_manifest_present: true,
-                certified_sources: certified_sources.clone(),
-            },
-        }),
-        LifecycleStageKind::FetchBody,
-        ReplayPayloadBindingV1::None,
-    )?;
-    candidate_from_authorized_projection(
-        context,
-        projected,
-        DurablePayloadReference::None,
-        authority,
-    )
-}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_recovered_decision_terminal_family_fixture(
     context: LifecycleContext,
     certified_sources: Vec<PeerId>,

@@ -626,16 +626,32 @@ impl PreparedReadyDurableValidateApplyPublication<'_> {
                 .as_ref()
                 .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
     }
+    /// Detach the prevalidated Apply admission for the registry's typed parent join.
+    pub(in crate::sumeragi) fn take_registry_work(
+        &mut self,
+    ) -> Option<PreparedLiveValidateApplyRegistryWork> {
+        self.registry_work.take()
+    }
+    /// Restore an unchanged Apply admission after a pre-fsync registry rejection.
+    pub(in crate::sumeragi) fn restore_registry_work(
+        &mut self,
+        work: PreparedLiveValidateApplyRegistryWork,
+    ) {
+        assert!(
+            self.registry_work.replace(work).is_none(),
+            "failed typed Apply join restores one vacant adapter owner"
+        );
+    }
     /// Install the prechecked Apply row and staged validation transition after fsync.
     pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
-        mut self,
+        self,
         reservation: LiveValidateApplyRegistryReservation<'_>,
     ) {
-        let work = self
-            .registry_work
-            .take()
-            .expect("pre-fsync Validate Apply retains one exact registry row");
-        work.install_into(reservation);
+        assert!(
+            self.registry_work.is_none(),
+            "typed Apply admission moved into the pre-fsync registry reservation"
+        );
+        reservation.install_live_apply();
         self.adapter.reducer = self.next_reducer;
         self.adapter.registry = self.next_registry;
         self.adapter.reducer_fence_generation = self.next_fence_generation;
@@ -1183,6 +1199,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
     ) -> Result<PreparedReadyDurableValidatePersistedSign<'a>, ReadyDurableValidateSignWalError<'a>>
     {
         if !self.pre_wal_is_exact() {
+            iroha_logger::error!("Ready Validate Sign append rejected pre-WAL exactness");
             return Err(ReadyDurableValidateSignWalError {
                 failure: ReadyDurableValidateSignWalFailure::PreWal { _prepared: self },
             });
@@ -1213,6 +1230,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         let receipt = match adapter.wal.append(&encoded_wal_payload) {
             Ok(receipt) => receipt,
             Err(error) => {
+                iroha_logger::error!(?error, "Ready Validate Sign WAL append failed");
                 adapter.fail_closed = true;
                 return Err(ReadyDurableValidateSignWalError {
                     failure: ReadyDurableValidateSignWalFailure::PostWal {
@@ -1272,6 +1290,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         let persisted_sign = match post_wal {
             Ok(persisted_sign) => persisted_sign,
             Err(error) => {
+                iroha_logger::error!(?error, "Ready Validate Sign post-WAL seal failed");
                 adapter.fail_closed = true;
                 return Err(ReadyDurableValidateSignWalError {
                     failure: ReadyDurableValidateSignWalFailure::PostWal {
@@ -1309,6 +1328,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         let committed_status = match committed_status {
             Ok(status) => status,
             Err(error) => {
+                iroha_logger::error!(?error, "Ready Validate Sign post-WAL status failed");
                 adapter.fail_closed = true;
                 return Err(ReadyDurableValidateSignWalError {
                     failure: ReadyDurableValidateSignWalFailure::PostWal {

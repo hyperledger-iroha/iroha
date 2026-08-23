@@ -52,7 +52,7 @@
             "the lane effect must preserve the exact immutable sidecar carrier",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
             "let data = NetworkMessage::CertifiedMergeSidecar(message);",
             "let data = NetworkMessage::CertifiedMergeSidecar(Arc::new((*message).clone()));",
@@ -1881,7 +1881,7 @@
             "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
             "CertifiedMergeSidecarMessage::CloseAck(_)\n"
             "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
@@ -2418,9 +2418,23 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
+            "|| !pending_recovery_is_exact",
+            "|| false",
+            "recovered Decision Apply completion must not overtake retained executor work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(",
             "|| self.finality_completion.is_some()",
             "|| false",
             "recovered Decision Apply completion must not overtake retained executor work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_recovered_decision_apply_finality(",
+            "&& pending_recovery_is_exact",
+            "&& true",
+            "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",

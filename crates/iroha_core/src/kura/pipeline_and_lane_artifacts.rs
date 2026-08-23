@@ -3587,27 +3587,6 @@ pub struct LaneBlockExecutionInputArtifact {
     /// Producer-authenticated native-AMX receipts in entrypoint order.
     pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
-/// Reset-11 producer wire layout retained for read-only startup compatibility.
-///
-/// The current format replaced the correlated source fields below with the
-/// disjoint [`LaneBlockExecutionSourceV1`] enum.  Existing reset-11 stores were
-/// written before that change, so readers decode this exact legacy shape and
-/// immediately normalize it to the current in-memory representation.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-struct PreReleaseLaneBlockExecutionInputArtifact {
-    format: LaneBlockExecutionInputArtifactFormat,
-    proposal: LaneBlockProposalV1,
-    artifact: LaneBlockArtifact,
-    autonomous_network_id: Option<iroha_data_model::NetworkId>,
-    autonomous_epoch: Option<u64>,
-    autonomous_payload_hash: Option<Hash>,
-    entrypoint_hashes: Vec<Hash>,
-    entrypoints: Vec<TransactionEntrypoint>,
-    reservation_keys: Vec<LaneQueueReservationKeyV2>,
-    routing_plans: Vec<RoutingPlan>,
-    native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
-}
 impl LaneBlockExecutionInputArtifact {
     const FORMAT_LABEL: &'static str = "lane.execution_input";
     /// Construct a durable execution input artifact from a verified recovery result.

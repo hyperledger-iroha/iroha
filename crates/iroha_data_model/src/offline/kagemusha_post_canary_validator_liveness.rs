@@ -781,11 +781,16 @@ impl<'a> LivenessTrust<'a> {
             return Err(KagemushaV4PostCanaryValidatorLivenessValidationError::ActivationBinding);
         }
         if verified_canary.promotion_id() != expectations.binding().promotion_id
+            || verified_canary.activation_expectations_artifact()
+                != expectations.activation_expectations_artifact()
             || verified_canary.activation_transaction_intent()
                 != expectations.activation_transaction_intent()
+            || canary_anchor.activation_finality_receipt
+                != verified_canary.activation_finality_receipt()
             || canary_anchor.canary_authorization != verified_canary.authorization_identity()
             || canary_anchor.canary_transaction_intent
                 != verified_canary.canary_transaction_intent()
+            || canary_anchor.canary_transaction_wire != verified_canary.canary_transaction_wire()
             || canary_anchor.canary_finalized_height != verified_canary.finalized_height()
             || canary_anchor.canary_finalized_block_hash != verified_canary.finalized_block_hash()
         {
@@ -1827,6 +1832,40 @@ mod tests {
         assert!(
             KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(body, &fixture.issuer)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn challenge_rejects_issuer_role_overlap_and_wrong_private_key() {
+        let fixture = Fixture::new();
+        let mut controller_overlap = fixture.challenge_body();
+        let controller = KeyPair::from_seed(vec![0x81; 32], Algorithm::Ed25519);
+        controller_overlap.issuer = controller.public_key().clone();
+        assert!(
+            KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+                controller_overlap,
+                &controller,
+            )
+            .is_err()
+        );
+
+        let mut validator_overlap = fixture.challenge_body();
+        validator_overlap.issuer = fixture.validator_keys[0].public_key().clone();
+        assert!(
+            KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+                validator_overlap,
+                &fixture.validator_keys[0],
+            )
+            .is_err()
+        );
+
+        let wrong_issuer = KeyPair::from_seed(vec![0x84; 32], Algorithm::Ed25519);
+        assert_eq!(
+            KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+                fixture.challenge_body(),
+                &wrong_issuer,
+            ),
+            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::SignerMismatch)
         );
     }
 

@@ -2549,12 +2549,7 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
                 effect,
                 pending,
             ),
-            Err(
-                super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Projection {
-                    failure: AdapterEffectAdmissionError::UnsupportedBroadcastPayload,
-                    ..
-                }
-            )
+            Err(super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Binding(_))
         ));
         assert!(coordinator.records.is_empty());
     }
@@ -2674,12 +2669,7 @@ fn bound_but_drifted_carriers_fail_closed_without_records() {
             foreign_protocol,
             pending,
         ),
-        Err(
-            super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Projection {
-                failure: AdapterEffectAdmissionError::InvalidCarrier,
-                ..
-            }
-        )
+        Err(super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Binding(_))
     ));
     assert!(coordinator.records.is_empty());
 }

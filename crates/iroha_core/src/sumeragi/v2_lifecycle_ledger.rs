@@ -1039,7 +1039,7 @@ impl LifecycleLedgerRecordV1 {
     ///
     /// A signed Broadcast with a durable Sign predecessor is deliberately not
     /// accepted here; recovered-WAL startup owns that family.  Invalid-body
-    /// reports must supply their unique adjacent terminal Validate parent, and
+    /// reports must supply their unique forward terminal Validate parent, and
     /// both the public edge and private replay-family relation are checked
     /// before the cold output seal is minted.
     pub(super) fn authenticate_recovered_lifecycle_output(
@@ -1064,7 +1064,7 @@ impl LifecycleLedgerRecordV1 {
                         .is_some_and(|(edge, ordinal)| {
                             edge == DurableContinuationEdge::ValidateToInvalidBodyReport
                                 && ordinal == self.ordinal()
-                                && parent.ordinal().checked_add(1) == Some(self.ordinal())
+                                && parent.ordinal() < self.ordinal()
                                 && parent.owner() == self.owner()
                                 && parent.work_class() == Some(LifecycleWorkClass::Validate)
                                 && parent.terminal() == Some(Some(TerminalOutcome::Advanced))

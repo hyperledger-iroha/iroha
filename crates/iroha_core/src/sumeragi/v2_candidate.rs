@@ -1724,10 +1724,6 @@ mod tests {
         let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash:
-                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                    transaction.hash_as_entrypoint(),
-                ),
             entrypoint_hash: transaction.hash_as_entrypoint(),
             queue_plan_admission_binding_hash: Hash::new(b"candidate-queue-plan-admission-binding"),
             routing_plan_digest: routing_plan.digest(),

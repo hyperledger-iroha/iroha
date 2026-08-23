@@ -370,6 +370,22 @@ impl ConsensusMessageControlRule {
             if self.chunk_index != other.chunk_index {
                 return false;
             }
+            if let ((Some(left_height), Some(left_view)), (Some(right_height), Some(right_view))) = (
+                (self.proposal_height, self.proposal_view),
+                (other.proposal_height, other.proposal_view),
+            ) && (left_height, left_view) != (right_height, right_view)
+            {
+                // Two unresolved selectors are both Holds and Proposal
+                // evidence later partitions them by exact round. A resolved
+                // selector already matches by manifest alone, however, so
+                // preserve ambiguity for an equal manifest or a mixed-action
+                // provisional match.
+                return match (self.manifest_hash, other.manifest_hash) {
+                    (None, None) => false,
+                    (Some(left), Some(right)) => left == right,
+                    (None, Some(_)) | (Some(_), None) => self.action != other.action,
+                };
+            }
             return match (self.manifest_hash, other.manifest_hash) {
                 (Some(left), Some(right))
                     if self.proposal_height.is_none() && other.proposal_height.is_none() =>
@@ -849,6 +865,15 @@ impl ConsensusMessageControl {
         if rules.iter().any(|rule| !rule.has_valid_coordinates()) {
             return Err(eyre!(
                 "message-control rules require either a positive directly encoded round or valid exact/Proposal-bound payload-chunk coordinates"
+            ));
+        }
+        if rules.iter().any(|rule| {
+            rule.kind == ConsensusMessageControlKind::PayloadChunk
+                && rule.proposal_height.is_some()
+                && rule.manifest_hash.is_some()
+        }) {
+            return Err(eyre!(
+                "commanded Proposal-bound payload-chunk rules must await daemon-side manifest resolution"
             ));
         }
         for (index, rule) in rules.iter().enumerate() {
@@ -2194,6 +2219,81 @@ mod tests {
         assert!(control.write_command(2, &[], &[2, 1], 2, false).is_err());
     }
     #[test]
+    fn writer_accepts_distinct_proposal_bound_chunk_rounds() {
+        let sender = descriptor_peer();
+        let view_zero = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            sender.clone(),
+            9,
+            0,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        let view_one = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            sender.clone(),
+            9,
+            1,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        assert!(!view_zero.overlaps(&view_one));
+
+        let parent = tempdir().expect("temporary parent");
+        let control =
+            ConsensusMessageControl::create(parent.path().join("control")).expect("create control");
+        assert!(
+            control
+                .write_command(2, &[view_zero.clone(), view_one.clone()], &[], 2, false)
+                .is_ok(),
+            "one authenticated chunk index may be held for distinct exact Proposal rounds"
+        );
+        assert!(
+            control
+                .write_command(3, &[view_zero.clone(), view_zero.clone()], &[], 2, false)
+                .is_err(),
+            "duplicate Proposal-bound chunk selectors remain ambiguous"
+        );
+        let resolved_view_zero = ConsensusMessageControlRule {
+            manifest_hash: Some(descriptor_manifest_hash()),
+            ..view_zero.clone()
+        };
+        let resolved_view_one = ConsensusMessageControlRule {
+            manifest_hash: Some(descriptor_manifest_hash()),
+            ..view_one.clone()
+        };
+        assert!(resolved_view_zero.overlaps(&resolved_view_one));
+        let different_resolved_view_one = ConsensusMessageControlRule {
+            manifest_hash: Some(HashOf::from_untyped_unchecked(CryptoHash::new(
+                b"different-resolved-manifest",
+            ))),
+            ..view_one
+        };
+        assert!(!resolved_view_zero.overlaps(&different_resolved_view_one));
+        assert!(!view_zero.overlaps(&resolved_view_one));
+        let resolved_drop_view_one = ConsensusMessageControlRule {
+            action: ConsensusMessageControlAction::Drop,
+            ..resolved_view_one
+        };
+        assert!(view_zero.overlaps(&resolved_drop_view_one));
+        assert!(
+            control
+                .write_command(4, std::slice::from_ref(&resolved_view_zero), &[], 2, false,)
+                .is_err(),
+            "Proposal-bound commands must let the daemon resolve their manifest"
+        );
+        let exact = ConsensusMessageControlRule::payload_chunk(
+            sender,
+            descriptor_manifest_hash(),
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        assert!(
+            control
+                .write_command(5, &[view_zero, exact], &[], 2, false)
+                .is_err(),
+            "an unresolved Proposal-bound selector may still resolve to an exact selector's manifest"
+        );
+    }
+    #[test]
     fn payload_chunk_rule_roundtrips_through_ack_and_rejects_round_coordinates() {
         let rule = ConsensusMessageControlRule::payload_chunk(
             descriptor_peer(),
@@ -2246,13 +2346,34 @@ mod tests {
         );
         let resolved = ConsensusMessageControlRule {
             manifest_hash: Some(descriptor_manifest_hash()),
-            ..deferred
+            ..deferred.clone()
         };
         assert_eq!(
             parse_ack(&canonical_json(&ack(rule_value(&resolved))).expect("resolved chunk ack"))
                 .expect("parse resolved chunk ack")
                 .rules,
-            vec![resolved]
+            vec![resolved.clone()]
+        );
+        let unresolved_next_view = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            rule.sender.clone(),
+            9,
+            3,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        let mut mixed_ack = ack(rule_value(&resolved));
+        mixed_ack.as_object_mut().expect("ack object").insert(
+            "rules".to_owned(),
+            Value::Array(vec![
+                rule_value(&resolved),
+                rule_value(&unresolved_next_view),
+            ]),
+        );
+        assert_eq!(
+            parse_ack(&canonical_json(&mixed_ack).expect("mixed bounded-view chunk ack"))
+                .expect("parse one resolved and one unresolved bounded-view rule")
+                .rules,
+            vec![resolved, unresolved_next_view]
         );
 
         let mutate = |field: &str, value: Value| {
@@ -2572,6 +2693,43 @@ mod tests {
             },
             &exact_expected
         ));
+    }
+    #[test]
+    fn ack_binding_accepts_one_resolved_rule_across_bounded_proposal_views() {
+        let digest = CryptoHash::new(b"bounded-view-deferred-command");
+        let view_zero = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            descriptor_peer(),
+            9,
+            0,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        let view_one = ConsensusMessageControlRule::payload_chunk_from_proposal(
+            view_zero.sender.clone(),
+            9,
+            1,
+            7,
+            ConsensusMessageControlAction::Hold,
+        );
+        let commanded = vec![view_zero.clone(), view_one.clone()];
+        let expected = ExpectedAck {
+            revision: 2,
+            command_digest: digest,
+            rules: &commanded,
+            queue_capacity: DEFAULT_QUEUE_CAPACITY,
+            drain: false,
+        };
+        let ack = ConsensusMessageControlAck {
+            rules: vec![
+                view_zero,
+                ConsensusMessageControlRule {
+                    manifest_hash: Some(descriptor_manifest_hash()),
+                    ..view_one
+                },
+            ],
+            ..empty_ack(digest)
+        };
+        assert!(ack_matches_expected(&ack, &expected));
     }
     #[tokio::test]
     async fn controller_operations_are_serialized() {

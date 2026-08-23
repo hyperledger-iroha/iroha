@@ -1320,7 +1320,6 @@ pub(crate) mod tests {
                     .to_le_bytes();
                 crate::queue::LaneQueueReservationKeyV2 {
                     version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-                    signed_transaction_hash: crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint.hash()),
                     entrypoint_hash: entrypoint.hash(),
                     queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                         b"merge-query-queue-plan-admission".as_slice(),

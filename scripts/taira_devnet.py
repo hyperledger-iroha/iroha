@@ -3,10 +3,11 @@
 
 ``up`` builds the current Kagami, daemon, and CLI; asks Kagami for a fresh
 four-validator NPoS Nexus network using the canonical Taira chain id; validates
-all four configs; starts the peers; and proves finality with one blocking signed
-``iroha tx ping``.  The generated network lives in one marked
-directory and is replaced on the next ``up``.  There is no release authority,
-promotion state, evidence bundle, soak, or rollback workflow.
+all four configs; starts the peers; and proves finality with one signed
+``iroha tx ping`` submission followed by the typed transaction-status waiter.
+The generated network lives in one marked directory and is replaced on the
+next ``up``.  There is no release authority, promotion state, evidence bundle,
+soak, or rollback workflow.
 """
 
 from __future__ import annotations
@@ -26,18 +27,30 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 try:
-    from taira_constants import network_id_from_genesis_hash
+    from taira_constants import (
+        CHAIN_ID as DEFAULT_CHAIN_ID,
+        PEER_COUNT,
+        network_id_from_genesis_hash,
+    )
 except ModuleNotFoundError:
-    from scripts.taira_constants import network_id_from_genesis_hash
+    from scripts.taira_constants import (
+        CHAIN_ID as DEFAULT_CHAIN_ID,
+        PEER_COUNT,
+        network_id_from_genesis_hash,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIR = REPO_ROOT / "dist" / "taira-devnet"
-DEFAULT_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 DEFAULT_API_PORT = 29_080
 DEFAULT_P2P_PORT = 33_337
-PEER_COUNT = 4
-MCP_PROTOCOL_VERSION = "2025-06-18"
+DEFAULT_OPERATION_TIMEOUT_SECONDS = 300
+# Four optimized daemons plus the Nexus/AMX lane pipeline routinely need more
+# than the ten-second view-zero deadline derived from Kagami's generic
+# one-second localnet cadence.  The five-second proposal cadence deliberately
+# trades a few seconds of smoke-test latency for a robust fifty-second
+# view-zero deadline.
+DEFAULT_BLOCK_CADENCE_MS = 5_000
 MARKER = ".iroha-taira-devnet"
 MARKER_BODY = "managed by scripts/taira_devnet.py\n"
 MAX_BUNDLE_TEXT_BYTES = 8 * 1024 * 1024
@@ -89,6 +102,45 @@ def run_command(
         detail = (stderr.strip() or stdout.strip())[-6000:]
         fail(f"{Path(command[0]).name} failed: {detail or completed.returncode}")
     return completed
+
+
+def submitted_transaction_hash(completed: subprocess.CompletedProcess[str]) -> str:
+    """Extract the raw 32-byte hash accepted by ``iroha tx status``."""
+
+    try:
+        payload = json.loads(completed.stdout or "")
+    except (TypeError, ValueError):
+        fail("signed ping did not return its JSON transaction receipt")
+    value = payload.get("hash") if isinstance(payload, dict) else None
+    match = (
+        re.fullmatch(r"hash:([0-9A-Fa-f]{64})#[0-9A-Fa-f]{4}", value)
+        if isinstance(value, str)
+        else None
+    )
+    if match is None:
+        fail("signed ping returned an invalid transaction hash")
+    return match.group(1)
+
+
+def require_applied_transaction(
+    completed: subprocess.CompletedProcess[str], expected_hash: str
+) -> None:
+    """Require the typed pipeline waiter to confirm the submitted transaction."""
+
+    try:
+        payload = json.loads(completed.stdout or "")
+    except (TypeError, ValueError):
+        fail("transaction status waiter did not return JSON")
+    if not isinstance(payload, dict):
+        fail("transaction status waiter returned an invalid response")
+    actual_hash = payload.get("hash")
+    terminal_kind = payload.get("terminal_kind")
+    if (
+        not isinstance(actual_hash, str)
+        or actual_hash.lower() != expected_hash.lower()
+        or terminal_kind != "Applied"
+    ):
+        fail("signed ping did not reach Applied pipeline finality")
 
 
 def require_executable(path: Path) -> Path:
@@ -380,6 +432,8 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
 def binary_paths(args: argparse.Namespace, run: Runner) -> tuple[Path, Path, Path]:
     """Build or locate Kagami, iroha3d, and iroha from one profile directory."""
 
+    if args.bin_dir is not None and not args.no_build:
+        fail("--bin-dir requires --no-build so a current build cannot be silently ignored")
     target_dir = args.target_dir.expanduser().absolute()
     if not args.no_build:
         print(f"Building current Taira binaries ({args.profile})...", flush=True)
@@ -404,6 +458,7 @@ def generate_network(
     kagami: Path,
     api_port: int,
     p2p_port: int,
+    block_cadence_ms: int,
     run: Runner,
 ) -> None:
     """Generate exactly one fresh-key, four-validator Taira network."""
@@ -431,6 +486,8 @@ def generate_network(
             str(api_port),
             "--base-p2p-port",
             str(p2p_port),
+            "--block-cadence-ms",
+            str(block_cadence_ms),
         ],
         cwd=REPO_ROOT,
         timeout=None,
@@ -462,7 +519,8 @@ def http_request(url: str, payload: object | None = None) -> tuple[int, object |
     """Send one local Torii GET/JSON POST and decode JSON when present."""
 
     body = None if payload is None else json.dumps(payload).encode("utf-8")
-    headers = {"Accept": "application/json"}
+    plain_text_probe = url.rstrip("/").endswith(("/health", "/readyz"))
+    headers = {"Accept": "text/plain" if plain_text_probe else "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers)
@@ -488,6 +546,20 @@ def torii_roots(api_port: int) -> tuple[str, ...]:
     """Return all four loopback Torii roots."""
 
     return tuple(f"http://127.0.0.1:{api_port + index}/" for index in range(PEER_COUNT))
+
+
+def bundle_torii_roots(target: Path) -> tuple[str, ...]:
+    """Derive the owned cohort's Torii roots from its generated client config."""
+
+    client = target / "client.toml"
+    value = quoted_assignment(client, "torii_url")
+    match = re.fullmatch(r"http://127\.0\.0\.1:([0-9]{1,5})/", value)
+    if match is None:
+        fail(f"generated client Torii URL is not a canonical loopback root: {client}")
+    base_port = int(match.group(1))
+    if base_port == 0 or base_port + PEER_COUNT - 1 > 65_535:
+        fail(f"generated client Torii port cannot address four peers: {client}")
+    return torii_roots(base_port)
 
 
 def read_height(root: str, request: Request) -> int:
@@ -532,11 +604,15 @@ def check_mcp(root: str, request: Request) -> None:
 
     url = root + "v1/mcp"
     status, capabilities = request(url, None)
+    protocol_version = (
+        capabilities.get("protocolVersion") if isinstance(capabilities, dict) else None
+    )
     if (
         status != 200
         or not isinstance(capabilities, dict)
         or capabilities.get("enabled") is not True
-        or capabilities.get("protocolVersion") != MCP_PROTOCOL_VERSION
+        or not isinstance(protocol_version, str)
+        or not protocol_version.strip()
     ):
         fail(f"MCP capabilities are not enabled/current at {url} (HTTP {status})")
     initialize = {
@@ -544,7 +620,7 @@ def check_mcp(root: str, request: Request) -> None:
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "protocolVersion": protocol_version,
             "capabilities": {},
             "clientInfo": {"name": "taira-devnet-smoke", "version": "1"},
         },
@@ -560,9 +636,16 @@ def check_mcp(root: str, request: Request) -> None:
         or initialized.get("id") != 1
         or "error" in initialized
         or not isinstance(initialized_result, dict)
-        or initialized_result.get("protocolVersion") != MCP_PROTOCOL_VERSION
+        or initialized_result.get("protocolVersion") != protocol_version
     ):
         fail(f"MCP initialize failed at {url} (HTTP {status})")
+    initialized_notification = {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    status, notification_response = request(url, initialized_notification)
+    if status != 202 or notification_response is not None:
+        fail(f"MCP initialized notification failed at {url} (HTTP {status})")
     tools_request = {
         "jsonrpc": "2.0",
         "id": 2,
@@ -643,16 +726,32 @@ def up(
     """Replace the disposable network and prove one signed transaction finalizes."""
 
     root = managed_root(args.dir, create=True)
-    target = reset_network(root, run)
     kagami, irohad, iroha = binary_paths(args, run)
+    target = reset_network(root, run)
     roots = torii_roots(args.base_api_port)
     try:
         print("Generating a fresh four-validator Taira network...", flush=True)
-        generate_network(target, kagami, args.base_api_port, args.base_p2p_port, run)
+        generate_network(
+            target,
+            kagami,
+            args.base_api_port,
+            args.base_p2p_port,
+            args.block_cadence_ms,
+            run,
+        )
         validate_configs(target, irohad, run)
         require_bundle_identity(target, roots)
         env = os.environ.copy()
-        env.update({"IROHAD_BIN": str(irohad), "IROHA_CLI": str(iroha)})
+        env.update(
+            {
+                "IROHAD_BIN": str(irohad),
+                "IROHA_CLI": str(iroha),
+                # The generated localnet start script can maintain a long-lived
+                # faucet reserve. A disposable deployment owns no predecessor
+                # state, so that retry loop only delays the authoritative smoke.
+                "IROHA_LOCALNET_FAUCET_RESERVE_RETRIES": "0",
+            }
+        )
         run(
             ["/bin/bash", str(target / "start.sh")],
             cwd=target,
@@ -661,8 +760,15 @@ def up(
             capture_output=False,
         )
         require_running_cohort(target, run)
-        baseline = wait_for_cluster(roots, args.timeout_seconds, request)
-        run(
+        # Health/readiness can become available before genesis is committed.
+        # Do not quote or submit a signed transaction against the empty height-0
+        # state, where the freshly generated authority is not registered yet.
+        baseline = wait_for_cluster(roots, args.timeout_seconds, request, above=0)
+        print(
+            f"Four validators converged at height {baseline[0]}; submitting signed smoke...",
+            flush=True,
+        )
+        submitted = run(
             [
                 str(iroha),
                 "--machine",
@@ -674,6 +780,7 @@ def up(
                 "json",
                 "tx",
                 "ping",
+                "--no-wait",
                 "--log-level",
                 "INFO",
                 "--msg",
@@ -682,6 +789,36 @@ def up(
             cwd=target,
             timeout=args.timeout_seconds,
         )
+        transaction_hash = submitted_transaction_hash(submitted)
+        print(
+            f"Submitted {transaction_hash}; waiting for typed Applied status...",
+            flush=True,
+        )
+        waited = run(
+            [
+                str(iroha),
+                "--machine",
+                "-c",
+                str(target / "client.toml"),
+                "--output-format",
+                "json",
+                "tx",
+                "status",
+                "--hash",
+                transaction_hash,
+                "--wait",
+                "--timeout-ms",
+                str(max(1, int(args.timeout_seconds * 1000))),
+                "--poll-interval-ms",
+                "250",
+                "--terminal-status",
+                "applied",
+            ],
+            cwd=target,
+            timeout=args.timeout_seconds + 5,
+        )
+        require_applied_transaction(waited, transaction_hash)
+        print("Signed smoke reached Applied; waiting for four-peer convergence...", flush=True)
         final = wait_for_cluster(roots, args.timeout_seconds, request, above=max(baseline))
         check_mcp(roots[0], request)
         if args.full_doctor:
@@ -700,6 +837,8 @@ def up(
         "torii_roots": list(roots),
         "baseline_height": baseline[0],
         "final_height": final[0],
+        "transaction_hash": transaction_hash,
+        "terminal_status": "Applied",
     }
     print(json.dumps(report, indent=2, sort_keys=True))
     return report
@@ -715,7 +854,11 @@ def check(
 
     root = managed_root(args.dir, create=False)
     target = require_network_bundle(root)
-    roots = torii_roots(args.base_api_port)
+    roots = (
+        bundle_torii_roots(target)
+        if args.base_api_port is None
+        else torii_roots(args.base_api_port)
+    )
     require_bundle_identity(target, roots)
     require_running_cohort(target, run)
     heights = wait_for_cluster(roots, args.timeout_seconds, request)
@@ -756,15 +899,30 @@ def parser() -> argparse.ArgumentParser:
         type=float,
         help="optional Cargo build deadline; the default lets a cold build finish",
     )
-    up_parser.add_argument("--timeout-seconds", type=float, default=120)
+    up_parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_OPERATION_TIMEOUT_SECONDS,
+        help="deadline for each startup, transaction, and convergence phase",
+    )
     up_parser.add_argument("--base-api-port", type=int, default=DEFAULT_API_PORT)
     up_parser.add_argument("--base-p2p-port", type=int, default=DEFAULT_P2P_PORT)
+    up_parser.add_argument(
+        "--block-cadence-ms",
+        type=int,
+        default=DEFAULT_BLOCK_CADENCE_MS,
+        help="signed cadence used to derive robust local consensus deadlines",
+    )
     up_parser.add_argument("--full-doctor", action="store_true", help="also require the broad public Taira product surface")
     up_parser.set_defaults(handler=up)
 
     check_parser = commands.add_parser("check", help="read four-peer readiness and height")
     check_parser.add_argument("--timeout-seconds", type=float, default=20)
-    check_parser.add_argument("--base-api-port", type=int, default=DEFAULT_API_PORT)
+    check_parser.add_argument(
+        "--base-api-port",
+        type=int,
+        help="override the generated bundle's Torii base port",
+    )
     check_parser.add_argument("--full-doctor", action="store_true")
     check_parser.add_argument("--iroha", type=Path, default=REPO_ROOT / "target/local-release/iroha")
     check_parser.set_defaults(handler=check)

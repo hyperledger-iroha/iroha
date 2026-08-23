@@ -311,6 +311,20 @@ class KagemushaStagedResourceGuardTests(unittest.TestCase):
             self.assertEqual(json.loads(report.read_text())["completed"], True)
             self.assertEqual(report.stat().st_mode & 0o777, 0o600)
 
+    def test_atomic_report_does_not_follow_an_existing_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "operator-owned.json"
+            target.write_text("do not replace\n", encoding="utf-8")
+            report = root / "report.json"
+            report.symlink_to(target)
+
+            with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
+                guard.atomic_write_report(report, {"completed": True})
+
+            self.assertTrue(report.is_symlink())
+            self.assertEqual(target.read_text(encoding="utf-8"), "do not replace\n")
+
     def test_guard_bounds_release_compiler_codegen_memory(self) -> None:
         program = (
             "import os; fd=int(os.environ['IROHA_KAGEMUSHA_V4_GUARD_FD']); "

@@ -2,11 +2,10 @@
 
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
-use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::consensus::LaneBlockDescriptorV1,
+    block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
     nexus::{DataSpaceId, LaneId, PublicLaneValidatorStatus},
     peer::PeerId,
 };
@@ -24,78 +23,6 @@ use super::{
     public_lane_validator_record_matches_key,
 };
 use crate::governance::manifest::{GovernanceRules, LaneManifestRegistry};
-
-const TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH: [u8; Hash::LENGTH] = [
-    0xd4, 0xdf, 0xdd, 0x60, 0x08, 0x4f, 0xa1, 0x90, 0xe7, 0x86, 0xc9, 0x71, 0x73, 0xf8, 0x5d, 0x63,
-    0xec, 0xe9, 0xd0, 0xb3, 0x96, 0x7b, 0x36, 0xba, 0x4f, 0x92, 0x69, 0xcf, 0x36, 0x21, 0xc2, 0x3b,
-];
-
-const TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH: [u8; Hash::LENGTH] = [
-    0x43, 0xcd, 0x25, 0xec, 0x05, 0x7a, 0x61, 0x4c, 0x06, 0xbc, 0x45, 0x72, 0xdb, 0xb5, 0x64, 0xbd,
-    0xee, 0x13, 0x44, 0x0a, 0xea, 0xe2, 0x4a, 0x9c, 0x8a, 0xcb, 0x23, 0x9a, 0xf6, 0x02, 0x91, 0xf1,
-];
-
-fn is_exact_taira_pre_release_projection_gap_identity(
-    descriptor_hash: Hash,
-    proposal_height: u64,
-    lane_id: LaneId,
-) -> bool {
-    (descriptor_hash == Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH)
-        && proposal_height == 4
-        && lane_id == LaneId::SINGLE)
-        || (descriptor_hash == Hash::prehashed(TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH)
-            && proposal_height == 7
-            && lane_id == LaneId::new(2))
-}
-
-fn is_exact_taira_pre_release_projection_gap(descriptor: &LaneBlockDescriptorV1) -> bool {
-    is_exact_taira_pre_release_projection_gap_identity(
-        descriptor.descriptor_hash,
-        descriptor.proposal_height,
-        descriptor.lane_id,
-    ) && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
-        && descriptor.previous_lane_block_height == 0
-        && descriptor.previous_lane_block_descriptor_hash.is_none()
-        && descriptor.lane_block_height == 1
-        && descriptor.lane_block_view == 0
-}
-
-#[cfg(test)]
-mod taira_pre_release_projection_gap_tests {
-    use super::*;
-
-    #[test]
-    fn accepts_only_the_two_exact_descriptor_identities() {
-        let lane0 = Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH);
-        let lane2 = Hash::prehashed(TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH);
-
-        assert!(is_exact_taira_pre_release_projection_gap_identity(
-            lane0,
-            4,
-            LaneId::SINGLE
-        ));
-        assert!(is_exact_taira_pre_release_projection_gap_identity(
-            lane2,
-            7,
-            LaneId::new(2)
-        ));
-        assert!(!is_exact_taira_pre_release_projection_gap_identity(
-            lane2,
-            6,
-            LaneId::new(2)
-        ));
-        assert!(!is_exact_taira_pre_release_projection_gap_identity(
-            lane2,
-            7,
-            LaneId::new(1)
-        ));
-        assert!(!is_exact_taira_pre_release_projection_gap_identity(
-            lane0,
-            7,
-            LaneId::new(2)
-        ));
-    }
-}
 
 /// Exact lane/dataspace route whose consensus authority is being resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -678,6 +605,68 @@ pub(super) fn resolve_from_sources(
     ))
 }
 
+/// Recover the unique descriptor committee bound by one finalized execution context.
+///
+/// Ordinary lane work commits its descriptor through `lane_payload_ownerships`,
+/// while autonomous work commits the same authority inside a producer-authenticated
+/// `autonomous_lane_payloads` envelope. Historical authority must recognize both
+/// canonical carrier forms without falling back to mutable live state.
+pub(crate) fn authenticated_committee_in_finalized_bundle(
+    bundle: &BlockExecutionContextBundle,
+    descriptor: &LaneBlockDescriptorV1,
+    network_id: NetworkId,
+    epoch: u64,
+) -> Result<Vec<PeerId>, &'static str> {
+    if descriptor.computed_descriptor_hash() != descriptor.descriptor_hash {
+        return Err("lane descriptor hash is not canonical");
+    }
+    let mut exact = None;
+    let mut bind = |validators: &[PeerId]| {
+        if exact.is_some() {
+            return Err("finalized proposal-height block ambiguously binds this lane descriptor");
+        }
+        exact = Some(validators.to_vec());
+        Ok(())
+    };
+    for ownership in bundle.lane_payload_ownerships.iter().filter(|ownership| {
+        ownership.proposal_height == descriptor.proposal_height
+            && ownership.lane_id == descriptor.lane_id
+            && ownership.dataspace_id == descriptor.dataspace_id
+            && ownership.lane_incarnation == descriptor.lane_incarnation
+            && ownership.lane_block_height == descriptor.lane_block_height
+            && ownership.lane_block_view == descriptor.lane_block_view
+            && ownership.subject_hash == descriptor.subject_hash
+            && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
+            && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
+            && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
+            && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
+            && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
+            && ownership.previous_lane_block_descriptor_hash
+                == descriptor.previous_lane_block_descriptor_hash
+            && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
+            && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
+            && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
+            && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
+            && ownership.qc_mode_tag == descriptor.qc_mode_tag
+            && ownership.validate_replay_material().is_ok()
+    }) {
+        bind(&ownership.lane_block_descriptor_validator_set)?;
+    }
+    for envelope in &bundle.autonomous_lane_payloads {
+        let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
+            envelope, network_id, epoch,
+        )
+        .map_err(
+            |_| "finalized proposal-height block contains an invalid autonomous lane payload",
+        )?;
+        if payload.origin_proposal.descriptor == *descriptor {
+            bind(&payload.origin_proposal.descriptor.validator_set)?;
+        }
+    }
+    drop(bind);
+    exact.ok_or("finalized proposal-height block does not bind this lane descriptor")
+}
+
 /// Recover a lane descriptor's immutable committee from the globally
 /// finalized block that authenticated its proposal-height ownership.
 ///
@@ -710,74 +699,13 @@ pub(super) fn authenticated_committee_for_descriptor(
     {
         return Err("lane proposal-height block and V2 finality disagree");
     }
-    let ownerships = block
+    let bundle = block
         .execution_context()
-        .ok_or("lane proposal-height block has no execution context")?
-        .lane_payload_ownerships
-        .iter()
-        .filter(|ownership| {
-            ownership.proposal_height == descriptor.proposal_height
-                && ownership.lane_id == descriptor.lane_id
-                && ownership.dataspace_id == descriptor.dataspace_id
-                && ownership.lane_incarnation == descriptor.lane_incarnation
-                && ownership.lane_block_height == descriptor.lane_block_height
-                && ownership.lane_block_view == descriptor.lane_block_view
-                && ownership.subject_hash == descriptor.subject_hash
-                && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
-                && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
-                && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
-                && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
-                && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
-                && ownership.previous_lane_block_descriptor_hash
-                    == descriptor.previous_lane_block_descriptor_hash
-                && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
-                && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
-                && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
-                && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
-                && ownership.qc_mode_tag == descriptor.qc_mode_tag
-                && ownership.validate_replay_material().is_ok()
-        });
-    let mut ownerships = ownerships.take(2);
-    let Some(ownership) = ownerships.next() else {
-        // Reset-11 was produced before global blocks persisted the complete
-        // lane-payload ownership projection. Its two certified lane blocks
-        // were nevertheless authorized with the producer's canonical
-        // proposal-height committees. Retain that exact, narrow recovery
-        // corridor only for the two authenticated descriptors emitted by the
-        // reset producer. The live State height may already expose a staged
-        // successor while this source is selected, so it is not a stable
-        // discriminator here; the immutable descriptor and proposal-height
-        // finality are.
-        if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&state.network_id)
-            && is_exact_taira_pre_release_projection_gap(descriptor)
-        {
-            let committee = finality
-                .height_context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>();
-            if !committee.is_empty()
-                && finality
-                    .height_context
-                    .roster
-                    .iter()
-                    .all(|entry| entry.power == 1)
-                && descriptor.validator_set == committee
-                && descriptor.validator_set_hash == descriptor.computed_validator_set_hash()
-                && usize::try_from(descriptor.validator_count).ok() == Some(committee.len())
-                && finality.height_context.quorum.min_signers == descriptor.min_quorum
-                && finality.height_context.quorum.total_power
-                    == u64::from(descriptor.validator_count)
-            {
-                return Ok(committee);
-            }
-            return Err("reset-11 lane descriptor differs from its canonical committee");
-        }
-        return Err("finalized proposal-height block does not bind this lane descriptor");
-    };
-    if ownerships.next().is_some() {
-        return Err("finalized proposal-height block ambiguously binds this lane descriptor");
-    }
-    Ok(ownership.lane_block_descriptor_validator_set.clone())
+        .ok_or("lane proposal-height block has no execution context")?;
+    authenticated_committee_in_finalized_bundle(
+        bundle,
+        descriptor,
+        state.network_id,
+        finality.height_context.epoch,
+    )
 }

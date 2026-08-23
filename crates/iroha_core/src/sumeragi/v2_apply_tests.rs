@@ -359,3 +359,76 @@ fn install_live_lifecycle_cursor_for_apply_test(
 include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");
+
+/// Canonical height-one material for exercising the recovered Decision Apply
+/// worker from another Sumeragi unit-test module.
+pub(in crate::sumeragi) struct ProductionRecoveredDecisionApplyFixtureV1 {
+    /// Cryptographically verified immutable height context.
+    pub(in crate::sumeragi) verified: VerifiedHeightContext,
+    /// Exact canonical proposal manifest.
+    pub(in crate::sumeragi) manifest: wire::PayloadManifest,
+    /// Exact canonical `SignedBlockWire` proposal bytes.
+    pub(in crate::sumeragi) canonical_wire: Vec<u8>,
+    /// Body store retaining the production validation marker.
+    pub(in crate::sumeragi) body_store: V2BodyStore,
+    /// Exact durable body receipt selected by validation.
+    pub(in crate::sumeragi) durable: DurableBodyReceipt,
+    /// Real aggregate-signed CommitQC authorizing application.
+    pub(in crate::sumeragi) commit_qc: wire::QuorumCertificate,
+    /// Matching State/Kura application service.
+    pub(in crate::sumeragi) apply_service: V2ApplyService,
+    /// Validator keys matching the frozen roster.
+    pub(in crate::sumeragi) validator_keys: Vec<KeyPair>,
+    /// Keeps the body-store directory alive through worker settlement.
+    pub(in crate::sumeragi) directory: tempfile::TempDir,
+}
+
+/// Build one production-valid genesis, validation marker, and CommitQC for a
+/// cross-module lifecycle Validate-to-Apply regression.
+pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
+-> ProductionRecoveredDecisionApplyFixtureV1 {
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
+    assert!(
+        fixture.state.matches_kura_instance(&fixture.kura),
+        "production recovered Decision Apply fixture must retain the State Kura instance"
+    );
+    assert!(
+        fixture.service.matches_lifecycle_launch(
+            &fixture.state,
+            &fixture.kura,
+            &fixture.context,
+            &fixture.service.validator_set_pops,
+        ),
+        "production recovered Decision Apply fixture must satisfy launch identity"
+    );
+    let body_store = fixture.reopen_body_store();
+    let canonical_wire = fixture
+        .body
+        .encode_wire()
+        .expect("encode canonical recovered Decision Apply fixture body");
+    let durable = fixture.task.validated_receipt().durable().clone();
+    let commit_qc = fixture.task.certificate().clone();
+    let verified = VerifiedHeightContext::genesis(
+        fixture.context.clone(),
+        fixture.service.validator_set_pops.clone(),
+    )
+    .expect("verify recovered Decision Apply fixture height context");
+    let ApplyFixture {
+        manifest,
+        service: apply_service,
+        body_root: directory,
+        validator_keys,
+        ..
+    } = fixture;
+    ProductionRecoveredDecisionApplyFixtureV1 {
+        verified,
+        manifest,
+        canonical_wire,
+        body_store,
+        durable,
+        commit_qc,
+        apply_service,
+        validator_keys,
+        directory,
+    }
+}

@@ -1554,7 +1554,6 @@ fn validate_lane_executable_payload_body(
             entrypoint.clone(),
         ));
         if key.validate().is_err()
-            || key.signed_transaction_hash != accepted.hash()
             || key.entrypoint_hash != accepted.hash_as_entrypoint()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id
@@ -6060,8 +6059,6 @@ mod tests {
         ));
         let reservation = LaneQueueReservationKeyV2 {
             version: LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash:
-                LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(entrypoint.hash()),
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"lane-consensus-queue-plan-admission-binding",
@@ -6225,6 +6222,18 @@ mod tests {
             .expect("canonical autonomous anchor decodes");
         assert_eq!(decoded, payload);
         assert_eq!(decoded.reservation_keys.encode(), reservation_bytes);
+        let finalized_bundle = iroha_data_model::block::BlockExecutionContextBundle::default()
+            .with_autonomous_lane_payloads(vec![envelope.clone()]);
+        assert_eq!(
+            crate::state::authenticated_committee_in_finalized_bundle(
+                &finalized_bundle,
+                &payload.origin_proposal.descriptor,
+                network_id,
+                epoch,
+            ),
+            Ok(payload.origin_proposal.descriptor.validator_set.clone()),
+            "a finalized autonomous anchor must preserve its immutable historical committee",
+        );
         let payload_hash = payload
             .computed_payload_hash()
             .expect("compute canonical payload identity");

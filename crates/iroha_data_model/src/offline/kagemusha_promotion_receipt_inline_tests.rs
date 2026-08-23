@@ -17,6 +17,7 @@ use crate::{
     transaction::{
         DataTriggerSequence, FeePaymentIntent, SignedTransaction, TransactionBuilder,
         TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        signed::SealedTransactionReveal,
     },
 };
 #[cfg(feature = "transparent_api")]
@@ -1818,9 +1819,178 @@ fn production_canary_authorization_and_finality_evidence_verify_exactly() {
         .expect("production canary evidence verifies");
     assert_eq!(verified.finalized_height(), 3);
     assert_eq!(
+        verified.activation_expectations_artifact(),
+        fixture
+            .receipt
+            .expectations
+            .activation_expectations_artifact(),
+    );
+    assert_eq!(
+        verified.activation_finality_receipt(),
+        exact_receipt_bytes(&receipt_bytes),
+    );
+    assert_eq!(
         verified.canary_transaction_intent(),
         fixture.canary_transaction.hash()
     );
+    assert_eq!(
+        verified.canary_transaction_wire(),
+        fixture
+            .authorization
+            .reservation
+            .body
+            .canary_transaction_wire,
+    );
+}
+
+#[cfg(feature = "transparent_api")]
+#[test]
+fn production_canary_evidence_rejects_a_sealed_reveal_entrypoint() {
+    let fixture = complete_canary_fixture();
+    let receipt_bytes =
+        norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
+    let mut body = fixture.evidence.body.clone();
+    body.committed_transaction.entrypoint =
+        TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"sealed Kagemusha canary evidence boundary"),
+            fixture.canary_transaction,
+            [0xA7; 32],
+        ));
+    assert_eq!(
+        KagemushaV4TairaCanaryEvidenceV1::try_sign(
+            body,
+            &fixture.receipt.issuer,
+            &fixture.authorization,
+            &fixture.authorization_bytes,
+            &fixture.receipt.expectations,
+            &fixture.receipt.receipt,
+            &receipt_bytes,
+        ),
+        Err(KagemushaV4TairaCanaryEvidenceValidationError::CommittedTransaction),
+    );
+}
+
+#[cfg(feature = "transparent_api")]
+#[test]
+fn post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices() {
+    let fixture = complete_canary_fixture();
+    let receipt_bytes =
+        norito::encode_canonical(&fixture.receipt.receipt).expect("canonical receipt");
+    let verified = fixture
+        .evidence
+        .verify_exact(
+            &fixture.evidence_bytes,
+            &fixture.authorization,
+            &fixture.authorization_bytes,
+            &fixture.receipt.expectations,
+            &fixture.receipt.receipt,
+            &receipt_bytes,
+        )
+        .expect("production canary evidence verifies");
+    let canary_proof = fixture
+        .evidence
+        .body
+        .finality_proof_chain
+        .last()
+        .expect("canary proof");
+    let canary_block_time = u64::try_from(canary_proof.block_header.creation_time().as_millis())
+        .expect("canary block time fits u64");
+    let anchor = KagemushaV4PostCanaryValidatorLivenessCanaryAnchorV1 {
+        schema: KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_CANARY_ANCHOR_SCHEMA.to_owned(),
+        version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+        activation_finality_receipt: verified.activation_finality_receipt(),
+        canary_authorization: verified.authorization_identity(),
+        canary_transaction_intent: verified.canary_transaction_intent(),
+        canary_transaction_wire: verified.canary_transaction_wire(),
+        canary_finalized_height: verified.finalized_height(),
+        canary_finalized_block_hash: verified.finalized_block_hash(),
+        canary_finalized_block_time_unix_ms: canary_block_time,
+    };
+    let targets = std::array::from_fn(|index| KagemushaV4PostCanaryValidatorLivenessTargetV1 {
+        validator_id: fixture.receipt.expectations.validator_bodies()[index]
+            .validator_id
+            .clone(),
+        canonical_torii_origin: format!("https://validator-{index}.example.test"),
+    });
+    let challenge_body = KagemushaV4PostCanaryValidatorLivenessChallengeBodyV1 {
+        schema: KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_CHALLENGE_BODY_SCHEMA.to_owned(),
+        version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+        binding: fixture.receipt.expectations.binding().clone(),
+        canary_anchor: anchor,
+        targets,
+        issuer: fixture.receipt.issuer.public_key().clone(),
+        nonce: [0xA6; 32],
+        issued_at_unix_ms: canary_block_time + 1,
+        expires_at_unix_ms: canary_block_time
+            + KAGEMUSHA_V4_POST_CANARY_VALIDATOR_LIVENESS_MAX_INTERVAL_MS,
+    };
+    let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+        challenge_body.clone(),
+        &fixture.receipt.issuer,
+    )
+    .expect("sign bound liveness challenge");
+    challenge
+        .verify_bound(
+            &fixture.receipt.expectations,
+            &verified,
+            &challenge_body.canary_anchor,
+            canary_proof,
+        )
+        .expect("untampered liveness anchor verifies");
+
+    let spliced_expectations =
+        KagemushaV4ActivationReceiptExpectationsV1::from_unverified_artifact_for_test(
+            &fixture.receipt.expectations_artifact.body,
+            b"different controller-authenticated expectations artifact",
+        )
+        .expect("build hostile expectations capability");
+    assert_eq!(
+        challenge.verify_bound(
+            &spliced_expectations,
+            &verified,
+            &challenge_body.canary_anchor,
+            canary_proof,
+        ),
+        Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
+        "a canary capability cannot move across exact expectations artifacts",
+    );
+
+    for (case, tampered_digest) in [
+        (
+            "activation receipt",
+            exact_receipt_bytes(b"spliced receipt"),
+        ),
+        (
+            "canary transaction wire",
+            exact_receipt_bytes(b"spliced transaction wire"),
+        ),
+    ] {
+        let mut tampered = challenge_body.clone();
+        match case {
+            "activation receipt" => {
+                tampered.canary_anchor.activation_finality_receipt = tampered_digest;
+            }
+            "canary transaction wire" => {
+                tampered.canary_anchor.canary_transaction_wire = tampered_digest;
+            }
+            _ => unreachable!("closed hostile anchor table"),
+        }
+        let challenge = KagemushaV4PostCanaryValidatorLivenessChallengeV1::try_sign(
+            tampered.clone(),
+            &fixture.receipt.issuer,
+        )
+        .expect("issuer can sign hostile anchor fixture");
+        assert_eq!(
+            challenge.verify_bound(
+                &fixture.receipt.expectations,
+                &verified,
+                &tampered.canary_anchor,
+                canary_proof,
+            ),
+            Err(KagemushaV4PostCanaryValidatorLivenessValidationError::CanaryBinding),
+            "{case} splice must fail against the verified canary capability",
+        );
+    }
 }
 
 #[cfg(feature = "transparent_api")]

@@ -814,7 +814,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 descriptor.lane_block_height,
                 &input_data_path,
                 &input_index_path,
-                Self::decode_lane_block_execution_input_artifact,
+                norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
                 "historical autonomous lane block execution input preflight",
                 false,
             );
@@ -926,7 +926,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 lane_block_height,
                 &route.namespace.data_path,
                 &route.namespace.index_path,
-                Self::decode_lane_block_execution_input_artifact,
+                norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
                 "historical autonomous lane block execution input",
                 false,
             )

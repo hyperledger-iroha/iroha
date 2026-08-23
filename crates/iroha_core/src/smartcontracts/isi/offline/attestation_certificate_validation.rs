@@ -101,9 +101,7 @@ fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Err
     };
     Ok(key_usage.critical && key_usage.value.key_cert_sign())
 }
-fn x509_leaf_allows_digital_signature(
-    certificate: &X509Certificate<'_>,
-) -> Result<bool, Error> {
+fn x509_leaf_allows_digital_signature(certificate: &X509Certificate<'_>) -> Result<bool, Error> {
     let Some(key_usage) = certificate
         .key_usage()
         .map_err(|_| invalid_attestation("attestation certificate key usage is invalid"))?
@@ -111,6 +109,36 @@ fn x509_leaf_allows_digital_signature(
         return Ok(false);
     };
     Ok(key_usage.critical && key_usage.value.digital_signature())
+}
+fn validate_x509_ca_path_len_constraint(
+    certificate: &X509Certificate<'_>,
+    subordinate_ca_count: usize,
+) -> Result<(), Error> {
+    let Some(basic_constraints) = certificate.basic_constraints().map_err(|_| {
+        invalid_attestation("attestation certificate basic constraints are invalid")
+    })?
+    else {
+        return Err(
+            invalid_attestation("attestation certificate issuer has no basic constraints").into(),
+        );
+    };
+    if basic_constraints
+        .value
+        .path_len_constraint
+        .is_some_and(|maximum| subordinate_ca_count > maximum as usize)
+    {
+        return Err(invalid_attestation(
+            "attestation certificate path length constraint is violated",
+        )
+        .into());
+    }
+    Ok(())
+}
+fn non_self_issued_subordinate_ca_count(certificates: &[X509Certificate<'_>]) -> usize {
+    certificates
+        .iter()
+        .filter(|certificate| certificate.issuer() != certificate.subject())
+        .count()
 }
 fn validate_x509_certificate_time(
     certificate: &X509Certificate<'_>,
@@ -177,7 +205,7 @@ fn validate_attestation_certificate_chain(
         )
         .into());
     }
-    for pair in parsed_chain.windows(2) {
+    for (issuer_offset, pair) in parsed_chain.windows(2).enumerate() {
         let certificate = &pair[0];
         let issuer = &pair[1];
         if certificate.issuer() != issuer.subject() || !x509_certificate_is_ca(issuer)? {
@@ -185,7 +213,11 @@ fn validate_attestation_certificate_chain(
                 invalid_attestation("attestation certificate issuer chain is invalid").into(),
             );
         }
+        let issuer_index = issuer_offset + 1;
+        let subordinate_ca_count =
+            non_self_issued_subordinate_ca_count(&parsed_chain[1..issuer_index]);
         verify_x509_certificate_signature(certificate, issuer)?;
+        validate_x509_ca_path_len_constraint(issuer, subordinate_ca_count)?;
     }
     let tail_der = certificate_chain.last().expect("chain is non-empty");
     let tail = parsed_chain.last().expect("chain is non-empty");
@@ -206,7 +238,9 @@ fn validate_attestation_certificate_chain(
             return Ok(());
         }
         if tail.issuer() == root.subject() {
+            let subordinate_ca_count = non_self_issued_subordinate_ca_count(&parsed_chain[1..]);
             verify_x509_certificate_signature(tail, &root)?;
+            validate_x509_ca_path_len_constraint(&root, subordinate_ca_count)?;
             return Ok(());
         }
     }
@@ -225,9 +259,7 @@ fn validate_attestation_certificate_chain(
     .into())
 }
 #[cfg(test)]
-fn x509_certificate_is_offline_attestation_test_root(
-    certificate: &X509Certificate<'_>,
-) -> bool {
+fn x509_certificate_is_offline_attestation_test_root(certificate: &X509Certificate<'_>) -> bool {
     certificate.subject().iter_common_name().any(|name| {
         name.as_str()
             .is_ok_and(|value| value == "Iroha Offline Attestation Test Root")
@@ -250,6 +282,128 @@ fn x509_unique_extension_value(
 }
 fn x509_subject_public_key_bytes(certificate: &X509Certificate<'_>) -> Vec<u8> {
     certificate.public_key().subject_public_key.data.to_vec()
+}
+
+#[cfg(test)]
+mod attestation_certificate_path_len_tests {
+    use super::*;
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
+        PKCS_ECDSA_P256_SHA256, date_time_ymd,
+    };
+
+    struct CertificateChainFixture {
+        leaf: Vec<u8>,
+        intermediate: Vec<u8>,
+        root: Vec<u8>,
+    }
+
+    fn certificate_chain_fixture(root_path_len: u8) -> CertificateChainFixture {
+        let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate root key");
+        let mut root_params = CertificateParams::new(vec!["kagemusha-root.example".to_owned()])
+            .expect("root certificate parameters");
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "Kagemusha Attestation Test Root");
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(root_path_len));
+        root_params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        root_params.not_before = date_time_ymd(2020, 1, 1);
+        root_params.not_after = date_time_ymd(2030, 1, 1);
+        let root_certificate = root_params
+            .self_signed(&root_key)
+            .expect("self-sign root certificate");
+        let root_issuer = Issuer::new(root_params, root_key);
+
+        let intermediate_key =
+            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate intermediate key");
+        let mut intermediate_params =
+            CertificateParams::new(vec!["kagemusha-intermediate.example".to_owned()])
+                .expect("intermediate certificate parameters");
+        intermediate_params.distinguished_name.push(
+            DnType::CommonName,
+            "Kagemusha Attestation Test Intermediate",
+        );
+        intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        intermediate_params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        intermediate_params.not_before = date_time_ymd(2020, 1, 1);
+        intermediate_params.not_after = date_time_ymd(2030, 1, 1);
+        let intermediate_certificate = intermediate_params
+            .signed_by(&intermediate_key, &root_issuer)
+            .expect("sign intermediate certificate");
+        let intermediate_issuer = Issuer::new(intermediate_params, intermediate_key);
+
+        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate leaf key");
+        let mut leaf_params = CertificateParams::new(vec!["kagemusha-leaf.example".to_owned()])
+            .expect("leaf certificate parameters");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "Kagemusha Attestation Test Leaf");
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        let leaf_certificate = leaf_params
+            .signed_by(&leaf_key, &intermediate_issuer)
+            .expect("sign leaf certificate");
+
+        CertificateChainFixture {
+            leaf: leaf_certificate.der().to_vec(),
+            intermediate: intermediate_certificate.der().to_vec(),
+            root: root_certificate.der().to_vec(),
+        }
+    }
+
+    fn evaluation_time() -> ASN1Time {
+        x509_evaluation_time(1_800_000_000_000).expect("fixed certificate evaluation time")
+    }
+
+    #[test]
+    fn included_trust_anchor_enforces_path_len_constraint() {
+        let permitted = certificate_chain_fixture(1);
+        validate_attestation_certificate_chain(
+            &[
+                permitted.leaf,
+                permitted.intermediate,
+                permitted.root.clone(),
+            ],
+            &[permitted.root],
+            &HashSet::new(),
+            evaluation_time(),
+        )
+        .expect("pathLenConstraint=1 permits one subordinate CA");
+
+        let denied = certificate_chain_fixture(0);
+        let error = validate_attestation_certificate_chain(
+            &[denied.leaf, denied.intermediate, denied.root.clone()],
+            &[denied.root],
+            &HashSet::new(),
+            evaluation_time(),
+        )
+        .expect_err("pathLenConstraint=0 must reject one subordinate CA");
+        assert!(error.to_string().contains("path length constraint"));
+    }
+
+    #[test]
+    fn external_trust_anchor_enforces_path_len_constraint() {
+        let permitted = certificate_chain_fixture(1);
+        validate_attestation_certificate_chain(
+            &[permitted.leaf, permitted.intermediate],
+            &[permitted.root],
+            &HashSet::new(),
+            evaluation_time(),
+        )
+        .expect("external pathLenConstraint=1 permits one subordinate CA");
+
+        let denied = certificate_chain_fixture(0);
+        let error = validate_attestation_certificate_chain(
+            &[denied.leaf, denied.intermediate],
+            &[denied.root],
+            &HashSet::new(),
+            evaluation_time(),
+        )
+        .expect_err("external pathLenConstraint=0 must reject one subordinate CA");
+        assert!(error.to_string().contains("path length constraint"));
+    }
 }
 fn validate_attestation_protocol_string(
     subject: &'static str,
@@ -325,12 +479,11 @@ fn ensure_kagemusha_transparent_attachment(attachment: &ProofAttachment) -> Resu
         .into());
     }
     let backend = attachment.backend.as_str();
-    let backend_tag =
-        crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha proof backend is not a supported generic OpenVerify engine",
-            )
-        })?;
+    let backend_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
+        labeled_invariant(
+            "verifier_key_invalid",
+            "Kagemusha proof backend is not a supported generic OpenVerify engine",
+        )
+    })?;
     ensure_kagemusha_transparent_backend(backend, backend_tag)
 }

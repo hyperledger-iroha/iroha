@@ -65,10 +65,6 @@ fn two_reservation_autonomous_lane_payload_for_kura(
         .map(
             |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash:
-                    LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                        entrypoint.hash(),
-                    ),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"two-reservation-strict-admission",

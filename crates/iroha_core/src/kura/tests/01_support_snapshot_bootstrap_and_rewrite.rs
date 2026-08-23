@@ -702,9 +702,6 @@ fn merge_entry_with_indexed_reservation(
     ));
     let reservation = LaneQueueReservationKeyV2 {
         version: LaneQueueReservationKeyV2::VERSION,
-        signed_transaction_hash: LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-            entrypoint.hash(),
-        ),
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura-queue-plan-admission-binding",

@@ -1251,11 +1251,12 @@ reverifies both `canary-authorization-submission-journal-v1.norito` and the
 root-private complete `canary-submission-journal-v1.norito` before the first
 authorization POST. Consensus verifies the reservation controller signature,
 network, actual transaction authorizer, exclusive time/height limits, and exact
-activation binding, then reserves only the external canary entrypoint hash.
-Reapplying the same exact reservation is idempotent; another reservation for an
-occupied promotion slot fails. Because the public instruction contains only
-signed hashes, a third party cannot learn and submit the exact canary early to
-poison its pipeline hash.
+activation binding, then reserves the external canary entrypoint hash, complete
+signed-wire identity, and byte-identical signed reservation under the same
+promotion slot. Reapplying that exact reservation is
+idempotent; another call, signed wire, or reservation for an occupied slot fails.
+Because the public instruction contains only signed digests, a third party
+cannot learn and submit the exact canary early to poison its pipeline hash.
 
 `submit-canary` requires separate explicit `--write-authorized` consent, the
 same exact Torii origin, network, and authority, the private byte-identical
@@ -1264,9 +1265,23 @@ before each local commit or network POST, the client advances an
 activation-anchored finality verifier through every observed successor, checks
 that the next-block inclusion margin remains before the exclusive height
 expiry, reads a fresh protected-host time, and reverifies the complete
-authorization. Core accepts `RecordKagemushaTairaCanaryV4` only when the current
-external entrypoint hash equals the reserved hash and the full activation
-binding and permit still match; the exact canary is consumed once. A
+authorization. At each canonical transaction boundary Core clears prior context
+and derives a complete-wire identity only when the enclosing entrypoint is
+itself `External` and contains exactly one direct
+`RecordKagemushaTairaCanaryV4`; top-level Batch, contract, IVM, dynamically
+emitted, and `SealedReveal`-wrapped forms remain unbound. In particular, opening
+a sealed commitment does not reinterpret its inner signed transaction as the
+external evidence carrier reserved by the controller. Core accepts the record
+only when both the current external entrypoint hash and this
+authorization-proof-bearing signed-wire identity equal their reserved markers
+and the full activation binding and permit still match. The direct record
+affinely takes and clears that wire capability before any child data-trigger
+execution, and the exact canary is consumed once. Autonomous merge producers
+and live or historical followers separately admit only `QueuePlanSynced`
+entrypoints after authenticating their payload or batch commitments. The
+controller-authorized canary is signed with `Ordinary`; changing that intent
+changes its signed entrypoint and complete wire, so merge cannot reclassify it
+as the reserved direct canary. A
 pre-existing status without the corresponding journal, a mismatching journal,
 or an ambiguous submission cannot be retrospectively converted into production
 evidence.
@@ -1292,13 +1307,17 @@ no-replace `post-canary-validator-liveness-challenge-v1.norito`: an
 issuer-signed, canary-bound challenge containing a fresh nonzero OS-random
 nonce, a maximum five-minute interval, and exactly four ordered qualified
 `PeerId`/distinct canonical HTTPS-origin targets. The collector then queries all
-four origins concurrently. Its attestation transport is direct, proxy-free,
-redirect-free, transport-retry-free, bounded to 8 MiB, requests identity
-encoding, rejects every `Content-Encoding`, and requires canonical Norito plus
-`Cache-Control: no-store`. Runtime-configured authentication headers are
-forwarded only to those four operator-precommitted origins; their custody is an
-operator trust input and header values are not persisted in the artifact. A
-status read is only an unsigned tip hint; a `404`
+four origins concurrently. Its status-hint and attestation transports share one
+direct, proxy-free, redirect-free, transport-retry-free client, request identity
+encoding, and reject every `Content-Encoding`. The status hint is the bounded,
+canonical JSON `/status/blocks` scalar. The attestation response is bounded to
+8 MiB and requires canonical Norito plus `Cache-Control: no-store`. The collector
+never forwards the primary Torii
+client's Basic, bearer, cookie, or custom headers to any separately supplied
+validator origin. The attestation request carries only `Accept`,
+`Accept-Encoding`, and the signed-challenge header; a validator that requires
+separate authentication therefore fails closed instead of receiving a reused
+credential. A status read is only an unsigned tip hint; a `404`
 caused by a tip race is retried at the application layer with the same signed
 challenge and a fresh hint while the interval remains open.
 
@@ -1312,7 +1331,10 @@ that chain byte-for-byte. The receipt issuer signs the complete four-observation
 artifact and publishes
 `post-canary-validator-liveness-evidence-v1.norito` no-replace. This proves that
 four distinct qualified signing keys answered the same fresh challenge with a
-durable tip at or after the exact canary. It does not prove continuous uptime,
+durable tip at or after the exact canary. The verified canary capability retains
+the exact controller-authenticated activation-expectations artifact, and the
+liveness verifier rejects substituting another expectations capability even
+when its promotion id and activation intent match. It does not prove continuous uptime,
 physical host independence, uncompromised validator keys, or that all four keys
 voted in one quorum certificate. HTTPS origins and request times are trusted
 collector observations; a reverse proxy can relay a request but cannot forge a

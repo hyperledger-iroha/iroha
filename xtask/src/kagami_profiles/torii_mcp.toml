@@ -1,6 +1,0 @@
-
-[torii.mcp]
-enabled = true
-profile = "writer"
-expose_operator_routes = false
-allow_tool_prefixes = ["iroha."]

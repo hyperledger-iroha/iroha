@@ -484,6 +484,7 @@ mod tests {
                             &durable_receipt,
                             &validate_effect,
                             &validate_pending,
+                            None,
                         )
                         .expect("project remote-Proposal Validate replay evidence"),
                 );
@@ -712,6 +713,53 @@ mod tests {
         );
         drop(prepared);
         assert_eq!(format!("{coordinator:#?}"), before);
+    }
+    #[test]
+    fn body_successor_uses_shared_ordinal_after_intervening_runtime_owners() {
+        let FetchStoreFixture {
+            mut coordinator,
+            lease,
+            verified,
+            durable_receipt,
+            store_candidate,
+            ..
+        } = fetch_store_fixture(1);
+        let (runtime_ordinals, durable_ordinals) =
+            super::super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water,
+            );
+        assert_eq!(
+            runtime_ordinals
+                .reserve_range(2)
+                .expect("reserve intervening runtime owners"),
+            (Some(2), Some(4))
+        );
+        coordinator.lifecycle_ordinal_authority = Some(durable_ordinals);
+        let parent_payload = DurablePayloadReference::BodyFrame(
+            projection::durable_body_frame_reference(
+                lifecycle_context(verified.context()),
+                &durable_receipt,
+            )
+            .expect("durable Fetch completion projects one body frame"),
+        );
+
+        let prepared = prepare_authorized_body_transition(
+            &mut coordinator,
+            &lease,
+            store_candidate,
+            parent_payload,
+            DurableContinuationEdge::FetchToStore,
+        )
+        .expect("stage Store after shared runtime ordinals");
+        assert_eq!(prepared.parent_ordinal, 1);
+        assert_eq!(prepared.child_ordinal, 4);
+        assert_eq!(
+            prepared.staged.durable_records[&prepared.parent_ordinal].continuation,
+            DurableContinuation::successor(
+                DurableContinuationEdge::FetchToStore,
+                prepared.child_ordinal,
+            )
+        );
     }
     #[test]
     fn wrong_and_stale_fetch_leases_reject_without_coordinator_mutation() {

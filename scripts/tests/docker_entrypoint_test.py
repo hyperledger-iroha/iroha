@@ -65,7 +65,6 @@ class DockerEntrypointTest(unittest.TestCase):
                 "IROHA_TAIRA_CONFIG": str(config_path),
                 "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
                 "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "localnet",
             }
         )
 
@@ -113,7 +112,6 @@ class DockerEntrypointTest(unittest.TestCase):
                 "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
                 "IROHA_TAIRA_GENESIS": str(genesis_path),
                 "IROHA_TAIRA_SIGNED_GENESIS": str(signed_genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "localnet",
             }
         )
 
@@ -159,98 +157,6 @@ class DockerEntrypointTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing Taira config", result.stderr)
 
-    def test_production_requires_immutable_image_reference(self) -> None:
-        config_path = self.temp_path / "config.toml"
-        runtime_config_path = self.temp_path / "runtime-config.toml"
-        genesis_path = self.temp_path / "genesis.json"
-        config_path.write_text('chain = "taira"\n', encoding="utf-8")
-        genesis_path.write_text("{}\n", encoding="utf-8")
-
-        result = self._run(
-            env={
-                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
-                "IROHA_TAIRA_CONFIG": str(config_path),
-                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
-                "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "production",
-            }
-        )
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("immutable image ID or repository@sha256 digest", result.stderr)
-
-    def test_production_requires_and_accepts_complete_configured_assets(self) -> None:
-        bundle_path = self.temp_path / "bundle"
-        runtime_assets = bundle_path / "runtime"
-        manifests = bundle_path / "manifests"
-        admission = bundle_path / "sorafs_admission"
-        for directory in (
-            runtime_assets,
-            manifests,
-            admission,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
-        onboarding_signer = runtime_assets / "onboarding-signer.key"
-        faucet_signer = runtime_assets / "faucet-signer.key"
-        governance_manifest = manifests / "governance.manifest.json"
-        onboarding_signer.write_text("onboarding\n", encoding="utf-8")
-        faucet_signer.write_text("faucet\n", encoding="utf-8")
-        governance_manifest.write_text("{}\n", encoding="utf-8")
-
-        config_path = bundle_path / "config.toml"
-        runtime_config_path = self.temp_path / "storage" / "runtime-config.toml"
-        genesis_path = self.temp_path / "genesis.json"
-        config_path.write_text(
-            "\n".join(
-                [
-                    'chain = "taira"',
-                    "",
-                    "[torii.account_onboarding]",
-                    f'private_key_file = "{onboarding_signer}"',
-                    "",
-                    "[torii.faucet]",
-                    f'private_key_file = "{faucet_signer}"',
-                    "",
-                    "[sorafs.discovery.admission]",
-                    f'envelopes_dir = "{admission}"',
-                    "",
-                    "[nexus.registry]",
-                    f'manifest_directory = "{manifests}"',
-                    f'cache_directory = "{manifests}"',
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        genesis_path.write_text("{}\n", encoding="utf-8")
-        image_reference = f"example/taira@sha256:{'a' * 64}"
-
-        result = self._run(
-            env={
-                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
-                "IROHA_TAIRA_CONFIG": str(config_path),
-                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
-                "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "production",
-                "TAIRA_IMAGE_REFERENCE": image_reference,
-            }
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            runtime_config_path.read_text(encoding="utf-8"),
-            config_path.read_text(encoding="utf-8"),
-        )
-        validation_only = self._run(
-            "--validate-taira-production-config",
-            str(config_path),
-            env={},
-        )
-        self.assertEqual(validation_only.returncode, 0, validation_only.stderr)
-        self.assertEqual(validation_only.stdout, "")
-
-        self.assertNotIn("Kagemusha", result.stderr)
-
     def test_runtime_config_update_replaces_symlink_without_following_it(self) -> None:
         config_path = self.temp_path / "config.toml"
         runtime_config_path = self.temp_path / "runtime-config.toml"
@@ -267,7 +173,6 @@ class DockerEntrypointTest(unittest.TestCase):
                 "IROHA_TAIRA_CONFIG": str(config_path),
                 "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
                 "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "localnet",
             }
         )
 

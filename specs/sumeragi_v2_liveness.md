@@ -2180,6 +2180,9 @@ ordered operation-record SHA-256 values, in the same class order, are
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
+The validator and receipt writer derive these exact cardinalities from the
+candidate-bound plans, so an unplanned eighth `network-scale-soak` operation
+is rejected without changing the authoritative seven-operation digest.
 
 An approval file must be owner-held, mode `0400`, single-link, bounded,
 canonical, and below trusted non-writable ancestry. Its command records use

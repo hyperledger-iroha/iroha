@@ -537,9 +537,6 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_sumeragi_core/VERIFICATION.md"),
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/verify_sumeragi_v2.sh"),
-        Path("xtask/src/kagami_profiles.rs"),
-        Path("defaults/kagami/iroha3-taira/config.toml"),
-        Path("defaults/kagami/iroha3-taira/genesis.json"),
         Path("configs/soranexus/taira/config.toml"),
         Path("configs/soranexus/taira/genesis.json"),
     ):

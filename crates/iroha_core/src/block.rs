@@ -3,8 +3,7 @@
 //! Operations on blocks:
 //!
 //! 1. Static analysis of the block. This is a _fallible_ operation
-//! 2. Execution of transactions and time triggers. This is an _infallible_ operation. If there are errors during
-//!    transaction execution, they are recorded in the block.
+//! 2. Execute transactions and time triggers infallibly, recording transaction errors in the block.
 //! 3. Voting
 //! 4. Pre-commit signatures check
 //! 5. Apply & commit
@@ -13,13 +12,11 @@
 //!
 //! Block lifecycle stages:
 //!
-//! 1. Block is created by the node ([`NewBlock`]). Such blocks are assumed to be valid and do not
-//!    require static validation to transform to [`ValidBlock`].
+//! 1. A node-created [`NewBlock`] is assumed valid and needs no static validation before [`ValidBlock`].
 //! 2. Block is received/deserialized from disk (as [`SignedBlock`]). Such blocks require static
 //!    validation before execution to transition to [`ValidBlock`].
-//! 3. Block is valid ([`ValidBlock`]). It is always created in pair with [`crate::state::StateBlock`]
-//!    containing the applied state changes from the block. Transaction errors are written to the
-//!    block.
+//! 3. [`ValidBlock`] pairs with [`crate::state::StateBlock`] containing applied state changes and
+//!    transaction errors.
 //! 4. Voting block ([`VotingBlock`]). Valid block might not have sufficient signatures to be committed.
 //!    Voting block is a wrappper around [`ValidBlock`] and its [`crate::state::StateBlock`] intended to
 //!    collect the signatures in order to transition to [`CommittedBlock`]
@@ -260,8 +257,7 @@ fn map_overlay_error(
         ),
     }
 }
-/// Return whether an executable is built through the VM overlay scheduler and
-/// therefore needs access capture, state-dependent retry, and live rebuild.
+/// Return whether an executable needs the VM overlay scheduler and live rebuild.
 #[must_use]
 const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     matches!(
@@ -291,10 +287,14 @@ fn validate_block_transaction_admission(
     tx: &SignedTransaction,
     routing: crate::queue::RoutingDecision,
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
-    state_tx.bind_privacy_transaction_intent_v1(None);
     let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
         .map_err(TransactionRejectionReason::Validation)?;
+    let canary_wire_identity =
+        crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(tx)
+            .map_err(TransactionRejectionReason::Validation)?;
     state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+    state_tx.kagemusha_taira_canary_external_entrypoint = true;
+    state_tx.kagemusha_taira_canary_wire_identity = canary_wire_identity;
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 fn commit_stateful_admission_sequence(
@@ -16616,10 +16616,6 @@ pub(crate) mod valid {
                 .expect("derive canonical autonomous reservation identity");
             let reservation = crate::queue::LaneQueueReservationKeyV2 {
                 version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash:
-                    crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                        entrypoint.hash(),
-                    ),
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new(
                     b"block-native-amx-queue-plan-admission-binding",
@@ -27193,6 +27189,7 @@ mod event {
         fn produce_events(&self) -> impl Iterator<Item = PipelineEventBox> {
             let block_height = self.as_ref().header().height();
             let block = self.as_ref();
+            let is_genesis = block.header().is_genesis();
             let committed_routes = block
                 .execution_context()
                 .map(|bundle| bundle.external.as_slice());
@@ -27208,12 +27205,14 @@ mod event {
                         | TransactionEntrypoint::Time(_) => return None,
                     };
                     let Some(context) = committed_routes.and_then(|routes| routes.get(idx)) else {
-                        iroha_logger::error!(
-                            block_height = block_height.get(),
-                            entrypoint_index = idx,
-                            %entrypoint_hash,
-                            "validated block transaction event is missing its committed execution route"
-                        );
+                        if !is_genesis {
+                            iroha_logger::error!(
+                                block_height = block_height.get(),
+                                entrypoint_index = idx,
+                                %entrypoint_hash,
+                                "validated block transaction event is missing its committed execution route"
+                            );
+                        }
                         return None;
                     };
                     if context.entrypoint_hash != entrypoint_hash {
@@ -27563,8 +27562,10 @@ mod event {
         }
 
         #[test]
-        fn valid_block_transaction_events_fail_closed_without_committed_route() {
+        fn genesis_transaction_events_fail_closed_without_committed_route() {
             let (valid, _hash) = peer_received_valid_block_with_committed_route(0x08, None);
+
+            assert!(valid.as_ref().header().is_genesis());
 
             let events = valid.produce_events().collect::<Vec<_>>();
 
@@ -28252,10 +28253,6 @@ mod tests {
         let descriptor = &coordinator_proposal.descriptor;
         let reservation = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash:
-                crate::queue::LaneQueueReservationKeyV2::compatibility_signed_transaction_hash(
-                    entrypoint_hash.clone(),
-                ),
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new(
                 b"historical-native-amx-queue-plan-admission",

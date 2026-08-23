@@ -6,6 +6,8 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.FixtureGeneratorRunner
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
@@ -15,6 +17,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -24,6 +27,45 @@ import kotlin.test.assertIs
 
 /** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-21 registration path. */
 class RegisterOfflineDeviceAttestationTest {
+
+    @Test
+    fun `omitted ttl uses canonical transaction default`() {
+        val accountId = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x42), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val registration = registration(accountId)
+        val request = RegisterOfflineDeviceAttestation(
+            networkId = TEST_NETWORK_ID,
+            authority = accountId,
+            registration = registration,
+            creationTimeMs = 1_900_000_000_000,
+            nonce = 7,
+            feePayment = TEST_FEE_PAYMENT,
+        )
+        val canonicalPayload = TransactionPayload(
+            networkId = TEST_NETWORK_ID,
+            authority = accountId,
+            creationTimeMs = 1_900_000_000_000,
+            executable = Executable.instructions(listOf(request.instruction())),
+            nonce = 7,
+            feePayment = TEST_FEE_PAYMENT,
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+        )
+
+        assertEquals(100_000L, canonicalPayload.timeToLiveMs)
+        assertEquals(canonicalPayload.timeToLiveMs, request.timeToLiveMs)
+        assertEquals(canonicalPayload.timeToLiveMs, request.transactionPayload().timeToLiveMs)
+        assertFailsWith<IllegalArgumentException> {
+            RegisterOfflineDeviceAttestation(
+                networkId = TEST_NETWORK_ID,
+                authority = accountId,
+                registration = registration,
+                creationTimeMs = registration.expiresAtMs - 99_999,
+                nonce = 7,
+                feePayment = TEST_FEE_PAYMENT,
+            )
+        }
+    }
 
     @Test
     fun `registration and instruction exactly match Rust current model`() {

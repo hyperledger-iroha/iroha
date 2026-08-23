@@ -56,20 +56,6 @@ impl<'a> SnapshotJsonField<'a> {
             message,
         })
     }
-    fn require_empty_pre_release_commit_qcs(self) -> Result<(), json::Error> {
-        const EMPTY_STORAGE: &str = r#"{"revert":{},"blocks":{}}"#;
-        let exact = match self {
-            Self::Borrowed(raw) => raw == EMPTY_STORAGE,
-            #[cfg(test)]
-            Self::Owned(value) => json::to_json(&value).is_ok_and(|raw| raw == EMPTY_STORAGE),
-        };
-        exact
-            .then_some(())
-            .ok_or_else(|| json::Error::InvalidField {
-                field: "world.commit_qcs".to_owned(),
-                message: "pre-release commit-QC archive must be canonically empty".to_owned(),
-            })
-    }
 }
 struct SnapshotJsonMap<'a> {
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
@@ -209,206 +195,6 @@ fn canonical_world_field_order() -> &'static [String] {
             .expect("borrowed default World JSON retains source order")
     })
 }
-fn migrate_pre_release_axt_state(
-    world: &mut World,
-    network_id: &NetworkId,
-    block_hashes: &[HashOf<BlockHeader>],
-) -> Result<(), json::Error> {
-    if !crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(network_id) {
-        return Err(json::Error::InvalidField {
-            field: "world.commit_qcs".to_owned(),
-            message:
-                "pre-release snapshot schema is restricted to the exact Taira reset-11 network"
-                    .to_owned(),
-        });
-    }
-    let registration_header_hash =
-        block_hashes
-            .first()
-            .copied()
-            .ok_or_else(|| json::Error::InvalidField {
-                field: "state.block_hashes".to_owned(),
-                message: "pre-release snapshot migration requires the authenticated genesis hash"
-                    .to_owned(),
-            })?;
-    let execution_identity = Hash::new_from_chunks(&[
-        b"iroha:axt:genesis-asset-incarnation:v1\0",
-        registration_header_hash.as_ref(),
-    ]);
-    let asset_definition_ids: Vec<_> = world
-        .asset_definitions
-        .view()
-        .iter()
-        .map(|(asset_definition_id, _)| asset_definition_id.clone())
-        .collect();
-    for (ordinal, asset_definition_id) in asset_definition_ids.into_iter().enumerate() {
-        let ordinal = u64::try_from(ordinal).map_err(|_| json::Error::InvalidField {
-            field: "world.axt_asset_incarnations".to_owned(),
-            message: "genesis asset-incarnation ordinal overflow".to_owned(),
-        })?;
-        let incarnation = AxtAssetIncarnationV1::derive(
-            network_id,
-            &asset_definition_id,
-            &registration_header_hash,
-            &execution_identity,
-            ordinal,
-        );
-        world
-            .axt_asset_incarnations
-            .insert(asset_definition_id, incarnation);
-    }
-    let definitions = world.asset_definitions.view();
-    let incarnations = world.axt_asset_incarnations.view();
-    for (asset_definition_id, incarnation) in incarnations.iter() {
-        incarnation
-            .validate()
-            .map_err(|error| json::Error::InvalidField {
-                field: "world.axt_asset_incarnations".to_owned(),
-                message: error.to_string(),
-            })?;
-        if definitions.get(asset_definition_id).is_none() {
-            return Err(json::Error::InvalidField {
-                field: "world.axt_asset_incarnations".to_owned(),
-                message: format!(
-                    "AXT incarnation references unregistered asset definition {asset_definition_id}"
-                ),
-            });
-        }
-    }
-    for (asset_definition_id, _) in definitions.iter() {
-        if incarnations.get(asset_definition_id).is_none() {
-            return Err(json::Error::InvalidField {
-                field: "world.axt_asset_incarnations".to_owned(),
-                message: format!(
-                    "registered asset definition {asset_definition_id} has no AXT incarnation"
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct PreReleaseSnapshotLaneConfig {
-    id: iroha_data_model::nexus::LaneId,
-    shard_id: Option<iroha_data_model::nexus::ShardId>,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
-    alias: String,
-    description: Option<String>,
-    visibility: iroha_data_model::nexus::LaneVisibility,
-    lane_type: Option<String>,
-    governance: Option<String>,
-    settlement: Option<String>,
-    storage: iroha_data_model::nexus::LaneStorageProfile,
-    proof_scheme: String,
-    metadata: BTreeMap<String, String>,
-}
-impl PreReleaseSnapshotLaneConfig {
-    fn into_current(
-        mut self,
-        index: usize,
-    ) -> Result<iroha_data_model::nexus::LaneConfig, json::Error> {
-        fn take_positive_metadata(
-            metadata: &mut BTreeMap<String, String>,
-            key: &str,
-            index: usize,
-        ) -> Result<Option<std::num::NonZeroU64>, json::Error> {
-            let Some(raw) = metadata.remove(key) else {
-                return Ok(None);
-            };
-            let parsed = raw
-                .parse::<u64>()
-                .map_err(|error| json::Error::InvalidField {
-                    field: format!("nexus_runtime.lanes[{index}].metadata.{key}"),
-                    message: error.to_string(),
-                })?;
-            if parsed.to_string() != raw {
-                return Err(json::Error::InvalidField {
-                    field: format!("nexus_runtime.lanes[{index}].metadata.{key}"),
-                    message: "pre-release scheduler value is not canonical decimal".to_owned(),
-                });
-            }
-            std::num::NonZeroU64::new(parsed)
-                .map(Some)
-                .ok_or_else(|| json::Error::InvalidField {
-                    field: format!("nexus_runtime.lanes[{index}].metadata.{key}"),
-                    message: "pre-release scheduler value must be positive".to_owned(),
-                })
-        }
-        let teu_capacity =
-            take_positive_metadata(&mut self.metadata, "scheduler.teu_capacity", index)?;
-        let starvation_bound_slots = take_positive_metadata(
-            &mut self.metadata,
-            "scheduler.starvation_bound_slots",
-            index,
-        )?;
-        let scheduler = if teu_capacity.is_some() || starvation_bound_slots.is_some() {
-            Some(iroha_data_model::nexus::LaneSchedulerPolicy::new(
-                teu_capacity,
-                starvation_bound_slots,
-            ))
-        } else {
-            None
-        };
-        let proof_scheme = self
-            .proof_scheme
-            .parse::<iroha_data_model::da::commitment::DaProofScheme>()
-            .map_err(|error| json::Error::InvalidField {
-                field: format!("nexus_runtime.lanes[{index}].proof_scheme"),
-                message: format!("{error}"),
-            })?;
-        Ok(iroha_data_model::nexus::LaneConfig {
-            id: self.id,
-            shard_id: self.shard_id,
-            dataspace_id: self.dataspace_id,
-            alias: self.alias,
-            description: self.description,
-            visibility: self.visibility,
-            lane_type: self.lane_type,
-            governance: self.governance,
-            settlement: self.settlement,
-            storage: self.storage,
-            proof_scheme,
-            manifest_policy: iroha_data_model::nexus::DaManifestPolicy::default(),
-            confidential_compute: None,
-            scheduler,
-            settlement_buffer: None,
-            metadata: self.metadata,
-        })
-    }
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-struct PreReleaseSnapshotNexusRuntime {
-    version: u8,
-    lane_count: u32,
-    lanes: Vec<PreReleaseSnapshotLaneConfig>,
-    lane_incarnation_lineage: Vec<SnapshotLaneIncarnationLineage>,
-    autoscale_last_transition_height: u64,
-    autoscale_scale_out_window_blocks: u16,
-    autoscale_scale_in_window_blocks: u16,
-    autoscale_sample_history_cap: u32,
-    autoscale_sample_history: Vec<AutoscaleSampleRecord>,
-}
-impl PreReleaseSnapshotNexusRuntime {
-    fn into_current(self) -> Result<SnapshotNexusRuntime, json::Error> {
-        let lanes = self
-            .lanes
-            .into_iter()
-            .enumerate()
-            .map(|(index, lane)| lane.into_current(index))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(SnapshotNexusRuntime {
-            version: self.version,
-            lane_count: self.lane_count,
-            lanes,
-            lane_incarnation_lineage: self.lane_incarnation_lineage,
-            autoscale_last_transition_height: self.autoscale_last_transition_height,
-            autoscale_scale_out_window_blocks: self.autoscale_scale_out_window_blocks,
-            autoscale_scale_in_window_blocks: self.autoscale_scale_in_window_blocks,
-            autoscale_sample_history_cap: self.autoscale_sample_history_cap,
-            autoscale_sample_history: self.autoscale_sample_history,
-        })
-    }
-}
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
@@ -522,7 +308,6 @@ impl KuraSeed {
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
         let world_map = world_value.into_object("world")?;
-        let has_pre_release_world_schema = world_map.contains_key("commit_qcs");
         if !world_map.contains_key("contract_subject_bindings") {
             return Err(json::Error::missing_field(
                 "world.contract_subject_bindings",
@@ -544,21 +329,11 @@ impl KuraSeed {
             take_required(&mut map, "public_lane_reward_claims")?;
         let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
             take_required(&mut map, "space_directory_manifests")?;
-        let snapshot_nexus_runtime: SnapshotNexusRuntime = if has_pre_release_world_schema {
-            let legacy: PreReleaseSnapshotNexusRuntime = map
-                .remove("nexus_runtime")
-                .ok_or_else(|| json::Error::missing_field("nexus_runtime"))?
-                .decode_canonical("nexus_runtime")?;
-            legacy.into_current()?
-        } else {
-            take_required(&mut map, "nexus_runtime")?
-        };
+        let snapshot_nexus_runtime: SnapshotNexusRuntime =
+            take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
-        if has_pre_release_world_schema {
-            migrate_pre_release_axt_state(&mut world, &network_id, &block_hashes_vec)?;
-        }
         let committed_height =
             u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
                 field: "state.block_hashes".to_owned(),

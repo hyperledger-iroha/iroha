@@ -561,12 +561,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     REPO_ROOT / "ci" / "check_agents_guardrails.sh",
     REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh",
     REPO_ROOT / "ci" / "check_soranet_privacy_guard.sh",
-    REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
-    REPO_ROOT
-    / "configs"
-    / "soranexus"
-    / "taira"
-    / "check_sorafs_rollout_mock_test.sh",
     SCRIPTS_DIR / "check_sf1_vectors.mjs",
     SCRIPTS_DIR / "sorafs-gateway",
     REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "__init__.py",
@@ -1902,16 +1896,6 @@ def test_active_sorafs_todo_scan_covers_ci_gate_entrypoints() -> None:
         Path("ci/check_agents_guardrails.sh"),
         Path("ci/check_connect_norito_bridge_header.sh"),
         Path("ci/check_soranet_privacy_guard.sh"),
-    }
-
-    assert required <= scanned
-
-
-def test_active_sorafs_todo_scan_covers_taira_rollout_entrypoints() -> None:
-    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
-    required = {
-        Path("configs/soranexus/taira/check_sorafs_rollout.sh"),
-        Path("configs/soranexus/taira/check_sorafs_rollout_mock_test.sh"),
     }
 
     assert required <= scanned
@@ -28613,7 +28597,6 @@ def test_sorafs_v1_builder_and_provider_advert_are_canonical_production_bins() -
         "provider_advert_" + "stub",
     )
     retired_internal_sources = (
-        REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
         REPO_ROOT / "scripts" / "android_codegen_replay_sorafs_fixture.py",
         REPO_ROOT
         / "scripts"

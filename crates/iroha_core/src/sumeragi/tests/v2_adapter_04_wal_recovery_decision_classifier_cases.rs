@@ -58,7 +58,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
     .unwrap_or_else(|(error, _)| panic!("bind exact pending Kura tip: {error}"))
     .authenticate_final_wal_startup_authority()
     .unwrap_or_else(|error| panic!("authenticate pending Kura Decision Fetch: {error}"));
-    assert!(pending.is_storage_only_for_test());
+    assert!(pending.retains_decision_fetch_for_test());
     assert_eq!(pending.expected_for_test(), expected_pending);
 
     let mismatched_pending_directory =
@@ -85,88 +85,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         mismatched,
         AdapterError::RecoveredPendingKuraApplyMismatch
     ));
-    let mut runtime_startup = pending.into_runtime_startup_for_test();
-    let ProductionLifecycleAdapterStartupStateV1::Recovered {
-        pending_kura_apply,
-        leader_wire_launch_prepared,
-        ..
-    } = &mut runtime_startup.state
-    else {
-        panic!("pending Kura startup must remain a recovered adapter")
-    };
-    assert!(pending_kura_apply.is_some());
-    *leader_wire_launch_prepared = true;
-    let (mut runtime, prepared, local_proposal_attempt) = runtime_startup
-        .into_serialized_runtime(
-            Instant::now(),
-            Duration::from_secs(10),
-            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("move pending Kura Fetch and its lifecycle sidecar into runtime");
-    assert!(local_proposal_attempt.is_none());
-    let prepared = prepared.expect("runtime returns one opaque pending Kura replay seal");
-    assert_eq!(prepared.expected_for_test(), expected_pending);
-    assert!(prepared.is_exact_for_test());
-    assert_eq!(
-        runtime
-            .take_effect_ownership(1)
-            .expect("runtime retains the exact pending Kura lifecycle sidecar")
-            .len(),
-        1
-    );
-    drop(prepared);
-    drop(runtime);
-
-    let install_pending_directory =
-        TempDir::new().expect("temporary pending Kura install-failure WAL");
-    let install_pending = write_and_reopen_authenticated_wal_startup(
-        &install_pending_directory,
-        &context,
-        &proofs,
-        0,
-        [0xC8; 32],
-        vec![WalRecordV2::Decision(decision.clone())],
-    )
-    .bind_pending_kura_apply(expected_pending)
-    .unwrap_or_else(|(error, _)| panic!("bind pending Kura install fixture: {error}"))
-    .authenticate_final_wal_startup_authority()
-    .unwrap_or_else(|error| panic!("authenticate pending Kura install fixture: {error}"));
-    assert!(install_pending.is_storage_only_for_test());
-    let mut install_runtime_startup = install_pending.into_runtime_startup_for_test();
-    let ProductionLifecycleAdapterStartupStateV1::Recovered {
-        leader_wire_launch_prepared,
-        ..
-    } = &mut install_runtime_startup.state
-    else {
-        panic!("pending Kura install fixture must remain recovered")
-    };
-    *leader_wire_launch_prepared = true;
-    let (runtime, prepared, local_proposal_attempt) = install_runtime_startup
-        .into_serialized_runtime(
-            Instant::now(),
-            Duration::from_secs(10),
-            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("move the install fixture into runtime");
-    assert!(local_proposal_attempt.is_none());
-    let prepared = prepared.expect("install fixture returns its pending replay seal");
-    let mut executor = super::super::v2_effects::V2EffectExecutor::with_runtime(
-        runtime,
-        BTreeMap::new(),
-        context.clone(),
-        context.roster[0].validator.clone(),
-        Some(0),
-        super::super::v2_effects::EffectQueueConfig::default(),
-    )
-    .expect("open a pending Kura executor without the required recovered body");
-    let (mut services, _planner_io) = super::super::v2_worker::tests::fixture();
-    let install_result = prepared.install(&mut executor, &mut services);
-    assert!(matches!(
-        install_result,
-        Err(super::super::v2_effects::EffectExecutorError::PendingApplyRecoveryMismatch(_))
-    ));
+    drop(pending);
 
     let empty_pending_directory =
         TempDir::new().expect("temporary pending Kura startup without a Decision");

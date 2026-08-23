@@ -126,6 +126,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
+    offline::KagemushaExactBytesDigestV1,
     oracle::{
         DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
         OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
@@ -336,12 +337,18 @@ use crate::{
 mod bounded_authority;
 mod canonical_history;
 mod committed_hash_journal;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod committed_transaction_context;
 mod da_hydration;
 mod lane_authority;
 mod tiered;
 use canonical_history::committed_block_from_kura;
 pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
+#[cfg(test)]
+pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -12910,14 +12917,16 @@ pub struct StateTransaction<'block, 'state> {
     pub confidential_gas_used_in_tx: u64,
     /// Confidential gas already accumulated when this transaction began.
     pub confidential_gas_used_in_block_so_far: u64,
-    /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
-    /// Not set for ad-hoc instruction execution in tests.
+    /// Current transaction entrypoint hash; unset for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
-    pub current_tx_hash:
-        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
+    /// Complete signed-wire identity of an exact direct Kagemusha Taira canary transaction.
+    pub(crate) kagemusha_taira_canary_wire_identity: Option<KagemushaExactBytesDigestV1>,
+    /// Whether the canonical carrier itself is an evidentiary `External` entrypoint.
+    pub(crate) kagemusha_taira_canary_external_entrypoint: bool,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
@@ -14291,7 +14300,6 @@ mod stake_snapshot_tests {
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
         let stale_lane = LaneId::new(1);
         let nexus = iroha_config::parameters::actual::Nexus::default();
-
         assert_eq!(
             nexus_active_lane_ids(&nexus),
             BTreeSet::from([LaneId::SINGLE])
@@ -30288,6 +30296,15 @@ impl State {
                         .to_owned(),
                 ));
             }
+            if source.input.entrypoints.iter().any(|entrypoint| {
+                entrypoint.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            }) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "autonomous merge entrypoint does not carry QueuePlanSynced admission intent"
+                        .to_owned(),
+                ));
+            }
             for hash in &source.input.entrypoint_hashes {
                 if !seen_entrypoints.insert(*hash) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -37045,6 +37062,8 @@ impl State {
         previous_heights: &BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
         validate_live_authority: bool,
     ) -> Result<(), MergeLedgerCommitError> {
+        let invalid_batch =
+            |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
         if batch.version != 1 {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "unsupported version {}",
@@ -37071,32 +37090,16 @@ impl State {
             }
             total_source_bundle_bytes = total_source_bundle_bytes
                 .checked_add(execution.source_bundle.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "source bundle byte count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("source bundle byte count overflow"))?;
             total_entrypoints = total_entrypoints
                 .checked_add(execution.entrypoints.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "entrypoint count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("entrypoint count overflow"))?;
             total_results = total_results
                 .checked_add(execution.results.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "result count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("result count overflow"))?;
             total_signer_proofs = total_signer_proofs
                 .checked_add(execution.signer_proofs.len())
-                .ok_or_else(|| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "signer proof count overflow".to_owned(),
-                    )
-                })?;
+                .ok_or_else(|| invalid_batch("signer proof count overflow"))?;
             for validator_count in [
                 execution.proposal.descriptor.validator_set.len(),
                 execution.prepare_qc.validator_set.len(),
@@ -37124,11 +37127,7 @@ impl State {
                 }
                 total_reservation_metadata_bytes = total_reservation_metadata_bytes
                     .checked_add(encoded.len())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "reservation metadata byte count overflow".to_owned(),
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_batch("reservation metadata byte count overflow"))?;
             }
             for encoded in &execution.routing_plans {
                 if encoded.len() > MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES {
@@ -37138,11 +37137,7 @@ impl State {
                 }
                 total_reservation_metadata_bytes = total_reservation_metadata_bytes
                     .checked_add(encoded.len())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "routing metadata byte count overflow".to_owned(),
-                        )
-                    })?;
+                    .ok_or_else(|| invalid_batch("routing metadata byte count overflow"))?;
             }
             for receipt in execution.native_amx_receipts.iter().flatten() {
                 if !crate::native_amx::native_amx_participant_leg_count_within_limit(
@@ -37208,6 +37203,17 @@ impl State {
         if !crate::merge::merge_execution_batch_commitments_match(batch) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "execution root, write-set root, post-state hash, or batch hash mismatch"
+                    .to_owned(),
+            ));
+        }
+        if batch.lanes.iter().any(|execution| {
+            execution.entrypoints.iter().any(|entrypoint| {
+                entrypoint.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            })
+        }) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous merge entrypoint does not carry QueuePlanSynced admission intent"
                     .to_owned(),
             ));
         }
@@ -46377,6 +46383,8 @@ impl<'state> StateBlock<'state> {
             tx_call_hash: None,
             current_tx_hash: None,
             privacy_transaction_intent_binding: None,
+            kagemusha_taira_canary_wire_identity: None,
+            kagemusha_taira_canary_external_entrypoint: false,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
@@ -50486,8 +50494,8 @@ impl<'state> StateBlock<'state> {
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
         for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
-            let tx = match entrypoint {
-                TransactionEntrypoint::External(tx) => tx,
+            let tx = match &entrypoint {
+                TransactionEntrypoint::External(tx) => tx.clone(),
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
                 TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
                     continue;
@@ -50496,7 +50504,11 @@ impl<'state> StateBlock<'state> {
             if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
-                Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
+                crate::state::seed_committed_transaction_context(
+                    &mut transaction,
+                    &entrypoint,
+                    entrypoint_index,
+                );
                 let contract_deployment_bootstrap =
                     crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
                         &transaction.world,
@@ -50536,18 +50548,6 @@ impl<'state> StateBlock<'state> {
         }
         self.resolve_queue_plan_pending_obligations_from_block(block)
             .expect("committed block must resolve exact QueuePlan pending application obligations");
-    }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    fn seed_committed_transaction_context(
-        transaction: &mut StateTransaction<'_, '_>,
-        tx: &SignedTransaction,
-        entrypoint_index: usize,
-    ) {
-        transaction.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        transaction.current_tx_hash =
-            Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(tx).signed_hash);
-        transaction.current_entrypoint_index =
-            Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX));
     }
 }
 #[cfg(feature = "zk-preverify")]
@@ -50845,7 +50845,6 @@ mod committed_transaction_context_tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
-    use iroha_logger::Level;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     #[test]
     fn committed_transaction_context_uses_canonical_entrypoint_metadata() {
@@ -50862,9 +50861,10 @@ mod committed_transaction_context_tests {
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([Log::new(Level::INFO, "context".into())])
+        .with_instructions([Log::new(iroha_logger::Level::INFO, "context".into())])
         .sign(ALICE_KEYPAIR.private_key());
-        StateBlock::seed_committed_transaction_context(&mut transaction, &signed, 7);
+        let entrypoint = TransactionEntrypoint::External(signed.clone());
+        crate::state::seed_committed_transaction_context(&mut transaction, &entrypoint, 7);
         assert_eq!(
             transaction.tx_call_hash,
             Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()))
