@@ -2,56 +2,23 @@
 
 use super::ProductionLifecycleOwnerV1;
 
-/// Linear proof that owner-open installed one exact recovered Decision Apply row.
-///
-/// The complete registry/coordinator census mints this value with the row's
-/// actor-global ordinal. Pending-tip replay consumes it when joining inert WAL
-/// provenance directly to the canonical lifecycle Apply worker.
-#[must_use = "the recovered Apply carrier permit must enter pending-tip installation"]
-pub(in crate::sumeragi) struct RecoveredPendingKuraApplyCarrierPermitV1 {
-    lifecycle_ordinal: u128,
-    _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
-}
-struct RecoveredPendingKuraApplyCarrierPermitLinearityV1;
-impl Drop for RecoveredPendingKuraApplyCarrierPermitLinearityV1 {
-    fn drop(&mut self) {}
-}
-impl RecoveredPendingKuraApplyCarrierPermitV1 {
-    /// Consume the owner proof and return its exact Ready ordinal.
-    pub(in crate::sumeragi) fn consume_for_executor(self) -> u128 {
-        self.lifecycle_ordinal
-    }
-}
-
 impl ProductionLifecycleOwnerV1 {
-    /// Attach interrupted-tip provenance to the recovered Decision Apply startup.
+    /// Attach the exact interrupted-tip replay to the storage-only adapter startup.
     ///
-    /// Only the pending-Kura authenticated factory calls this after owner-open
-    /// reconstructed the exact Ready Apply carrier from the move-only Decision
-    /// Fetch. The inert replay remains nested in adapter startup and cannot
-    /// become independently scheduled lifecycle work.
+    /// Only the pending-Kura authenticated factory calls this after the normal
+    /// owner constructor proved there is no live recovered WAL carrier. The
+    /// replay remains nested in the adapter startup and cannot become an
+    /// independently scheduled Decision-Fetch row.
     pub(in crate::sumeragi) fn with_pending_kura_apply_replay(
         mut self,
         replay: crate::sumeragi::v2::RecoveredPendingKuraApplyReplayV1,
-    ) -> Result<Self, &'static str> {
-        let lifecycle_ordinal = self
-            .registry
-            .registry()
-            .exact_recovered_decision_apply_ready_ordinal(&self.coordinator)
-            .ok_or(
-                "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier",
-            )?;
-        let apply_carrier = RecoveredPendingKuraApplyCarrierPermitV1 {
-            lifecycle_ordinal,
-            _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
-        };
-        let replay = replay.bind_recovered_apply_carrier(apply_carrier);
+    ) -> Self {
         let startup = self
             .adapter_startup
             .take()
-            .expect("recovered Apply pending Kura owner retains adapter startup");
+            .expect("storage-only pending Kura owner retains adapter startup");
         self.adapter_startup = Some(startup.with_pending_kura_apply_replay(replay));
-        Ok(self)
+        self
     }
 }
 
@@ -342,7 +309,7 @@ enum SourceId {
     Ledger,
     LifecycleOpen,
     LifecycleRecovery,
-    PendingKuraRecovery,
+    PendingKura,
     PendingLifecycle,
     Preactivation,
     Projection,
@@ -388,7 +355,7 @@ impl SourceId {
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
             "lifecycle_recovery" => Self::LifecycleRecovery,
-            "pending_kura_recovery" => Self::PendingKuraRecovery,
+            "pending_kura" => Self::PendingKura,
             "pending_lifecycle" => Self::PendingLifecycle,
             "preactivation" => Self::Preactivation,
             "projection" => Self::Projection,
@@ -454,7 +421,7 @@ fn source(id: SourceId) -> String {
             1,
         ),
         SourceId::LifecycleRecovery => include_str!("v2_lifecycle_recovery.rs").to_owned(),
-        SourceId::PendingKuraRecovery => include_str!("v2_pending_kura_recovery.rs").to_owned(),
+        SourceId::PendingKura => include_str!("v2_pending_kura_recovery.rs").to_owned(),
         SourceId::PendingLifecycle => include_str!("v2_lifecycle_pending_kura.rs").to_owned(),
         SourceId::Preactivation => include_str!("v2_lifecycle_preactivation.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
@@ -753,9 +720,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 50 {
+    if current.is_some() || cases.len() != 52 {
         return Err(format!(
-            "source contract asset must contain exactly 50 closed cases"
+            "source contract asset must contain exactly 52 closed cases"
         ));
     }
     Ok(cases)
@@ -886,7 +853,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 50, "source contract inventory drifted");
+    assert_eq!(ids.len(), 52, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

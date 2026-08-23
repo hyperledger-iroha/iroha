@@ -1466,6 +1466,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
         &mut services,
         runtime,
         std::sync::Arc::clone(&output_guard),
+        0,
         2,
     );
     crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
@@ -2017,6 +2018,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
             replay_runtime,
             body_store,
             terminal_census,
+            None,
             fixture.verified.context().clone(),
             fixture.verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2281,6 +2283,7 @@ fn recovered_ready_validate_plural_open_fixture() {
             runtime,
             body_store,
             census,
+            None,
             fixtures[0].verified.context().clone(),
             fixtures[0].verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2433,6 +2436,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
             direct_runtime,
             body_store,
             RecoveredDurableValidateRetryCensusV1::empty_for_test(),
+            None,
             fixtures[0].verified.context().clone(),
             fixtures[0].verified.context().roster[0].validator.clone(),
             Some(0),
@@ -2488,6 +2492,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
         open_runtime,
         body_store,
         open_census,
+        None,
         fixtures[0].verified.context().clone(),
         fixtures[0].verified.context().roster[0].validator.clone(),
         Some(0),
@@ -3971,6 +3976,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         &mut services,
         runtime,
         std::sync::Arc::clone(&output_guard),
+        0,
         2,
     );
     let live_started_at = std::time::Instant::now();
@@ -4441,6 +4447,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             live_runtime,
             live_body_store,
             recovered_validate_retry_census,
+            None,
             verified.context().clone(),
             verified.context().roster[0].validator.clone(),
             Some(0),

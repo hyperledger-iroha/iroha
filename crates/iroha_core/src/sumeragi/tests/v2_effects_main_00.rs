@@ -1,6 +1,6 @@
 use super::*;
 use crate::sumeragi::{
-    FairV2Ingress, InboundBlockMessage,
+    InboundBlockMessage,
     message::BlockMessage,
     v2::{
         AdapterEquivocationEvidence, AdapterError, AdapterFingerprints,
@@ -351,6 +351,12 @@ impl EffectRuntime for FakeRuntime {
             self.scheduler_ownership_ready = true;
         }
         step
+    }
+    fn step_recovery_effects(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
+        self.step_effects(now)
     }
     fn step_pacemaker_effects(
         &mut self,

@@ -724,7 +724,7 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
     /// A Ready live Apply could not retire its exact competing executor work.
     LiveApplyReconciliation(EffectExecutorError),
-    /// The Apply executor was closed or retained an active mutation owner.
+    /// The exact Apply executor owner was unavailable or failed its preflight.
     ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
@@ -4222,6 +4222,7 @@ mod recovered_sign_capacity_tests {
                     &mut services,
                     runtime,
                     Arc::clone(&output_guard),
+                    0,
                     2,
                 );
             let fence = executor.lifecycle_reducer_fence_observation();
@@ -4282,6 +4283,7 @@ mod recovered_sign_capacity_tests {
                 &mut services,
                 runtime,
                 Arc::clone(&output_guard),
+                0,
                 2,
             );
             let fence = executor.lifecycle_reducer_fence_observation();
@@ -5180,6 +5182,7 @@ impl ProductionLifecycleOwnerV1 {
                 runtime,
                 body_store,
                 recovered_validate_retry_census,
+                None,
                 context.clone(),
                 requester,
                 Some(local_validator),
@@ -5225,6 +5228,7 @@ impl ProductionLifecycleOwnerV1 {
             services,
             runtime,
             output_guard,
+            0,
             class_capacity,
         )
     }
@@ -5249,15 +5253,29 @@ impl ProductionLifecycleOwnerV1 {
             .exactly_covers_finalization_work(&self.coordinator)
     }
 
-    /// Build one empty storage-owning production owner for the ingress
-    /// admission/planner transaction regression.
-    pub(in crate::sumeragi) fn empty_ingress_owner_for_test(
+    /// Build one storage-owning production owner around the exact selected
+    /// Fetch carrier used by the cross-module planner transaction regression.
+    pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(
         verified: crate::sumeragi::v2::VerifiedHeightContext,
+        prepared: &PreparedLifecycleIngressSelector,
+        effect: crate::sumeragi::v2::AdapterEffect,
+        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
         local_signer: &iroha_crypto::KeyPair,
         root: &std::path::Path,
-    ) -> Self {
-        use super::{CapacityClass, schema::CapacityGeometry};
-        let context = super::projection::lifecycle_context(verified.context());
+    ) -> (Self, u128, super::WaitSource) {
+        use super::{
+            AdmissionDecision, AdmissionRequest, CapacityClass, WaitToken,
+            schema::CapacityGeometry,
+            work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
+        };
+        let (context, _, _, _, expected_key, expected_root, source) = prepared
+            .certified_fetch_ready_authority_for_test()
+            .expect("selected Fetch must derive its exact lifecycle authority");
+        assert_eq!(
+            context,
+            super::projection::lifecycle_context(verified.context()),
+            "selected Fetch and verified owner must share one context"
+        );
         let mut coordinator = LifecycleCoordinator::new(
             context,
             0,
@@ -5323,23 +5341,28 @@ impl ProductionLifecycleOwnerV1 {
         let serve_payloads = recovery
             .authenticate(&verified, local_signer, &body_store)
             .expect("authenticate exact owner Serve payload census");
-        Self {
-            verified,
-            coordinator,
-            registry: LifecycleWorkRegistryHolder::empty(),
-            recovered_lifecycle_outputs: None,
-            payload_store,
-            serve_payloads,
-            body_store: Some(body_store),
-            body_store_identity: None,
-            kura_binding: None,
-            apply_service: None,
-            adapter_startup: Some(
-                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
-            ),
-            timeout_supersession_successor: None,
-        }
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+                timeout_supersession_successor: None,
+            },
+            ordinal,
+            source,
+        )
     }
+
     /// Move the owner's exact startup body store into the bounded test worker
     /// while retaining only its comparison seal in the running owner.
     pub(in crate::sumeragi) fn bind_body_store_to_planner_io_for_test(
