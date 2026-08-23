@@ -55,7 +55,7 @@ enum KagemushaRecursiveSpendWorkerPermit {
     }
 }
 
-/// Exact capability record returned by the explicitly versioned ABI-21/V4
+/// Exact capability record returned by the explicitly versioned ABI-22/V4
 /// bridge. Older capability archives cannot be reinterpreted as permission to
 /// invoke this prover.
 public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
@@ -306,7 +306,7 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaReceiverAcknowledgementVerifyResultV2")
     public static let redeemRequestWireName = "iroha.torii.v1.offline.redeem.request"
 
-    // Canonical ABI-21 data-model carriers.
+    // Canonical ABI-22 data-model carriers.
     public static let bundleWireNameV4 = wire("KagemushaRecursiveSpendBundleV4")
     public static let topUpAnchorWireNameV4 =
         wire("KagemushaRecursiveSpendTopUpAnchorV4")
@@ -445,11 +445,11 @@ public enum KagemushaRecursiveSpend {
         iosAppAttestAuthenticatorDataFixedHeaderBytesV2 + 1
     /// Exact protocol ceiling for App Attest authenticator data.
     public static let maximumIosAppAttestAuthenticatorDataBytesV2 = 4 * 1024
-    /// Consensus ceiling for one canonical recipient-only ABI-21 peer archive.
+    /// Consensus ceiling for one canonical recipient-only ABI-22 peer archive.
     /// Text and individual QR/APDU frames retain smaller independent bounds.
     public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024
     public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4
-    /// Maximum canonical ABI-21 promoted-release marker accepted by native install.
+    /// Maximum canonical ABI-22 promoted-release marker accepted by native install.
     public static let maximumPromotionRecordBytesV4 = 1_024 * 1_024
     /// Maximum canonical runner-signed internal-validation receipt accepted by native install.
     public static let maximumInternalValidationReceiptBytesV4 = 1_024 * 1_024
@@ -679,7 +679,7 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    /// Match the ABI-21/V4 cross-platform artifact identifier contract byte
+    /// Match the ABI-22/V4 cross-platform artifact identifier contract byte
     /// for byte. This is deliberately stricter than general portable text.
     static func requirePortableArtifactIdentifier(
         _ value: String,
@@ -1938,7 +1938,7 @@ public struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendabl
     }
 }
 
-/// Installed ABI-21/V4 generation bound to its authenticated manifest.
+/// Installed ABI-22/V4 generation bound to its authenticated manifest.
 public struct KagemushaRecursiveSpendInstalledArtifactSetV4: Equatable, Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
@@ -2579,7 +2579,7 @@ private typealias KagemushaV4TwoArchiveTimeOutFn = @convention(c) (
 ) -> Int32
 #endif
 
-/// ABI-21 lifecycle calls resolve explicitly suffixed V4 symbols without a
+/// ABI-22 lifecycle calls resolve explicitly suffixed V4 symbols without a
 /// legacy recursive-lifecycle fallback.
 extension NoritoNativeBridge {
     func kagemushaRecursiveSpendCapabilitiesV4() throws -> Data? {

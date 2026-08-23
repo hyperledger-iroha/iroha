@@ -414,7 +414,7 @@ convenience APIs are Ed25519-only while native-backed algorithms use
 `IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
 Its sole profile code `2` requires schema `0x0102` and allows a 24,576-byte
 bounded whole-offer body (24,660 bytes including the fixed 84-byte IPM1
-header). Canonical bytes are capped at 32 KiB and must be a kind-matched ABI21
+header). Canonical bytes are capped at 32 KiB and must be a kind-matched ABI22
 archive. Construction and decode validate NRT0 v0.0, no compression, exact
 compact-length flags, CRC64, the authoritative fully-qualified schema, and
 static padding (request/payment 8, ACK 0) without requiring the native bridge.
@@ -471,7 +471,7 @@ The portable wire, QR, Nearby cryptography, and NFC state machines live in
 `IrohaSwift`; Google Nearby and Core NFC lifecycle adapters live in
 `IrohaSwiftMobileTransports`. These `IrohaPeer*V1` APIs have no
 MultipeerConnectivity, legacy AID, raw-text, or unauthenticated BYTES fallback.
-That scope does not remove the independent Kagemusha ABI21 bulk family.
+That scope does not remove the independent Kagemusha ABI22 bulk family.
 
 The application entry points are:
 
@@ -514,12 +514,12 @@ The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102
 `IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
 native archive decoder, and its IPM1 adapter fails explicitly above the 24,576
 byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
-independent ABI21 APIs remain
+independent ABI22 APIs remain
 `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
 `KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
 `F0504B45504B524E464301` SDK NFC AID, and
 Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
-used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
+used as fallback for Retail V1. Full QR, NFC, and native ABI22 archives up to
 32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
 its own smaller bound. The profile identifier must not be used for a different
 sidecar or demo encoding.
@@ -556,7 +556,7 @@ rounding.
 
 Wallet applications own encrypted note state and peer transport. Persist the
 opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete ABI-21/V4 artifact set,
+operation status at each commit boundary. Fetch the complete ABI-22/V4 artifact set,
 wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
 it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
 `.authenticated(...)` from deployment-provisioned release trust. Keep every proof
@@ -1207,7 +1207,7 @@ that consumes them; they do not change universal offline capability.
 
 Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
 `KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
-canonical ABI-21 digest. After direct Torii submission and authenticated
+canonical ABI-22 digest. After direct Torii submission and authenticated
 finality verification, initialize the offline branch with
 `KagemushaRecursiveSpendInitLocalRequestV4` and
 `KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:

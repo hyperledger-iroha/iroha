@@ -26,12 +26,12 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
+ * Native bridge ABI 22 for Kagemusha ABI-22/V4 artifact streaming and capabilities.
  *
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * Every recursive lifecycle result is projected only through an ABI-21/V4 native decoder.
+ * Every recursive lifecycle result is projected only through an ABI-22/V4 native decoder.
  */
 public final class KagemushaRecursiveSpendProver {
   /** Retryable contention signal raised before a second proof request is copied. */
@@ -96,20 +96,20 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2 = 24_576;
   public static final int MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1 = 2 * 1024;
   public static final int PROMOTED_FINALITY_CHECKPOINT_BYTES_V2 = 40;
-  /** Consensus ceiling for one canonical recipient-only ABI-21 peer archive. */
+  /** Consensus ceiling for one canonical recipient-only ABI-22 peer archive. */
   public static final int MAX_PEER_ARCHIVE_BYTES_V4 = 32 * 1024 * 1024;
   public static final int MAX_PEER_ARCHIVE_BYTES = MAX_PEER_ARCHIVE_BYTES_V4;
-  /** Consensus-derived ceiling for one canonical ABI-21 top-up provenance archive. */
+  /** Consensus-derived ceiling for one canonical ABI-22 top-up provenance archive. */
   public static final int MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 = 6_488_064;
   /** Largest V4 local verify carrier accepted by the native bridge, plus framing headroom. */
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4;
-  /** Exact Torii body ceiling for the ABI-21/V4 top-up route. */
+  /** Exact Torii body ceiling for the ABI-22/V4 top-up route. */
   public static final int MAX_TORII_TOP_UP_REQUEST_BYTES_V4 = 512 * 1024;
 
-  /** Exact Torii body ceiling for the ABI-21/V4 redemption route. */
+  /** Exact Torii body ceiling for the ABI-22/V4 redemption route. */
   public static final int MAX_TORII_REDEEM_REQUEST_BYTES_V4 = 48 * 1024 * 1024;
 
   private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
@@ -167,7 +167,7 @@ public final class KagemushaRecursiveSpendProver {
     });
   }
 
-  /** Canonical ABI-21 artifact roles. Declaration order is part of the native contract. */
+  /** Canonical ABI-22 artifact roles. Declaration order is part of the native contract. */
   public enum ArtifactRoleV4 {
     STEP_EQ_PARAMS_IPA("step-eq.params-ipa.krv4"),
     STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
@@ -2677,7 +2677,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Opaque ABI-21 recursive state. */
+  /** Opaque ABI-22 recursive state. */
   public static final class BundleV4 extends CanonicalArchive {
     private BundleV4(final byte[] archive) {
       super(
@@ -2731,7 +2731,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Finalized ABI-21 top-up receipt with a V4 artifact binding. */
+  /** Finalized ABI-22 top-up receipt with a V4 artifact binding. */
   public static final class TopUpAnchorV4 extends CanonicalArchive {
     private TopUpAnchorV4(final byte[] archive) {
       super(
@@ -2896,7 +2896,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Canonical next-zero cursor persisted atomically with every restored ABI-21 branch. */
+  /** Canonical next-zero cursor persisted atomically with every restored ABI-22 branch. */
   public static final class OutputMembershipFrontierV4 extends CanonicalArchive {
     private OutputMembershipFrontierV4(final byte[] archive) {
       super(
@@ -3712,7 +3712,7 @@ public final class KagemushaRecursiveSpendProver {
     public int proofStepCount() { return proofStepCount; }
   }
 
-  /** Secret-bearing local state used only by the genuine ABI-21 builders. */
+  /** Secret-bearing local state used only by the genuine ABI-22 builders. */
   public static final class SpendableBranchV4 implements AutoCloseable {
     private final BundleV4 bundle;
     private final NoteMembershipWitness membershipWitness;
@@ -4175,7 +4175,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Authenticated ABI-21 V4 release identity selected at the readiness snapshot. */
+  /** Authenticated ABI-22 V4 release identity selected at the readiness snapshot. */
   public static final class AuthenticatedArtifactSet {
     private final String generation;
     private final byte[] manifestSha256;

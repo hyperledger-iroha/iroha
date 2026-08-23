@@ -36,7 +36,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
+/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-22/V4 lifecycle. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();

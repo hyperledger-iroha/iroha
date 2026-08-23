@@ -10872,7 +10872,7 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable startup-authenticated ABI-21 recursive release catalog.
+    /// Immutable startup-authenticated ABI-22 recursive release catalog.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Startup-authenticated complete runtime projection used only by local consensus gates.
@@ -11700,7 +11700,7 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-21 recursive release catalog snapshot for this block.
+    /// Immutable ABI-22 recursive release catalog snapshot for this block.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this block.
@@ -12844,7 +12844,7 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-21 recursive release catalog snapshot for this transaction.
+    /// Immutable ABI-22 recursive release catalog snapshot for this transaction.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
@@ -13189,7 +13189,7 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-21 recursive release catalog snapshot for this view.
+    /// Immutable ABI-22 recursive release catalog snapshot for this view.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this view.

@@ -8,7 +8,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-21/V4 artifact streaming |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-22/V4 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
 | `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline-wallet integration built on `client-android`; use this artifact for Android offline cash |
 
@@ -295,8 +295,8 @@ Kagemusha handoff.
 
 IPM1 admits only profile `2` / schema `0x0102` as a 24,576-byte bounded
 handoff for a mainline typed Kagemusha native archive. Generic IPM validates
-its exact ABI21 envelope without native code; `IrohaPeerKagemushaAdapterV1`
-then performs deeper typed semantic decoding. Full ABI21
+its exact ABI22 envelope without native code; `IrohaPeerKagemushaAdapterV1`
+then performs deeper typed semantic decoding. Full ABI22
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
 `KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
@@ -310,7 +310,7 @@ migration fallback.
 These transport changes are client-side and require no backend API change.
 
 The sole first-release IPM1 profile code 2 requires schema `0x0102`.
-Construction and decode enforce native-independent ABI21 NRT0 framing, the
+Construction and decode enforce native-independent ABI22 NRT0 framing, the
 authoritative fully-qualified kind schema, CRC64, exact compact-length flags,
 and static padding (request/payment 8, ACK 0). Deeper semantics remain in the
 typed adapter.
@@ -432,7 +432,7 @@ have a gap.
 
 ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
 native signer method; confidential movement uses the typed Kagemusha lifecycle.
-`core-jvm` exposes the exact ABI-21/V4 typed Kagemusha init, fractional append/change,
+`core-jvm` exposes the exact ABI-22/V4 typed Kagemusha init, fractional append/change,
 verification, and redemption builders through the fixed native surface. It also provides exact
 scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter

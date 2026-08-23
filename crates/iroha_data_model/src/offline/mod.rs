@@ -76,7 +76,7 @@ pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
-/// Absolute canonical byte ceiling for one ABI-21 unshield-v3 proof.
+/// Absolute canonical byte ceiling for one ABI-22 unshield-v3 proof.
 ///
 /// The installed verifier record may advertise a lower limit, but no
 /// Kagemusha redemption archive may carry a larger proof.
@@ -186,10 +186,10 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the ABI-21 Eq/Fp recursive-step half.
+/// Chain verifier role for the ABI-22 Eq/Fp recursive-step half.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4: &str =
     "kagemusha_recursive_step_eq_v4_verifier_record";
-/// Chain verifier role for the ABI-21 Ep/Fq recursive-step half.
+/// Chain verifier role for the ABI-22 Ep/Fq recursive-step half.
 pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4: &str =
     "kagemusha_recursive_step_ep_v4_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
@@ -198,7 +198,7 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Verifier purpose for either half of the sole ABI-21 recursive step.
+/// Verifier purpose for either half of the sole ABI-22 recursive step.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V4: &str = "kagemusha_recursive_spend_step_v4";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
@@ -251,7 +251,7 @@ pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V2: usize = 0;
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Maximum tracked root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V2: u64 = 16 * 1024 * 1024;
-/// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
+/// Degree-parameterized Pasta-cycle backend selected only by ABI 22 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4: &str =
     "halo2/ipa-pasta-cycle-compact-v5";
 /// Transcript contract for V4 proofs and degree-sized BGH19 folds.
@@ -263,11 +263,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4: &str =
 /// Ep/Fq recursive-step circuit with authenticated dynamic IPA layout.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4: &str =
     "kagemusha-recursive-spend-step-ep-compact-lineage-v5";
-/// Verifying-key curve for the ABI-21 `EqAffine` recursive-step half.
+/// Verifying-key curve for the ABI-22 `EqAffine` recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
-/// Verifying-key curve for the ABI-21 `EpAffine` recursive-step half.
+/// Verifying-key curve for the ABI-22 `EpAffine` recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
-/// Number of canonical Pasta field elements exposed by one ABI-21/V4 Step operation.
+/// Number of canonical Pasta field elements exposed by one ABI-22/V4 Step operation.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact `u32` limbs used by the eight-limb encoding of every operation element.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
@@ -276,11 +276,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 66;
 /// Maximum `u32` length at the authenticated compact degree (`k = 17`).
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 66;
-/// Canonical ABI-21/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
+/// Canonical ABI-22/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
 /// Its `operation_protocol_v2` label versions only the subordinate operation-vector layout; it
 /// cannot select a V2/V3 executor. Compact V5 state changes V4 circuit identity and invalidates earlier candidates.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2},"private_witness":{"state_layout_version":5,"state_limbs":138,"parent_slots":2,"operation_field_elements":135,"operation_limbs":1080}}"#;
-/// Canonical ABI-21/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
+/// Canonical ABI-22/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
 /// As with Eq, `operation_protocol_v2` versions the operation vector, not the execution path.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_compact_v5","layout":"single_column_field","elements":66,"ipa_round_count":17,"semantic_authority":"step_eq","role":"lineage_and_reciprocal_wrapper","semantic_header":{"elements":20,"encoding":"canonical_u128_chunks","fields":["compact_profile_version","parent_count","proof_step_count","public_statement_digest[2]","operation_poseidon_fp[2]","parent_state_poseidon_fp[2][2]","result_state_poseidon_fp[2]","manifest_sha256[2]","step_eq_protocol_sha256[2]","step_ep_protocol_sha256[2]","live_selector"]},"ipa_accumulator":{"wire_version":5,"elements":38,"formula":"2*ipa_round_count+4","encoding":"canonical_u128_chunks"},"reciprocal_audits":{"hash":"sha256","digests":4,"elements_per_digest":2}}"#;
 /// Version of the compact canonical cross-field state boundary.
@@ -295,12 +295,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 =
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4: u16 = 4;
 /// Version of the tracked-lock-bound recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5: u16 = 5;
-/// Version carried by every ABI-21 chain-facing request and artifact binding.
+/// Version carried by every ABI-22 chain-facing request and artifact binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4: u16 = 4;
-/// Schema identifier for the immutable pre-evidence ABI-21 candidate record.
+/// Schema identifier for the immutable pre-evidence ABI-22 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.candidate.v4";
-/// Version of the immutable pre-evidence ABI-21 candidate record.
+/// Version of the immutable pre-evidence ABI-22 candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4: u16 = 4;
 /// Schema identifier for an immutable tracked-lock-bound candidate record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V5: &str =
@@ -353,7 +353,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4: &str =
 /// Schema identifier for a signed tracked-lock-bound V5 release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V5: &str =
     "kagemusha.offline.recursive_spend.release_attestation.v5";
-/// Schema identifier for an authenticated ABI-21/V4 promotion record.
+/// Schema identifier for an authenticated ABI-22/V4 promotion record.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.promoted_release.v4";
 /// Schema identifier for an authenticated tracked-lock-bound V5 promotion record.
@@ -398,7 +398,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum canonical signed V4 cryptographic-review envelope size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4: usize = 1024 * 1024;
-/// Maximum canonical ABI-21/V4 promotion record accepted by release consumers.
+/// Maximum canonical ABI-22/V4 promotion record accepted by release consumers.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: usize = 1024 * 1024;
 /// Historical version-one attestation file name retained by policy tooling.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
@@ -474,11 +474,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_8
 pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 5 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
 pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 9 * 1024 * 1024;
-/// Exact cryptographic profile embedded inside the ABI-21/V4 lifecycle.
+/// Exact cryptographic profile embedded inside the ABI-22/V4 lifecycle.
 pub const KAGEMUSHA_COMPACT_PROFILE_VERSION_V5: u32 = 5;
-/// Maximum canonical recipient-only ABI-21 peer-payment archive.
+/// Maximum canonical recipient-only ABI-22 peer-payment archive.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4: usize = 32 * 1024 * 1024;
-/// Maximum canonical provenance archive carried by one ABI-21 spendable branch.
+/// Maximum canonical provenance archive carried by one ABI-22 spendable branch.
 /// It admits one maximum roster and two bounded anchor/finality pairs plus framing headroom.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4: usize =
     KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2
@@ -486,12 +486,12 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4: usize =
             * (KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_USIZE_V2
                 + KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_USIZE_V2)
         + 64 * 1024;
-/// Maximum canonical ABI-21 online-to-offline chain request.
+/// Maximum canonical ABI-22 online-to-offline chain request.
 /// It covers shield proof, optional device attestation, and bounded metadata with headroom.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4: usize = 512 * 1024;
-/// Number of canonical Pallas-field elements in one ABI-21 public operation row.
+/// Number of canonical Pallas-field elements in one ABI-22 public operation row.
 pub const KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
-/// Exact little-endian `u32` limbs carried for one ABI-21 public operation row.
+/// Exact little-endian `u32` limbs carried for one ABI-22 public operation row.
 pub const KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FIELD_ELEMENTS_V4 * 8;
 /// Pallas base-field modulus as eight exact little-endian `u32` limbs.
@@ -537,7 +537,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4: &str =
 /// Canonical Ep final-key selector-zero bootstrap-witness package for V4 runtime.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4: &str =
     "step-ep.bootstrap-witness.krv4";
-/// Exact ordered cryptographic artifact roles required by an ABI-21 release.
+/// Exact ordered cryptographic artifact roles required by an ABI-22 release.
 /// Capability order is Eq then Ep, with the four canonical artifact roles inside each profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8] = [
     "step_eq_params_ipa",
@@ -564,7 +564,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-r
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2`].
 const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
-/// Production-promotion gate for the ABI-21/V4 paired recursive backend.
+/// Production-promotion gate for the ABI-22/V4 paired recursive backend.
 /// Only explicitly promoted builds enable it; runtime still requires an authenticated V4 release
 /// with the exact verifier/prover inventory, so this gate never substitutes for authentication.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
@@ -755,7 +755,7 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
 }
 impl std::error::Error for KagemushaReleaseVerificationError {}
 /// Runtime proof that a V4 manifest, evidence set, and role thresholds were authenticated.
-/// Private fields keep unsigned material out of the configured ABI-21 catalog.
+/// Private fields keep unsigned material out of the configured ABI-22 catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV4 {
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
@@ -3140,7 +3140,7 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
     }
 }
 impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
-    /// Validate an installed ABI-21 backend capability record.
+    /// Validate an installed ABI-22 backend capability record.
     ///
     /// `max_proof_bytes` is deliberately release-specific: it must come from the authenticated V4
     /// manifest selected by the installed artifact handle, rather than from a compile-time default.
@@ -3180,7 +3180,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
     }
 }
 impl KagemushaPastaCycleProofEnvelopeV4 {
-    /// Validate the fixed ABI-21 envelope shape before release lookup.
+    /// Validate the fixed ABI-22 envelope shape before release lookup.
     ///
     /// # Errors
     ///
@@ -5815,7 +5815,7 @@ impl KagemushaReceiverAcknowledgementV2 {
             acknowledgement: self.clone(),
         })
     }
-    /// Verify the unchanged ACK leaf against an authoritative ABI-21 recipient bundle.
+    /// Verify the unchanged ACK leaf against an authoritative ABI-22 recipient bundle.
     ///
     /// # Errors
     ///
@@ -5872,7 +5872,7 @@ impl KagemushaReceiverAcknowledgementV2 {
         }
         Ok(())
     }
-    /// Return canonical ACK bytes after ABI-21 payment validation.
+    /// Return canonical ACK bytes after ABI-22 payment validation.
     ///
     /// # Errors
     ///
@@ -5885,7 +5885,7 @@ impl KagemushaReceiverAcknowledgementV2 {
         self.validate_for_payment_v4(recipient_request, recipient_bundle)?;
         Ok(norito::encode_canonical(self)?)
     }
-    /// Build the unchanged typed ACK result after ABI-21 payment validation.
+    /// Build the unchanged typed ACK result after ABI-22 payment validation.
     ///
     /// # Errors
     ///
@@ -5946,20 +5946,20 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
     }
     Ok(())
 }
-/// Domain separator for ABI-21 unsigned top-up authorization payloads.
+/// Domain separator for ABI-22 unsigned top-up authorization payloads.
 pub const KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-payload";
-/// Domain separator for ABI-21 finalized top-up anchor receipts.
+/// Domain separator for ABI-22 finalized top-up anchor receipts.
 pub const KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-anchor";
-/// Domain separator for an ABI-21 split transition binding.
+/// Domain separator for an ABI-22 split transition binding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:split-binding";
-/// Domain separator for an ABI-21 redemption transition binding.
+/// Domain separator for an ABI-22 redemption transition binding.
 pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:redemption-transition";
-/// Domain separator for an ABI-21 recursive public statement.
+/// Domain separator for an ABI-22 recursive public statement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:public-statement";
-/// Exact finalized-anchor schema carried by an ABI-21 init request.
+/// Exact finalized-anchor schema carried by an ABI-22 init request.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4: u16 = 4;
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaTopUpAnchorDigestPreimageV4 {
@@ -6008,7 +6008,7 @@ struct KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
     statement: KagemushaRecursiveSpendPublicStatementV4,
 }
 impl KagemushaRecursiveSpendTopUpAnchorV4 {
-    /// Populate and validate the canonical ABI-21 receipt digest.
+    /// Populate and validate the canonical ABI-22 receipt digest.
     ///
     /// # Errors
     ///
@@ -6077,7 +6077,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
         }
         Ok(())
     }
-    /// Return the stable compact identity retained by ABI-21 descendants.
+    /// Return the stable compact identity retained by ABI-22 descendants.
     ///
     /// # Errors
     ///
@@ -6093,7 +6093,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
     }
 }
 impl KagemushaRecursiveSpendTopUpUnsignedV4 {
-    /// Validate every ABI-21 top-up field before payer authorization is attached.
+    /// Validate every ABI-22 top-up field before payer authorization is attached.
     ///
     /// # Errors
     ///
@@ -6157,7 +6157,7 @@ impl KagemushaRecursiveSpendTopUpUnsignedV4 {
     }
 }
 impl KagemushaRecursiveSpendTopUpRequestV4 {
-    /// Construct and validate an ABI-21 online-to-offline request.
+    /// Construct and validate an ABI-22 online-to-offline request.
     #[allow(clippy::too_many_arguments)]
     ///
     /// # Errors
@@ -6219,7 +6219,7 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         }
         self.authorization.validate_for_payload(unsigned.digest()?)
     }
-    /// Return the digest of every unsigned ABI-21 top-up field.
+    /// Return the digest of every unsigned ABI-22 top-up field.
     ///
     /// # Errors
     ///
@@ -6239,7 +6239,7 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
     }
 }
 impl KagemushaRecursiveSpendInitRequestV4 {
-    /// Validate finalized provenance and its exact authenticated ABI-21 release.
+    /// Validate finalized provenance and its exact authenticated ABI-22 release.
     ///
     /// # Errors
     ///
@@ -6408,7 +6408,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             self.asset_scale,
         )
     }
-    /// Return the V4-domain transition binding consumed by ABI-21 Step.
+    /// Return the V4-domain transition binding consumed by ABI-22 Step.
     ///
     /// # Errors
     ///
@@ -6420,7 +6420,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             split: self.clone(),
         })
     }
-    /// Derive the deterministic conflict claims for one ABI-21 child.
+    /// Derive the deterministic conflict claims for one ABI-22 child.
     ///
     /// # Errors
     ///
@@ -6584,7 +6584,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
     }
 }
 impl KagemushaRecursiveSpendPublicStatementV4 {
-    /// Validate the canonical ABI-21 recursive-state statement.
+    /// Validate the canonical ABI-22 recursive-state statement.
     ///
     /// # Errors
     ///
@@ -6648,7 +6648,7 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
         }
         Ok(())
     }
-    /// Return the V4-domain digest exposed by the ABI-21 Step instance.
+    /// Return the V4-domain digest exposed by the ABI-22 Step instance.
     ///
     /// # Errors
     ///
@@ -6703,19 +6703,19 @@ mod kagemusha_v4_lifecycle_domain_tests {
         .expect("the first differing high limb is below the modulus");
     }
 }
-/// Domain separator for ABI-21 recursive bundle identity digests.
+/// Domain separator for ABI-22 recursive bundle identity digests.
 pub const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:recursive-spend-bundle";
-/// Domain separator for ABI-21 unsigned redemption authorization payloads.
+/// Domain separator for ABI-22 unsigned redemption authorization payloads.
 pub const KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:redeem-payload";
 /// Domain separator binding an accepted receiver request to its exact output bundle.
 pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
     "iroha:kagemusha:v4:request-output-binding";
-/// Maximum canonical ABI-21 receiver-verification request size.
+/// Maximum canonical ABI-22 receiver-verification request size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
-/// Maximum canonical ABI-21 redemption request archive size.
+/// Maximum canonical ABI-22 redemption request archive size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
-/// Frame-derived base multiplier for bounded ABI-21 request reconstruction.
+/// Frame-derived base multiplier for bounded ABI-22 request reconstruction.
 pub const KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4: usize = 4;
 /// Extra frame-derived multiplier for an untrusted redemption proof field.
 ///
@@ -6727,31 +6727,31 @@ pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usiz
 /// Canonical wire preflight rejects its nested oversized unshield proof before reconstruction, so
 /// the exact fixed allowance accounts for the remaining charged copies.
 pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usize = 0;
-/// Fixed allocation allowance for a maximum-shaped ABI-21 top-up request.
+/// Fixed allocation allowance for a maximum-shaped ABI-22 top-up request.
 pub const KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     6 * KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2 + 64 * 1024;
-/// Fixed allocation allowance for one root ABI-21 recursive bundle.
+/// Fixed allocation allowance for one root ABI-22 recursive bundle.
 pub const KAGEMUSHA_BUNDLE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     8 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for one nested ABI-21 recursive bundle.
+/// Fixed allocation allowance for one nested ABI-22 recursive bundle.
 ///
 /// This profile covers peer payments, initialization results, and local
 /// wrappers containing one bundle.
 pub const KAGEMUSHA_SINGLE_RECURSIVE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     11 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for a maximum-shaped ABI-21 split result.
+/// Fixed allocation allowance for a maximum-shaped ABI-22 split result.
 pub const KAGEMUSHA_SPLIT_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     24 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for a two-parent ABI-21 change-preparation request.
+/// Fixed allocation allowance for a two-parent ABI-22 change-preparation request.
 pub const KAGEMUSHA_PEER_SPLIT_PREPARE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     28 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for a two-parent ABI-21 local append request.
+/// Fixed allocation allowance for a two-parent ABI-22 local append request.
 pub const KAGEMUSHA_APPEND_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     34 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for a nested ABI-21 terminal-verification request.
+/// Fixed allocation allowance for a nested ABI-22 terminal-verification request.
 pub const KAGEMUSHA_VERIFY_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
     14 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
-/// Fixed allocation allowance for a maximum-shaped ABI-21 redemption request.
+/// Fixed allocation allowance for a maximum-shaped ABI-22 redemption request.
 pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize = 27
     * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
     + 3 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
@@ -6868,7 +6868,7 @@ fn preflight_kagemusha_unshield_proof_archive_v4<T: norito::NoritoSerialize>(
 /// # Errors
 ///
 /// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
-/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
+/// archive cannot be safely classified or the proof exceeds the ABI-22 limit.
 pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
     preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemRequestV4>(
         frame,
@@ -6881,7 +6881,7 @@ pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(),
 /// # Errors
 ///
 /// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
-/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
+/// archive cannot be safely classified or the proof exceeds the ABI-22 limit.
 pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
     preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemUnsignedV4>(
         frame,
@@ -6894,7 +6894,7 @@ pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<()
 /// # Errors
 ///
 /// Returns a Norito framing, layout, schema, checksum, length, or field-limit error when the
-/// archive cannot be safely classified or the proof exceeds the ABI-21 limit.
+/// archive cannot be safely classified or the proof exceeds the ABI-22 limit.
 pub fn preflight_kagemusha_redeem_build_result_archive_v4(
     frame: &[u8],
 ) -> Result<(), norito::Error> {
@@ -7300,7 +7300,7 @@ impl KagemushaRecursiveSpendSplitResultV4 {
     }
 }
 impl KagemushaRecursiveSpendPeerPaymentV4 {
-    /// Project the recipient-only ABI-21 transport from a validated split result.
+    /// Project the recipient-only ABI-22 transport from a validated split result.
     ///
     /// # Errors
     ///
@@ -7317,7 +7317,7 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
         payment.validate_public_binding()?;
         Ok(payment)
     }
-    /// Return the recipient peer-split transition embedded by the ABI-21 statement.
+    /// Return the recipient peer-split transition embedded by the ABI-22 statement.
     ///
     /// # Errors
     ///
@@ -7354,7 +7354,7 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
     pub fn recipient_request_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
-    /// Validate the recipient branch, membership state, and ABI-21 peer-size ceiling.
+    /// Validate the recipient branch, membership state, and ABI-22 peer-size ceiling.
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.

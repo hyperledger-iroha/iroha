@@ -256,8 +256,8 @@ APDU implementations. The shared vector is
 
 IPM1 admits only profile `2` / schema `0x0102` as a 24,576-byte bounded
 handoff for a mainline typed Kagemusha native archive. Generic IPM validates
-its exact ABI21 envelope without native code; production code then performs
-deeper semantic decoding through `IrohaPeerKagemushaAdapterV1`. Full ABI21
+its exact ABI22 envelope without native code; production code then performs
+deeper semantic decoding through `IrohaPeerKagemushaAdapterV1`. Full ABI22
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
 facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
@@ -266,13 +266,13 @@ identifiers, while NFC uses the sole canonical AID
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for IPM1. The
 no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the
-retained ABI21 family also has no old AID. Do not use profile `2` for a
+retained ABI22 family also has no old AID. Do not use profile `2` for a
 sidecar/demo representation.
 
 These transport changes are client-side and require no backend API change.
 
 The sole first-release IPM1 profile code 2 requires schema `0x0102`.
-Construction and decode enforce native-independent ABI21 NRT0 framing, the
+Construction and decode enforce native-independent ABI22 NRT0 framing, the
 authoritative fully-qualified kind schema, CRC64, exact compact-length flags,
 and static padding (request/payment 8, ACK 0). Deeper semantics remain in the
 typed adapter.
