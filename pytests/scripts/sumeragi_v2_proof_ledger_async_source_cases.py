@@ -211,6 +211,13 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
         )
 
     retired_timeout_action = "Form" + "TC"
+    cache_path = formal_dir / ".tlacache" / "fingerprints.history" / "retired.tla"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(f"{retired_timeout_action} == FALSE\n", encoding="utf-8")
+    assert not any(
+        "retired standalone timeout-certificate action identifier" in error
+        for error in module._progress_witness_source_fidelity_errors(formal_dir)
+    )
     core_path.write_text(
         canonical_core
         + f"\n{retired_timeout_action}(node, roundView) == FALSE\n",

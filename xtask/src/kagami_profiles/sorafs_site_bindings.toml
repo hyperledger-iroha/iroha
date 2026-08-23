@@ -1,5 +1,0 @@
-
-[sorafs.gateway.site_bindings]
-path = "/config/sorafs_sites.json"
-max_bytes = 1048576
-max_sites = 1024

@@ -15,12 +15,13 @@ use super::{
         certified_fetch_lifecycle_key, certified_fetch_wait_source, pending_effect_causal_root,
     },
     schema::{
-        CausalRoot, LifecycleContext, LifecycleDigest, LifecycleKey, LifecyclePhase,
-        LifecycleState, LifecycleWorkClass, ReadyEvent, WaitSource,
+        CausalRoot, InitialLifecycleState, LifecycleContext, LifecycleDigest, LifecycleKey,
+        LifecyclePhase, LifecycleState, LifecycleWorkClass, ReadyEvent, WaitSource, WaitToken,
     },
     work_registry::{
         CertifiedFetchCompletionError, CertifiedFetchWaitingLocation,
-        ConcreteLifecycleWorkRegistry, PreparedCertifiedFetchCompletion,
+        ConcreteLifecycleWorkRegistry, PreparedCertifiedFetchAdmissionV1,
+        PreparedCertifiedFetchCompletion,
     },
 };
 #[cfg(test)]
@@ -427,7 +428,7 @@ impl CertifiedFetchBodyPersistencePreparationError {
 enum CertifiedFetchBodyPersistenceRetryFailure {
     FreshSelector(LifecycleIngressSelectorError),
     Selector(CertifiedFetchReadyPublicationError),
-    CompletionIdentity,
+    CompletionIdentity(&'static str),
     Executor(EffectTransportError),
     CoordinatorStutter,
     Registry(CertifiedFetchCompletionError),
@@ -471,7 +472,7 @@ impl CertifiedFetchBodyPersistenceRetryError {
         match &self.failure {
             CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(_) => "fresh selector",
             CertifiedFetchBodyPersistenceRetryFailure::Selector(_) => "selector authority",
-            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity => {
+            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(_) => {
                 "persistence completion identity"
             }
             CertifiedFetchBodyPersistenceRetryFailure::Executor(_) => "executor preflight",
@@ -495,8 +496,8 @@ impl CertifiedFetchBodyPersistenceRetryError {
                 format!("{error:?}")
             }
             CertifiedFetchBodyPersistenceRetryFailure::Selector(error) => format!("{error:?}"),
-            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity => {
-                "persisted completion differs from the fresh exact selector".to_owned()
+            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(detail) => {
+                (*detail).to_owned()
             }
             CertifiedFetchBodyPersistenceRetryFailure::Executor(error) => error.to_string(),
             CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => {
@@ -1087,6 +1088,21 @@ pub(crate) enum LifecycleIngressIoTargetKind {
     /// Persist one lifecycle-recovered Decision Fetch response without ordinary work ownership.
     RecoveredDecisionFetchBodyPersistence,
 }
+/// Exact owner of one selected current-context certified response occurrence.
+///
+/// A response family has one lowest-ordinal winner. Later fanout replies and
+/// replies whose request owner has already retired are non-priority queue
+/// occurrences; they must drain through the ordinary consumer without
+/// borrowing the winner's Fetch authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectedCertifiedBodyResponseOwnerV1 {
+    /// The selected occurrence is the ordinary certified-Fetch family winner.
+    OrdinaryWinner,
+    /// The selected occurrence is the recovered Decision-Fetch family winner.
+    RecoveredWinner,
+    /// The selected occurrence owns no live response family.
+    NonPriority,
+}
 /// Opaque binding between a selected fair-ingress occurrence and its I/O target.
 ///
 /// No constructor or scalar debt accessor is exposed. The production service
@@ -1418,6 +1434,59 @@ impl PreparedLifecycleIngressSelector {
         };
         Ok(())
     }
+    /// Prepare the selected response's exact durable Waiting Fetch owner.
+    ///
+    /// This seals the pending executor request, response manifest, active
+    /// context, and replay authority without mutating executor state.
+    pub(super) fn prepare_selected_certified_fetch_admission(
+        &self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        verified: &crate::sumeragi::v2::VerifiedHeightContext,
+    ) -> Result<PreparedCertifiedFetchAdmissionV1, LifecycleIngressSchedulerCarrierError> {
+        if !matches!(
+            self.io_target,
+            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+        ) {
+            return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
+        }
+        let family = self
+            .selected_claimed_response_family()
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let candidate = family
+            .candidate
+            .ordinary()
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let (response, responder) = family
+            .authenticated_response()
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        if !executor
+            .revalidate_certified_response_priority_candidate(candidate, response, responder)
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?
+        {
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+        }
+        let authority = self
+            .selected_certified_fetch_ready_authority()
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let prepared = executor
+            .prepare_lifecycle_certified_fetch_admission(
+                candidate,
+                response,
+                self.context,
+                verified,
+            )
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let admitted = prepared.candidate();
+        if admitted.key != authority.key
+            || admitted.causal_root != authority.causal_root
+            || admitted.work_class != LifecycleWorkClass::Fetch
+            || admitted.initial_state
+                != InitialLifecycleState::Waiting(WaitToken::new(authority.wait_source(), 0))
+        {
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+        }
+        Ok(prepared)
+    }
     /// Prove that this selected response names the exact waiting Fetch row and
     /// its installed concrete registry incumbent without changing either.
     pub(super) fn attest_scheduler_fetch_carrier(
@@ -1627,15 +1696,25 @@ impl PreparedLifecycleIngressSelector {
         if ready.ingress_identity != id.ingress_identity
             || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
         {
-            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+            return Err(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "persisted queue identity or dequeue disposition differs from the fresh selector",
+                ),
+            );
         }
         let family = self
             .claimed_response_families
             .get(&ready.request_hash)
-            .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
-        let (response, responder) = family
-            .authenticated_response()
-            .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
+            .ok_or(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "fresh selector no longer retains the persisted request family",
+                ),
+            )?;
+        let (response, responder) = family.authenticated_response().ok_or(
+            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                "fresh selector no longer authenticates the persisted response",
+            ),
+        )?;
         if family.ingress_identity != id.ingress_identity
             || family
                 .candidate
@@ -1647,7 +1726,11 @@ impl PreparedLifecycleIngressSelector {
                 .candidate
                 .matches_authenticated_response(response, responder)
         {
-            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+            return Err(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "persisted family work, response, or responder differs from the fresh selector",
+                ),
+            );
         }
         Ok(family)
     }
@@ -1795,20 +1878,27 @@ impl PreparedLifecycleIngressSelector {
             let family = self.persisted_family(id, authenticated)?;
             let (response, responder) = family
                 .authenticated_response()
-                .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
+                .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "fresh selector no longer authenticates the persisted response during dequeue preflight",
+                ))?;
             executor
                 .revalidate_certified_response_priority_candidate(
-                    family
-                        .candidate
-                        .ordinary()
-                        .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?,
+                    family.candidate.ordinary().ok_or(
+                        CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                            "fresh selector changed the persisted response candidate family",
+                        ),
+                    )?,
                     response,
                     responder,
                 )
                 .map_err(CertifiedFetchBodyPersistenceRetryFailure::Executor)?
         };
         if !revalidated {
-            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+            return Err(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "persisted response candidate failed its final executor revalidation",
+                ),
+            );
         }
         let Self {
             context,
@@ -2155,13 +2245,17 @@ impl LifecycleCoordinator {
         let Some(candidate) = family.candidate.ordinary() else {
             let receipt = durable_registry.abort_before_dequeue();
             retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "fresh selector changed the persisted response candidate family",
+                ),
                 receipt
             );
         };
-        let executor_prepared = match executor
-            .prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)
-        {
+        let executor_prepared = match executor.prepare_lifecycle_certified_fetch_completion(
+            candidate,
+            &authenticated,
+            durable_registry.durable_body_receipt(),
+        ) {
             Ok(prepared) => prepared,
             Err(error) => {
                 let receipt = durable_registry.abort_before_dequeue();
@@ -2231,7 +2325,9 @@ impl LifecycleCoordinator {
         if !selected_response_matches {
             let receipt = durable_registry.abort_before_dequeue();
             retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "durable registry replacement differs from the fresh selected response",
+                ),
                 receipt
             );
         }
@@ -2242,7 +2338,9 @@ impl LifecycleCoordinator {
         else {
             let receipt = durable_registry.abort_before_dequeue();
             retry!(
-                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity(
+                    "selected Fetch service task no longer owns a certified request",
+                ),
                 receipt
             );
         };

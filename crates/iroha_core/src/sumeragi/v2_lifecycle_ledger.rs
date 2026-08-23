@@ -1039,7 +1039,7 @@ impl LifecycleLedgerRecordV1 {
     ///
     /// A signed Broadcast with a durable Sign predecessor is deliberately not
     /// accepted here; recovered-WAL startup owns that family.  Invalid-body
-    /// reports must supply their unique adjacent terminal Validate parent, and
+    /// reports must supply their unique forward terminal Validate parent, and
     /// both the public edge and private replay-family relation are checked
     /// before the cold output seal is minted.
     pub(super) fn authenticate_recovered_lifecycle_output(
@@ -1064,7 +1064,7 @@ impl LifecycleLedgerRecordV1 {
                         .is_some_and(|(edge, ordinal)| {
                             edge == DurableContinuationEdge::ValidateToInvalidBodyReport
                                 && ordinal == self.ordinal()
-                                && parent.ordinal().checked_add(1) == Some(self.ordinal())
+                                && parent.ordinal() < self.ordinal()
                                 && parent.owner() == self.owner()
                                 && parent.work_class() == Some(LifecycleWorkClass::Validate)
                                 && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
@@ -2006,6 +2006,95 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         self.successor_descends_from_retirement()
             && self.matches_successor_owner_ledger(owner, &self.successor_ledger)
     }
+    fn matches_launched_successor_owner_ledger(
+        &self,
+        owner: &mut ProductionLifecycleOwnerV1,
+        successor_ledger: &LifecycleLedgerV1,
+    ) -> bool {
+        let Some(successor_root) = self.successor_store.path.parent() else {
+            return false;
+        };
+        let Some(owner_store) = owner.coordinator.ledger_store.as_ref() else {
+            return false;
+        };
+        if owner.body_store.is_some()
+            || owner.body_store_identity.is_none()
+            || owner.apply_service.is_some()
+            || owner.adapter_startup.is_some()
+            || owner.timeout_supersession_successor.is_some()
+            || owner.coordinator.fault.is_some()
+            || owner.coordinator.active_lease.is_some()
+            || !self.predecessor_remains_exact()
+            || !self
+                .complete_tip
+                .authorizes_successor_kura(owner.kura_binding.as_ref())
+            || !self
+                .complete_tip
+                .authorizes_verified_successor(&owner.verified)
+            || !self
+                .complete_tip
+                .authorizes_successor_lifecycle_target(successor_root, successor_ledger.context())
+            || !owner
+                .payload_store
+                .matches_lifecycle_storage_root(successor_root, owner.verified.context())
+            || owner
+                .payload_store
+                .validate_authenticated_cut(&owner.serve_payloads)
+                .is_err()
+            || !super::open::authenticated_serve_payloads_match_ledger(
+                successor_ledger,
+                &owner.serve_payloads,
+            )
+            || !owner_store.same_publication_target(&self.successor_store)
+            || self.successor_store.load().ok().as_ref() != Some(successor_ledger)
+            || owner_store.load().ok().as_ref() != Some(successor_ledger)
+            || LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+                .ok()
+                .as_ref()
+                != Some(successor_ledger)
+        {
+            return false;
+        }
+        let Some(owner_held_outputs) = owner.exact_lifecycle_output_ordinals_for_registry_census()
+        else {
+            return false;
+        };
+        let registry = owner.registry.registry_mut();
+        registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+            &owner.coordinator,
+            &owner_held_outputs,
+        ) || registry.exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+            &owner.coordinator,
+            &owner_held_outputs,
+        )
+    }
+    /// Reauthenticate and refreeze the successor after generic launch settlement.
+    ///
+    /// Generic launch may durably settle owner-held recovered output after the
+    /// initial CompleteTip owner join. Reload the exact canonical target and
+    /// admit that newer frame only while it remains above the retained
+    /// predecessor floor and exactly matches the still-sealed launched owner.
+    pub(super) fn reauthenticate_launched_successor_owner(
+        &mut self,
+        owner: &mut ProductionLifecycleOwnerV1,
+    ) -> Result<(), CompleteTipSuccessorOwnerBindErrorV1> {
+        let Ok(successor_ledger) = self.successor_store.load() else {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        };
+        if !self.frame_descends_from_retained_floor(&successor_ledger)
+            || !self.matches_launched_successor_owner_ledger(owner, &successor_ledger)
+        {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        }
+        self.successor_frame_identity = successor_ledger.frame_identity();
+        self.successor_ledger = successor_ledger;
+        if !self.successor_descends_from_retirement()
+            || !self.matches_launched_successor_owner_ledger(owner, &self.successor_ledger)
+        {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        }
+        Ok(())
+    }
     /// Consume retirement and the exact unlaunched H+1 owner into one seal.
     ///
     /// The join reopens the retained Kura-derived LedgerV1 target, compares the
@@ -2118,8 +2207,14 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
         Box<LaunchedRecoveredCompleteTipSuccessorLifecycleV1>,
         super::launch::ProductionLifecycleLaunchErrorV1,
     > {
-        let Self { owner, retirement } = self;
-        let launched = owner.launch(inputs)?;
+        let Self {
+            owner,
+            mut retirement,
+        } = self;
+        let mut launched = owner.launch(inputs)?;
+        launched
+            .reauthenticate_recovered_complete_tip_successor(&mut retirement)
+            .map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         Ok(Box::new(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
             launched,
             retirement,

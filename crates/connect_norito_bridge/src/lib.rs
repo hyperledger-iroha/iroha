@@ -5666,6 +5666,9 @@ const KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4: c_ulong =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 + 4096;
 const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_POLICY_BYTES_V1: c_ulong = 64 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1: c_ulong = 1024 * 1024;
+const KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1: c_ulong =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
+        as c_ulong;
 const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: c_ulong =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1 as c_ulong;
 const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: c_ulong =
@@ -11455,6 +11458,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
     trusted_policy_norito_len: c_ulong,
     release_attestation_norito_ptr: *const c_uchar,
     release_attestation_norito_len: c_ulong,
+    internal_validation_receipt_norito_ptr: *const c_uchar,
+    internal_validation_receipt_norito_len: c_ulong,
     benchmark_evidence_ptr: *const c_uchar,
     benchmark_evidence_len: c_ulong,
     cryptographic_review_ptr: *const c_uchar,
@@ -11469,6 +11474,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
         require_kagemusha_recursive_spend_production_promotion_v4()?;
         if trusted_policy_norito_ptr.is_null()
             || release_attestation_norito_ptr.is_null()
+            || internal_validation_receipt_norito_ptr.is_null()
             || benchmark_evidence_ptr.is_null()
             || cryptographic_review_ptr.is_null()
             || promotion_record_norito_ptr.is_null()
@@ -11481,6 +11487,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
             || release_attestation_norito_len == 0
             || release_attestation_norito_len
                 > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1
+            || internal_validation_receipt_norito_len == 0
+            || internal_validation_receipt_norito_len
+                > KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
             || benchmark_evidence_len == 0
             || benchmark_evidence_len > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
             || cryptographic_review_len == 0
@@ -11515,6 +11524,13 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
                 release_attestation_norito_ptr,
                 release_attestation_norito_len,
                 KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1 as usize,
+            )?
+        };
+        let internal_validation_receipt = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                internal_validation_receipt_norito_ptr,
+                internal_validation_receipt_norito_len,
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1 as usize,
             )?
         };
         let benchmark_evidence = unsafe {
@@ -11553,6 +11569,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_i
         let release_record = iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4 {
             manifest: manifest.clone(),
             release_attestation,
+            internal_validation_receipt,
             physical_device_benchmark_summary: benchmark_evidence,
             cryptographic_review_summary: cryptographic_review,
             promotion_record,
@@ -13801,6 +13818,153 @@ mod kagemusha_bridge_tests {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
     }
+    fn internal_validation_receipt_bytes_v4(
+        candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+    ) -> Vec<u8> {
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_SIGNATURE_DOMAIN_V1,
+            KagemushaExactBytesDigestV1, KagemushaInternalValidationCommandOutcomeV1,
+            KagemushaInternalValidationFuzzOutcomeV1, KagemushaInternalValidationFuzzTargetV1,
+            KagemushaInternalValidationToolRoleV1, KagemushaInternalValidationToolV1,
+            KagemushaInternalValidationWorkingDirectoryV1,
+            KagemushaRecursiveSpendInternalValidationReceiptBodyV1,
+            KagemushaRecursiveSpendInternalValidationReceiptV1,
+            KagemushaReviewedTrackedCargoLockV2,
+            kagemusha_internal_validation_runner_identity_sha256_v1,
+        };
+
+        fn exact(seed: u8) -> KagemushaExactBytesDigestV1 {
+            KagemushaExactBytesDigestV1 {
+                byte_len: u64::from(seed) + 1,
+                sha256: [seed.max(1); 32],
+            }
+        }
+        fn fuzz(
+            target: KagemushaInternalValidationFuzzTargetV1,
+            seed: u8,
+        ) -> KagemushaInternalValidationFuzzOutcomeV1 {
+            KagemushaInternalValidationFuzzOutcomeV1 {
+                target,
+                minimum_executions:
+                    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
+                completed_executions:
+                    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
+                crashes: 0,
+                timeouts: 0,
+                out_of_memory: 0,
+                initial_corpus: exact(seed),
+                final_corpus: exact(seed.wrapping_add(1)),
+                engine_report: exact(seed.wrapping_add(2)),
+            }
+        }
+
+        let runner = fixture_key_pair(0xA7);
+        let validator_binary = exact(14);
+        let tool_roles = [
+            KagemushaInternalValidationToolRoleV1::Cargo,
+            KagemushaInternalValidationToolRoleV1::Rustc,
+            KagemushaInternalValidationToolRoleV1::Rustdoc,
+            KagemushaInternalValidationToolRoleV1::CargoClippy,
+            KagemushaInternalValidationToolRoleV1::ClippyDriver,
+            KagemushaInternalValidationToolRoleV1::CargoFuzz,
+            KagemushaInternalValidationToolRoleV1::ValidationRunner,
+        ];
+        let tools = tool_roles
+            .into_iter()
+            .enumerate()
+            .map(|(index, role)| {
+                let mut executable = exact(u8::try_from(index + 8).expect("tool seed fits"));
+                if role == KagemushaInternalValidationToolRoleV1::Cargo {
+                    executable.sha256 = manifest.reviewed_cargo_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::Rustc {
+                    executable.sha256 = manifest.reviewed_rustc_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::ValidationRunner {
+                    executable = validator_binary;
+                }
+                KagemushaInternalValidationToolV1 {
+                    role,
+                    executable,
+                    version_output: exact(
+                        u8::try_from(index + 40).expect("version-output seed fits"),
+                    ),
+                }
+            })
+            .collect();
+        let commands = KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1
+            .iter()
+            .enumerate()
+            .map(
+                |(index, spec)| KagemushaInternalValidationCommandOutcomeV1 {
+                    ordinal: u16::try_from(index).expect("command ordinal fits"),
+                    command_id: spec.command_id.to_owned(),
+                    program: spec.program,
+                    argv: spec
+                        .argv
+                        .iter()
+                        .map(|argument| (*argument).to_owned())
+                        .collect(),
+                    working_directory: KagemushaInternalValidationWorkingDirectoryV1::SourceRoot,
+                    environment_manifest: exact(
+                        u8::try_from(index + 70).expect("environment seed fits"),
+                    ),
+                    exit_code: 0,
+                    termination_signal: None,
+                    timed_out: false,
+                    log_archive: exact(u8::try_from(index + 130).expect("log seed fits")),
+                    fuzz: spec.fuzz_target.map(|target| {
+                        fuzz(target, u8::try_from(index + 190).expect("fuzz seed fits"))
+                    }),
+                },
+            )
+            .collect();
+        let validation_runner_public_key = runner.public_key().clone();
+        let body = KagemushaRecursiveSpendInternalValidationReceiptBodyV1 {
+            signature_domain: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_SIGNATURE_DOMAIN_V1
+                .to_owned(),
+            validation_runner_identity_sha256:
+                kagemusha_internal_validation_runner_identity_sha256_v1(
+                    &validation_runner_public_key,
+                    &validator_binary,
+                )
+                .expect("derive validation-runner identity"),
+            validation_runner_public_key,
+            candidate_sha256: candidate.sha256().expect("candidate identity"),
+            qualification_receipt_sha256: manifest.qualification_receipt_sha256,
+            qualified_candidate_sha256: manifest.qualified_candidate_sha256,
+            source_commit: manifest.source_commit.clone(),
+            source_git_tree: manifest.source_commit.clone(),
+            source_tree_sha256: manifest.source_tree_sha256,
+            source_repo_dirty: manifest.source_repo_dirty,
+            reviewed_source_closure_descriptor_sha256: manifest
+                .reviewed_source_closure_descriptor_sha256,
+            authenticated_source_seal_projection_sha256: manifest
+                .authenticated_source_seal_projection_sha256,
+            tracked_cargo_lock: KagemushaReviewedTrackedCargoLockV2 {
+                path: "Cargo.lock".to_owned(),
+                git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
+                git_mode: "100644".to_owned(),
+                sha256: [6; 32],
+                size_bytes: 1024,
+            },
+            reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
+            reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
+            candidate_validation_report: exact(12),
+            host_triple: "aarch64-apple-darwin".to_owned(),
+            target_triple: "aarch64-apple-darwin".to_owned(),
+            validator_binary,
+            toolchain_manifest: exact(15),
+            tools,
+            commands,
+        };
+        let receipt = KagemushaRecursiveSpendInternalValidationReceiptV1::try_sign(body, &runner)
+            .expect("sign candidate-bound internal-validation receipt");
+        norito::encode_canonical(&receipt).expect("encode canonical internal-validation receipt")
+    }
     fn reviewed_source_closure_v1(
         source_commit: &str,
         source_tree_sha256: [u8; 32],
@@ -13989,6 +14153,7 @@ mod kagemusha_bridge_tests {
             generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
             qualification_receipt_sha256: digest(b"DS streaming installer qualification receipt"),
             qualified_candidate_sha256: [0; 32],
+            internal_validation_receipt_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -14007,6 +14172,7 @@ mod kagemusha_bridge_tests {
         let mut candidate_manifest = manifest.clone();
         candidate_manifest.qualification_receipt_sha256 = [0; 32];
         candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.internal_validation_receipt_sha256 = [0; 32];
         candidate_manifest.benchmark_evidence_sha256 = [0; 32];
         candidate_manifest.cryptographic_review_sha256 = [0; 32];
         candidate_manifest.release_attestation_sha256 = [0; 32];
@@ -14021,6 +14187,9 @@ mod kagemusha_bridge_tests {
                 candidate.sha256().expect("lightweight candidate identity"),
                 manifest.qualification_receipt_sha256,
             );
+        let internal_validation_receipt =
+            internal_validation_receipt_bytes_v4(&candidate, &manifest);
+        manifest.internal_validation_receipt_sha256 = digest(&internal_validation_receipt);
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -14106,6 +14275,7 @@ mod kagemusha_bridge_tests {
             &manifest,
             &policy,
             &attestation,
+            &internal_validation_receipt,
             &benchmark_evidence,
             &cryptographic_review,
         )
@@ -16129,12 +16299,13 @@ mod kagemusha_bridge_tests {
             ),
             (
                 "java_native_kagemusha_artifact_set_install_v4",
-                7,
+                8,
                 &[
                     "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4",
                     "KAGEMUSHA_RECURSIVE_SPEND_SHA256_BYTES_V4",
                     "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_POLICY_BYTES_V1",
                     "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1",
+                    "KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1",
                     "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1",
                     "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
                 ][..],
@@ -16413,9 +16584,22 @@ mod kagemusha_bridge_tests {
             assert!(guarded.contains("require_kagemusha_recursive_spend_production_promotion_v4"));
         }
         assert!(artifact_install.contains("promotion_record_norito_ptr"));
+        assert!(artifact_install.contains("internal_validation_receipt_norito_ptr"));
+        assert!(artifact_install.contains("internal_validation_receipt_norito_len == 0"));
         assert!(artifact_install.contains("KagemushaRecursiveSpendReleaseRecordV4"));
+        assert!(artifact_install.contains("internal_validation_receipt,"));
         assert!(artifact_install.contains(".authenticate(&trusted_policy)"));
         assert!(!artifact_install.contains("KagemushaAuthenticatedReleaseV4::verify"));
+        let header = include_str!("../include/connect_norito_bridge.h");
+        let install_declaration = header
+            .split_once("int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v4(")
+            .expect("V4 C artifact installer declaration")
+            .1
+            .split_once(");")
+            .expect("end of V4 C artifact installer declaration")
+            .0;
+        assert!(install_declaration.contains("internal_validation_receipt_norito_ptr"));
+        assert!(install_declaration.contains("internal_validation_receipt_norito_len"));
         let internal_installer = source
             .split_once("fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4")
             .expect("V4 internal artifact installer")
@@ -16545,6 +16729,7 @@ mod kagemusha_bridge_tests {
         manifest: iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
         policy: iroha_data_model::offline::KagemushaRecursiveSpendReleasePolicyV1,
         attestation: iroha_data_model::offline::KagemushaRecursiveSpendReleaseAttestationV4,
+        internal_validation_receipt: Vec<u8>,
         benchmark_evidence: Vec<u8>,
         cryptographic_review: Vec<u8>,
         promotion_record: iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4,
@@ -16929,6 +17114,7 @@ mod kagemusha_bridge_tests {
                 b"production gate actual recursion qualification receipt",
             ),
             qualified_candidate_sha256: [0; 32],
+            internal_validation_receipt_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -16948,6 +17134,7 @@ mod kagemusha_bridge_tests {
         let mut candidate_manifest = manifest.clone();
         candidate_manifest.qualification_receipt_sha256 = [0; 32];
         candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.internal_validation_receipt_sha256 = [0; 32];
         candidate_manifest.benchmark_evidence_sha256 = [0; 32];
         candidate_manifest.cryptographic_review_sha256 = [0; 32];
         candidate_manifest.release_attestation_sha256 = [0; 32];
@@ -16962,6 +17149,9 @@ mod kagemusha_bridge_tests {
                 candidate.sha256().expect("production candidate identity"),
                 manifest.qualification_receipt_sha256,
             );
+        let internal_validation_receipt =
+            internal_validation_receipt_bytes_v4(&candidate, &manifest);
+        manifest.internal_validation_receipt_sha256 = digest(&internal_validation_receipt);
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -17046,6 +17236,7 @@ mod kagemusha_bridge_tests {
             &manifest,
             &policy,
             &attestation,
+            &internal_validation_receipt,
             &benchmark_evidence,
             &cryptographic_review,
         )
@@ -17063,6 +17254,7 @@ mod kagemusha_bridge_tests {
             candidate_sha256: candidate.sha256().expect("candidate digest"),
             qualification_receipt_sha256: manifest.qualification_receipt_sha256,
             qualified_candidate_sha256: manifest.qualified_candidate_sha256,
+            internal_validation_receipt_sha256: manifest.internal_validation_receipt_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -17081,6 +17273,7 @@ mod kagemusha_bridge_tests {
             manifest,
             policy,
             attestation,
+            internal_validation_receipt,
             benchmark_evidence,
             cryptographic_review,
             promotion_record,
@@ -19949,6 +20142,8 @@ mod kagemusha_bridge_tests {
                     policy_bytes.len() as c_ulong,
                     attestation_bytes.as_ptr(),
                     attestation_bytes.len() as c_ulong,
+                    fixture.internal_validation_receipt.as_ptr(),
+                    fixture.internal_validation_receipt.len() as c_ulong,
                     fixture.benchmark_evidence.as_ptr(),
                     fixture.benchmark_evidence.len() as c_ulong,
                     fixture.cryptographic_review.as_ptr(),

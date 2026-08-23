@@ -1,7 +1,0 @@
-profile: Iroha3Taira
-chain_id: iroha3-taira
-block_cadence_ms: 1000
-vrf_seed: 9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3
-peers_with_pop: 7
-consensus_fingerprint: 0xd7a4259ec9f2d49973b7fa6674e3fcbe416af5dde6506149fdc9541e30a3da37
-kagami_version: 2.0.0-rc.2.0

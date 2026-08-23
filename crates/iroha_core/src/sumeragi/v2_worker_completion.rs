@@ -529,6 +529,10 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
             outbound_payload: result.outbound_payload.clone(),
         })
     }
+    /// Return the exact dedicated-queue and registry dispatch identity.
+    pub(in crate::sumeragi) fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+        self.guarded.result().dispatch_key()
+    }
     /// Retire the command owner after durable Broadcast publication and all
     /// volatile assertion-only tails, then disarm restart closure.
     pub(in crate::sumeragi) fn acknowledge_after_publication(self) {

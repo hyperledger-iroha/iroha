@@ -78,7 +78,7 @@ use iroha_data_model::{
         FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1,
         FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-        SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+        SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
@@ -88,14 +88,16 @@ use iroha_data_model::{
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
         SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
         SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHttpServiceEconomicsV1,
-        SoraInrouGuestOsV1, SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1,
-        SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1,
-        SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouManifestV1, SoraInrouRuntimeBackendV1, SoraLeaseVolumeBindingV1,
+        SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
         SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
         SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
-        SoracloudRuntimeProvenancePurposeV1, encode_soracloud_runtime_provenance_preimage_v1,
+        SoracloudRuntimeProvenancePurposeV1, encode_inrou_host_advertise_provenance_payload,
+        encode_soracloud_runtime_provenance_preimage_v1,
     },
     sorafs::pin_registry::ManifestDigest,
 };
@@ -15884,6 +15886,47 @@ fn model_host_advertise_provenance_for(
         signature: checked_signature(key_pair.private_key(), &payload),
     }
 }
+fn sample_inrou_host_capability(
+    validator_account_id: AccountId,
+    advertised_at_ms: u64,
+    heartbeat_expires_at_ms: u64,
+) -> SoraInrouHostCapabilityRecordV1 {
+    SoraInrouHostCapabilityRecordV1 {
+        schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        validator_account_id,
+        peer_id: "12D3KooWInrouCoreTestPeer".to_owned(),
+        supported_backends: std::collections::BTreeSet::from([
+            SoraInrouRuntimeBackendV1::PortableVm,
+        ]),
+        supported_guest_isas: std::collections::BTreeSet::from([SoraInrouGuestIsaV1::X8664]),
+        max_hosted_replica_capacity: 1,
+        max_cpu_millis: 1_000,
+        max_memory_bytes: 1_073_741_824,
+        max_storage_bytes: 10_737_418_240,
+        geography_tags: std::collections::BTreeSet::new(),
+        observed_latency_ms: None,
+        advertised_at_ms,
+        heartbeat_expires_at_ms,
+    }
+}
+#[test]
+fn inrou_v1_backend_selection_uses_only_portable_vm() {
+    let capability = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
+    assert_eq!(
+        select_inrou_backend_for_host(&capability),
+        Some(SoraInrouRuntimeBackendV1::PortableVm)
+    );
+}
+fn inrou_host_advertise_provenance(
+    capability: &SoraInrouHostCapabilityRecordV1,
+) -> ManifestProvenance {
+    let payload = encode_inrou_host_advertise_provenance_payload(capability)
+        .expect("Inrou host advertise payload");
+    ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+    }
+}
 fn model_host_heartbeat_provenance(
     validator_account_id: &AccountId,
     heartbeat_expires_at_ms: u64,
@@ -16028,6 +16071,57 @@ fn model_host_advertise_and_withdraw_updates_authoritative_state() -> Result<(),
             .get(&ALICE_ID)
             .is_none()
     );
+    Ok(())
+}
+#[test]
+fn model_host_advertise_rejects_zero_signed_record_fields() -> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction!(state, header, state_block, state_transaction);
+    let canonical = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+    let mut zero_schema_version = canonical.clone();
+    zero_schema_version.schema_version = 0;
+    let mut zero_advertised_at = canonical;
+    zero_advertised_at.advertised_at_ms = 0;
+
+    for (field, capability) in [
+        ("schema_version", zero_schema_version),
+        ("advertised_at_ms", zero_advertised_at),
+    ] {
+        let provenance = model_host_advertise_provenance(&capability);
+        let error = isi::AdvertiseSoracloudModelHost {
+            capability,
+            provenance,
+        }
+        .execute(&ALICE_ID, &mut state_transaction)
+        .expect_err("zero signed model-host fields must not be normalized");
+        assert_invalid_parameter_contains(error, field);
+    }
+    Ok(())
+}
+#[test]
+fn inrou_host_advertise_rejects_zero_fields_before_signature_verification()
+-> Result<(), eyre::Report> {
+    permissioned_soracloud_state!(kura, state);
+    soracloud_transaction_at!(state, header, state_block, state_transaction, 10);
+    let canonical = sample_inrou_host_capability(ALICE_ID.clone(), 10, 110);
+    let mut zero_schema_version = canonical.clone();
+    zero_schema_version.schema_version = 0;
+    let mut zero_advertised_at = canonical.clone();
+    zero_advertised_at.advertised_at_ms = 0;
+
+    for (field, capability, signed_capability) in [
+        ("schema_version", zero_schema_version, canonical.clone()),
+        ("advertised_at_ms", zero_advertised_at, canonical),
+    ] {
+        let provenance = inrou_host_advertise_provenance(&signed_capability);
+        let error = isi::AdvertiseSoracloudInrouHost {
+            capability,
+            provenance,
+        }
+        .execute(&ALICE_ID, &mut state_transaction)
+        .expect_err("zero Inrou fields must not be normalized into a signed payload");
+        assert_invalid_parameter_contains(error, field);
+    }
     Ok(())
 }
 #[test]

@@ -8,7 +8,8 @@
 //! `[P0.current, P0.prior, P1.current, P1.prior, Guard.current, Guard.prior]`.
 //! A `current` accumulator is derived only after reading that child's proof and
 //! is never copied from the child's current public instances. A `prior` lineage
-//! is the canonical 576-byte tail beginning at STATE ABI word 93.
+//! is the canonical 576-byte tail beginning at STATE ABI word 93 for STATE
+//! parents and GuardBundle ABI word 192 for the GuardBundle parent.
 //!
 //! BGH19 transcript bytes remain opaque here. Exact length and canonical input
 //! accumulator codecs are useful fail-closed framing checks, but they are not
@@ -23,6 +24,15 @@ use halo2_proofs::halo2curves::{
     pasta::{EpAffine, EqAffine},
 };
 use iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2;
+
+use super::{
+    guard_bundle_provenance::{
+        OfflineCashGuardBundleStateProvenanceSealV2, VerifiedOfflineCashGuardBundleStateHandoffV2,
+    },
+    state_semantic_parent_provenance::{
+        ProvenanceBoundStateParent0InputsV2, ProvenanceBoundStateParent1InputsV2,
+    },
+};
 
 /// Fixed recursive domain exponent under review.
 pub(super) const STATE_RECURSIVE_FOLD_K_V2: u32 = 17;
@@ -186,7 +196,7 @@ pub(super) enum StateRecursiveFoldInputRoleV2 {
     Parent1Prior = 4,
     /// GuardBundle accumulator derived after its current proof.
     GuardCurrent = 5,
-    /// GuardBundle predecessor lineage from ABI word 93.
+    /// GuardBundle predecessor lineage from GuardBundle ABI word 192.
     GuardPrior = 6,
 }
 
@@ -208,6 +218,8 @@ pub(super) enum StateRecursiveFoldInputSourceV2 {
     CurrentProofAccumulator,
     /// Decoded from the already-public 576-byte tail beginning at word 93.
     PriorLineageAtWord93,
+    /// Decoded from the GuardBundle 576-byte tail beginning at word 192.
+    GuardPriorLineageAtWord192,
 }
 
 impl StateRecursiveFoldInputRoleV2 {
@@ -218,9 +230,10 @@ impl StateRecursiveFoldInputRoleV2 {
             Self::Parent0Current | Self::Parent1Current | Self::GuardCurrent => {
                 StateRecursiveFoldInputSourceV2::CurrentProofAccumulator
             }
-            Self::Parent0Prior | Self::Parent1Prior | Self::GuardPrior => {
+            Self::Parent0Prior | Self::Parent1Prior => {
                 StateRecursiveFoldInputSourceV2::PriorLineageAtWord93
             }
+            Self::GuardPrior => StateRecursiveFoldInputSourceV2::GuardPriorLineageAtWord192,
         }
     }
 }
@@ -484,7 +497,7 @@ pub(super) struct StateRecursiveFoldInputV2 {
 }
 
 impl StateRecursiveFoldInputV2 {
-    pub(super) const fn new(
+    const fn new(
         role: StateRecursiveFoldInputRoleV2,
         accumulator: CanonicalStateAccumulatorV2,
     ) -> Self {
@@ -497,6 +510,185 @@ impl StateRecursiveFoldInputV2 {
 
     pub(super) const fn accumulator(&self) -> &CanonicalStateAccumulatorV2 {
         &self.accumulator
+    }
+}
+
+/// Borrowed view of one provenance-bound accumulator in exact fold order.
+///
+/// This view cannot outlive or detach an accumulator from the owner retaining
+/// its semantic-parent or GuardBundle provenance seal. The referenced
+/// `CanonicalStateAccumulatorV2` remains a cloneable codec-only value: cloning
+/// it conveys no proof authority and cannot recreate a provenance-bound input,
+/// whose fields and constructors remain private.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StateRecursiveFoldInputRefV2<'a> {
+    role: StateRecursiveFoldInputRoleV2,
+    accumulator: &'a CanonicalStateAccumulatorV2,
+}
+
+impl<'a> StateRecursiveFoldInputRefV2<'a> {
+    const fn new(
+        role: StateRecursiveFoldInputRoleV2,
+        accumulator: &'a CanonicalStateAccumulatorV2,
+    ) -> Self {
+        Self { role, accumulator }
+    }
+
+    pub(super) const fn role(self) -> StateRecursiveFoldInputRoleV2 {
+        self.role
+    }
+
+    pub(super) const fn accumulator(self) -> &'a CanonicalStateAccumulatorV2 {
+        self.accumulator
+    }
+}
+
+/// The only production-shaped GuardBundle input pair accepted by future STATE assembly.
+///
+/// The opaque seal keeps the complete current-helper/role-6 provenance alive
+/// beside the exact Eq and Ep `[Guard.current, Guard.prior]` inputs. Its sole
+/// constructor consumes a verified GuardBundle handoff whose production
+/// constructor is uninhabited while the recursive verifier is unavailable.
+pub(super) struct ProvenanceBoundStateGuardInputsV2 {
+    provenance_seal: OfflineCashGuardBundleStateProvenanceSealV2,
+    eq_inputs: [StateRecursiveFoldInputV2; 2],
+    ep_inputs: [StateRecursiveFoldInputV2; 2],
+}
+
+impl ProvenanceBoundStateGuardInputsV2 {
+    pub(super) const fn eq_inputs(&self) -> &[StateRecursiveFoldInputV2; 2] {
+        &self.eq_inputs
+    }
+
+    pub(super) const fn ep_inputs(&self) -> &[StateRecursiveFoldInputV2; 2] {
+        &self.ep_inputs
+    }
+
+    pub(super) const fn provenance_seal(&self) -> &OfflineCashGuardBundleStateProvenanceSealV2 {
+        &self.provenance_seal
+    }
+}
+
+/// Consume the one verified GuardBundle handoff into exact parity-local STATE inputs.
+pub(super) fn state_guard_inputs_from_verified_guard_bundle_v2(
+    handoff: VerifiedOfflineCashGuardBundleStateHandoffV2,
+) -> ProvenanceBoundStateGuardInputsV2 {
+    let (provenance_seal, eq_current, eq_prior, ep_current, ep_prior) =
+        handoff.into_state_accumulator_parts_v2().into_parts_v2();
+    ProvenanceBoundStateGuardInputsV2 {
+        provenance_seal,
+        eq_inputs: [
+            StateRecursiveFoldInputV2::new(StateRecursiveFoldInputRoleV2::GuardCurrent, eq_current),
+            StateRecursiveFoldInputV2::new(StateRecursiveFoldInputRoleV2::GuardPrior, eq_prior),
+        ],
+        ep_inputs: [
+            StateRecursiveFoldInputV2::new(StateRecursiveFoldInputRoleV2::GuardCurrent, ep_current),
+            StateRecursiveFoldInputV2::new(StateRecursiveFoldInputRoleV2::GuardPrior, ep_prior),
+        ],
+    }
+}
+
+/// Move-only owner of the exact six recursive inputs for both Pasta parities.
+///
+/// P0, P1, and GuardBundle remain position-bound and retain their opaque
+/// provenance seals. Only ordered borrowed accumulator views are exposed.
+pub(super) struct ProvenanceBoundStateSixInputSetV2 {
+    parent_0: ProvenanceBoundStateParent0InputsV2,
+    parent_1: ProvenanceBoundStateParent1InputsV2,
+    guard: ProvenanceBoundStateGuardInputsV2,
+}
+
+impl ProvenanceBoundStateSixInputSetV2 {
+    /// Borrow the position-bound P0 owner, including its opaque provenance seal.
+    pub(super) const fn parent_0(&self) -> &ProvenanceBoundStateParent0InputsV2 {
+        &self.parent_0
+    }
+
+    /// Borrow the position-bound P1 owner, including its opaque provenance seal.
+    pub(super) const fn parent_1(&self) -> &ProvenanceBoundStateParent1InputsV2 {
+        &self.parent_1
+    }
+
+    /// Borrow the GuardBundle owner, including its opaque provenance seal.
+    pub(super) const fn guard(&self) -> &ProvenanceBoundStateGuardInputsV2 {
+        &self.guard
+    }
+
+    /// Exact Eq order: P0 current/prior, P1 current/prior, Guard current/prior.
+    pub(super) fn eq_inputs(
+        &self,
+    ) -> [StateRecursiveFoldInputRefV2<'_>; STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] {
+        [
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent0Current,
+                self.parent_0.eq_current(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent0Prior,
+                self.parent_0.eq_prior(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent1Current,
+                self.parent_1.eq_current(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent1Prior,
+                self.parent_1.eq_prior(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::GuardCurrent,
+                self.guard.eq_inputs()[0].accumulator(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::GuardPrior,
+                self.guard.eq_inputs()[1].accumulator(),
+            ),
+        ]
+    }
+
+    /// Exact Ep order: P0 current/prior, P1 current/prior, Guard current/prior.
+    pub(super) fn ep_inputs(
+        &self,
+    ) -> [StateRecursiveFoldInputRefV2<'_>; STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] {
+        [
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent0Current,
+                self.parent_0.ep_current(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent0Prior,
+                self.parent_0.ep_prior(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent1Current,
+                self.parent_1.ep_current(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::Parent1Prior,
+                self.parent_1.ep_prior(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::GuardCurrent,
+                self.guard.ep_inputs()[0].accumulator(),
+            ),
+            StateRecursiveFoldInputRefV2::new(
+                StateRecursiveFoldInputRoleV2::GuardPrior,
+                self.guard.ep_inputs()[1].accumulator(),
+            ),
+        ]
+    }
+}
+
+/// Consume all three provenance-bound owners into one immutable six-input set.
+pub(super) fn assemble_provenance_bound_state_six_input_set_v2(
+    parent_0: ProvenanceBoundStateParent0InputsV2,
+    parent_1: ProvenanceBoundStateParent1InputsV2,
+    guard: ProvenanceBoundStateGuardInputsV2,
+) -> ProvenanceBoundStateSixInputSetV2 {
+    ProvenanceBoundStateSixInputSetV2 {
+        parent_0,
+        parent_1,
+        guard,
     }
 }
 

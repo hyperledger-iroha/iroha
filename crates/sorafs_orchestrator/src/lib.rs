@@ -5365,8 +5365,22 @@ fn ingest_privacy_payload(
         }
         match json::from_str::<SoranetPrivacyEventV1>(trimmed) {
             Ok(event) => {
-                aggregator.record_event(&event);
-                events_ingested = events_ingested.saturating_add(1);
+                if let Err(error) = aggregator.record_event(&event) {
+                    warn!(
+                        target: "telemetry::sorafs.privacy",
+                        provider = %alias,
+                        line = idx + 1,
+                        ?error,
+                        "rejected out-of-window privacy event"
+                    );
+                    had_error = true;
+                    metrics
+                        .soranet_privacy_poll_errors_total
+                        .with_label_values(&[alias])
+                        .inc();
+                } else {
+                    events_ingested = events_ingested.saturating_add(1);
+                }
             }
             Err(event_error) => match json::from_str::<SoranetPrivacyPrioShareV1>(trimmed) {
                 Ok(share) => {
@@ -5681,6 +5695,9 @@ fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
         multi_fetch::MultiSourceError::InvalidPlan(_) => "invalid_plan",
         multi_fetch::MultiSourceError::NoHealthyProviders { .. } => "no_healthy_providers",
         multi_fetch::MultiSourceError::NoCompatibleProviders { .. } => "no_compatible_providers",
+        multi_fetch::MultiSourceError::NoPolicyEligibleProviders { .. } => {
+            "no_policy_eligible_providers"
+        }
         multi_fetch::MultiSourceError::ExhaustedRetries { .. } => "exhausted_retries",
         multi_fetch::MultiSourceError::ObserverFailed { .. } => "observer_failed",
         multi_fetch::MultiSourceError::InternalInvariant(_) => "internal_invariant",
@@ -6105,6 +6122,15 @@ mod tests {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::Mutex as AsyncMutex;
+    #[test]
+    fn error_reason_classifies_score_policy_exclusion() {
+        let error = multi_fetch::MultiSourceError::NoPolicyEligibleProviders {
+            chunk_index: 0,
+            providers: vec![multi_fetch::ProviderId::new("denied")],
+        };
+
+        assert_eq!(error_reason(&error), "no_policy_eligible_providers");
+    }
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
@@ -9668,7 +9694,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("current time before unix epoch")
             .as_secs();
-        let bucket_start = ((now_secs.saturating_sub(180)) / bucket_secs) * bucket_secs;
+        let bucket_start = ((now_secs.saturating_sub(bucket_secs)) / bucket_secs) * bucket_secs;
         let bucket_label = bucket_start.to_string();
         let mode = SoranetPrivacyModeV1::Middle;
         let events = [
@@ -9755,7 +9781,7 @@ mod tests {
                 bucket_secs,
                 min_contributors: 1,
                 flush_delay_buckets: 1,
-                force_flush_buckets: 1,
+                force_flush_buckets: 2,
                 max_completed_buckets: 8,
                 expected_shares: 1,
                 max_share_lag_buckets: 12,
@@ -9938,7 +9964,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_prio_shares_basic() {
         test_logger();
-        let mut share_a = SoranetPrivacyPrioShareV1::new(1, 0, 60);
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time before unix epoch")
+            .as_secs();
+        let bucket_start = (now_secs / 60) * 60;
+        let mut share_a = SoranetPrivacyPrioShareV1::new(1, bucket_start, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
         share_a.handshake_pow_reject_share = 1;
@@ -9948,7 +9979,7 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-        let mut share_b = SoranetPrivacyPrioShareV1::new(2, 0, 60);
+        let mut share_b = SoranetPrivacyPrioShareV1::new(2, bucket_start, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
         share_b.handshake_pow_reject_share = 2;
@@ -10013,7 +10044,7 @@ mod tests {
         );
         let accepted = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&["entry", "0", "accepted"])
+            .with_label_values(&["entry", &bucket_start.to_string(), "accepted"])
             .get();
         assert_eq!(accepted, 15);
         let poll_errors = metrics
@@ -10027,7 +10058,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_prio_shares() {
         test_logger();
-        let mut share_a = SoranetPrivacyPrioShareV1::new(1, 0, 60);
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time before unix epoch")
+            .as_secs();
+        let bucket_start = (now_secs / 60) * 60;
+        let mut share_a = SoranetPrivacyPrioShareV1::new(1, bucket_start, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
         share_a.handshake_pow_reject_share = 1;
@@ -10037,7 +10073,7 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-        let mut share_b = SoranetPrivacyPrioShareV1::new(2, 0, 60);
+        let mut share_b = SoranetPrivacyPrioShareV1::new(2, bucket_start, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
         share_b.handshake_pow_reject_share = 2;

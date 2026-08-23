@@ -14,9 +14,11 @@ cargo run -p soranet-handshake-harness -- fixtures --verify --out tests/interop/
 - `summary` — render TLV summaries from hex input.
 - `salt` — produce a `SaltAnnouncementV1` JSON payload from CLI arguments.
 - `telemetry` — emit a `SoraNetTelemetryV1` JSON payload. Use `--signature` /
-  `--witness-signature` to supply precomputed values or `--relay-static-sk-hex`
-  to derive deterministic Dilithium3 + Ed25519 signatures from a 32-byte static
-  key.
+  `--witness-signature` to supply precomputed values or
+  `--relay-static-sk-file <path>` to derive deterministic Dilithium3 + Ed25519
+  signatures from a 32-byte static key. Secret files must be owner-private,
+  direct files with one link; use `-` to read one bounded secret from standard
+  input.
 - `salt-verify` — validate an existing salt fixture (`--vector <path>`), ensuring
   timestamp ordering, epoch continuity, salt length, and reporting whether a signature is present.
 - `fixtures` — generate or verify the canonical capability, telemetry, and salt fixtures.
@@ -34,8 +36,8 @@ Example:
 cargo run -p soranet-handshake-harness -- simulate \
   --client-hex 0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe \
   --relay-hex 0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678 \
-  --client-static-sk-hex 2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a \
-  --relay-static-sk-hex d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de \
+  --client-static-sk-file /secure/path/client-static-sk.hex \
+  --relay-static-sk-file /secure/path/relay-static-sk.hex \
   --descriptor-commit-hex 76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f \
   --client-nonce-hex 2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a \
   --relay-nonce-hex d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de \
@@ -53,3 +55,6 @@ Use `--show-steps` to print the padded Noise XX handshake frames alongside
 the textual summary.
 Use `--only-capability <type>` (repeatable, accepts hex like `0x0101` or
 decimal) to focus warnings and JSON output on specific capability IDs.
+The `kem-validate` command likewise accepts secret material only through
+`--secret-file <path>` (or `-` for bounded standard input); public keys and
+ciphertexts may remain inline.

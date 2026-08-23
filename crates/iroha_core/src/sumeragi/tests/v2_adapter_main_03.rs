@@ -1165,7 +1165,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             runtime,
             body_store,
             super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
-            None,
             context.clone(),
             requester,
             Some(local),

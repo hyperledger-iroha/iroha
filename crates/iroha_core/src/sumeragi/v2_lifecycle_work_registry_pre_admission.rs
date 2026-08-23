@@ -247,6 +247,12 @@ enum BoundAdapterReplayOriginV1 {
     InvalidBodyReport(LifecycleReplayAuthorityV1),
     /// A complete signed Broadcast or authenticated equivocation report.
     DirectSigned(LifecycleReplayAuthorityV1),
+    /// A certificate-backed Fetch joined to its authenticated response family.
+    CertifiedFetch {
+        authority: LifecycleReplayAuthorityV1,
+        response_manifest: wire::PayloadManifest,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    },
 }
 impl BoundAdapterReplayOriginV1 {
     const fn authority(&self) -> &LifecycleReplayAuthorityV1 {
@@ -254,6 +260,7 @@ impl BoundAdapterReplayOriginV1 {
             Self::LiveWal(authority)
             | Self::InvalidBodyReport(authority)
             | Self::DirectSigned(authority) => authority,
+            Self::CertifiedFetch { authority, .. } => authority,
         }
     }
     fn exactly_matches_bound_effect(
@@ -270,6 +277,19 @@ impl BoundAdapterReplayOriginV1 {
                         && exact_direct_signed_admission_authority(effect, pending).as_ref()
                             == Some(authority)
                 }
+                Self::CertifiedFetch {
+                    authority,
+                    response_manifest,
+                    ..
+                } => {
+                    exact_pending_certified_fetch_admission_authority(
+                        effect,
+                        pending,
+                        response_manifest,
+                    )
+                    .as_ref()
+                        == Some(authority)
+                }
             }
     }
 }
@@ -284,6 +304,14 @@ pub(super) struct BoundAdapterEffectV1 {
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
     replay_origin: BoundAdapterReplayOriginV1,
+}
+
+/// Certificate-backed ingress Fetch kept outside the five adapter-origin owners.
+#[derive(Debug)]
+#[must_use = "a prepared certified Fetch must be admitted or returned intact"]
+pub(in crate::sumeragi) struct PreparedCertifiedFetchAdmissionV1 {
+    bound: BoundAdapterEffectV1,
+    candidate: CandidateAdmission,
 }
 
 /// Origin-specific companion retained beside one live-WAL admission.
@@ -458,6 +486,56 @@ impl BoundAdapterEffectV1 {
         }
         Ok(bound)
     }
+    /// Bind one pending certified Fetch to the manifest authenticated by its response.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn bind_certified_fetch(
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        response_manifest: wire::PayloadManifest,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<
+        Self,
+        (
+            AdapterEffect,
+            PendingRuntimeEffectBinding,
+            wire::PayloadManifest,
+            HashOf<wire::CertifiedBodyRequest>,
+        ),
+    > {
+        let Some(authority) = exact_pending_certified_fetch_admission_authority(
+            &effect,
+            &pending,
+            &response_manifest,
+        ) else {
+            return Err((effect, pending, response_manifest, request_hash));
+        };
+        let bound = Self {
+            effect,
+            pending,
+            replay_origin: BoundAdapterReplayOriginV1::CertifiedFetch {
+                authority,
+                response_manifest,
+                request_hash,
+            },
+        };
+        if !bound.validates() {
+            let Self {
+                effect,
+                pending,
+                replay_origin,
+            } = bound;
+            let BoundAdapterReplayOriginV1::CertifiedFetch {
+                response_manifest,
+                request_hash,
+                ..
+            } = replay_origin
+            else {
+                unreachable!("certified-Fetch bind retained another replay origin")
+            };
+            return Err((effect, pending, response_manifest, request_hash));
+        }
+        Ok(bound)
+    }
     /// Bind one report only while the canonical rejected-Validate replay seal
     /// supplies the private one-shot permit and exact authority.
     #[allow(clippy::result_large_err)]
@@ -511,12 +589,23 @@ impl BoundAdapterEffectV1 {
             &self.effect,
             &self.pending,
         )?;
+        let initial_state = match &self.replay_origin {
+            BoundAdapterReplayOriginV1::CertifiedFetch { request_hash, .. } => {
+                InitialLifecycleState::Waiting(WaitToken::new(
+                    projection::certified_fetch_wait_source(*request_hash),
+                    0,
+                ))
+            }
+            BoundAdapterReplayOriginV1::LiveWal(_)
+            | BoundAdapterReplayOriginV1::InvalidBodyReport(_)
+            | BoundAdapterReplayOriginV1::DirectSigned(_) => projected.initial_state,
+        };
         let candidate = CandidateAdmission::new(
             projected.key,
             projected.causal_root,
             projected.work_class,
             projected.stage,
-            projected.initial_state,
+            initial_state,
             projected.reconstruction_source,
             DurablePayloadReference::None,
             self.replay_origin.authority().clone(),
@@ -633,6 +722,74 @@ impl fmt::Debug for PreparedLifecycleAdmissionOwnerV1 {
         })
     }
 }
+
+impl PreparedCertifiedFetchAdmissionV1 {
+    /// Prepare one certificate-backed Fetch directly in its external Waiting state.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare(
+        active_context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        response_manifest: wire::PayloadManifest,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<Self, AdapterEffectAdmissionError> {
+        let AdapterEffect::FetchBody {
+            certificate: Some(certificate),
+            ..
+        } = &effect
+        else {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        };
+        if verified.verify_quorum_certificate(certificate).is_err() {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let bound = BoundAdapterEffectV1::bind_certified_fetch(
+            effect,
+            pending,
+            response_manifest,
+            request_hash,
+        )
+        .map_err(|_| AdapterEffectAdmissionError::UnboundEffect)?;
+        let candidate = bound.project_candidate(active_context, verified)?;
+        let prepared = Self { bound, candidate };
+        prepared
+            .validates(active_context)
+            .then_some(prepared)
+            .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+
+    /// Borrow the exact derived Waiting Fetch candidate.
+    pub(super) const fn candidate(&self) -> &CandidateAdmission {
+        &self.candidate
+    }
+
+    /// Recheck the certificate response owner and its derived candidate.
+    pub(super) fn validates(&self, active_context: LifecycleContext) -> bool {
+        matches!(
+            &self.bound.replay_origin,
+            BoundAdapterReplayOriginV1::CertifiedFetch { .. }
+        ) && self
+            .bound
+            .exactly_authorizes_candidate(active_context, &self.candidate)
+    }
+
+    /// Consume the ingress owner into the adjacent registry transaction.
+    pub(super) fn into_bound(self) -> BoundAdapterEffectV1 {
+        self.bound
+    }
+
+    /// Restore the exact ingress owner after a reversible registry failure.
+    pub(super) fn from_returned_bound(
+        active_context: LifecycleContext,
+        candidate: CandidateAdmission,
+        bound: BoundAdapterEffectV1,
+    ) -> Option<Self> {
+        let prepared = Self { bound, candidate };
+        prepared.validates(active_context).then_some(prepared)
+    }
+}
+
 /// Ownership-preserving failure before a prepared admission exists.
 #[derive(Debug)]
 pub(super) enum PreparedLifecycleAdmissionErrorV1 {
@@ -712,6 +869,12 @@ impl PreparedLifecycleAdmissionV1 {
         candidate: CandidateAdmission,
         bound: BoundAdapterEffectV1,
     ) -> Option<Self> {
+        if matches!(
+            &bound.replay_origin,
+            BoundAdapterReplayOriginV1::CertifiedFetch { .. }
+        ) {
+            return None;
+        }
         let owner = match &bound.replay_origin {
             BoundAdapterReplayOriginV1::LiveWal(_) => PreparedLifecycleAdmissionOwnerV1::LiveWal(
                 PreparedLiveWalAdmissionV1::bound_only(bound),
@@ -722,6 +885,7 @@ impl PreparedLifecycleAdmissionV1 {
             BoundAdapterReplayOriginV1::DirectSigned(_) => {
                 PreparedLifecycleAdmissionOwnerV1::DirectSigned(bound)
             }
+            BoundAdapterReplayOriginV1::CertifiedFetch { .. } => unreachable!(),
         };
         let prepared = Self { owner, candidate };
         prepared.validates(active_context).then_some(prepared)
@@ -1791,6 +1955,7 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
         self,
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<
         PreparedRemoteProposalValidateReplayPreAdmission,
         RemoteProposalValidateReplayPreAdmissionError,
@@ -1813,6 +1978,7 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
             &durable_receipt,
             &effect,
             &pending,
+            authority_certificate,
         ) {
             Ok(replay_evidence) => {
                 let validate = PreparedRemoteProposalValidateReplayPreAdmission {
@@ -1843,10 +2009,7 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
         self,
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
-        decision_round: wire::ConsensusRound,
-        proposal_round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        execution_commitment: wire::ExecutionCommitment,
+        decision_certificate: &wire::QuorumCertificate,
     ) -> Result<
         PreparedRemoteProposalValidateReplayPreAdmission,
         RemoteProposalValidateReplayPreAdmissionError,
@@ -1859,10 +2022,10 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
             });
         };
         if !ownership.binds_durable_decision_authority(
-            decision_round,
-            proposal_round,
-            subject,
-            execution_commitment,
+            decision_certificate.round,
+            decision_certificate.proposal_round,
+            decision_certificate.subject,
+            decision_certificate.execution_commitment,
         ) {
             return Err(RemoteProposalValidateReplayPreAdmissionError {
                 _stored: self,
@@ -1881,6 +2044,7 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
             &durable_receipt,
             &effect,
             &pending,
+            decision_certificate,
         ) {
             Ok(replay_evidence) => {
                 let validate = PreparedRemoteProposalValidateReplayPreAdmission {
@@ -1924,7 +2088,10 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
             &self.effect,
             &self.pending,
             &self.durable_receipt,
-            candidate.replay_authority.is_remote_proposal_origin(),
+            self.replay_evidence.exactly_authorizes_admission_authority(
+                active_context,
+                &candidate.replay_authority,
+            ),
             active_context,
             candidate,
         )

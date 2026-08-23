@@ -1,3 +1,19 @@
+impl ReplayEventTagV1 {
+    /// Match a Decision-owned round without imposing reducer-view ordering.
+    ///
+    /// A valid CommitQC may decide a future view before the local reducer has
+    /// installed that view. The complete tag, including its generation, still
+    /// remains part of the sealed WAL owner; only its view is not an ordering
+    /// predicate for the authenticated Decision continuation.
+    fn matches_decision_round(
+        self,
+        context: LifecycleContext,
+        round: wire::ConsensusRound,
+    ) -> bool {
+        round_matches_context(context, round) && self.height == context.height()
+    }
+}
+
 /// Non-decodable live authority for one exact fsynced WAL continuation.
 ///
 /// Payload-free stages retain their complete canonical V1 envelope. `Apply`

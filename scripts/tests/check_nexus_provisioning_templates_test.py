@@ -83,9 +83,9 @@ def test_client_and_validator_identity_drift_fails(tmp_path: pathlib.Path) -> No
         guard.validate_repository(tmp_path)
 
 
-def test_checked_in_profile_inline_secret_fails(tmp_path: pathlib.Path) -> None:
+def test_checked_in_generated_profile_inline_secret_fails(tmp_path: pathlib.Path) -> None:
     _write_repository(tmp_path)
-    target = tmp_path / guard.TAIRA_PROFILE_TEMPLATES[-1]
+    target = tmp_path / guard.GENERATED_SERVER_TEMPLATES[-1]
     target.write_text(_server("private_key"), encoding="utf-8")
     with pytest.raises(guard.ProvisioningTemplateError, match="forbidden runtime secret"):
         guard.validate_repository(tmp_path)
@@ -105,16 +105,6 @@ private_key = "runtime-secret"
         encoding="utf-8",
     )
     with pytest.raises(guard.ProvisioningTemplateError, match="kagemusha_commands"):
-        guard.validate_repository(tmp_path)
-
-
-def test_taira_peer_identity_drift_fails(tmp_path: pathlib.Path) -> None:
-    _write_repository(tmp_path)
-    target = tmp_path / guard.TAIRA_PROFILE_TEMPLATES[-1]
-    target.write_text(
-        _server().replace(HASH_IDENTITY, OTHER_HASH_IDENTITY), encoding="utf-8"
-    )
-    with pytest.raises(guard.ProvisioningTemplateError, match="Taira peer configs"):
         guard.validate_repository(tmp_path)
 
 

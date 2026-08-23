@@ -112,6 +112,7 @@ fn live_local_proposal_sign_enters_lifecycle_before_generic_sign_or_broadcast() 
             &fixture.manifest,
             validated,
             command_identity,
+            validate_ownership.owner().lifecycle_ordinal(),
         )
         .unwrap_or_else(|_| panic!("complete exact LocalProposalReady replay"));
     let sign_ownership = validate_ownership
@@ -903,6 +904,68 @@ fn proposal_reconstruction_rejection_retries_and_preserves_hybrid_owner() {
     assert_eq!(executor.outstanding_requests.len(), 1);
     assert!(!executor.status().fail_closed);
 }
+
+#[test]
+fn certificate_only_fetch_rejects_chunks_and_retains_typed_response_path() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare),
+            }],
+            &mut services,
+        )
+        .expect("start certificate-only fetch with manifest authority");
+    let task = services.fetch_tasks[0].clone();
+    let work_id = task.id();
+    let request_hash = HashOf::new(
+        task.certified_request()
+            .expect("certificate-only fetch owns one response request"),
+    );
+    let ownership_before = executor.body_ownership_projection();
+
+    assert_eq!(
+        executor.accept_payload_chunk(
+            work_id,
+            signed_payload_chunk(&fixture),
+            &fixture.context.roster[0].validator,
+            &mut services,
+        ),
+        Err(EffectTransportError::WrongFetchKind),
+        "chunks without Proposal replay cannot manufacture certified lifecycle authority",
+    );
+    assert!(services.chunks.is_empty());
+    assert_eq!(executor.body_ownership_projection(), ownership_before);
+    assert_eq!(executor.certified_work.get(&request_hash), Some(&work_id));
+    assert!(executor.outstanding_requests.contains(request_hash));
+
+    let response = signed_certified_response(
+        &fixture,
+        &task,
+        fixture.manifest.clone(),
+        fixture.body.clone(),
+        0,
+    );
+    let responder = fixture.context.roster[0].validator.clone();
+    assert!(matches!(
+        executor
+            .probe_certified_response_priority(&response, &responder)
+            .expect("the untouched request still accepts its typed response"),
+        CertifiedResponsePriorityProbe::PreflightRequired(candidate)
+            if candidate.work_id() == work_id
+                && candidate.request_hash() == request_hash
+    ));
+    assert!(!executor.status().fail_closed);
+}
+
 #[test]
 fn certified_body_response_carrier_swap_is_rejected_before_fetch_mutation() {
     let fixture = Fixture::new();
@@ -2028,6 +2091,19 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     assert_eq!(planner_io.queued_certified_fetch_count(), 1);
     assert!(!fixture.executor.output_guard.restart_required());
     let queue_depth_before_completion = ingress.len();
+    let selected_strong_count_before_worker = ingress
+        .state
+        .lock()
+        .lanes
+        .values()
+        .flat_map(|lane| lane.entries.iter())
+        .find(|entry| entry.admission_ordinal == first_ordinal)
+        .map(|entry| Arc::strong_count(&entry.inbound))
+        .expect("the selected response remains queued before worker execution");
+    assert_eq!(
+        selected_strong_count_before_worker, 1,
+        "all selector probes must release the selected response before worker execution",
+    );
     planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
     let completion = match production_services
         .take_next_lifecycle_completion()
@@ -2090,6 +2166,22 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
             .expect("the completion FIFO remains valid after exact acknowledgement"),
         crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
     ));
+    let body_key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = fixture
+        .executor
+        .durable_bodies
+        .get(&body_key)
+        .expect("Phase B joins the durable receipt into the executor catalog");
+    assert_eq!(durable.manifest_hash(), HashOf::new(&fixture.manifest));
+    assert!(
+        fixture
+            .executor
+            .recovered_bodies
+            .get(&body_key)
+            .is_some_and(
+                |(manifest, recovered)| manifest == &fixture.manifest && recovered == durable
+            )
+    );
     assert!(!fixture.executor.output_guard.restart_required());
     assert_eq!(
         queued_leader_wire_ingress_token(&ingress, &ingress_gate, second_ordinal),

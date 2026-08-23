@@ -1711,19 +1711,12 @@ fn stark_air_composition_value(
     }
     let expected = stark_air_row(index, public_digest)?;
     let expected_next = stark_air_row((index + 1) % domain_size, public_digest)?;
-    let mut acc = Fq::zero();
-    let mut coeff = Fq::from_canonical_u64(3)?;
-    for (actual, expected) in row.iter().zip(expected.iter()) {
-        let residue = Fq::from_canonical_u64(*actual)?.sub(Fq::from_canonical_u64(*expected)?);
-        acc = acc.add(coeff.mul(residue));
-        coeff = coeff.add(Fq::from_canonical_u64(2)?);
+    // Check each transcript-sampled row and its neighbour against the verifier-owned binding AIR.
+    // This is a sampled proximity check; it does not assert equality of every committed trace row.
+    if row != expected.as_slice() || next_row != expected_next.as_slice() {
+        return None;
     }
-    for (actual, expected) in next_row.iter().zip(expected_next.iter()) {
-        let residue = Fq::from_canonical_u64(*actual)?.sub(Fq::from_canonical_u64(*expected)?);
-        acc = acc.add(coeff.mul(residue));
-        coeff = coeff.add(Fq::from_canonical_u64(2)?);
-    }
-    Some(acc)
+    Some(Fq::zero())
 }
 fn stark_air_composition_value_for_context(
     context: StarkAirVerificationContext<'_>,

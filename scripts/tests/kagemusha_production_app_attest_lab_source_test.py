@@ -607,6 +607,85 @@ class ProductionAppAttestLabSourceTest(unittest.TestCase):
             self.assertIsNone(platform)
             self.assertIsNone(summary)
 
+    def test_malformed_policy_list_returns_diagnostics_without_type_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            request_path = root / "request.json"
+            capture_path = root / "capture.json"
+            policy_path = root / "policy.json"
+            apple_root = (ROOT / "certs/apple_app_attestation_root.der").read_bytes()
+            request = {
+                "schema": capture_evidence.REQUEST_SCHEMA,
+                "version": 1,
+                "attestation_client_data_base64": base64.b64encode(b"{}\n").decode(
+                    "ascii"
+                ),
+                "assertion_client_data_template": {},
+            }
+            capture = {
+                "schema": capture_evidence.CAPTURE_SCHEMA,
+                "version": 1,
+                "status": "captured",
+                "app_attest_supported": True,
+                "requested_environment": "production",
+                "started_at_unix_ms": 1,
+                "captured_at_unix_ms": 2,
+                "bundle_id": "org.example.app",
+                "bundle_version": "1",
+                "key_id": base64.b64encode(b"k" * 32).decode("ascii"),
+                "attestation_client_data_base64": base64.b64encode(b"{}\n").decode(
+                    "ascii"
+                ),
+                "attestation_object_base64": base64.b64encode(b"invalid").decode(
+                    "ascii"
+                ),
+                "assertion_client_data_base64": base64.b64encode(b"{}\n").decode(
+                    "ascii"
+                ),
+                "assertion_object_base64": base64.b64encode(b"invalid").decode(
+                    "ascii"
+                ),
+            }
+            policy = {
+                "schema": production_evidence.PRODUCTION_POLICY_SCHEMA,
+                "version": 1,
+                "policy_id": "malformed-list-v1",
+                "app_id_prefix": "A1B2C3D4E5",
+                "bundle_id": "org.example.app",
+                "environment": "production",
+                "allowed_validation_categories": [4],
+                "allowed_bundle_versions": 1,
+                "trusted_app_attest_roots": [
+                    {
+                        "der_base64": base64.b64encode(apple_root).decode("ascii"),
+                        "sha256": hashlib.sha256(apple_root).hexdigest(),
+                    }
+                ],
+                "revoked_certificate_tbs_sha256": [],
+                "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
+                "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
+            }
+            for path, value in (
+                (request_path, request),
+                (capture_path, capture),
+                (policy_path, policy),
+            ):
+                candidate_evidence.write_private_json(path, value)
+
+            errors, platform, summary = capture_evidence.validate_capture(
+                capture_path,
+                request_path,
+                policy_path,
+                candidate_evidence,
+                production_evidence,
+            )
+
+            self.assertTrue(
+                any("allowed_bundle_versions" in error for error in errors), errors
+            )
+            self.assertIsNone(platform)
+            self.assertIsNone(summary)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1377,8 +1377,8 @@ self.io.is_some()
                 launch_path,
                 launch_source,
                 "borrow-bound activated lifecycle owner",
-                "impl ActivatedProductionLifecycleV1",
-                "impl ProductionLifecycleOwnerV1",
+                "fn with_runner_runtime<R>(",
+                "impl FinalizedProductionLifecycleRolloverV1",
             )
             require_tokens(
                 launch_path,
@@ -3196,6 +3196,89 @@ self.io.is_some()
                     "PreparedRecoveredLifecycleSignCarrier::NextWalVote(sign)",
                 ),
             )
+            single_broadcast_prepare = region(
+                registry_path,
+                registry_source,
+                "shared-ordinal recovered Sign-to-Broadcast preparation",
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_successor",
+                "/// Seal the exact Broadcast-and-next-WAL-Sign pair",
+            )
+            reject_tokens(
+                registry_path,
+                "shared-ordinal recovered Sign-to-Broadcast preparation",
+                single_broadcast_prepare,
+                ("coordinator.high_water", ".checked_add(1)", "broadcast_address"),
+            )
+            single_broadcast_bind = region(
+                registry_path,
+                registry_source,
+                "staged recovered Broadcast registry binding",
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>",
+                "impl<'adapter> BoundRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>",
+            )
+            require_order(
+                registry_path,
+                "staged recovered Broadcast registry binding",
+                single_broadcast_bind,
+                (
+                    "coordinator.records.get(&child_ordinal)",
+                    "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
+                    "self.registry.entries.contains_key(&broadcast_address)",
+                    ".validates_at(&self.verified, broadcast_address, child_digest)",
+                ),
+            )
+            single_broadcast_transition = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "staged recovered Sign-to-Broadcast transition",
+                "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition",
+                "/// Stage the exact two-child result",
+            )
+            require_order(
+                body_pipeline_path,
+                "staged recovered Sign-to-Broadcast transition",
+                single_broadcast_transition,
+                (
+                    "stage_recovered_lifecycle_sign_broadcast_transition(",
+                    ".bind_staged_child(",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "staged recovered Sign-to-Broadcast transition",
+                single_broadcast_transition,
+                ("transition.child_ordinal",),
+            )
+            fresh_serve_preflight = region(
+                registry_path,
+                registry_source,
+                "shared-ordinal fresh Certified-Serve preflight",
+                "pub(super) fn preflights_fresh_registry(",
+                "fn exactly_matches_fresh_staged_append(",
+            )
+            reject_tokens(
+                registry_path,
+                "shared-ordinal fresh Certified-Serve preflight",
+                fresh_serve_preflight,
+                ("current.high_water.checked_add(2)",),
+            )
+            fresh_serve_pair = region(
+                registry_path,
+                registry_source,
+                "adjacent fresh Certified-Serve pair after a shared gap",
+                "fn exactly_matches_fresh_staged_append(",
+                "\n}\nfn recovered_serve_pairs_preflight(",
+            )
+            require_tokens(
+                registry_path,
+                "adjacent fresh Certified-Serve pair after a shared gap",
+                fresh_serve_pair,
+                (
+                    "current.high_water >= serve",
+                    "serve.checked_add(1) != Some(producer)",
+                    "producer != staged.high_water",
+                ),
+            )
             recovered_sign_settlement = region(
                 launch_path,
                 launch_source,
@@ -4037,7 +4120,7 @@ self.io.is_some()
                 selector_source,
                 "queue-owned recovered Decision Fetch selector",
                 "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Classify every exact pre-cut fair-ingress occurrence without mutation.",
+                "/// Decide whether an already selected exact cut is the recovered Fetch owner.",
             )
             require_order(
                 selector_path,
@@ -4261,6 +4344,59 @@ self.io.is_some()
                     "fn acknowledge(",
                     "fn settle(",
                 ),
+            )
+            single_store_prepare = region(
+                registry_path,
+                registry_source,
+                "shared-ordinal recovered Fetch-to-Store preparation",
+                "pub(super) fn prepare_recovered_decision_fetch_store_successor",
+                "impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>",
+            )
+            reject_tokens(
+                registry_path,
+                "shared-ordinal recovered Fetch-to-Store preparation",
+                single_store_prepare,
+                ("coordinator.high_water", ".checked_add(1)", "store_address"),
+            )
+            single_store_bind = region(
+                registry_path,
+                registry_source,
+                "staged recovered Store registry binding",
+                "impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>",
+                "impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor<'_, 'adapter>",
+            )
+            require_order(
+                registry_path,
+                "staged recovered Store registry binding",
+                single_store_bind,
+                (
+                    "coordinator.records.get(&child_ordinal)",
+                    "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
+                    "self.registry.entries.contains_key(&store_address)",
+                    ".validates_at(coordinator.active_context, store_address, child_digest)",
+                ),
+            )
+            single_store_transition = region(
+                body_pipeline_path,
+                body_pipeline_source,
+                "staged recovered Fetch-to-Store transition",
+                "pub(super) fn prepare_recovered_decision_fetch_store_transition",
+                "/// Stage one recovered Sign",
+            )
+            require_order(
+                body_pipeline_path,
+                "staged recovered Fetch-to-Store transition",
+                single_store_transition,
+                (
+                    "stage_recovered_decision_fetch_store_transition(",
+                    ".bind_staged_child(",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "staged recovered Fetch-to-Store transition",
+                single_store_transition,
+                ("transition.child_ordinal",),
             )
             recovered_fetch_settlement = region(
                 launch_path,
@@ -4811,279 +4947,29 @@ self.io.is_some()
                     "ProductionLifecycleFinalizationOutcomeV1 {",
                 ),
             )
-            finalization_publication = region(
+            _successor_production_recovery_finalization_tail(
                 ledger_path,
                 ledger_source,
-                "opaque all-row finalization publication",
-                "fn persist_exact_finalization_successor(",
-                "#[cfg(test)]",
-            )
-            require_order(
-                ledger_path,
-                "opaque all-row finalization publication",
-                finalization_publication,
-                (
-                    "self,",
-                    "StagedFinalizationRetirementV1 { current, retired }",
-                    "LifecycleLedgerV1::from_coordinator(&self)? != current",
-                    "store.persist_exact_successor(&current, &retired)?",
-                    "store.load()? != retired",
-                    "coordinator: self",
-                ),
-            )
-            require_tokens(
-                ledger_path,
-                "opaque all-row finalization ownership",
-                ledger_source,
-                (
-                    "struct StagedFinalizationRetirementV1 { current: LifecycleLedgerV1, retired: LifecycleLedgerV1, }",
-                    "struct PublishedFinalizationRetirementV1 { coordinator: LifecycleCoordinator, current: LifecycleLedgerV1, retired: LifecycleLedgerV1, retained_floor: PublishedFinalizedLifecycleRetainedFloorV1, }",
-                    "fn consume_owners( self, mut registry: LifecycleWorkRegistryHolder, )",
-                    "registry.registry_mut().exactly_covers_finalization_work(&self.coordinator)",
-                    "let retained_floor = self.retained_floor",
-                    "drop(self.coordinator)",
-                    "retained_floor",
-                ),
-            )
-            reject_tokens(
-                ledger_path,
-                "opaque all-row finalization ownership",
-                ledger_source,
-                (
-                    "impl Clone for StagedFinalizationRetirementV1",
-                    "impl Copy for StagedFinalizationRetirementV1",
-                    "impl Clone for PublishedFinalizationRetirementV1",
-                    "impl Copy for PublishedFinalizationRetirementV1",
-                    "pub coordinator: LifecycleCoordinator",
-                    "pub current: LifecycleLedgerV1",
-                    "pub retired: LifecycleLedgerV1",
-                ),
-            )
-            require_tokens(
                 lifecycle_startup_test_path,
-                "production lifecycle all-row finalization behavior",
                 lifecycle_startup_test_source,
-                (
-                    "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
-                    ".retire_lifecycle_stores_for_test(finality_receipt)",
-                    "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
-                    "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
-                    "let placeholder_cadence = exact_state.sumeragi_block_cadence()",
-                    "placeholder_cadence.checked_add(Duration::from_millis(1))",
-                    "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
-                    "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    "lifecycle_run_inner::finalize_lifecycle_height(",
-                    "assert_eq!(receipt.context_id(), recovered_context.id())",
-                    "assert_eq!(artifact.subject, subject)",
-                    ".retain_merge_sidecars_for_global_view(",
-                    "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
-                    "drop(retained_sidecars)",
-                    "outcome.cleanup().warnings().is_empty()",
-                ),
-            )
-            finalization_registry = region(
                 registry_validate_path,
                 registry_validate_source,
-                "finalization-only recovered registry census",
-                "fn exactly_covers_finalization_work(",
-                "fn exactly_covers_ready_work_with_extra(",
-            )
-            require_tokens(
-                registry_validate_path,
-                "finalization-only recovered registry census",
-                finalization_registry,
-                (
-                    "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
-                    "DurableRecoveredLifecycleSignedBroadcast(_)",
-                    ".collect::<std::collections::BTreeSet<_>>()",
-                    "self.exact_recovered_wal_registry_slot()",
-                    "RecoveredWalRegistrySlotV1::None",
-                    "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, &refanned_broadcasts, )",
-                ),
-            )
-            finalization_pair_link = region(
-                registry_validate_path,
-                registry_validate_source,
-                "finalization recovered Broadcast pair link",
-                "fn exact_optional_recovered_wal_authority(",
-                "/// Install one work value without overwriting an incumbent address.",
-            )
-            require_tokens(
-                registry_validate_path,
-                "finalization recovered Broadcast pair link",
-                finalization_pair_link,
-                (
-                    "broadcast.is_unpaired()",
-                    "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
-                    "refanned_broadcasts.iter().all(|ordinal|",
-                    "LifecycleLedgerV1::from_coordinator(coordinator)",
-                    "!matches!(record.state, super::LifecycleState::Waiting(_))",
-                    "broadcast.validates_in_ledger(exact_ledger)",
-                    "broadcast.paired_next_sign_matches_terminal_record( coordinator, exact_ledger, )",
-                    "broadcast.matches_current_finalization_record(",
-                    "!refanned_broadcasts.contains(&record.ordinal)",
-                ),
-            )
-            terminal_pair_link = region(
                 registry_path,
                 registry_source,
-                "retained recovered Broadcast terminal next-Sign link",
-                "fn paired_next_sign_matches_terminal_record(",
-                "fn validates_at(",
-            )
-            require_tokens(
-                registry_path,
-                "retained recovered Broadcast terminal next-Sign link",
-                terminal_pair_link,
-                (
-                    "LifecycleState::Terminal(outcome)",
-                    "exact_single_record_slot(",
-                    "LifecycleWorkClass::SignVote.capacity_class()",
-                    "ConcreteWorkAddress::new(next_record.owner, next_record.ordinal, next_slot) == Some(next_address)",
-                    "installed_digest == next_digest",
-                    "coordinator.key_index.get(&next_record.key) == Some(&next_address.ordinal)",
-                    "coordinator.owner_index.get(&next_record.owner.causal_root()) == Some(&next_record.owner)",
-                    "!coordinator.ready_index.contains(&next_address.ordinal)",
-                    "durable_next.terminal() == Some(Some(outcome))",
-                    "continuation.matches_record( LifecycleWorkClass::SignVote, Some(outcome), next_address.ordinal, ledger.high_water(), )",
-                ),
-            )
-            require_tokens(
                 wal_recovery_path,
-                "volatile refanned Broadcast finalization state",
                 wal_recovery_source,
-                (
-                    "fn matches_current_finalization_record(",
-                    "WaitSource::Recovery(digest)",
-                    "coordinator.observed_generation.get(&expected_source) == Some(&wait.observed_generation())",
-                    "!coordinator.ready_index.contains(&address.ordinal)",
-                ),
-            )
-            require_literals(
                 scheduler_path,
-                "volatile refanned Broadcast finalization behavior",
                 scheduler_source,
-                (
-                    '"finalization accepts the exact volatile refanout wait after its next Sign retires"',
-                    '"all exact post-output waits form one bounded finalization census"',
-                    '"finalization rejects a corrupted retained digest after paired Sign retirement"',
-                    '"finalization must reject the corrupted exact next-Sign link"',
-                ),
+                region,
+                require_order,
+                require_tokens,
+                reject_tokens,
+                require_literals,
             )
-            require_tokens(
-                scheduler_path,
-                "volatile refanned Broadcast finalization behavior",
-                scheduler_source,
-                (
-                    "fn recovered_broadcast_refanout_ranks_exact_pair_before_unrelated_ready_sign()",
-                    "fn finalization_waits_for_every_authenticated_recovered_broadcast_refanout()",
-                    "finalization_registry_census_is_exact_for_test()",
-                ),
-            )
-        snapshot_authority = region(
+        _check_successor_snapshot_authority(
             recovery_path,
             recovery_source,
-            "SnapshotSuccessorActivationAuthority::new",
-            "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
-            "\n    /// Imported snapshot height which anchors the first executable context.",
-        )
-        require_tokens(
-            recovery_path,
-            "SnapshotSuccessorActivationAuthority::new",
-            snapshot_authority,
-            (
-                "record.context.snapshot_bootstrap.as_ref()",
-                "expect(\"verified snapshot activation authority retains its anchor\")",
-                "record_hash: HashOf::new(record), snapshot_height: anchor.snapshot_height, snapshot_block_hash: anchor.snapshot_block_hash, successor_context_id: record.context.id(),",
-            ),
-        )
-        recovery = region(
-            recovery_path,
-            recovery_source,
-            "recover_active_height_with_plan",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "\nfn verify_state_kura_prefix(",
-        )
-        require_tokens(
-            recovery_path,
-            "recover_active_height_with_plan snapshot authority",
-            recovery,
-            (
-                "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
-                "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
-                "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
-                "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "recover_active_height_with_plan snapshot authority",
-            recovery,
-            (
-                "authenticate_v2_snapshot_replay_boundary(",
-                "is_entirely_audited_snapshot_import()",
-                "authenticated_snapshot_v2_bootstrap()",
-                "record.context() != &bootstrap.context",
-                "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
-                "SnapshotSuccessorActivationAuthority::new(bootstrap)",
-            ),
-        )
-        require_tokens(
-            recovery_path,
-            "recover_active_height_with_plan complete-tip authority",
-            recovery,
-            (
-                "kura.v2_finality_artifact_with_receipt(durable_height)?",
-                "let predecessor_record = context_store.load(durable_height)?",
-                "let verified_predecessor = verify_persisted_height( kura, state, &context_store, predecessor_record, durable_height, )?;",
-                "let predecessor_signature_policy = if durable_height == 1 { BlockSignaturePolicy::GenesisAuthority(genesis_public_key.clone()) } else { BlockSignaturePolicy::RotatingLeader };",
-                "build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;",
-                "let (verified_context, activation) = successor.into_parts();",
-                "RecoveredCompleteTipActivationAuthority::authenticate( parent_artifact, parent_receipt, verified_predecessor, predecessor_signature_policy, &verified_context, activation, kura, )?;",
-                "RecoveredSuccessorActivationAuthority::CompleteTip( complete_tip_activation, )",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "recover_active_height_with_plan complete-tip authority",
-            recovery,
-            (
-                "verify_persisted_height(",
-                "build_verified_successor(",
-                "successor.into_parts()",
-                "RecoveredCompleteTipActivationAuthority::authenticate(",
-                "RecoveredSuccessorActivationAuthority::CompleteTip(",
-            ),
-        )
-        verified_successor = region(
-            recovery_path,
-            recovery_source,
-            "build_verified_successor",
-            "pub(crate) fn build_verified_successor(",
-            "\nfn verify_persisted_height(",
-        )
-        require_tokens(
-            recovery_path,
-            "build_verified_successor",
-            verified_successor,
-            (
-                "DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;",
-                "if state_height != parent_height || state_block_hash != Some(predecessor.block_hash)",
-                "if parent_record.context() != &parent_artifact.height_context",
-                "VerifiedHeightContext::successor( expected, proofs, parent_artifact, parent_receipt, parent_record.proofs_of_possession(), )?;",
-                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified.context().id(), }",
-                "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified_context.context().id(), }",
-            ),
-        )
-        require_order(
-            recovery_path,
-            "build_verified_successor",
-            verified_successor,
-            (
-                "DurableV2PredecessorIdentity::authenticate(",
-                "state_height != parent_height",
-                "parent_record.context() != &parent_artifact.height_context",
-                "VerifiedHeightContext::successor(",
-                "DurableSuccessorActivationAuthority",
-            ),
+            region,
+            require_tokens,
+            require_order,
         )

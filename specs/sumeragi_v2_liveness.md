@@ -1338,7 +1338,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
+`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
 Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 523 TSV lines and has SHA-256
 `e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
@@ -2180,6 +2180,9 @@ ordered operation-record SHA-256 values, in the same class order, are
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
+The validator and receipt writer derive these exact cardinalities from the
+candidate-bound plans, so an unplanned eighth `network-scale-soak` operation
+is rejected without changing the authoritative seven-operation digest.
 
 An approval file must be owner-held, mode `0400`, single-link, bounded,
 canonical, and below trusted non-writable ancestry. Its command records use

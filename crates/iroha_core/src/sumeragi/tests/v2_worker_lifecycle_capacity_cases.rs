@@ -184,6 +184,7 @@ fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop() {
         LifecycleCompletionCapacityProbeV1::Apply {
             ordinal: 12,
             key: apply,
+            executor_available: true,
         },
     ]) {
         Err(error) => error,
@@ -220,6 +221,7 @@ fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop() {
             LifecycleCompletionCapacityProbeV1::Apply {
                 ordinal: 10,
                 key: apply,
+                executor_available: true,
             },
             LifecycleCompletionCapacityProbeV1::Sign {
                 ordinal: 11,
@@ -236,6 +238,19 @@ fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop() {
     reservation.cancel_uncommitted();
     assert!(!output_guard.restart_required());
     assert!(planner.command_rx.queue.lock().commands.is_empty());
+
+    let executor_blocked = service
+        .capture_lifecycle_completion_capacity_census(vec![
+            LifecycleCompletionCapacityProbeV1::Apply {
+                ordinal: 10,
+                key: apply,
+                executor_available: false,
+            },
+        ])
+        .expect("freeze an executor-blocked Apply capacity owner");
+    assert_eq!(executor_blocked.capacity_for_test(10), Some((false, 0)));
+    executor_blocked.complete_without_selection();
+    assert!(!output_guard.restart_required());
 
     let fetch_round = wire::ConsensusRound {
         context_id: context.id(),
@@ -292,6 +307,7 @@ fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop() {
             LifecycleCompletionCapacityProbeV1::Apply {
                 ordinal: 10,
                 key: apply,
+                executor_available: true,
             },
             LifecycleCompletionCapacityProbeV1::Sign {
                 ordinal: 11,
@@ -328,6 +344,7 @@ fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop() {
                 LifecycleCompletionCapacityProbeV1::Apply {
                     ordinal: 12,
                     key: dropped_key,
+                    executor_available: true,
                 },
             ])
             .expect("arm one census before abandoning it"),

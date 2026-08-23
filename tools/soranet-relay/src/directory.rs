@@ -28,7 +28,7 @@ use soranet_pq::{
 };
 use std::{
     collections::{HashMap, TryReserveError},
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 use thiserror::Error;
@@ -491,13 +491,37 @@ pub struct RotationOutput {
     pub keys: RotationKeys,
 }
 /// Key material produced during rotation.
-#[derive(Debug, Clone)]
 pub struct RotationKeys {
     pub ed25519_secret: [u8; 32],
     pub ed25519_public: [u8; 32],
     pub mldsa_public: Vec<u8>,
     pub mldsa_secret: Vec<u8>,
     pub fingerprint: [u8; 32],
+}
+impl RotationKeys {
+    fn clear_private_material(&mut self) {
+        self.ed25519_secret.fill(0);
+        std::hint::black_box(&mut self.ed25519_secret);
+        self.mldsa_secret.fill(0);
+        std::hint::black_box(self.mldsa_secret.as_mut_slice());
+    }
+}
+impl fmt::Debug for RotationKeys {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RotationKeys")
+            .field("ed25519_secret", &"<redacted>")
+            .field("ed25519_public", &hex::encode(self.ed25519_public))
+            .field("mldsa_public_len", &self.mldsa_public.len())
+            .field("mldsa_secret", &"<redacted>")
+            .field("fingerprint", &hex::encode(self.fingerprint))
+            .finish()
+    }
+}
+impl Drop for RotationKeys {
+    fn drop(&mut self) {
+        self.clear_private_material();
+    }
 }
 /// Build a guard directory snapshot from configuration.
 ///
@@ -1494,6 +1518,24 @@ mod tests {
         0, 0,
     ];
     #[test]
+    fn rotation_keys_redact_and_clear_private_material() {
+        let mut keys = RotationKeys {
+            ed25519_secret: [0x11; 32],
+            ed25519_public: [0x22; 32],
+            mldsa_public: vec![0x33; 64],
+            mldsa_secret: vec![0x44; 96],
+            fingerprint: [0x55; 32],
+        };
+        let debug = format!("{keys:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains(&hex::encode(keys.ed25519_secret)));
+        assert!(!debug.contains(&hex::encode(&keys.mldsa_secret)));
+
+        keys.clear_private_material();
+        assert_eq!(keys.ed25519_secret, [0; 32]);
+        assert!(keys.mldsa_secret.iter().all(|byte| *byte == 0));
+    }
+    #[test]
     fn directory_build_config_file_limit_accepts_exact_and_rejects_plus_one() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("directory.json");
@@ -2287,10 +2329,12 @@ mod tests {
         }
     }
     fn sample_certificate(fingerprint: [u8; 32]) -> RelayCertificateV2 {
-        let identity = [0x22; 32];
+        let identity_ed25519 = SigningKey::from_bytes(&[0x23; 32])
+            .verifying_key()
+            .to_bytes();
         RelayCertificateV2 {
-            relay_id: identity,
-            identity_ed25519: identity,
+            relay_id: identity_ed25519,
+            identity_ed25519,
             identity_mldsa65: vec![0x33; 1952],
             descriptor_commit: [0x44; 32],
             roles: RelayRolesV2 {

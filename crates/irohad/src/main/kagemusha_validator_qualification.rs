@@ -10,7 +10,7 @@ use iroha_genesis::GenesisBlock;
 
 /// Same-read startup sources which may be consumed only inside the daemon.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KagemushaStartupQualificationSourcesV1 {
+pub(super) struct KagemushaStartupQualificationSourcesV1 {
     snapshot_bootstrap: bool,
     flattened_toml_config_source: Option<Vec<u8>>,
     signed_genesis_source: Option<Vec<u8>>,
@@ -43,7 +43,7 @@ impl KagemushaStartupQualificationSourcesV1 {
 
 /// Same-read controller reservation plus independently pinned receipt authority.
 #[derive(Clone, Copy)]
-pub struct KagemushaTrustedPromotionInputsV1<'a> {
+pub(super) struct KagemushaTrustedPromotionInputsV1<'a> {
     pinned_controller: &'a PublicKey,
     exact_reservation_bytes: &'a [u8],
     catalog_revalidation_receipt_json: &'a [u8],
@@ -72,7 +72,7 @@ impl<'a> KagemushaTrustedPromotionInputsV1<'a> {
 
 /// Explicit reason why this process did not create a validator seal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KagemushaValidatorQualificationUnavailableV1 {
+pub(super) enum KagemushaValidatorQualificationUnavailableV1 {
     /// Snapshot bootstrap has no ordinary signed-genesis source in this corridor.
     SnapshotBootstrap,
     /// The protected promotion controller supplied no trusted reservation.
@@ -95,7 +95,7 @@ pub enum KagemushaValidatorQualificationUnavailableV1 {
     variant_size_differences,
     reason = "the boxed signed seal and tiny explicit-unavailable result are intentionally asymmetric; boxing the unavailable reason would add a pointless allocation"
 )]
-pub enum KagemushaValidatorQualificationOutcomeV1 {
+pub(super) enum KagemushaValidatorQualificationOutcomeV1 {
     /// Qualification was deliberately unavailable and no signature was made.
     Unavailable(KagemushaValidatorQualificationUnavailableV1),
     /// One locally signed validator seal, not published or submitted.
@@ -107,7 +107,7 @@ pub enum KagemushaValidatorQualificationOutcomeV1 {
 /// Returns an explicit unavailable outcome for every absent trust input and an
 /// error only when all inputs exist but fail closed validation or signing.
 #[allow(clippy::too_many_arguments)]
-pub fn try_build_kagemusha_validator_qualification_v1(
+pub(super) fn try_build_kagemusha_validator_qualification_v1(
     sources: &KagemushaStartupQualificationSourcesV1,
     promotion: Option<KagemushaTrustedPromotionInputsV1<'_>>,
     catalog_capture: Option<&KagemushaValidatorQualificationCatalogCaptureV1>,
@@ -172,7 +172,7 @@ pub fn try_build_kagemusha_validator_qualification_v1(
 
 /// Exercise the fail-closed seam for the stock launcher, which has no trusted
 /// promotion reservation or same-load catalog capture and therefore cannot sign.
-pub fn evaluate_stock_launcher_unavailable_v1(
+pub(super) fn evaluate_stock_launcher_unavailable_v1(
     sources: &KagemushaStartupQualificationSourcesV1,
     genesis: Option<&GenesisBlock>,
     validator_id: &PeerId,
@@ -198,10 +198,10 @@ pub fn evaluate_stock_launcher_unavailable_v1(
 }
 
 #[cfg(test)]
-pub mod tests {
+pub(super) mod tests {
     use super::*;
 
-    pub fn reservation_fixture(
+    pub(super) fn reservation_fixture(
         controller: &KeyPair,
     ) -> iroha_data_model::offline::KagemushaV4PromotionReservationV1 {
         use iroha_crypto::{Hash, HashOf};
@@ -232,6 +232,14 @@ pub mod tests {
             vec!["41".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x55; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: 1_800_000_000_000,
+                last_modified_ms: Some(1_800_000_000_000),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             1_800_000_000_000,
         )
         .expect("production device policy fixture");

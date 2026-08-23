@@ -202,7 +202,6 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
         runtime,
         reopened_body_store,
         super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
-        None,
         context.clone(),
         service.local_peer.clone(),
         Some(local_validator),

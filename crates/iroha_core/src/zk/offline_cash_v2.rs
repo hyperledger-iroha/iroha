@@ -7,12 +7,13 @@
 //! and Ep P-256 signature entries below are role metadata only. They cannot
 //! authenticate a key or authorize proof acceptance.
 //!
-//! The private STATE child modules freeze one acyclic source contract: a
+//! The private GuardBundle and STATE child modules freeze one acyclic source
+//! contract: a
 //! parity-typed 576-byte public value is an aggregate predecessor lineage, not
 //! the current proof's terminal accumulator. It also freezes the exact
-//! 237-word/34-cell field-neutral ABI, six-input fold order, and fail-closed
-//! terminal order. They do not implement recursion, folding, artifacts, or a
-//! verifier.
+//! 336-word/48-cell GuardBundle ABI, 237-word/34-cell STATE ABI, ordered helper
+//! and STATE folds, and fail-closed terminal order. They do not implement
+//! recursion, folding, artifacts, or a verifier.
 //!
 //! Session framing, final-STATE pair qualification, V2 wire/release types,
 //! compact SHA-256, DER/KeyMint/root closure, recursion bootstrap,
@@ -27,6 +28,8 @@ mod attestation_registration;
 #[cfg(test)]
 #[path = "offline_cash_v2/attestation_registration_tests.rs"]
 mod attestation_registration_tests;
+#[path = "offline_cash_v2/guard_bundle_provenance.rs"]
+mod guard_bundle_provenance;
 #[path = "offline_cash_v2/registered_platform_p256_circuit_source.rs"]
 mod registered_platform_p256_circuit_source;
 #[path = "offline_cash_v2/registered_platform_p256_statement.rs"]
@@ -35,6 +38,8 @@ mod registered_platform_p256_statement;
 mod state_lineage;
 #[path = "offline_cash_v2/state_recursive_fold.rs"]
 mod state_recursive_fold;
+#[path = "offline_cash_v2/state_semantic_parent_provenance.rs"]
+mod state_semantic_parent_provenance;
 #[path = "offline_cash_v2/state_terminal_candidate.rs"]
 mod state_terminal_candidate;
 
@@ -263,12 +268,38 @@ pub(super) enum OfflineCashHalo2ParityV2 {
     Ep = 2,
 }
 
-/// The sole new circuit-role tag recorded by this scaffold.
+/// Finite k=17 circuit-role namespace recorded by the private V2 source contract.
+///
+/// These tags are not a compiled protocol inventory and cannot identify an
+/// artifact. Every corresponding compiler, artifact, backend, and release gate
+/// remains closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(super) enum OfflineCashHalo2CircuitRoleV2 {
+    /// Recursive balance-state relation.
+    State = 1,
+    /// Exact-next guard-use relation.
+    GuardUse = 2,
+    /// Platform binding relation.
+    PlatformBind = 3,
+    /// Optional Android hardware-key certificate relation.
+    AndroidKeyCert = 4,
+    /// Ordered recursive helper aggregation.
+    GuardBundle = 5,
     /// P-256 signature verification child; metadata only.
     P256Signature = 6,
+}
+
+impl OfflineCashHalo2CircuitRoleV2 {
+    /// Exact canonical V2 source-role order.
+    pub(super) const ALL: [Self; 6] = [
+        Self::State,
+        Self::GuardUse,
+        Self::PlatformBind,
+        Self::AndroidKeyCert,
+        Self::GuardBundle,
+        Self::P256Signature,
+    ];
 }
 
 /// Private artifact labels for the two P-256 parity records.

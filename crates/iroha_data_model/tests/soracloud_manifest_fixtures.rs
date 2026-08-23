@@ -324,12 +324,24 @@ fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
                 "x86_64": {
                   "kernel_image_path": "/inrou/x86_64/vmlinux",
                   "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
-                  "initrd_image_path": null
+                  "initrd_image_path": null,
+                  "distribution": {
+                    "target": {"target": "Global", "value": null},
+                    "prefer_low_latency": true,
+                    "fallback_to_low_latency_when_geography_unknown": true
+                  },
+                  "published_artifact": null
                 },
                 "aarch64": {
                   "kernel_image_path": "/inrou/aarch64/vmlinux",
                   "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
-                  "initrd_image_path": null
+                  "initrd_image_path": null,
+                  "distribution": {
+                    "target": {"target": "Global", "value": null},
+                    "prefer_low_latency": true,
+                    "fallback_to_low_latency_when_geography_unknown": true
+                  },
+                  "published_artifact": null
                 }
               },
               "bootstrap_user_data_path": null,
@@ -338,7 +350,7 @@ fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
         )
         .expect("valid inrou manifest fixture"),
     );
-    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     let mut service = expected_service_manifest();
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
     service.replicas = NonZeroU16::new(2).expect("nonzero");
@@ -752,75 +764,85 @@ fn deployment_bundle_fixture_is_canonical() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn container_manifest_fixture_decodes_legacy_missing_default_fields() {
-    let mut value: json::Value =
-        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
-    let object = value.as_object_mut().expect("fixture root must be object");
+fn container_manifest_fixture_rejects_missing_v1_fields() {
     for field in [
+        "schema_version",
+        "runtime",
+        "bundle_hash",
+        "bundle_path",
+        "entrypoint",
+        "args",
+        "env",
         "inrou",
         "required_config_names",
         "required_secret_names",
         "config_exports",
+        "capabilities",
+        "resources",
+        "lifecycle",
     ] {
+        let mut value: json::Value =
+            json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value.as_object_mut().expect("fixture root must be object");
         assert!(
             object.remove(field).is_some(),
-            "fixture should declare `{field}` before the legacy omission check"
+            "fixture should declare `{field}` before the omission check"
+        );
+        let error = json::from_value::<SoraContainerManifestV1>(value)
+            .expect_err("every first-release container field must be explicit");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing `{field}` reported the wrong error: {error:?}"
         );
     }
-    let decoded: SoraContainerManifestV1 =
-        json::from_value(value).expect("legacy container fixture shape must decode");
-    assert_eq!(decoded, expected_container_manifest());
-    decoded
-        .validate()
-        .expect("legacy container fixture shape should validate");
 }
 #[cfg(feature = "json")]
 #[test]
-fn container_manifest_fixture_decodes_missing_args_and_env_defaults() {
-    let mut value: json::Value =
-        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
-    let object = value.as_object_mut().expect("fixture root must be object");
-    for field in ["args", "env"] {
+fn container_manifest_fixture_rejects_missing_nested_v1_fields() {
+    for (parent, field) in [
+        ("capabilities", "allow_model_inference"),
+        ("lifecycle", "healthcheck_path"),
+    ] {
+        let mut value: json::Value =
+            json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value
+            .get_mut(parent)
+            .and_then(json::Value::as_object_mut)
+            .expect("nested fixture field must be an object");
         assert!(
             object.remove(field).is_some(),
-            "fixture should declare `{field}` before the default omission check"
+            "fixture should declare `{parent}.{field}` before the omission check"
+        );
+        let error = json::from_value::<SoraContainerManifestV1>(value)
+            .expect_err("every nested first-release container field must be explicit");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing `{parent}.{field}` reported the wrong error: {error:?}"
         );
     }
-    let decoded: SoraContainerManifestV1 =
-        json::from_value(value).expect("container fixture without args/env must decode");
-    let mut expected = expected_container_manifest();
-    expected.args.clear();
-    expected.env.clear();
-    assert_eq!(decoded, expected);
-    decoded
-        .validate()
-        .expect("container fixture without args/env should validate");
 }
 #[cfg(feature = "json")]
 #[test]
-fn container_manifest_fixture_decodes_null_default_collections() {
-    let mut value: json::Value =
-        json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
-    let object = value.as_object_mut().expect("fixture root must be object");
+fn container_manifest_fixture_rejects_null_v1_collections() {
     for field in [
-        "inrou",
+        "args",
+        "env",
         "required_config_names",
         "required_secret_names",
         "config_exports",
     ] {
+        let mut value: json::Value =
+            json::from_str(CONTAINER_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value.as_object_mut().expect("fixture root must be object");
         assert!(
             object
                 .insert(field.to_string(), json::Value::Null)
                 .is_some(),
-            "fixture should declare `{field}` before the null-default check"
+            "fixture should declare `{field}` before the null check"
         );
+        json::from_value::<SoraContainerManifestV1>(value)
+            .expect_err("first-release collection fields must not accept null");
     }
-    let decoded: SoraContainerManifestV1 =
-        json::from_value(value).expect("container fixture with null defaults must decode");
-    assert_eq!(decoded, expected_container_manifest());
-    decoded
-        .validate()
-        .expect("container fixture with null defaults should validate");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -855,12 +877,24 @@ fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
             "x86_64": {
               "kernel_image_path": "/inrou/x86_64/vmlinux",
               "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
-              "initrd_image_path": null
+              "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
+              "published_artifact": null
             },
             "aarch64": {
               "kernel_image_path": "/inrou/aarch64/vmlinux",
               "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
-              "initrd_image_path": null
+              "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
+              "published_artifact": null
             }
           },
           "bootstrap_user_data_path": null,
@@ -1096,41 +1130,81 @@ fn container_manifest_rejects_relative_healthcheck_path() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn service_manifest_fixture_decodes_missing_default_fields() {
-    let mut value: json::Value =
-        json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
-    let object = value.as_object_mut().expect("fixture root must be object");
-    for field in ["execution_plane", "economics", "lease_volumes"] {
+fn service_manifest_fixture_rejects_missing_v1_fields() {
+    for field in [
+        "schema_version",
+        "service_name",
+        "service_version",
+        "execution_plane",
+        "container",
+        "replicas",
+        "route",
+        "rollout",
+        "economics",
+        "state_bindings",
+        "lease_volumes",
+        "handlers",
+        "artifacts",
+    ] {
+        let mut value: json::Value =
+            json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value.as_object_mut().expect("fixture root must be object");
         assert!(
             object.remove(field).is_some(),
-            "fixture should declare `{field}` before the default omission check"
+            "fixture should declare `{field}` before the omission check"
+        );
+        let error = json::from_value::<SoraServiceManifestV1>(value)
+            .expect_err("every first-release service field must be explicit");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing `{field}` reported the wrong error: {error:?}"
         );
     }
-    let decoded: SoraServiceManifestV1 =
-        json::from_value(value).expect("service fixture with omitted defaults must decode");
-    assert_eq!(decoded, expected_service_manifest());
-    decoded
-        .validate()
-        .expect("service fixture with omitted defaults should validate");
 }
 #[cfg(feature = "json")]
 #[test]
-fn service_manifest_fixture_decodes_missing_route_as_none() {
-    let mut value: json::Value =
-        json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
-    let object = value.as_object_mut().expect("fixture root must be object");
-    assert!(
-        object.remove("route").is_some(),
-        "fixture should declare `route` before the default omission check"
-    );
-    let decoded: SoraServiceManifestV1 =
-        json::from_value(value).expect("service fixture without route must decode");
-    let mut expected = expected_service_manifest();
-    expected.route = None;
-    assert_eq!(decoded, expected);
-    decoded
-        .validate()
-        .expect("deterministic service fixture without route should validate");
+fn service_manifest_fixture_rejects_missing_nested_v1_fields() {
+    for (collection, field) in [
+        ("handlers", "route_path"),
+        ("handlers", "mailbox"),
+        ("artifacts", "handler_name"),
+    ] {
+        let mut value: json::Value =
+            json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value
+            .get_mut(collection)
+            .and_then(json::Value::as_array_mut)
+            .and_then(|members| members.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("nested fixture collection must contain an object");
+        assert!(
+            object.remove(field).is_some(),
+            "fixture should declare `{collection}[0].{field}` before the omission check"
+        );
+        let error = json::from_value::<SoraServiceManifestV1>(value)
+            .expect_err("every nested first-release service field must be explicit");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing `{collection}[0].{field}` reported the wrong error: {error:?}"
+        );
+    }
+}
+#[cfg(feature = "json")]
+#[test]
+fn service_manifest_fixture_rejects_null_v1_collections() {
+    for field in ["state_bindings", "lease_volumes", "handlers", "artifacts"] {
+        let mut value: json::Value =
+            json::from_str(SERVICE_FIXTURE).expect("fixture must decode as JSON value");
+        let object = value.as_object_mut().expect("fixture root must be object");
+        assert!(
+            object
+                .insert(field.to_string(), json::Value::Null)
+                .is_some(),
+            "fixture should declare `{field}` before the null check"
+        );
+        json::from_value::<SoraServiceManifestV1>(value)
+            .expect_err("first-release service collection fields must not accept null");
+    }
 }
 #[test]
 fn service_manifest_rejects_empty_service_version() {
@@ -1412,30 +1486,19 @@ fn artifact_ref_rejects_control_character_path() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_fixture_decodes_legacy_nested_container_defaults() {
+fn deployment_bundle_fixture_rejects_missing_nested_container_field() {
     let mut value: json::Value = json::from_str(DEPLOYMENT_BUNDLE_FIXTURE)
         .expect("bundle fixture must decode as JSON value");
     let container = value
         .get_mut("container")
         .and_then(json::Value::as_object_mut)
         .expect("bundle fixture container must be object");
-    for field in [
-        "inrou",
-        "required_config_names",
-        "required_secret_names",
-        "config_exports",
-    ] {
-        assert!(
-            container.remove(field).is_some(),
-            "nested container should declare `{field}` before the legacy omission check"
-        );
-    }
-    let bundle: SoraDeploymentBundleV1 =
-        json::from_value(value).expect("legacy nested container defaults must decode");
-    assert_eq!(bundle, expected_deployment_bundle());
-    bundle
-        .validate_for_admission()
-        .expect("legacy nested container defaults should validate");
+    assert!(
+        container.remove("config_exports").is_some(),
+        "nested container should declare `config_exports` before the omission check"
+    );
+    json::from_value::<SoraDeploymentBundleV1>(value)
+        .expect_err("nested first-release container fields must be explicit");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -1604,7 +1667,7 @@ fn deployment_bundle_rejects_http_service_without_shared_lease_volume() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_rejects_inrou_http_service_without_ssh_key() {
+fn deployment_bundle_accepts_inrou_http_service_without_ssh_keys() {
     let mut bundle = expected_inrou_http_deployment_bundle();
     bundle
         .container
@@ -1614,16 +1677,9 @@ fn deployment_bundle_rejects_inrou_http_service_without_ssh_key() {
         .ssh_authorized_keys
         .clear();
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    let error = bundle
+    bundle
         .validate_for_admission()
-        .expect_err("Inrou HTTP services require SSH authorized keys");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "container.inrou.ssh_authorized_keys",
-            ..
-        }
-    ));
+        .expect("Inrou HTTP services must not require an SSH access path");
 }
 #[cfg(feature = "json")]
 #[test]

@@ -954,10 +954,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     )
     repo_root = formal_dir.parents[2]
     baseline_errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
-    p2p_taira_markers = (
-        "/crates/iroha_p2p/", "/configs/soranexus/taira/",
-        "/defaults/kagami/iroha3-taira/",
-    )
+    p2p_taira_markers = ("/crates/iroha_p2p/", "/configs/soranexus/taira/")
     assert not [
         error for error in baseline_errors
         if any(marker in error for marker in p2p_taira_markers)
@@ -1100,10 +1097,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         "        0,",
     )
 
-    for relative in (
-        Path("defaults/kagami/iroha3-taira/config.toml"),
-        Path("configs/soranexus/taira/config.toml"),
-    ):
+    for relative in (Path("configs/soranexus/taira/config.toml"),):
         path = geometry_root / relative
         source = path.read_text(encoding="utf-8")
         path.write_text(
@@ -1124,7 +1118,6 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         "root configuration rejects H greater than exact-output reply-source R",
         "shared Sumeragi fingerprint projection carries H beside ingress capacities",
         "localnet aggregate bytes scale by N+H",
-        "default seven-validator Taira profile pins H=2 and nine source partitions",
         "production Taira profile pins H=2 and six source partitions",
     ):
         assert any(expected_error in error for error in geometry_errors), (
@@ -1176,73 +1169,25 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
             "accepted peer must publish validator dial session ownership",
         ),
         (
-            Path("defaults/kagami/iroha3-taira/config.toml"),
+            Path("configs/soranexus/taira/config.toml"),
             None,
             "max_frame_bytes = 23068700",
             "max_frame_bytes = 23068699",
-            "default Taira profile carries maximum privacy transaction and block-sync frames",
+            "production Taira profile carries maximum privacy transaction and block-sync frames",
         ),
         (
-            Path("defaults/kagami/iroha3-taira/genesis.json"),
+            Path("configs/soranexus/taira/genesis.json"),
             None,
-            '"max_payload_size_bytes": 16777216',
-            '"max_payload_size_bytes": 16777215',
-            "default Taira genesis DA pins the revision-4 protocol ceiling",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            None,
-            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;",
-            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_699;",
-            "Kagami Taira encrypted-frame ceiling",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            None,
-            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;",
-            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_671;",
-            "Kagami Taira block-sync frame ceiling",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            None,
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;",
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_487;",
-            "Kagami Taira transaction-gossip frame ceiling",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            "render_peer_config_with_private_keys",
-            'let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {',
-            'let taira_network_frame_overrides = if spec.slug == "iroha3-dev" {',
-            "Taira-only Kagami frame override branch",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            "render_peer_config_with_private_keys",
-            "fn render_peer_config_with_private_keys(",
-            "fn disabled_render_peer_config_with_private_keys(",
-            "require exactly one Kagami render_peer_config_with_private_keys item",
-        ),
-        (
-            Path("xtask/src/kagami_profiles.rs"),
-            "render_peer_config_with_private_keys",
-            "taira_network_frame_overrides = taira_network_frame_overrides,",
-            "taira_network_frame_overrides = String::new(),",
-            "install the Taira frame overrides in the network table",
+            '"max_payload_size_bytes":16777216',
+            '"max_payload_size_bytes":16777215',
+            "production Taira genesis DA pins the revision-4 protocol ceiling",
         ),
     )
     refresh_source_relatives = (
         ("p2p_network", Path("crates/iroha_p2p/src/network.rs")),
         ("p2p_peer", Path("crates/iroha_p2p/src/peer.rs")),
-        ("kagami_profiles", Path("xtask/src/kagami_profiles.rs")),
-        ("taira_default", Path("defaults/kagami/iroha3-taira/config.toml")),
         ("taira_config", Path("configs/soranexus/taira/config.toml")),
         ("taira_genesis", Path("configs/soranexus/taira/genesis.json")),
-        (
-            "taira_default_genesis",
-            Path("defaults/kagami/iroha3-taira/genesis.json"),
-        ),
     )
     for index, (relative, item_name, old, new, expected_error) in enumerate(
         refresh_mutations
@@ -1282,10 +1227,7 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
         tmp_path, module, "SumeragiV2AsyncNetwork.tla"
     )
     repo_root = formal_dir.parents[2]
-    markers = (
-        "/crates/iroha_p2p/", "/configs/soranexus/taira/",
-        "/defaults/kagami/iroha3-taira/",
-    )
+    markers = ("/crates/iroha_p2p/", "/configs/soranexus/taira/")
     baseline = module._transport_geometry_production_source_fidelity_errors(repo_root)
     assert not [error for error in baseline if any(marker in error for marker in markers)], baseline
 
@@ -1296,21 +1238,10 @@ def test_transport_geometry_source_fidelity_rejects_taira_semantic_mutants(
         .replace('"max_tx_bytes": 10485760', '"max_tx_bytes": 10485759', 1),
         encoding="utf-8",
     )
-    default_path = repo_root / "defaults/kagami/iroha3-taira/genesis.json"
-    default_source = default_path.read_text(encoding="utf-8")
-    default_path.write_text(
-        default_source.replace(
-            '"max_payload_size_bytes": 16777216,',
-            '"max_payload_size_bytes": 16777216,\n      "max_payload_size_bytes": 16777216,',
-            1,
-        ),
-        encoding="utf-8",
-    )
     errors = module._transport_geometry_production_source_fidelity_errors(repo_root)
     for expected in (
         "production Taira genesis DA pins the revision-4 protocol ceiling",
         "production Taira genesis admits one maximum privacy transaction",
-        "default Taira genesis must parse with unique keys",
     ):
         assert any(expected in error for error in errors), (expected, errors)
 

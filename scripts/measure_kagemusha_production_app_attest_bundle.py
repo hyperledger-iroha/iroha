@@ -13,6 +13,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 
 
 SCHEMA = "iroha.kagemusha.ios.app_attest_capture_code_sign_measurements.v1"
@@ -26,6 +27,26 @@ MAX_CODESIGN_DIAGNOSTIC_BYTES = 64 * 1024
 
 class MeasurementError(RuntimeError):
     """Raised when the bundle measurement cannot be trusted."""
+
+
+class MeasurementPublicationUncertain(MeasurementError):
+    """Raised after an output may have reached its final name."""
+
+
+def _identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return metadata fields that must remain stable during measurement."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
 
 def _regular_bytes(path: Path, label: str, maximum: int) -> bytes:
@@ -173,6 +194,31 @@ def measure_bundle(
         or CDHASH_RE.fullmatch(cdhash) is None
     ):
         raise MeasurementError("capture app codesign identity is not exact")
+    if (
+        _regular_bytes(
+            app / "Info.plist", "capture app Info.plist", MAX_PLIST_BYTES
+        )
+        != info_payload
+        or _regular_bytes(
+            entitlements_path,
+            "capture app signed entitlements",
+            MAX_PLIST_BYTES,
+        )
+        != entitlements_payload
+        or _regular_bytes(
+            app / executable_name,
+            "capture app executable",
+            MAX_EXECUTABLE_BYTES,
+        )
+        != executable_payload
+    ):
+        raise MeasurementError("capture app inputs changed during measurement")
+    try:
+        final_app_metadata = app.lstat()
+    except OSError as error:
+        raise MeasurementError("capture app changed during measurement") from error
+    if _identity(final_app_metadata) != _identity(app_metadata):
+        raise MeasurementError("capture app changed during measurement")
     return {
         "schema": SCHEMA,
         "version": 1,
@@ -190,17 +236,126 @@ def _write_new_private_json(path: Path, value: dict[str, object]) -> None:
     payload = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("ascii") + b"\n"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    descriptor = os.open(path, flags, 0o600)
+    descriptor, temporary_text = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=os.fspath(path.parent)
+    )
+    temporary = Path(temporary_text)
+    created_identity: tuple[int, int] | None = None
+    directory_descriptor = -1
+    link_attempted = False
+    linked = False
+    operation_error: OSError | None = None
     try:
+        os.fchmod(descriptor, 0o600)
+        opened = os.fstat(descriptor)
+        created_identity = (opened.st_dev, opened.st_ino)
         offset = 0
         while offset < len(payload):
-            offset += os.write(descriptor, payload[offset:])
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short capture-app measurement write")
+            offset += written
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        closing = descriptor
+        descriptor = -1
+        os.close(closing)
+        link_attempted = True
+        os.link(temporary, path, follow_symlinks=False)
+        linked = True
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        directory_descriptor = os.open(path.parent, directory_flags)
+        os.fsync(directory_descriptor)
+        temporary.unlink()
+        os.fsync(directory_descriptor)
+        closing = directory_descriptor
+        directory_descriptor = -1
+        os.close(closing)
+        published = path.lstat()
+        if (
+            (published.st_dev, published.st_ino) != created_identity
+            or not stat.S_ISREG(published.st_mode)
+            or published.st_nlink != 1
+            or published.st_uid != os.geteuid()
+            or stat.S_IMODE(published.st_mode) != 0o600
+            or published.st_size != len(payload)
+        ):
+            raise OSError("capture-app measurement output changed while writing")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        published_descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(published_descriptor)
+            if (
+                _identity(opened) != _identity(published)
+                or (opened.st_dev, opened.st_ino) != created_identity
+            ):
+                raise OSError(
+                    "capture-app measurement output changed while opening"
+                )
+            digest = hashlib.sha256()
+            chunks: list[bytes] = []
+            remaining = len(payload)
+            while remaining:
+                chunk = os.read(published_descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise OSError(
+                        "capture-app measurement output ended before its declared size"
+                    )
+                digest.update(chunk)
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(published_descriptor, 1):
+                raise OSError("capture-app measurement output grew while reading")
+            after_open = os.fstat(published_descriptor)
+            after_path = path.lstat()
+            if (
+                _identity(after_open) != _identity(opened)
+                or _identity(after_path) != _identity(opened)
+                or b"".join(chunks) != payload
+                or digest.digest() != hashlib.sha256(payload).digest()
+            ):
+                raise OSError(
+                    "capture-app measurement output bytes or identity changed"
+                )
+        finally:
+            os.close(published_descriptor)
+    except OSError as error:
+        operation_error = error
+
+    cleanup_error: OSError | None = None
+    for remaining in (descriptor, directory_descriptor):
+        if remaining < 0:
+            continue
+        try:
+            os.close(remaining)
+        except OSError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    try:
+        temporary.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        if cleanup_error is None:
+            cleanup_error = error
+
+    error = operation_error if operation_error is not None else cleanup_error
+    if error is not None:
+        if created_identity is not None and (
+            linked or (link_attempted and not isinstance(error, FileExistsError))
+        ):
+            raise MeasurementPublicationUncertain(
+                "measurement output publication commit state is uncertain; "
+                "no final name was removed"
+            ) from error
+        if isinstance(error, FileExistsError):
+            raise error
+        raise error
 
 
 def main() -> int:
@@ -219,6 +374,9 @@ def main() -> int:
             args.bundle_id,
         )
         _write_new_private_json(Path(args.output), value)
+    except MeasurementPublicationUncertain as error:
+        print(f"[kagemusha-app-attest-measure] ERROR: {error}", file=sys.stderr)
+        return 75
     except (OSError, MeasurementError) as error:
         print(f"[kagemusha-app-attest-measure] ERROR: {error}", file=sys.stderr)
         return 1

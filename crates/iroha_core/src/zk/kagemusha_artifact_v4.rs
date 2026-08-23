@@ -998,6 +998,12 @@ where
         &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     ) -> Result<T, String>,
 {
+    // A source controls the cursor it lends. Cached offsets and framed digests
+    // are relative to the complete file, so never authenticate from that
+    // ambient cursor position.
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind Kagemusha V4 artifact: {error}"))?;
     let KagemushaArtifactPrefixV4 {
         inspection,
         framed_hasher,
@@ -1928,5 +1934,38 @@ mod tests {
         )
         .expect_err("stale cached inspection must fail closed");
         assert!(error.contains("header changed"));
+    }
+
+    #[test]
+    fn cached_inspection_parse_is_anchored_at_frame_origin() {
+        let payload = b"cached inspection origin-bound payload fixture";
+        let (bytes, descriptor) = framed_fixture(payload);
+        let inspection = inspect_kagemusha_pasta_cycle_artifact_content_v4(
+            &mut Cursor::new(bytes.clone()),
+            &descriptor,
+            accept_test_binding,
+        )
+        .expect("authenticate fixture once");
+
+        let prefix = b"unauthenticated leading bytes";
+        let mut prefixed = prefix.to_vec();
+        prefixed.extend_from_slice(&bytes);
+        let mut reader = Cursor::new(prefixed);
+        reader.set_position(u64::try_from(prefix.len()).expect("small prefix"));
+        let error = with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(
+            &mut reader,
+            &descriptor,
+            accept_test_binding,
+            &inspection,
+            |reader, _| {
+                let mut parsed = Vec::new();
+                reader
+                    .read_to_end(&mut parsed)
+                    .map_err(|error| error.to_string())?;
+                Ok(parsed)
+            },
+        )
+        .expect_err("cached inspection must authenticate from byte zero");
+        assert!(error.contains("magic mismatch"));
     }
 }

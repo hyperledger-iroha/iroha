@@ -10,7 +10,7 @@ import java.util.Objects;
 
 /** Platform-neutral NFC APDU datastream used by Android HCE/IsoDep and iOS CardSession peers. */
 public final class KagemushaNfcProtocol {
-  public static final byte[] AID =
+  private static final byte[] CANONICAL_AID =
       new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
   public static final String AID_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
   public static final int RAW_TRANSPORT_VERSION = 4;
@@ -19,12 +19,15 @@ public final class KagemushaNfcProtocol {
   public static final int MAX_EXTENDED_WRITE_CHUNK_BYTES = 16 * 1024;
   public static final int MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES;
 
-  public static final byte[] STATUS_SUCCESS = new byte[] {(byte) 0x90, 0x00};
-  public static final byte[] STATUS_WRONG_DATA = new byte[] {(byte) 0x6A, (byte) 0x80};
-  public static final byte[] STATUS_NOT_FOUND = new byte[] {(byte) 0x6A, (byte) 0x82};
-  public static final byte[] STATUS_CONDITIONS_NOT_SATISFIED =
+  private static final byte[] CANONICAL_STATUS_SUCCESS = new byte[] {(byte) 0x90, 0x00};
+  private static final byte[] CANONICAL_STATUS_WRONG_DATA =
+      new byte[] {(byte) 0x6A, (byte) 0x80};
+  private static final byte[] CANONICAL_STATUS_NOT_FOUND =
+      new byte[] {(byte) 0x6A, (byte) 0x82};
+  private static final byte[] CANONICAL_STATUS_CONDITIONS_NOT_SATISFIED =
       new byte[] {(byte) 0x69, (byte) 0x85};
-  public static final byte[] STATUS_UNSUPPORTED = new byte[] {(byte) 0x6D, 0x00};
+  private static final byte[] CANONICAL_STATUS_UNSUPPORTED =
+      new byte[] {(byte) 0x6D, 0x00};
 
   private static final int CLA_IROHA = 0x80;
   private static final int INS_GET_INFO = 0x10;
@@ -37,14 +40,38 @@ public final class KagemushaNfcProtocol {
 
   private KagemushaNfcProtocol() {}
 
+  public static byte[] defaultApplicationIdentifier() {
+    return CANONICAL_AID.clone();
+  }
+
+  public static byte[] statusSuccess() {
+    return CANONICAL_STATUS_SUCCESS.clone();
+  }
+
+  public static byte[] statusWrongData() {
+    return CANONICAL_STATUS_WRONG_DATA.clone();
+  }
+
+  public static byte[] statusNotFound() {
+    return CANONICAL_STATUS_NOT_FOUND.clone();
+  }
+
+  public static byte[] statusConditionsNotSatisfied() {
+    return CANONICAL_STATUS_CONDITIONS_NOT_SATISFIED.clone();
+  }
+
+  public static byte[] statusUnsupported() {
+    return CANONICAL_STATUS_UNSUPPORTED.clone();
+  }
+
   public static byte[] selectAidApdu() {
-    final byte[] apdu = new byte[5 + AID.length + 1];
+    final byte[] apdu = new byte[5 + CANONICAL_AID.length + 1];
     apdu[0] = 0x00;
     apdu[1] = (byte) 0xA4;
     apdu[2] = 0x04;
     apdu[3] = 0x00;
-    apdu[4] = (byte) AID.length;
-    System.arraycopy(AID, 0, apdu, 5, AID.length);
+    apdu[4] = (byte) CANONICAL_AID.length;
+    System.arraycopy(CANONICAL_AID, 0, apdu, 5, CANONICAL_AID.length);
     apdu[apdu.length - 1] = 0x00;
     return apdu;
   }
@@ -269,9 +296,10 @@ public final class KagemushaNfcProtocol {
     if (length < 0 || offset + length > data.length) {
       throw new IllegalArgumentException("length out of bounds");
     }
-    final byte[] response = new byte[length + STATUS_SUCCESS.length];
+    final byte[] response = new byte[length + CANONICAL_STATUS_SUCCESS.length];
     System.arraycopy(data, offset, response, 0, length);
-    System.arraycopy(STATUS_SUCCESS, 0, response, length, STATUS_SUCCESS.length);
+    System.arraycopy(
+        CANONICAL_STATUS_SUCCESS, 0, response, length, CANONICAL_STATUS_SUCCESS.length);
     return response;
   }
 
@@ -331,7 +359,7 @@ public final class KagemushaNfcProtocol {
     if (!isAnySelectAid(apdu)) return false;
     final int length = apdu[4] & 0xFF;
     final int payloadEnd = 5 + length;
-    return Arrays.equals(Arrays.copyOfRange(apdu, 5, payloadEnd), AID);
+    return Arrays.equals(Arrays.copyOfRange(apdu, 5, payloadEnd), CANONICAL_AID);
   }
 
   private static boolean isAnySelectAid(final byte[] apdu) {

@@ -1,9 +1,10 @@
 //! Challenge-independent proof-session entropy and commitment inventory.
 //!
 //! This module allocates the complete current dual-`z` identity inventory before
-//! the first `Csrc` blinding is sampled.  Only the already-existing 344 source
-//! commitments can be adopted in this slice.  Every later purpose transition is
-//! deliberately absent, and production still cannot construct the entropy source.
+//! the first `Csrc` blinding is sampled. The root session adopts the 344 source
+//! commitments; private child typestates may advance specifically reviewed
+//! challenge-independent ranges. Production still cannot construct the entropy
+//! source, and every live integration/release gate remains closed.
 
 #![allow(dead_code, reason = "later commitment purposes remain uninhabited")]
 #![cfg_attr(
@@ -431,7 +432,7 @@ struct GlobalLookupCommitmentSessionLiveV1 {
 }
 
 pub(in crate::vega::zk_ams::mkhe) struct SourceOpeningEntropyStageV1;
-pub(super) struct SourceOpeningCompleteStageV1;
+pub(in crate::vega::zk_ams::mkhe) struct SourceOpeningCompleteStageV1;
 
 /// Move-only typestated session. Taking `live` before every operation poisons
 /// the owner on error and unwind.
@@ -692,6 +693,14 @@ fn fill_entropy_v1(
 
 #[path = "commitment_session_v1/global_z_rendezvous_v2.rs"]
 mod global_z_rendezvous_v2;
+
+#[path = "commitment_session_v1/existing_radix_candidate_v1.rs"]
+mod existing_radix_candidate_v1;
+pub(in crate::vega::zk_ams::mkhe) use existing_radix_candidate_v1::{
+    RnsNativeExistingRadixCandidateAppendReceiptV1, RnsNativeExistingRadixCandidateAssemblyV1,
+    RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1,
+    RnsNativeExistingRadixCandidateRoleV1,
+};
 
 #[cfg(test)]
 #[path = "commitment_session_v1_tests.rs"]

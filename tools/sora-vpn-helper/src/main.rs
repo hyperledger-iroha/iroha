@@ -17,7 +17,11 @@ use iroha_crypto::{
     },
 };
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::{
     env,
     ffi::OsStr,
@@ -33,17 +37,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 #[cfg(target_os = "linux")]
-use std::{ffi::CStr, os::fd::FromRawFd};
+use std::{
+    ffi::CStr,
+    os::fd::{FromRawFd, OwnedFd},
+};
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
     VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
     VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-};
-use nix::{
-    errno::Errno,
-    sys::signal::{self, Signal},
-    unistd::Pid,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -65,9 +67,9 @@ use soranet_record_io::{RecordReader, RecordWriter};
 use thiserror::Error;
 use tokio::{
     io::unix::AsyncFd,
-    io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::lookup_host,
-    signal::unix::{SignalKind, signal},
+    signal::unix::{Signal, SignalKind, signal},
     time::timeout,
 };
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,10 +78,17 @@ const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONNECT_POLL_ATTEMPTS: usize = 50;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MAX_SYSTEM_COMMAND_STDOUT_BYTES: usize = 256 * 1024;
+const MAX_SYSTEM_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const CONNECT_PAYLOAD_FRAME_MAGIC: &[u8; 8] = b"SVPNCP1\0";
 const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
+const STATE_FILE_NAME: &str = "state.norito";
+const CONTROLLER_LOCK_FILE_NAME: &str = "controller.lock";
+const RESOLV_CONF_BACKUP_FILE_NAME: &str = "resolv.conf.backup";
 // The first-release worker protocol is local-only, but the hidden subcommands can still be
 // invoked with an arbitrary pipe. One MiB leaves room for the complete route policy while
 // preventing a privileged helper from buffering an unbounded stdin stream.
@@ -111,10 +120,13 @@ const DEFAULT_USAGE_VOUCHER_INTERVAL_MS: u64 = 1_000;
 static PENDING_BYTES_IN: AtomicU64 = AtomicU64::new(0);
 static PENDING_BYTES_OUT: AtomicU64 = AtomicU64::new(0);
 static LAST_TRAFFIC_FLUSH_MS: AtomicU64 = AtomicU64::new(0);
-#[cfg(target_os = "linux")]
-const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
-#[cfg(target_os = "linux")]
-const LINUX_IFF_NO_PI: nix::libc::c_short = 0x1000;
+static ATOMIC_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(target_os = "linux", test))]
+const LINUX_IFF_TUN_BITS: u16 = 0x0001;
+#[cfg(any(target_os = "linux", test))]
+const LINUX_IFF_NO_PI_BITS: u16 = 0x1000;
+#[cfg(any(target_os = "linux", test))]
+const LINUX_IFF_TUN_EXCL_BITS: u16 = 0x8000;
 #[cfg(target_os = "linux")]
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
 fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
@@ -143,15 +155,12 @@ struct Cli {
 enum Command {
     InstallCheck,
     Status,
-    Connect {
-        payload: Option<String>,
-    },
+    #[command(about = "Connect using a bounded JSON payload read from stdin")]
+    Connect,
     Disconnect,
     Repair,
     #[command(hide = true)]
     RunTunnel,
-    #[command(hide = true)]
-    RunPacketEngine,
 }
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -167,7 +176,7 @@ struct State {
     bytes_in: u64,
     bytes_out: u64,
     message: String,
-    pid: Option<u32>,
+    worker_identity: Option<WorkerProcessIdentity>,
     session_id: Option<String>,
     relay_endpoint: Option<String>,
     applied_network: Option<AppliedNetworkState>,
@@ -178,7 +187,7 @@ impl Default for State {
             installed: true,
             active: false,
             controller_kind: CONTROLLER_KIND.to_owned(),
-            interface_name: current_interface_name(),
+            interface_name: None,
             network_service: None,
             version: VERSION.to_owned(),
             controller_path: current_controller_path(),
@@ -186,12 +195,34 @@ impl Default for State {
             bytes_in: 0,
             bytes_out: 0,
             message: "ready".to_owned(),
-            pid: None,
+            worker_identity: None,
             session_id: None,
             relay_endpoint: None,
             applied_network: None,
         }
     }
+}
+#[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
+enum WorkerRole {
+    Tunnel,
+}
+impl WorkerRole {
+    #[cfg(target_os = "linux")]
+    const fn subcommand(self) -> &'static str {
+        match self {
+            Self::Tunnel => "run-tunnel",
+        }
+    }
+}
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
+struct WorkerProcessIdentity {
+    pid: u32,
+    start_time_ticks: u64,
+    executable_device: u64,
+    executable_inode: u64,
+    role: WorkerRole,
 }
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -216,6 +247,64 @@ struct ConnectPayload {
     metering_private_key_seed_hex: Option<String>,
     usage_voucher_interval_ms: u64,
 }
+impl ConnectPayload {
+    fn wipe_credentials(&mut self) {
+        wipe_secret_string(&mut self.helper_ticket_hex);
+        if let Some(seed) = self.metering_private_key_seed_hex.as_mut() {
+            wipe_secret_string(seed);
+        }
+        self.metering_private_key_seed_hex = None;
+    }
+}
+impl Drop for ConnectPayload {
+    fn drop(&mut self) {
+        self.wipe_credentials();
+    }
+}
+fn wipe_secret_string(secret: &mut String) {
+    // SAFETY: overwriting every byte with zero preserves UTF-8 validity and does not change the
+    // string length or capacity while the mutable byte view exists.
+    wipe_secret_bytes(unsafe { secret.as_mut_vec() });
+    secret.clear();
+}
+fn wipe_secret_bytes(secret: &mut [u8]) {
+    for byte in secret {
+        // SAFETY: `byte` is a valid unique pointer into the supplied mutable slice.
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
+    std::sync::atomic::compiler_fence(Ordering::SeqCst);
+}
+struct WipeBytes(Vec<u8>);
+impl std::ops::Deref for WipeBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for WipeBytes {
+    fn drop(&mut self) {
+        wipe_secret_bytes(&mut self.0);
+    }
+}
+struct SensitiveConnectJson(JsonValue);
+impl Drop for SensitiveConnectJson {
+    fn drop(&mut self) {
+        let Some(object) = self.0.as_object_mut() else {
+            return;
+        };
+        for key in [
+            "helperTicketHex",
+            "helper_ticket_hex",
+            "meteringPrivateKeySeedHex",
+            "metering_private_key_seed_hex",
+        ] {
+            if let Some(JsonValue::String(secret)) = object.get_mut(key) {
+                wipe_secret_string(secret);
+            }
+        }
+    }
+}
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
 #[norito(decode_from_slice)]
 struct AppliedNetworkState {
@@ -227,7 +316,7 @@ struct AppliedNetworkState {
 #[norito(decode_from_slice)]
 enum DnsBackendState {
     Resolved { interface_name: String },
-    ResolvConf { backup_path: String },
+    ResolvConf,
 }
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
@@ -342,13 +431,18 @@ struct UsageVoucherSigner {
     ticket: VpnHelperTicketV1,
     sequence: u64,
     started_at: Instant,
-    last_emitted_at: Instant,
     interval: Duration,
 }
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PacketStreamDecoder {
     buffer: Vec<u8>,
     expected_len: Option<usize>,
+    max_packet_len: usize,
+}
+
+struct TunnelShutdownSignals {
+    sigterm: Signal,
+    sigint: Signal,
 }
 #[derive(Debug, Error)]
 enum ControllerError {
@@ -396,7 +490,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), ControllerError> {
     match cli.command {
         Command::InstallCheck => {
-            let mut state = current_state();
+            let mut state = current_state()?;
             state.message = if state.repair_required {
                 "repair required".to_owned()
             } else if state.active {
@@ -409,13 +503,22 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
             Ok(())
         }
         Command::Status => {
-            let state = current_state();
+            let state = current_state()?;
             print_state(&state)?;
             Ok(())
         }
-        Command::Connect { payload } => connect_command(payload.as_deref()),
-        Command::Disconnect => disconnect_command("idle"),
-        Command::Repair => repair_command(),
+        Command::Connect => {
+            let _lock = acquire_controller_action_lock()?;
+            connect_command()
+        }
+        Command::Disconnect => {
+            let _lock = acquire_controller_action_lock()?;
+            disconnect_command("idle")
+        }
+        Command::Repair => {
+            let _lock = acquire_controller_action_lock()?;
+            repair_command()
+        }
         Command::RunTunnel => {
             let payload = read_connect_payload_from_stdin()?;
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -423,21 +526,28 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
                 .build()?;
             runtime.block_on(run_tunnel_command(payload))
         }
-        Command::RunPacketEngine => {
-            let payload = read_connect_payload_from_stdin()?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(run_packet_engine_command(payload))
-        }
     }
 }
-fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
-    let payload = parse_connect_payload(raw_payload)?;
-    if let Some(existing_pid) = current_state().pid {
-        terminate_pid(existing_pid)?;
-        let _ = wait_for_pid_exit(existing_pid, Duration::from_secs(2));
+fn connect_command() -> Result<(), ControllerError> {
+    let raw_payload = read_connect_payload_json_from_stdin()?;
+    let parsed_payload = std::str::from_utf8(&raw_payload)
+        .map_err(|error| {
+            ControllerError::InvalidPayload(format!("connect payload stdin is not UTF-8: {error}"))
+        })
+        .and_then(|raw| parse_connect_payload(Some(raw)));
+    drop(raw_payload);
+    let mut payload = parsed_payload?;
+    let mut previous_state = current_state()?;
+    if let Some(existing_worker) = previous_state.worker_identity.as_ref() {
+        terminate_worker(existing_worker)?;
+        if !wait_for_worker_exit(existing_worker, Duration::from_secs(2))? {
+            return Err(ControllerError::State(format!(
+                "VPN worker {} did not exit after termination request",
+                existing_worker.pid
+            )));
+        }
     }
+    cleanup_persisted_network(&mut previous_state)?;
     let mut state = State {
         message: "starting".to_owned(),
         session_id: Some(payload.session_id.clone()),
@@ -446,74 +556,126 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
     };
     persist_state(&state)?;
     let current_exe = env::current_exe()?;
-    let payload_frame = encode_connect_payload_frame(&payload)?;
-    let mut child = ProcessCommand::new(current_exe)
+    let payload_frame = WipeBytes(encode_connect_payload_frame(&payload)?);
+    payload.wipe_credentials();
+    let child_result = ProcessCommand::new(current_exe)
         .arg("run-tunnel")
+        .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()?;
-    child
+        .spawn();
+    let mut child = match child_result {
+        Ok(child) => child,
+        Err(error) => return Err(error.into()),
+    };
+    // The worker is still blocked on its empty stdin here, so the PID cannot have exited and
+    // been reused before the pidfd-backed identity capture.
+    let child_pid = child.id();
+    let child_identity = match capture_worker_identity(child_pid, WorkerRole::Tunnel) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    // Persist the exact blocked child identity before releasing its credential frame. This keeps
+    // a worker from mutating host networking before durable state can identify it.
+    state.worker_identity = Some(child_identity.clone());
+    if let Err(error) = persist_state(&state) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    let payload_write = child
         .stdin
         .as_mut()
-        .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))?
-        .write_all(payload_frame.as_slice())?;
-    let child_pid = child.id();
-    state.pid = Some(child_pid);
-    persist_state(&state)?;
+        .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))
+        .and_then(|stdin| stdin.write_all(&payload_frame).map_err(Into::into));
+    if let Err(error) = payload_write {
+        let _ = child.kill();
+        let _ = child.wait();
+        state.worker_identity = None;
+        state.message = "failed to deliver worker credentials".to_owned();
+        if let Err(state_error) = persist_state(&state) {
+            return Err(ControllerError::State(format!(
+                "{error}; failed to clear the blocked worker identity: {state_error}"
+            )));
+        }
+        return Err(error);
+    }
+    drop(child.stdin.take());
+    drop(payload_frame);
     for _ in 0..CONNECT_POLL_ATTEMPTS {
         sleep_blocking(CONNECT_POLL_INTERVAL);
-        let state = current_state();
-        if state.pid == Some(child_pid) && state.active {
+        let state = current_state()?;
+        if state.worker_identity.as_ref() == Some(&child_identity) && state.active {
             print_state(&state)?;
             return Ok(());
         }
-        if !process_alive(child_pid) {
+        if !worker_identity_alive(&child_identity)? {
             return Err(ControllerError::State(state.message));
         }
     }
-    terminate_pid(child_pid)?;
-    let _ = wait_for_pid_exit(child_pid, Duration::from_secs(2));
+    terminate_worker(&child_identity)?;
+    let _ = wait_for_worker_exit(&child_identity, Duration::from_secs(2))?;
     Err(ControllerError::State(
         "timed out waiting for VPN tunnel worker to report readiness".to_owned(),
     ))
 }
 fn disconnect_command(message: &str) -> Result<(), ControllerError> {
-    let mut state = current_state();
-    if let Some(pid) = state.pid {
-        terminate_pid(pid)?;
-        let _ = wait_for_pid_exit(pid, Duration::from_secs(2));
+    let mut state = current_state()?;
+    if let Some(worker) = state.worker_identity.as_ref() {
+        terminate_worker(worker)?;
+        if !wait_for_worker_exit(worker, Duration::from_secs(2))? {
+            return Err(ControllerError::State(format!(
+                "VPN worker {} did not exit after termination request",
+                worker.pid
+            )));
+        }
     }
     cleanup_persisted_network(&mut state)?;
     state.active = false;
     state.repair_required = false;
-    state.pid = None;
+    state.worker_identity = None;
     state.message = message.to_owned();
     persist_state(&state)?;
     print_state(&state)?;
     Ok(())
 }
 fn repair_command() -> Result<(), ControllerError> {
-    let mut state = current_state();
-    if let Some(pid) = state.pid {
-        terminate_pid(pid)?;
-        let _ = wait_for_pid_exit(pid, Duration::from_secs(2));
+    let mut state = current_state()?;
+    if let Some(worker) = state.worker_identity.as_ref() {
+        terminate_worker(worker)?;
+        if !wait_for_worker_exit(worker, Duration::from_secs(2))? {
+            return Err(ControllerError::State(format!(
+                "VPN worker {} did not exit after termination request",
+                worker.pid
+            )));
+        }
     }
     cleanup_persisted_network(&mut state)?;
     state.active = false;
     state.repair_required = false;
-    state.pid = None;
+    state.worker_identity = None;
     state.message = "repaired".to_owned();
     persist_state(&state)?;
     print_state(&state)?;
     Ok(())
 }
-async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerError> {
+async fn run_tunnel_command(mut payload: ConnectPayload) -> Result<(), ControllerError> {
+    // Install the signal handlers before any privileged network mutation. Signals delivered
+    // while the handshake or synchronous setup is in progress remain queued and are consumed by
+    // the packet loop, which then runs the normal rollback path.
+    let mut shutdown_signals = TunnelShutdownSignals::install()?;
     let pid = std::process::id();
-    let mut state = current_state();
+    let worker_identity = capture_worker_identity(pid, WorkerRole::Tunnel)?;
+    let mut state = current_state()?;
+    authorize_worker_start(&state, &worker_identity, &payload)?;
     state.active = false;
     state.repair_required = false;
-    state.pid = Some(pid);
+    state.worker_identity = Some(worker_identity.clone());
     state.session_id = Some(payload.session_id.clone());
     state.relay_endpoint = Some(payload.relay_endpoint.clone());
     state.bytes_in = 0;
@@ -527,7 +689,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             update_terminal_state(
                 false,
                 false,
-                Some(pid),
+                Some(worker_identity.clone()),
                 payload.session_id.as_str(),
                 payload.relay_endpoint.as_str(),
                 error.to_string(),
@@ -545,7 +707,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             update_terminal_state(
                 false,
                 false,
-                Some(pid),
+                Some(worker_identity.clone()),
                 payload.session_id.as_str(),
                 payload.relay_endpoint.as_str(),
                 failure.to_string(),
@@ -561,7 +723,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             update_terminal_state(
                 false,
                 false,
-                Some(pid),
+                Some(worker_identity.clone()),
                 payload.session_id.as_str(),
                 payload.relay_endpoint.as_str(),
                 failure.to_string(),
@@ -579,12 +741,31 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             update_terminal_state(
                 false,
                 false,
-                Some(pid),
+                Some(worker_identity.clone()),
                 payload.session_id.as_str(),
                 payload.relay_endpoint.as_str(),
                 failure.to_string(),
             )?;
             return Err(failure);
+        }
+    };
+    // Validate and derive every credential-dependent runtime object before changing host routes,
+    // DNS, or link state. A malformed metering seed must not strand a prepared tunnel.
+    let voucher_signer = match UsageVoucherSigner::from_payload(&payload) {
+        Ok(signer) => signer,
+        Err(error) => {
+            connection.close(0u32.into(), error.to_string().as_bytes());
+            endpoint.close(0u32.into(), error.to_string().as_bytes());
+            endpoint.wait_idle().await;
+            update_terminal_state(
+                false,
+                false,
+                Some(worker_identity.clone()),
+                payload.session_id.as_str(),
+                payload.relay_endpoint.as_str(),
+                error.to_string(),
+            )?;
+            return Err(error);
         }
     };
     let prepared = match prepare_tunnel(&payload) {
@@ -596,7 +777,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             update_terminal_state(
                 false,
                 false,
-                Some(pid),
+                Some(worker_identity.clone()),
                 payload.session_id.as_str(),
                 payload.relay_endpoint.as_str(),
                 error.to_string(),
@@ -604,17 +785,51 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             return Err(error);
         }
     };
-    state = current_state();
+    state = current_state()?;
     state.active = true;
     state.repair_required = false;
     state.interface_name = Some(prepared.interface_name.clone());
     state.network_service = prepared.network_service.clone();
     state.applied_network = Some(prepared.applied_network.clone());
     state.message = "connected".to_owned();
-    persist_state(&state)?;
+    if let Err(persist_error) = persist_state(&state) {
+        let applied_network = prepared.applied_network.clone();
+        let cleanup_result = cleanup_tunnel(prepared);
+        connection.close(0u32.into(), persist_error.to_string().as_bytes());
+        endpoint.close(0u32.into(), persist_error.to_string().as_bytes());
+        endpoint.wait_idle().await;
+        state.active = false;
+        state.interface_name = None;
+        state.network_service = None;
+        state.worker_identity = Some(worker_identity);
+        let cleanup_error = cleanup_result.err();
+        state.repair_required = cleanup_error.is_some();
+        state.applied_network = cleanup_error.as_ref().map(|_| applied_network);
+        state.message = cleanup_error.as_ref().map_or_else(
+            || format!("failed to persist connected state: {persist_error}"),
+            |cleanup_error| {
+                format!(
+                    "failed to persist connected state: {persist_error}; cleanup also failed: {cleanup_error}"
+                )
+            },
+        );
+        let recovery_persist = persist_state(&state);
+        return match (cleanup_error, recovery_persist) {
+            (None, Ok(())) => Err(persist_error),
+            (Some(cleanup_error), Ok(())) => Err(ControllerError::State(format!(
+                "{persist_error}; cleanup also failed: {cleanup_error}"
+            ))),
+            (None, Err(recovery_error)) => Err(ControllerError::State(format!(
+                "{persist_error}; cleaned up host networking but failed to persist the terminal state: {recovery_error}"
+            ))),
+            (Some(cleanup_error), Err(recovery_error)) => Err(ControllerError::State(format!(
+                "{persist_error}; cleanup also failed: {cleanup_error}; failed to persist repair state: {recovery_error}"
+            ))),
+        };
+    }
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
-    let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
+    payload.wipe_credentials();
     let voucher_counters = UsageVoucherCounters::default();
     let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
     let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
@@ -630,6 +845,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
         },
         voucher_signer,
         voucher_counters,
+        &mut shutdown_signals,
     )
     .await;
     let cleanup_result = cleanup_tunnel(prepared);
@@ -665,94 +881,36 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     )?;
     Ok(())
 }
-async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), ControllerError> {
-    let pid = std::process::id();
-    let (endpoint, connection, record_layer) = connect_and_handshake(&payload).await?;
-    let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(error)) => {
-            let failure = ControllerError::Connection(error);
-            connection.close(0u32.into(), failure.to_string().as_bytes());
-            endpoint.close(0u32.into(), failure.to_string().as_bytes());
-            endpoint.wait_idle().await;
-            return Err(failure);
-        }
-        Err(_) => {
-            let failure =
-                ControllerError::State("timed out opening relay VPN tunnel stream".to_owned());
-            connection.close(0u32.into(), failure.to_string().as_bytes());
-            endpoint.close(0u32.into(), failure.to_string().as_bytes());
-            endpoint.wait_idle().await;
-            return Err(failure);
-        }
-    };
-    let record_stream = record_layer
-        .stream(record_stream_context(send.id()))
-        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
-    update_terminal_state(
-        true,
-        false,
-        Some(pid),
-        payload.session_id.as_str(),
-        payload.relay_endpoint.as_str(),
-        "connected".to_owned(),
-    )
-    .map_err(|error| {
-        ControllerError::State(format!(
-            "failed to persist packet engine connected state: {error}"
-        ))
-    })?;
-    let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
-    let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
-    let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
-    let voucher_counters = UsageVoucherCounters::default();
-    let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
-    let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
-    let shutdown = packet_engine_loop(
-        &mut protected_send,
-        &mut protected_recv,
-        circuit_id,
-        flow_label,
-        payload.padding_budget_ms,
-        voucher_signer,
-        voucher_counters,
-    )
-    .await;
-    let (repair_required, message) = match shutdown {
-        Ok(exit) => (exit.repair_required, exit.message),
-        Err(error) => (false, error.to_string()),
-    };
-    let _ = protected_send.shutdown().await;
-    drop(protected_send);
-    drop(protected_recv);
-    connection.close(0u32.into(), message.as_bytes());
-    endpoint.close(0u32.into(), message.as_bytes());
-    endpoint.wait_idle().await;
-    update_terminal_state(
-        false,
-        repair_required,
-        None,
-        payload.session_id.as_str(),
-        payload.relay_endpoint.as_str(),
-        message,
-    )
-    .map_err(|error| {
-        ControllerError::State(format!(
-            "failed to persist packet engine disconnected state: {error}"
-        ))
-    })?;
+fn authorize_worker_start(
+    state: &State,
+    worker_identity: &WorkerProcessIdentity,
+    payload: &ConnectPayload,
+) -> Result<(), ControllerError> {
+    let exact_start_record = !state.active
+        && !state.repair_required
+        && state.message == "starting"
+        && state.worker_identity.as_ref() == Some(worker_identity)
+        && state.session_id.as_deref() == Some(payload.session_id.as_str())
+        && state.relay_endpoint.as_deref() == Some(payload.relay_endpoint.as_str())
+        && state.applied_network.is_none();
+    if !exact_start_record {
+        return Err(ControllerError::State(
+            "worker invocation is not bound to the controller's exact persisted start record"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 async fn connect_and_handshake(
     payload: &ConnectPayload,
 ) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
-    let helper_ticket = decode_hex(payload.helper_ticket_hex.as_str())?;
+    let helper_ticket = WipeBytes(decode_hex(payload.helper_ticket_hex.as_str())?);
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
     let relay_addr = resolve_multiaddr_socket_addr(&relay)
         .await
         .map_err(|error| {
             ControllerError::State(format!(
-                "failed to resolve packet engine relay address {}: {error}",
+                "failed to resolve VPN relay address {}: {error}",
                 payload.relay_endpoint
             ))
         })?;
@@ -762,7 +920,7 @@ async fn connect_and_handshake(
     };
     let mut endpoint = Endpoint::client(bind_addr).map_err(|error| {
         ControllerError::State(format!(
-            "failed to create packet engine QUIC endpoint on {bind_addr}: {error}"
+            "failed to create VPN QUIC endpoint on {bind_addr}: {error}"
         ))
     })?;
     let relay_tls_pin = parse_canonical_nonzero_hex_32(
@@ -770,15 +928,13 @@ async fn connect_and_handshake(
         "relay TLS SPKI pin",
     )?;
     endpoint.set_default_client_config(build_client_config(relay_tls_pin).map_err(|error| {
-        ControllerError::State(format!(
-            "failed to build packet engine QUIC client config: {error}"
-        ))
+        ControllerError::State(format!("failed to build VPN QUIC client config: {error}"))
     })?);
     let connect = endpoint
         .connect(relay_addr, payload.tls_server_name.as_str())
         .map_err(|error| {
             ControllerError::State(format!(
-                "failed to start packet engine QUIC connect to {relay_addr}: {error}"
+                "failed to start VPN QUIC connect to {relay_addr}: {error}"
             ))
         })?;
     let connection = match timeout(CONNECT_TIMEOUT, connect).await {
@@ -850,7 +1006,7 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
 async fn perform_helper_handshake(
     connection: &Connection,
     payload: &ConnectPayload,
-    helper_ticket: Vec<u8>,
+    helper_ticket: WipeBytes,
 ) -> Result<SessionSecrets, ControllerError> {
     let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
         Ok(Ok(streams)) => streams,
@@ -977,27 +1133,23 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
     if let Err(error) =
         apply_tunnel_link_config(&applied_network.interface_name, mtu, &tunnel_addresses)
     {
-        let _ = cleanup_network(&applied_network);
-        return Err(error);
+        return Err(tunnel_prepare_error_with_cleanup(error, &applied_network));
     }
     if let Err(error) = apply_route_pushes(&applied_network.interface_name, &payload.route_pushes) {
-        let _ = cleanup_network(&applied_network);
-        return Err(error);
+        return Err(tunnel_prepare_error_with_cleanup(error, &applied_network));
     }
     match apply_excluded_routes(&payload.excluded_routes) {
         Ok(snapshots) => {
             applied_network.excluded_route_snapshots = snapshots;
         }
         Err(error) => {
-            let _ = cleanup_network(&applied_network);
-            return Err(error);
+            return Err(tunnel_prepare_error_with_cleanup(error, &applied_network));
         }
     }
     let dns_backend = match apply_dns(&applied_network.interface_name, &payload.dns_servers) {
         Ok(backend) => backend,
         Err(error) => {
-            let _ = cleanup_network(&applied_network);
-            return Err(error);
+            return Err(tunnel_prepare_error_with_cleanup(error, &applied_network));
         }
     };
     applied_network.dns_backend = dns_backend.clone();
@@ -1009,10 +1161,29 @@ fn prepare_tunnel(payload: &ConnectPayload) -> Result<PreparedTunnel, Controller
         packet_read_mtu: usize::from(mtu),
     })
 }
+fn tunnel_prepare_error_with_cleanup(
+    error: ControllerError,
+    applied_network: &AppliedNetworkState,
+) -> ControllerError {
+    match cleanup_network(applied_network) {
+        Ok(()) => error,
+        Err(cleanup_error) => ControllerError::State(format!(
+            "{error}; tunnel preparation rollback also failed: {cleanup_error}"
+        )),
+    }
+}
 fn cleanup_tunnel(prepared: PreparedTunnel) -> Result<(), ControllerError> {
     cleanup_network(&prepared.applied_network)?;
     drop(prepared);
     Ok(())
+}
+impl TunnelShutdownSignals {
+    fn install() -> Result<Self, ControllerError> {
+        Ok(Self {
+            sigterm: signal(SignalKind::terminate())?,
+            sigint: signal(SignalKind::interrupt())?,
+        })
+    }
 }
 async fn tunnel_packet_loop<W, R>(
     device: Arc<LinuxTunDevice>,
@@ -1021,13 +1192,12 @@ async fn tunnel_packet_loop<W, R>(
     traffic: TunnelTrafficConfig,
     voucher_signer: Option<UsageVoucherSigner>,
     voucher_counters: UsageVoucherCounters,
+    shutdown_signals: &mut TunnelShutdownSignals,
 ) -> Result<TunnelShutdown, ControllerError>
 where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
     let upstream = tun_to_vpn_loop(
         Arc::clone(&device),
         send,
@@ -1035,15 +1205,15 @@ where
         voucher_signer,
         voucher_counters.clone(),
     );
-    let downstream = vpn_to_tun_loop(device, recv, voucher_counters);
+    let downstream = vpn_to_tun_loop(device, recv, voucher_counters, traffic.packet_read_mtu);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
     tokio::select! {
-        _ = sigterm.recv() => Ok(TunnelShutdown {
+        _ = shutdown_signals.sigterm.recv() => Ok(TunnelShutdown {
             repair_required: false,
             message: "idle".to_owned(),
         }),
-        _ = sigint.recv() => Ok(TunnelShutdown {
+        _ = shutdown_signals.sigint.recv() => Ok(TunnelShutdown {
             repair_required: false,
             message: "idle".to_owned(),
         }),
@@ -1051,65 +1221,6 @@ where
             Ok(()) => Ok(TunnelShutdown {
                 repair_required: false,
                 message: "local tunnel closed".to_owned(),
-            }),
-            Err(error) => Err(error),
-        },
-        result = &mut downstream => match result {
-            Ok(()) => Ok(TunnelShutdown {
-                repair_required: false,
-                message: "relay tunnel closed".to_owned(),
-            }),
-            Err(error) => Err(error),
-        },
-    }
-}
-async fn packet_engine_loop<W, R>(
-    send: &mut W,
-    recv: &mut R,
-    circuit_id: [u8; 16],
-    flow_label: VpnFlowLabelV1,
-    padding_budget_ms: u16,
-    voucher_signer: Option<UsageVoucherSigner>,
-    voucher_counters: UsageVoucherCounters,
-) -> Result<TunnelShutdown, ControllerError>
-where
-    W: AsyncWrite + Unpin,
-    R: AsyncRead + Unpin,
-{
-    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
-        ControllerError::State(format!(
-            "failed to register packet engine SIGTERM handler: {error}"
-        ))
-    })?;
-    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
-        ControllerError::State(format!(
-            "failed to register packet engine SIGINT handler: {error}"
-        ))
-    })?;
-    let upstream = packet_engine_to_vpn_loop(
-        send,
-        circuit_id,
-        flow_label,
-        padding_budget_ms,
-        voucher_signer,
-        voucher_counters.clone(),
-    );
-    let downstream = vpn_to_packet_engine_loop(recv, voucher_counters);
-    tokio::pin!(upstream);
-    tokio::pin!(downstream);
-    tokio::select! {
-        _ = sigterm.recv() => Ok(TunnelShutdown {
-            repair_required: false,
-            message: "idle".to_owned(),
-        }),
-        _ = sigint.recv() => Ok(TunnelShutdown {
-            repair_required: false,
-            message: "idle".to_owned(),
-        }),
-        result = &mut upstream => match result {
-            Ok(()) => Ok(TunnelShutdown {
-                repair_required: false,
-                message: "packet engine input closed".to_owned(),
             }),
             Err(error) => Err(error),
         },
@@ -1205,93 +1316,6 @@ where
         }
     }
 }
-async fn packet_engine_to_vpn_loop<W>(
-    send: &mut W,
-    circuit_id: [u8; 16],
-    flow_label: VpnFlowLabelV1,
-    padding_budget_ms: u16,
-    mut voucher_signer: Option<UsageVoucherSigner>,
-    voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError>
-where
-    W: AsyncWrite + Unpin,
-{
-    let mut reader = tokio_io::stdin();
-    let mut sequence = 0u64;
-    if let Some(signer) = voucher_signer.as_mut() {
-        send_usage_voucher_control_cell(
-            send,
-            circuit_id,
-            flow_label,
-            padding_budget_ms,
-            &voucher_counters,
-            signer,
-            &mut sequence,
-        )
-        .await?;
-    }
-    loop {
-        let Some(packet) = read_packet_from_stream(&mut reader)
-            .await
-            .map_err(|error| {
-                ControllerError::State(format!(
-                    "failed to read packet engine stdin stream: {error}"
-                ))
-            })?
-        else {
-            if let Some(signer) = voucher_signer.as_mut() {
-                send_usage_voucher_control_cell(
-                    send,
-                    circuit_id,
-                    flow_label,
-                    padding_budget_ms,
-                    &voucher_counters,
-                    signer,
-                    &mut sequence,
-                )
-                .await?;
-            }
-            send.shutdown().await?;
-            return Ok(());
-        };
-        voucher_counters.add_egress(packet.len() as u64);
-        let encoded = encode_packet_stream_frame(&packet)?;
-        for chunk in encoded.chunks(VpnCellV1::max_payload_len()) {
-            let cell = VpnCellV1 {
-                header: VpnCellHeaderV1 {
-                    version: 1,
-                    class: VpnCellClassV1::Data,
-                    flags: VpnCellFlagsV1::new(false, false, false, false),
-                    circuit_id,
-                    flow_label,
-                    sequence,
-                    ack: 0,
-                    padding_budget_ms,
-                    payload_len: 0,
-                },
-                payload: chunk.to_vec(),
-            };
-            let padded = cell.into_padded_frame()?;
-            send.write_all(padded.as_ref()).await?;
-            sequence = sequence.saturating_add(1);
-        }
-        if let Some(signer) = voucher_signer.as_mut()
-            && signer.should_emit()
-        {
-            send_usage_voucher_control_cell(
-                send,
-                circuit_id,
-                flow_label,
-                padding_budget_ms,
-                &voucher_counters,
-                signer,
-                &mut sequence,
-            )
-            .await?;
-        }
-        add_traffic_bytes(0, packet.len() as u64)?;
-    }
-}
 async fn read_exact_or_eof<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<bool>
 where
     R: AsyncRead + Unpin,
@@ -1320,11 +1344,12 @@ async fn vpn_to_tun_loop<R>(
     device: Arc<LinuxTunDevice>,
     recv: &mut R,
     voucher_counters: UsageVoucherCounters,
+    packet_read_mtu: usize,
 ) -> Result<(), ControllerError>
 where
     R: AsyncRead + Unpin,
 {
-    let mut decoder = PacketStreamDecoder::default();
+    let mut decoder = PacketStreamDecoder::new(packet_read_mtu)?;
     let mut frame = [0u8; VPN_CELL_LEN];
     loop {
         match read_exact_or_eof(recv, &mut frame).await {
@@ -1351,53 +1376,12 @@ where
         }
     }
 }
-async fn vpn_to_packet_engine_loop<R>(
-    recv: &mut R,
-    voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut decoder = PacketStreamDecoder::default();
-    let mut frame = [0u8; VPN_CELL_LEN];
-    let mut writer = tokio_io::stdout();
-    loop {
-        match read_exact_or_eof(recv, &mut frame).await {
-            Ok(true) => {
-                let cell = VpnPaddedCellV1::parse_bytes_with_flow_label_bits(
-                    &frame,
-                    VpnFlowLabelV1::MAX_BITS,
-                )?;
-                if cell.header.class != VpnCellClassV1::Data {
-                    continue;
-                }
-                for packet in decoder.ingest(&cell.payload)? {
-                    write_packet_to_stream(&mut writer, &packet)
-                        .await
-                        .map_err(|error| {
-                            ControllerError::State(format!(
-                                "failed to write packet engine stdout stream: {error}"
-                            ))
-                        })?;
-                    voucher_counters.add_ingress(packet.len() as u64);
-                    add_traffic_bytes(packet.len() as u64, 0)?;
-                }
-            }
-            Ok(false) => return Ok(()),
-            Err(error) => {
-                return Err(ControllerError::State(format!(
-                    "relay read failed: {error}"
-                )));
-            }
-        }
-    }
-}
 impl UsageVoucherSigner {
     fn from_payload(payload: &ConnectPayload) -> Result<Option<Self>, ControllerError> {
         let Some(seed_hex) = payload.metering_private_key_seed_hex.as_deref() else {
             return Ok(None);
         };
-        let seed = parse_fixed_hex_32(seed_hex, "metering private key seed")?;
+        let mut seed = parse_fixed_hex_32(seed_hex, "metering private key seed")?;
         let ticket = decode_helper_ticket_metadata(payload.helper_ticket_hex.as_str())?;
         let expected_session_id = relay_session_id_from_session_id(payload.session_id.as_str());
         if ticket.session_id != expected_session_id {
@@ -1405,12 +1389,13 @@ impl UsageVoucherSigner {
                 "helper ticket session id does not match connect sessionId".to_owned(),
             ));
         }
-        let key_pair =
-            KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
-                ControllerError::InvalidPayload(format!(
-                    "metering private key seed was rejected: {err}"
-                ))
-            })?;
+        let key_pair_result = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519);
+        wipe_secret_bytes(&mut seed);
+        let key_pair = key_pair_result.map_err(|err| {
+            ControllerError::InvalidPayload(format!(
+                "metering private key seed was rejected: {err}"
+            ))
+        })?;
         if key_pair.public_key() != &ticket.metering_public_key {
             return Err(ControllerError::InvalidPayload(
                 "metering private key does not match helper ticket public key".to_owned(),
@@ -1422,12 +1407,8 @@ impl UsageVoucherSigner {
             ticket,
             sequence: 0,
             started_at: now,
-            last_emitted_at: now,
             interval: Duration::from_millis(payload.usage_voucher_interval_ms.max(1)),
         }))
-    }
-    fn should_emit(&self) -> bool {
-        self.last_emitted_at.elapsed() >= self.interval
     }
     fn build_envelope(
         &mut self,
@@ -1447,7 +1428,7 @@ impl UsageVoucherSigner {
             ingress_bytes,
             egress_bytes,
             active_ms,
-            issued_at_ms: unix_now_ms(),
+            issued_at_ms: unix_now_ms()?,
         };
         let voucher = VpnUsageVoucherV1 {
             signature: Signature::try_new(self.key_pair.private_key(), &body.encode())?,
@@ -1462,7 +1443,6 @@ impl UsageVoucherSigner {
                 ControllerError::State(format!("usage voucher tariff arithmetic failed: {error}"))
             })?;
         self.sequence = self.sequence.saturating_add(1);
-        self.last_emitted_at = Instant::now();
         Ok(VpnUsageVoucherEnvelopeV1 {
             voucher,
             earned_fee,
@@ -1515,19 +1495,35 @@ where
     Ok(())
 }
 fn decode_helper_ticket_metadata(hex_ticket: &str) -> Result<VpnHelperTicketV1, ControllerError> {
-    let bytes = decode_hex(hex_ticket)?;
+    let bytes = WipeBytes(decode_hex(hex_ticket)?);
     VpnHelperTicketV1::decode_unverified(&bytes).map_err(|error| {
         ControllerError::InvalidPayload(format!("helperTicketHex has invalid v1 metadata: {error}"))
     })
 }
-fn unix_now_ms() -> u64 {
-    SystemTime::now()
+fn unix_now_ms() -> Result<u64, ControllerError> {
+    unix_time_ms_at(SystemTime::now())
+}
+fn unix_time_ms_at(now: SystemTime) -> Result<u64, ControllerError> {
+    let elapsed = now
         .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
+        .map_err(|_| ControllerError::State("system clock is before the Unix epoch".to_owned()))?;
+    Ok(elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
 }
 impl PacketStreamDecoder {
+    fn new(max_packet_len: usize) -> Result<Self, ControllerError> {
+        if max_packet_len == 0 || max_packet_len > usize::from(u16::MAX) {
+            return Err(ControllerError::State(format!(
+                "packet-stream MTU must be within 1..={}, got {max_packet_len}",
+                u16::MAX
+            )));
+        }
+        Ok(Self {
+            buffer: Vec::new(),
+            expected_len: None,
+            max_packet_len,
+        })
+    }
+
     fn ingest(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, ControllerError> {
         self.buffer.extend_from_slice(bytes);
         let mut packets = Vec::new();
@@ -1537,6 +1533,12 @@ impl PacketStreamDecoder {
                     break;
                 }
                 let len = usize::from(u16::from_be_bytes([self.buffer[0], self.buffer[1]]));
+                if len == 0 || len > self.max_packet_len {
+                    return Err(ControllerError::State(format!(
+                        "packet-stream frame length {len} is outside 1..={} negotiated MTU bytes",
+                        self.max_packet_len
+                    )));
+                }
                 self.buffer.drain(..PACKET_LEN_PREFIX_BYTES);
                 self.expected_len = Some(len);
             }
@@ -1565,7 +1567,7 @@ impl LinuxTunDevice {
         let fd = unsafe {
             nix::libc::open(
                 c"/dev/net/tun".as_ptr() as *const _,
-                nix::libc::O_RDWR | nix::libc::O_NONBLOCK,
+                nix::libc::O_RDWR | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC,
             )
         };
         if fd < 0 {
@@ -1578,7 +1580,7 @@ impl LinuxTunDevice {
                 req.ifr_name.as_mut_ptr(),
                 name_bytes.len(),
             );
-            req.ifr_ifru.ifru_flags = (LINUX_IFF_TUN | LINUX_IFF_NO_PI) as _;
+            req.ifr_ifru.ifru_flags = linux_tun_creation_flags();
         }
         let ioctl_result = unsafe { nix::libc::ioctl(fd, LINUX_TUNSETIFF as _, &req) };
         if ioctl_result < 0 {
@@ -1588,9 +1590,23 @@ impl LinuxTunDevice {
             }
             return Err(ControllerError::Io(error));
         }
-        let name = unsafe { CStr::from_ptr(req.ifr_name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
+        let name = match unsafe { CStr::from_ptr(req.ifr_name.as_ptr()) }.to_str() {
+            Ok(name) => name.to_owned(),
+            Err(error) => {
+                unsafe {
+                    nix::libc::close(fd);
+                }
+                return Err(ControllerError::State(format!(
+                    "kernel returned a non-UTF-8 TUN interface name: {error}"
+                )));
+            }
+        };
+        if let Err(error) = ensure_exact_tun_interface_name(requested_name, &name) {
+            unsafe {
+                nix::libc::close(fd);
+            }
+            return Err(error);
+        }
         let file = unsafe { fs::File::from_raw_fd(fd) };
         let file = AsyncFd::new(file)?;
         Ok(Self { file, name })
@@ -1629,6 +1645,27 @@ impl LinuxTunDevice {
         }
     }
 }
+#[cfg(target_os = "linux")]
+const fn linux_tun_creation_flags() -> nix::libc::c_short {
+    linux_tun_creation_flag_bits() as nix::libc::c_short
+}
+#[cfg(any(target_os = "linux", test))]
+const fn linux_tun_creation_flag_bits() -> u16 {
+    // `IFF_TUN_EXCL` makes a name collision fail instead of attaching this privileged worker to
+    // an existing interface that it would subsequently reconfigure.
+    LINUX_IFF_TUN_BITS | LINUX_IFF_NO_PI_BITS | LINUX_IFF_TUN_EXCL_BITS
+}
+fn ensure_exact_tun_interface_name(
+    requested_name: &str,
+    kernel_name: &str,
+) -> Result<(), ControllerError> {
+    if kernel_name != requested_name {
+        return Err(ControllerError::State(format!(
+            "kernel returned TUN interface name {kernel_name} instead of requested {requested_name}"
+        )));
+    }
+    Ok(())
+}
 fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError> {
     let packet_len = u16::try_from(packet.len()).map_err(|_| {
         ControllerError::State(format!(
@@ -1641,36 +1678,6 @@ fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError>
     encoded.extend_from_slice(packet);
     Ok(encoded)
 }
-async fn read_packet_from_stream<R>(reader: &mut R) -> Result<Option<Vec<u8>>, ControllerError>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut len_buf = [0u8; PACKET_LEN_PREFIX_BYTES];
-    let first_len = reader.read(&mut len_buf[..1]).await?;
-    if first_len == 0 {
-        return Ok(None);
-    }
-    reader.read_exact(&mut len_buf[1..]).await?;
-    let packet_len = usize::from(u16::from_be_bytes(len_buf));
-    let mut packet = vec![0u8; packet_len];
-    reader.read_exact(&mut packet).await?;
-    Ok(Some(packet))
-}
-async fn write_packet_to_stream<W>(writer: &mut W, packet: &[u8]) -> Result<(), ControllerError>
-where
-    W: AsyncWrite + Unpin,
-{
-    let packet_len = u16::try_from(packet.len()).map_err(|_| {
-        ControllerError::State(format!(
-            "packet length {} exceeds u16 packet-stream limit",
-            packet.len()
-        ))
-    })?;
-    writer.write_all(&packet_len.to_be_bytes()).await?;
-    writer.write_all(packet).await?;
-    writer.flush().await?;
-    Ok(())
-}
 fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerError> {
     if bytes_in == 0 && bytes_out == 0 {
         return Ok(());
@@ -1680,7 +1687,7 @@ fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerErro
     flush_traffic_bytes_if_due(false)
 }
 fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
-    let now_ms = unix_now_ms();
+    let now_ms = unix_now_ms()?;
     let last_ms = LAST_TRAFFIC_FLUSH_MS.load(Ordering::Relaxed);
     if !force && last_ms != 0 && now_ms.saturating_sub(last_ms) < 1_000 {
         return Ok(());
@@ -1691,7 +1698,7 @@ fn flush_traffic_bytes_if_due(force: bool) -> Result<(), ControllerError> {
         LAST_TRAFFIC_FLUSH_MS.store(now_ms, Ordering::Relaxed);
         return Ok(());
     }
-    let mut state = current_state();
+    let mut state = current_state()?;
     state.bytes_in = state.bytes_in.saturating_add(bytes_in);
     state.bytes_out = state.bytes_out.saturating_add(bytes_out);
     if let Err(error) = persist_state(&state) {
@@ -1706,18 +1713,42 @@ fn flush_traffic_bytes() -> Result<(), ControllerError> {
     flush_traffic_bytes_if_due(true)
 }
 fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
+    let restored_persisted_resolver = state.applied_network.as_ref().is_some_and(|applied| {
+        matches!(
+            applied.dns_backend.as_ref(),
+            Some(DnsBackendState::ResolvConf)
+        )
+    });
     if let Some(applied) = state.applied_network.take() {
         cleanup_network(&applied)?;
+    }
+    if !restored_persisted_resolver {
+        match fs::symlink_metadata(resolv_conf_backup_path()) {
+            Ok(_) => cleanup_dns(&DnsBackendState::ResolvConf)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     state.network_service = None;
     Ok(())
 }
 fn cleanup_network(applied: &AppliedNetworkState) -> Result<(), ControllerError> {
+    let mut failures = Vec::new();
     if let Some(dns_backend) = &applied.dns_backend {
-        cleanup_dns(dns_backend)?;
+        if let Err(error) = cleanup_dns(dns_backend) {
+            failures.push(format!("DNS cleanup failed: {error}"));
+        }
     }
-    for snapshot in &applied.excluded_route_snapshots {
-        restore_excluded_route(snapshot)?;
+    for snapshot in applied.excluded_route_snapshots.iter().rev() {
+        if let Err(error) = restore_excluded_route(snapshot) {
+            failures.push(format!(
+                "failed to restore excluded route {}: {error}",
+                snapshot.cidr
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        return Err(ControllerError::State(failures.join("; ")));
     }
     Ok(())
 }
@@ -1741,14 +1772,7 @@ fn apply_tunnel_link_config(
     for address in tunnel_addresses {
         run_command(
             DEFAULT_ROUTE_CMD,
-            vec![
-                address.family().flag().to_owned(),
-                "address".to_owned(),
-                "replace".to_owned(),
-                format!("{}/{}", address.address, address.prefix),
-                "dev".to_owned(),
-                interface_name.to_owned(),
-            ],
+            tunnel_address_add_args(interface_name, *address),
         )?;
     }
     Ok(())
@@ -1758,54 +1782,90 @@ fn apply_route_pushes(interface_name: &str, routes: &[String]) -> Result<(), Con
         let parsed = parse_cidr(route)?;
         run_command(
             DEFAULT_ROUTE_CMD,
-            vec![
-                parsed.family().flag().to_owned(),
-                "route".to_owned(),
-                "replace".to_owned(),
-                route.trim().to_owned(),
-                "dev".to_owned(),
-                interface_name.to_owned(),
-            ],
+            tunnel_route_add_args(interface_name, parsed),
         )?;
     }
     Ok(())
 }
+fn tunnel_address_add_args(interface_name: &str, address: ParsedCidr) -> Vec<String> {
+    vec![
+        address.family().flag().to_owned(),
+        "address".to_owned(),
+        "add".to_owned(),
+        format!("{}/{}", address.address, address.prefix),
+        "dev".to_owned(),
+        interface_name.to_owned(),
+    ]
+}
+fn tunnel_route_add_args(interface_name: &str, route: ParsedCidr) -> Vec<String> {
+    vec![
+        route.family().flag().to_owned(),
+        "route".to_owned(),
+        "add".to_owned(),
+        format!("{}/{}", route.address, route.prefix),
+        "dev".to_owned(),
+        interface_name.to_owned(),
+    ]
+}
 fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>, ControllerError> {
     let mut snapshots = Vec::with_capacity(routes.len());
     for route in routes {
-        let normalized = route.trim().to_owned();
-        let parsed = parse_cidr(&normalized)?;
-        let previous_route = capture_existing_route(parsed.family(), &normalized)?;
-        let default_route = capture_default_route(parsed.family())?;
-        let Some((via, dev)) = default_route else {
-            return Err(ControllerError::State(format!(
-                "cannot install excluded route {normalized}: no system default route for {}",
-                match parsed.family() {
-                    IpFamily::V4 => "IPv4",
-                    IpFamily::V6 => "IPv6",
+        let applied = (|| -> Result<ExcludedRouteSnapshot, ControllerError> {
+            let normalized = route.trim().to_owned();
+            let parsed = parse_cidr(&normalized)?;
+            let previous_route = capture_existing_route(parsed.family(), &normalized)?;
+            let default_route = capture_default_route(parsed.family())?;
+            let Some((via, dev)) = default_route else {
+                return Err(ControllerError::State(format!(
+                    "cannot install excluded route {normalized}: no system default route for {}",
+                    match parsed.family() {
+                        IpFamily::V4 => "IPv4",
+                        IpFamily::V6 => "IPv6",
+                    }
+                )));
+            };
+            let mut args = vec![
+                parsed.family().flag().to_owned(),
+                "route".to_owned(),
+                "replace".to_owned(),
+                normalized.clone(),
+            ];
+            if let Some(via) = via {
+                args.push("via".to_owned());
+                args.push(via);
+            }
+            if let Some(dev) = dev {
+                args.push("dev".to_owned());
+                args.push(dev);
+            }
+            run_command(DEFAULT_ROUTE_CMD, args)?;
+            Ok(ExcludedRouteSnapshot {
+                cidr: normalized,
+                family: parsed.family(),
+                previous_route,
+            })
+        })();
+        match applied {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(error) => {
+                let rollback = snapshots
+                    .iter()
+                    .rev()
+                    .filter_map(|snapshot| {
+                        restore_excluded_route(snapshot)
+                            .err()
+                            .map(|rollback_error| format!("{}: {rollback_error}", snapshot.cidr))
+                    })
+                    .collect::<Vec<_>>();
+                if rollback.is_empty() {
+                    return Err(error);
                 }
-            )));
-        };
-        let mut args = vec![
-            parsed.family().flag().to_owned(),
-            "route".to_owned(),
-            "replace".to_owned(),
-            normalized.clone(),
-        ];
-        if let Some(via) = via {
-            args.push("via".to_owned());
-            args.push(via);
+                return Err(ControllerError::State(format!(
+                    "{error}; excluded-route rollback also failed: {}",
+                    rollback.join("; ")
+                )));
+            }
         }
-        if let Some(dev) = dev {
-            args.push("dev".to_owned());
-            args.push(dev);
-        }
-        run_command(DEFAULT_ROUTE_CMD, args)?;
-        snapshots.push(ExcludedRouteSnapshot {
-            cidr: normalized,
-            family: parsed.family(),
-            previous_route,
-        });
     }
     Ok(snapshots)
 }
@@ -1876,25 +1936,39 @@ fn apply_dns(
         return Ok(None);
     }
     if command_exists("resolvectl") {
-        let mut dns_args = vec!["dns".to_owned(), interface_name.to_owned()];
-        dns_args.extend(dns_servers.iter().map(|item| item.trim().to_owned()));
-        run_command("resolvectl", dns_args)?;
-        run_command(
-            "resolvectl",
-            vec![
-                "domain".to_owned(),
-                interface_name.to_owned(),
-                "~.".to_owned(),
-            ],
-        )?;
-        run_command(
-            "resolvectl",
-            vec![
-                "default-route".to_owned(),
-                interface_name.to_owned(),
-                "true".to_owned(),
-            ],
-        )?;
+        let apply_result = (|| -> Result<(), ControllerError> {
+            let mut dns_args = vec!["dns".to_owned(), interface_name.to_owned()];
+            dns_args.extend(dns_servers.iter().map(|item| item.trim().to_owned()));
+            run_command("resolvectl", dns_args)?;
+            run_command(
+                "resolvectl",
+                vec![
+                    "domain".to_owned(),
+                    interface_name.to_owned(),
+                    "~.".to_owned(),
+                ],
+            )?;
+            run_command(
+                "resolvectl",
+                vec![
+                    "default-route".to_owned(),
+                    interface_name.to_owned(),
+                    "true".to_owned(),
+                ],
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = apply_result {
+            return match run_command(
+                "resolvectl",
+                vec!["revert".to_owned(), interface_name.to_owned()],
+            ) {
+                Ok(_) => Err(error),
+                Err(rollback_error) => Err(ControllerError::State(format!(
+                    "{error}; resolved DNS rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
         return Ok(Some(DnsBackendState::Resolved {
             interface_name: interface_name.to_owned(),
         }));
@@ -1904,22 +1978,58 @@ fn apply_dns(
         Path::new("/etc/resolv.conf"),
         MAX_RESOLV_CONF_BYTES_V1,
         "resolver configuration",
-    )
-    .unwrap_or_default();
-    if let Some(parent) = backup_path.parent() {
-        fs::create_dir_all(parent)?;
+    )?;
+    let state_root = backup_path
+        .parent()
+        .ok_or_else(|| ControllerError::State("resolver backup path has no parent".to_owned()))?;
+    prepare_private_state_root(state_root)?;
+    match fs::symlink_metadata(&backup_path) {
+        Ok(_) => {
+            return Err(ControllerError::State(format!(
+                "resolver backup {} already exists; repair the prior VPN state before connecting",
+                backup_path.display()
+            )));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
-    write_private_file(&backup_path, &backup_bytes)?;
+    write_file_atomic(
+        &backup_path,
+        &backup_bytes,
+        0o600,
+        true,
+        "resolver configuration backup",
+    )?;
     let mut rendered = String::from("# sora-vpn-controller managed resolv.conf\n");
     for server in dns_servers {
         rendered.push_str("nameserver ");
         rendered.push_str(server.trim());
         rendered.push('\n');
     }
-    write_private_file(Path::new("/etc/resolv.conf"), rendered.as_bytes())?;
-    Ok(Some(DnsBackendState::ResolvConf {
-        backup_path: backup_path.to_string_lossy().into_owned(),
-    }))
+    if let Err(error) = write_file_atomic(
+        Path::new("/etc/resolv.conf"),
+        rendered.as_bytes(),
+        0o644,
+        false,
+        "resolver configuration",
+    ) {
+        return match write_file_atomic(
+            Path::new("/etc/resolv.conf"),
+            &backup_bytes,
+            0o644,
+            false,
+            "resolver configuration rollback",
+        ) {
+            Ok(()) => {
+                remove_private_file_durable(&backup_path, "resolver configuration backup")?;
+                Err(error)
+            }
+            Err(rollback_error) => Err(ControllerError::State(format!(
+                "{error}; resolver rollback also failed: {rollback_error}"
+            ))),
+        };
+    }
+    Ok(Some(DnsBackendState::ResolvConf))
 }
 fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
     match backend {
@@ -1929,15 +2039,21 @@ fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
                 vec!["revert".to_owned(), interface_name.clone()],
             )?;
         }
-        DnsBackendState::ResolvConf { backup_path } => {
-            let backup = PathBuf::from(backup_path);
-            let bytes = read_stable_regular_file_bounded(
+        DnsBackendState::ResolvConf => {
+            let backup = resolv_conf_backup_path();
+            let bytes = read_private_stable_regular_file_bounded(
                 &backup,
                 MAX_RESOLV_CONF_BYTES_V1,
                 "resolver configuration backup",
             )?;
-            write_private_file(Path::new("/etc/resolv.conf"), &bytes)?;
-            let _ = fs::remove_file(backup);
+            write_file_atomic(
+                Path::new("/etc/resolv.conf"),
+                &bytes,
+                0o644,
+                false,
+                "resolver configuration",
+            )?;
+            remove_private_file_durable(&backup, "resolver configuration backup")?;
         }
     }
     Ok(())
@@ -1945,14 +2061,11 @@ fn cleanup_dns(backend: &DnsBackendState) -> Result<(), ControllerError> {
 fn dns_backend_label(backend: &DnsBackendState) -> String {
     match backend {
         DnsBackendState::Resolved { .. } => "resolvectl".to_owned(),
-        DnsBackendState::ResolvConf { .. } => "resolv.conf".to_owned(),
+        DnsBackendState::ResolvConf => "resolv.conf".to_owned(),
     }
 }
 fn resolv_conf_backup_path() -> PathBuf {
-    state_path()
-        .parent()
-        .unwrap_or_else(|| Path::new("/tmp"))
-        .join("resolv.conf.backup")
+    default_state_root().join(RESOLV_CONF_BACKUP_FILE_NAME)
 }
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
@@ -1969,17 +2082,118 @@ where
         .into_iter()
         .map(|item| item.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    let output = ProcessCommand::new(&program_path)
+    execute_system_command(program, &program_path, &collected, SYSTEM_COMMAND_TIMEOUT)
+}
+fn execute_system_command(
+    program: &str,
+    program_path: &Path,
+    collected: &[String],
+    command_timeout: Duration,
+) -> Result<String, ControllerError> {
+    let mut command = ProcessCommand::new(program_path);
+    command
         .env_clear()
         .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
-        .args(&collected)
-        .output()?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        .args(collected)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // A timed-out helper may have forked descendants that inherited the pipe descriptors. Put
+    // the command in its own process group so cleanup closes every inherited descriptor instead
+    // of blocking forever while joining the drain threads.
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = kill_command_process_group(child.id());
+            let _ = child.wait();
+            return Err(ControllerError::State(format!(
+                "failed to capture {program} standard output"
+            )));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = kill_command_process_group(child.id());
+            let _ = child.wait();
+            return Err(ControllerError::State(format!(
+                "failed to capture {program} standard error"
+            )));
+        }
+    };
+    let stdout_thread = match std::thread::Builder::new()
+        .name("sora-vpn-command-stdout".to_owned())
+        .spawn(move || drain_bounded_pipe(stdout, MAX_SYSTEM_COMMAND_STDOUT_BYTES))
+    {
+        Ok(thread) => thread,
+        Err(error) => {
+            let _ = kill_command_process_group(child.id());
+            let _ = child.wait();
+            return Err(error.into());
+        }
+    };
+    let stderr_thread = match std::thread::Builder::new()
+        .name("sora-vpn-command-stderr".to_owned())
+        .spawn(move || drain_bounded_pipe(stderr, MAX_SYSTEM_COMMAND_STDERR_BYTES))
+    {
+        Ok(thread) => thread,
+        Err(error) => {
+            let _ = kill_command_process_group(child.id());
+            let _ = child.wait();
+            let _ = stdout_thread.join();
+            return Err(error.into());
+        }
+    };
+    let deadline = Instant::now() + command_timeout;
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // The command contract forbids detached work. Ensure descendants cannot retain
+                // pipes or continue privileged mutations after their leader exits.
+                kill_command_process_group(child.id())?;
+                break (status, false);
+            }
+            Ok(None) if Instant::now() < deadline => {
+                sleep_blocking(SYSTEM_COMMAND_POLL_INTERVAL);
+            }
+            Ok(None) => {
+                kill_command_process_group(child.id())?;
+                break (child.wait()?, true);
+            }
+            Err(error) => {
+                let _ = kill_command_process_group(child.id());
+                let _ = child.wait();
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return Err(error.into());
+            }
+        }
+    };
+    let stdout_result = join_bounded_pipe(stdout_thread, "standard output");
+    let stderr_result = join_bounded_pipe(stderr_thread, "standard error");
+    let stdout = stdout_result?;
+    let stderr = stderr_result?;
+    if timed_out {
+        return Err(ControllerError::State(format!(
+            "{program} {} exceeded the {} second command deadline",
+            collected.join(" "),
+            command_timeout.as_secs_f64()
+        )));
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if stdout.overflow || stderr.overflow {
+        return Err(ControllerError::State(format!(
+            "{program} {} exceeded bounded command output limits",
+            collected.join(" ")
+        )));
+    }
+    if status.success() {
+        return Ok(String::from_utf8_lossy(&stdout.bytes).into_owned());
+    }
+    let stderr = String::from_utf8_lossy(&stderr.bytes).trim().to_owned();
     let detail = if stderr.is_empty() {
-        format!("exit status {}", output.status)
+        format!("exit status {status}")
     } else {
         stderr
     };
@@ -1988,15 +2202,104 @@ where
         collected.join(" ")
     )))
 }
-fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
-    if program.contains('/') {
-        let path = PathBuf::from(program);
-        return path.exists().then_some(path);
+fn kill_command_process_group(child_pid: u32) -> io::Result<()> {
+    let process_group = i32::try_from(child_pid)
+        .map_err(|_| io::Error::other("child PID does not fit a Unix process-group identifier"))?;
+    match nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(process_group),
+        nix::sys::signal::Signal::SIGKILL,
+    ) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
     }
-    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+}
+#[derive(Debug, PartialEq, Eq)]
+struct BoundedPipeOutput {
+    bytes: Vec<u8>,
+    overflow: bool,
+}
+fn drain_bounded_pipe<R: io::Read>(
+    mut reader: R,
+    max_bytes: usize,
+) -> io::Result<BoundedPipeOutput> {
+    let mut bytes = Vec::new();
+    let mut overflow = false;
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let count = match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        let retained = remaining.min(count);
+        bytes.extend_from_slice(&chunk[..retained]);
+        overflow |= retained != count;
+    }
+    Ok(BoundedPipeOutput { bytes, overflow })
+}
+fn join_bounded_pipe(
+    thread: std::thread::JoinHandle<io::Result<BoundedPipeOutput>>,
+    label: &str,
+) -> Result<BoundedPipeOutput, ControllerError> {
+    thread
+        .join()
+        .map_err(|_| ControllerError::State(format!("{label} drain thread panicked")))?
+        .map_err(Into::into)
+}
+fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
+    if !matches!(program, "ip" | "resolvectl") {
+        return None;
+    }
+    ["/usr/sbin", "/usr/bin", "/sbin", "/bin"]
         .into_iter()
         .map(|dir| Path::new(dir).join(program))
-        .find(|candidate| candidate.exists())
+        .filter_map(|candidate| candidate.canonicalize().ok())
+        .find(|candidate| validate_system_executable(candidate).is_ok())
+}
+fn validate_system_executable(path: &Path) -> Result<(), ControllerError> {
+    if !path.is_absolute() {
+        return Err(ControllerError::State(format!(
+            "system executable {} is not absolute",
+            path.display()
+        )));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(ControllerError::State(format!(
+            "system executable {} is not a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.uid() != 0 {
+            return Err(ControllerError::State(format!(
+                "system executable {} is not root-owned",
+                path.display()
+            )));
+        }
+        if metadata.mode() & 0o022 != 0 {
+            return Err(ControllerError::State(format!(
+                "system executable {} is group- or other-writable",
+                path.display()
+            )));
+        }
+        if metadata.mode() & 0o111 == 0 {
+            return Err(ControllerError::State(format!(
+                "system executable {} is not executable",
+                path.display()
+            )));
+        }
+    }
+    let parent = path.parent().ok_or_else(|| {
+        ControllerError::State(format!(
+            "system executable {} has no parent",
+            path.display()
+        ))
+    })?;
+    validate_directory_custody(parent)
 }
 fn normalize_mtu(value: u64) -> Result<u16, ControllerError> {
     if value == 0 || value > u64::from(u16::MAX) {
@@ -2033,22 +2336,8 @@ fn parse_cidr(value: &str) -> Result<ParsedCidr, ControllerError> {
     Ok(ParsedCidr { address, prefix })
 }
 fn desired_interface_name(session_id: &str) -> Result<String, ControllerError> {
-    if let Some(name) = current_interface_name() {
-        return Ok(name);
-    }
-    let suffix = session_id
-        .chars()
-        .filter(|ch| ch.is_ascii_hexdigit())
-        .take(10)
-        .collect::<String>();
-    let name = format!(
-        "srvpn{}",
-        if suffix.is_empty() {
-            "0000000000"
-        } else {
-            suffix.as_str()
-        }
-    );
+    let digest = blake3_hash(session_id.as_bytes());
+    let name = format!("srvpn{}", hex::encode(&digest.as_bytes()[..5]));
     if name.len() > 15 {
         return Err(ControllerError::State(format!(
             "derived interface name {name} exceeds Linux IFNAMSIZ"
@@ -2091,31 +2380,34 @@ fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
 fn update_terminal_state(
     active: bool,
     repair_required: bool,
-    pid: Option<u32>,
+    worker_identity: Option<WorkerProcessIdentity>,
     session_id: &str,
     relay_endpoint: &str,
     message: String,
 ) -> Result<(), ControllerError> {
     flush_traffic_bytes()?;
-    let mut state = current_state();
+    let mut state = current_state()?;
     state.active = active;
     state.repair_required = repair_required;
-    state.pid = pid;
+    state.worker_identity = worker_identity;
     state.session_id = Some(session_id.to_owned());
     state.relay_endpoint = Some(relay_endpoint.to_owned());
-    if !active {
-        state.applied_network = None;
-        state.network_service = None;
-    }
+    apply_terminal_network_lifecycle(&mut state, active, repair_required);
     state.message = message;
     persist_state(&state)?;
     Ok(())
 }
-fn current_state() -> State {
-    let mut state = load_state();
+fn apply_terminal_network_lifecycle(state: &mut State, active: bool, repair_required: bool) {
+    if !active && !repair_required {
+        state.applied_network = None;
+        state.network_service = None;
+    }
+}
+fn current_state() -> Result<State, ControllerError> {
+    let mut state = load_state()?;
     hydrate_runtime_fields(&mut state);
-    scrub_stale_process(&mut state);
-    state
+    scrub_stale_process(&mut state)?;
+    Ok(state)
 }
 fn read_bounded<R: io::Read>(
     reader: &mut R,
@@ -2123,6 +2415,25 @@ fn read_bounded<R: io::Read>(
     label: &str,
 ) -> Result<Vec<u8>, ControllerError> {
     let mut bytes = Vec::new();
+    read_bounded_into(reader, max_bytes, label, &mut bytes)?;
+    Ok(bytes)
+}
+fn read_sensitive_bounded<R: io::Read>(
+    reader: &mut R,
+    max_bytes: usize,
+    label: &str,
+) -> Result<WipeBytes, ControllerError> {
+    let mut bytes = WipeBytes(Vec::new());
+    read_bounded_into(reader, max_bytes, label, &mut bytes.0)?;
+    Ok(bytes)
+}
+fn read_bounded_into<R: io::Read>(
+    reader: &mut R,
+    max_bytes: usize,
+    label: &str,
+    bytes: &mut Vec<u8>,
+) -> Result<(), ControllerError> {
+    debug_assert!(bytes.is_empty());
     let mut chunk = [0_u8; 8 * 1024];
     while bytes.len() < max_bytes {
         let remaining = max_bytes - bytes.len();
@@ -2135,7 +2446,7 @@ fn read_bounded<R: io::Read>(
             }
         };
         if count == 0 {
-            return Ok(bytes);
+            return Ok(());
         }
         bytes.try_reserve_exact(count).map_err(|error| {
             ControllerError::InvalidPayload(format!(
@@ -2157,21 +2468,38 @@ fn read_bounded<R: io::Read>(
             "{label} exceeds the v1 limit of {max_bytes} bytes"
         )));
     }
-    Ok(bytes)
+    Ok(())
 }
 fn read_stable_regular_file_bounded(
     path: &Path,
     max_bytes: usize,
     label: &str,
 ) -> Result<Vec<u8>, ControllerError> {
-    let mut file = fs::File::open(path)?;
+    read_stable_regular_file_bounded_with_policy(path, max_bytes, label, false)
+}
+fn read_private_stable_regular_file_bounded(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, ControllerError> {
+    read_stable_regular_file_bounded_with_policy(path, max_bytes, label, true)
+}
+fn read_stable_regular_file_bounded_with_policy(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+    private: bool,
+) -> Result<Vec<u8>, ControllerError> {
+    let before_path = fs::symlink_metadata(path)?;
+    validate_regular_file_metadata(path, &before_path, label, private)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let mut file = options.open(path)?;
     let before = file.metadata()?;
-    if !before.file_type().is_file() {
-        return Err(ControllerError::State(format!(
-            "{label} {} is not a regular file",
-            path.display()
-        )));
-    }
+    validate_regular_file_metadata(path, &before, label, private)?;
+    ensure_same_file(&before_path, &before, path, label)?;
     if before.len() > max_bytes as u64 {
         return Err(ControllerError::State(format!(
             "{label} {} exceeds the v1 limit of {max_bytes} bytes",
@@ -2185,7 +2513,14 @@ fn read_stable_regular_file_bounded(
         ))
     })?;
     let after = file.metadata()?;
-    if before.len() != after.len() || after.len() != bytes.len() as u64 {
+    let after_path = fs::symlink_metadata(path)?;
+    validate_regular_file_metadata(path, &after_path, label, private)?;
+    ensure_same_file(&before, &after, path, label)?;
+    ensure_same_file(&after, &after_path, path, label)?;
+    if before.len() != after.len()
+        || after.len() != bytes.len() as u64
+        || metadata_modified_tuple(&before) != metadata_modified_tuple(&after)
+    {
         return Err(ControllerError::State(format!(
             "{label} {} changed while it was being read",
             path.display()
@@ -2193,22 +2528,126 @@ fn read_stable_regular_file_bounded(
     }
     Ok(bytes)
 }
-fn load_state() -> State {
-    let path = state_path();
-    let Ok(bytes) = read_stable_regular_file_bounded(&path, MAX_STATE_FRAME_BYTES_V1, "state file")
-    else {
-        return State::default();
+fn validate_regular_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+    label: &str,
+    private: bool,
+) -> Result<(), ControllerError> {
+    if !metadata.file_type().is_file() {
+        return Err(ControllerError::State(format!(
+            "{label} {} is not a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(ControllerError::State(format!(
+                "{label} {} must have exactly one hard link",
+                path.display()
+            )));
+        }
+        if private && metadata.uid() != effective_uid() {
+            return Err(ControllerError::State(format!(
+                "{label} {} is not owned by the effective user",
+                path.display()
+            )));
+        }
+        if private && metadata.mode() & 0o7777 & !0o600_u32 != 0 {
+            return Err(ControllerError::State(format!(
+                "{label} {} grants permissions beyond owner read/write",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn ensure_same_file(
+    left: &fs::Metadata,
+    right: &fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<(), ControllerError> {
+    if left.dev() != right.dev() || left.ino() != right.ino() {
+        return Err(ControllerError::State(format!(
+            "{label} {} changed identity while it was being accessed",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn ensure_same_file(
+    _left: &fs::Metadata,
+    _right: &fs::Metadata,
+    _path: &Path,
+    _label: &str,
+) -> Result<(), ControllerError> {
+    Ok(())
+}
+#[cfg(unix)]
+fn metadata_modified_tuple(metadata: &fs::Metadata) -> (i64, i64, i64, i64) {
+    (
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
+}
+#[cfg(not(unix))]
+fn metadata_modified_tuple(metadata: &fs::Metadata) -> Option<SystemTime> {
+    metadata.modified().ok()
+}
+fn load_state() -> Result<State, ControllerError> {
+    load_state_at(&state_path())
+}
+fn load_state_at(path: &Path) -> Result<State, ControllerError> {
+    let parent = path.parent().ok_or_else(|| {
+        ControllerError::State(format!("state path {} has no parent", path.display()))
+    })?;
+    match fs::symlink_metadata(parent) {
+        Ok(metadata) => validate_private_state_root(parent, &metadata)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
+        Err(error) => return Err(error.into()),
+    }
+    let bytes = match read_private_stable_regular_file_bounded(
+        path,
+        MAX_STATE_FRAME_BYTES_V1,
+        "state file",
+    ) {
+        Ok(bytes) => bytes,
+        Err(ControllerError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(State::default());
+        }
+        Err(error) => return Err(error),
     };
-    decode_state_frame(&bytes).unwrap_or_default()
+    let state = decode_state_frame(&bytes)?;
+    validate_state_invariants(&state)?;
+    Ok(state)
 }
 fn persist_state(state: &State) -> Result<(), ControllerError> {
     let path = state_path();
-    if let Some(parent) = Path::new(&path).parent() {
-        fs::create_dir_all(parent)?;
-    }
+    persist_state_at(&path, state)
+}
+fn persist_state_at(path: &Path, state: &State) -> Result<(), ControllerError> {
+    validate_state_invariants(state)?;
+    let parent = path.parent().ok_or_else(|| {
+        ControllerError::State(format!("state path {} has no parent", path.display()))
+    })?;
+    prepare_private_state_root(parent)?;
     let bytes = encode_state_frame(state)?;
-    write_private_file(path.as_path(), &bytes)?;
-    Ok(())
+    write_file_atomic(path, &bytes, 0o600, true, "state file")
+}
+fn validate_state_invariants(state: &State) -> Result<(), ControllerError> {
+    match &state.worker_identity {
+        None if !state.active => Ok(()),
+        Some(identity) if identity.pid > 1 => Ok(()),
+        _ => Err(ControllerError::State(
+            "active state must have a valid worker process identity".to_owned(),
+        )),
+    }
 }
 fn print_state(state: &State) -> Result<(), ControllerError> {
     let rendered = json::to_json(&state_json_value(state))
@@ -2331,8 +2770,8 @@ fn state_json_value(state: &State) -> JsonValue {
     insert_u64(&mut map, "bytes_in", state.bytes_in);
     insert_u64(&mut map, "bytes_out", state.bytes_out);
     insert_string(&mut map, "message", &state.message);
-    match state.pid {
-        Some(pid) => insert_u64(&mut map, "pid", u64::from(pid)),
+    match state.worker_identity.as_ref() {
+        Some(identity) => insert_u64(&mut map, "pid", u64::from(identity.pid)),
         None => {
             map.insert("pid".to_owned(), JsonValue::Null);
         }
@@ -2379,9 +2818,8 @@ fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
             insert_string(&mut map, "kind", "resolved");
             insert_string(&mut map, "interface_name", interface_name);
         }
-        DnsBackendState::ResolvConf { backup_path } => {
+        DnsBackendState::ResolvConf => {
             insert_string(&mut map, "kind", "resolv-conf");
-            insert_string(&mut map, "backup_path", backup_path);
         }
     }
     JsonValue::Object(map)
@@ -2414,27 +2852,260 @@ fn insert_bool(map: &mut JsonMap, key: &str, value: bool) {
 fn insert_u64(map: &mut JsonMap, key: &str, value: u64) {
     map.insert(key.to_owned(), JsonValue::Number(JsonNumber::from(value)));
 }
-fn state_path() -> PathBuf {
-    env::var("SORANET_VPN_STATE_FILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| default_state_path())
+#[cfg(unix)]
+struct ControllerActionLock {
+    file: fs::File,
 }
-fn default_state_path() -> PathBuf {
-    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join("sora-vpn-controller/state.norito");
+#[cfg(not(unix))]
+struct ControllerActionLock;
+#[cfg(unix)]
+impl Drop for ControllerActionLock {
+    fn drop(&mut self) {
+        // SAFETY: `file` owns a live descriptor and `LOCK_UN` does not retain it.
+        let _ = unsafe { nix::libc::flock(self.file.as_raw_fd(), nix::libc::LOCK_UN) };
     }
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/state/sora-vpn-controller/state.norito");
-    }
-    PathBuf::from("/var/lib/sora-vpn-controller/state.norito")
 }
-fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn acquire_controller_action_lock() -> Result<ControllerActionLock, ControllerError> {
+    acquire_controller_action_lock_at(&default_state_root())
+}
+#[cfg(unix)]
+fn acquire_controller_action_lock_at(root: &Path) -> Result<ControllerActionLock, ControllerError> {
+    prepare_private_state_root(root)?;
+    let path = root.join(CONTROLLER_LOCK_FILE_NAME);
     let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    options
+        .create(true)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let file = options.open(&path)?;
+    let metadata = file.metadata()?;
+    validate_regular_file_metadata(&path, &metadata, "controller action lock", true)?;
+    // SAFETY: `file` owns a live descriptor; `flock` only changes its advisory lock state.
+    let result =
+        unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        if error
+            .raw_os_error()
+            .is_some_and(|code| code == nix::libc::EWOULDBLOCK || code == nix::libc::EAGAIN)
+        {
+            return Err(ControllerError::State(
+                "another VPN controller action is already in progress".to_owned(),
+            ));
+        }
+        return Err(error.into());
+    }
+    Ok(ControllerActionLock { file })
+}
+#[cfg(not(unix))]
+fn acquire_controller_action_lock_at(
+    _root: &Path,
+) -> Result<ControllerActionLock, ControllerError> {
+    Err(ControllerError::State(
+        "secure VPN controller locking is unavailable on this platform".to_owned(),
+    ))
+}
+fn state_path() -> PathBuf {
+    default_state_root().join(STATE_FILE_NAME)
+}
+fn default_state_root() -> PathBuf {
+    // This process mutates host routing and resolver state. Never let caller-controlled
+    // environment select the persistence root, including for non-root capability deployments.
+    PathBuf::from("/var/lib/sora-vpn-controller")
+}
+fn effective_uid() -> u32 {
     #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path)?;
-    file.write_all(bytes)
+    {
+        // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+        unsafe { nix::libc::geteuid() }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+fn prepare_private_state_root(root: &Path) -> Result<(), ControllerError> {
+    if !root.is_absolute() {
+        return Err(ControllerError::State(format!(
+            "state root {} must be absolute",
+            root.display()
+        )));
+    }
+    match fs::symlink_metadata(root) {
+        Ok(metadata) => validate_private_state_root(root, &metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let parent = root.parent().ok_or_else(|| {
+                ControllerError::State(format!("state root {} has no parent", root.display()))
+            })?;
+            validate_directory_custody(parent)?;
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(root)?;
+            #[cfg(unix)]
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+            let metadata = fs::symlink_metadata(root)?;
+            validate_private_state_root(root, &metadata)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+fn validate_private_state_root(
+    root: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), ControllerError> {
+    if !metadata.file_type().is_dir() {
+        return Err(ControllerError::State(format!(
+            "state root {} is not a directory",
+            root.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.uid() != effective_uid() {
+            return Err(ControllerError::State(format!(
+                "state root {} is not owned by the effective user",
+                root.display()
+            )));
+        }
+        if metadata.mode() & 0o7777 != 0o700 {
+            return Err(ControllerError::State(format!(
+                "state root {} must have mode 0700",
+                root.display()
+            )));
+        }
+    }
+    validate_directory_custody(root)
+}
+fn validate_directory_custody(path: &Path) -> Result<(), ControllerError> {
+    let canonical = path.canonicalize().map_err(|error| {
+        ControllerError::State(format!(
+            "failed to resolve directory custody for {}: {error}",
+            path.display()
+        ))
+    })?;
+    for ancestor in canonical.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if !metadata.file_type().is_dir() {
+            return Err(ControllerError::State(format!(
+                "trusted path component {} is not a directory",
+                ancestor.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            let owner = metadata.uid();
+            if owner != 0 && owner != effective_uid() {
+                return Err(ControllerError::State(format!(
+                    "trusted path component {} has an unexpected owner",
+                    ancestor.display()
+                )));
+            }
+            if metadata.mode() & 0o022 != 0 {
+                let root_owned_sticky = owner == 0 && metadata.mode() & 0o1000 != 0;
+                if !root_owned_sticky {
+                    return Err(ControllerError::State(format!(
+                        "trusted path component {} is group- or other-writable",
+                        ancestor.display()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn write_file_atomic(
+    path: &Path,
+    bytes: &[u8],
+    mode: u32,
+    private: bool,
+    label: &str,
+) -> Result<(), ControllerError> {
+    if mode & 0o7022 != 0 || (private && mode != 0o600) {
+        return Err(ControllerError::State(format!(
+            "invalid mode {mode:o} for atomic {label} write"
+        )));
+    }
+    if !path.is_absolute() {
+        return Err(ControllerError::State(format!(
+            "{label} path {} must be absolute",
+            path.display()
+        )));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        ControllerError::State(format!("{label} path {} has no parent", path.display()))
+    })?;
+    validate_directory_custody(parent)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => validate_regular_file_metadata(path, &metadata, label, private)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let file_name = path.file_name().and_then(OsStr::to_str).ok_or_else(|| {
+        ControllerError::State(format!("{label} path {} has no valid name", path.display()))
+    })?;
+    let (temporary_path, mut temporary_file) = (0..128)
+        .find_map(|_| {
+            let nonce = ATOMIC_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+            let temporary_path =
+                parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
+            let mut options = fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(unix)]
+            {
+                options.mode(mode);
+                options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+            }
+            match options.open(&temporary_path) {
+                Ok(file) => Some(Ok((temporary_path, file))),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            ControllerError::State(format!(
+                "failed to allocate a temporary {label} in {}",
+                parent.display()
+            ))
+        })?;
+    let write_result = (|| -> io::Result<()> {
+        #[cfg(unix)]
+        temporary_file.set_permissions(fs::Permissions::from_mode(mode))?;
+        temporary_file.write_all(bytes)?;
+        temporary_file.sync_all()?;
+        drop(temporary_file);
+        fs::rename(&temporary_path, path)?;
+        let directory = fs::File::open(parent)?;
+        directory.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(error.into());
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    validate_regular_file_metadata(path, &metadata, label, private)?;
+    #[cfg(unix)]
+    if private && metadata.permissions().mode() & 0o077 != 0 {
+        return Err(ControllerError::State(format!(
+            "new {label} {} is not private",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+fn remove_private_file_durable(path: &Path, label: &str) -> Result<(), ControllerError> {
+    let parent = path.parent().ok_or_else(|| {
+        ControllerError::State(format!("{label} path {} has no parent", path.display()))
+    })?;
+    validate_directory_custody(parent)?;
+    let metadata = fs::symlink_metadata(path)?;
+    validate_regular_file_metadata(path, &metadata, label, true)?;
+    fs::remove_file(path)?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 fn hydrate_runtime_fields(state: &mut State) {
     state.installed = true;
@@ -2447,65 +3118,247 @@ fn hydrate_runtime_fields(state: &mut State) {
     if state.controller_path.is_none() {
         state.controller_path = current_controller_path();
     }
-    if state.interface_name.is_none() {
-        state.interface_name = current_interface_name();
-    }
-}
-fn current_interface_name() -> Option<String> {
-    env::var("SORANET_VPN_INTERFACE")
-        .ok()
-        .and_then(|value| trim_to_option(value.as_str()))
 }
 fn current_controller_path() -> Option<String> {
     env::current_exe()
         .ok()
         .and_then(|path| path.to_str().map(ToOwned::to_owned))
 }
-fn trim_to_option(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
-fn scrub_stale_process(state: &mut State) {
-    let Some(pid) = state.pid else {
-        return;
+fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
+    let Some(identity) = state.worker_identity.as_ref() else {
+        return Ok(());
     };
-    if process_alive(pid) {
-        return;
+    if worker_identity_alive(identity)? {
+        return Ok(());
     }
     state.active = false;
-    state.pid = None;
+    state.worker_identity = None;
     state.repair_required = state.applied_network.is_some();
     if state.message == "connected" || state.message == "starting" || state.message == "connecting"
     {
         state.message = "tunnel worker exited".to_owned();
     }
+    Ok(())
 }
-fn process_alive(pid: u32) -> bool {
-    let Ok(raw_pid) = i32::try_from(pid) else {
-        return false;
-    };
-    match signal::kill(Pid::from_raw(raw_pid), None) {
-        Ok(()) => true,
-        Err(Errno::EPERM) => true,
-        Err(Errno::ESRCH) => false,
-        Err(_) => false,
+#[cfg(target_os = "linux")]
+fn capture_worker_identity(
+    pid: u32,
+    role: WorkerRole,
+) -> Result<WorkerProcessIdentity, ControllerError> {
+    let pidfd = open_pidfd(pid)?.ok_or_else(|| {
+        ControllerError::State(format!(
+            "worker process {pid} exited before identity capture"
+        ))
+    })?;
+    let identity = observe_linux_worker_identity(pid, role)?.ok_or_else(|| {
+        ControllerError::State(format!(
+            "worker process {pid} exited before identity capture"
+        ))
+    })?;
+    let current_exe = env::current_exe()?.canonicalize()?;
+    let current_metadata = fs::metadata(&current_exe)?;
+    if identity.executable_device != current_metadata.dev()
+        || identity.executable_inode != current_metadata.ino()
+    {
+        return Err(ControllerError::State(format!(
+            "worker process {pid} is not running the controller executable"
+        )));
     }
+    if !pidfd_send_signal(&pidfd, 0)? {
+        return Err(ControllerError::State(format!(
+            "worker process {pid} exited during identity capture"
+        )));
+    }
+    Ok(identity)
 }
-fn terminate_pid(pid: u32) -> Result<(), ControllerError> {
-    if !process_alive(pid) {
+#[cfg(not(target_os = "linux"))]
+fn capture_worker_identity(
+    _pid: u32,
+    _role: WorkerRole,
+) -> Result<WorkerProcessIdentity, ControllerError> {
+    Err(ControllerError::State(
+        "VPN worker process identity is only supported on Linux".to_owned(),
+    ))
+}
+#[cfg(target_os = "linux")]
+fn observe_linux_worker_identity(
+    pid: u32,
+    role: WorkerRole,
+) -> Result<Option<WorkerProcessIdentity>, ControllerError> {
+    let stat_path = PathBuf::from(format!("/proc/{pid}/stat"));
+    let stat = match read_small_proc_file(&stat_path, 16 * 1024) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let stat = std::str::from_utf8(&stat).map_err(|error| {
+        ControllerError::State(format!("worker process {pid} stat is not UTF-8: {error}"))
+    })?;
+    let (process_state, start_time_ticks) = parse_linux_process_stat(stat).map_err(|error| {
+        ControllerError::State(format!("worker process {pid} stat is malformed: {error}"))
+    })?;
+    if process_state == 'Z' {
+        return Ok(None);
+    }
+    let cmdline_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    let cmdline = match read_small_proc_file(&cmdline_path, 64 * 1024) {
+        Ok(cmdline) => cmdline,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut args = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty());
+    let _program = args.next();
+    if args.next() != Some(role.subcommand().as_bytes()) {
+        return Ok(None);
+    }
+    let executable = match fs::metadata(format!("/proc/{pid}/exe")) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(WorkerProcessIdentity {
+        pid,
+        start_time_ticks,
+        executable_device: executable.dev(),
+        executable_inode: executable.ino(),
+        role,
+    }))
+}
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_process_stat(stat: &str) -> Result<(char, u64), &'static str> {
+    let fields = stat
+        .rsplit_once(") ")
+        .ok_or("missing command terminator")?
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let process_state = fields
+        .first()
+        .and_then(|value| value.chars().next())
+        .ok_or("missing process state")?;
+    let start_time = fields
+        .get(19)
+        .ok_or("truncated before start time")?
+        .parse::<u64>()
+        .map_err(|_| "invalid start time")?;
+    Ok((process_state, start_time))
+}
+#[cfg(target_os = "linux")]
+fn read_small_proc_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+    use std::io::Read as _;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let mut file = options.open(path)?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} exceeds {max_bytes} bytes", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+#[cfg(target_os = "linux")]
+fn worker_identity_alive(identity: &WorkerProcessIdentity) -> Result<bool, ControllerError> {
+    let Some(pidfd) = open_pidfd(identity.pid)? else {
+        return Ok(false);
+    };
+    let observed = observe_linux_worker_identity(identity.pid, identity.role)?;
+    Ok(pidfd_send_signal(&pidfd, 0)? && observed.as_ref() == Some(identity))
+}
+#[cfg(not(target_os = "linux"))]
+fn worker_identity_alive(_identity: &WorkerProcessIdentity) -> Result<bool, ControllerError> {
+    Err(ControllerError::State(
+        "refusing to inspect a persisted VPN worker without Linux process identity support"
+            .to_owned(),
+    ))
+}
+#[cfg(target_os = "linux")]
+fn open_pidfd(pid: u32) -> Result<Option<OwnedFd>, ControllerError> {
+    let raw_pid = i32::try_from(pid)
+        .map_err(|_| ControllerError::State(format!("invalid worker PID {pid}")))?;
+    // SAFETY: `pidfd_open` receives only integer arguments and returns a new owned descriptor.
+    let fd = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, raw_pid, 0) };
+    if fd >= 0 {
+        // SAFETY: a successful `pidfd_open` returns a fresh descriptor owned by this process.
+        return Ok(Some(unsafe { OwnedFd::from_raw_fd(fd as i32) }));
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(nix::libc::ESRCH) {
+        return Ok(None);
+    }
+    Err(ControllerError::State(format!(
+        "failed to open a stable handle for worker process {pid}: {error}"
+    )))
+}
+#[cfg(target_os = "linux")]
+fn pidfd_send_signal(pidfd: &OwnedFd, signal: i32) -> Result<bool, ControllerError> {
+    // SAFETY: `pidfd` is a live process descriptor and the remaining syscall arguments follow
+    // `pidfd_send_signal(2)`; no pointer is dereferenced because `siginfo` is null.
+    let result = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            signal,
+            std::ptr::null::<nix::libc::siginfo_t>(),
+            0,
+        )
+    };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(nix::libc::ESRCH) {
+        return Ok(false);
+    }
+    Err(ControllerError::State(format!(
+        "pidfd signal operation failed: {error}"
+    )))
+}
+#[cfg(target_os = "linux")]
+fn terminate_worker(identity: &WorkerProcessIdentity) -> Result<(), ControllerError> {
+    let Some(pidfd) = open_pidfd(identity.pid)? else {
+        return Ok(());
+    };
+    if !pidfd_send_signal(&pidfd, 0)? {
         return Ok(());
     }
-    let raw_pid =
-        i32::try_from(pid).map_err(|_| ControllerError::State(format!("invalid pid {pid}")))?;
-    signal::kill(Pid::from_raw(raw_pid), Signal::SIGTERM)
-        .map_err(|error| ControllerError::State(format!("failed to terminate pid {pid}: {error}")))
+    let observed = observe_linux_worker_identity(identity.pid, identity.role)?;
+    if !pidfd_send_signal(&pidfd, 0)? {
+        return Ok(());
+    }
+    if observed.as_ref() != Some(identity) {
+        return Err(ControllerError::State(format!(
+            "refusing to signal PID {} because its process identity does not match persisted VPN state",
+            identity.pid
+        )));
+    }
+    let _ = pidfd_send_signal(&pidfd, nix::libc::SIGTERM)?;
+    Ok(())
 }
-fn wait_for_pid_exit(pid: u32, timeout_limit: Duration) -> bool {
+#[cfg(not(target_os = "linux"))]
+fn terminate_worker(_identity: &WorkerProcessIdentity) -> Result<(), ControllerError> {
+    Err(ControllerError::State(
+        "refusing to signal a persisted VPN worker without Linux pidfd support".to_owned(),
+    ))
+}
+fn wait_for_worker_exit(
+    identity: &WorkerProcessIdentity,
+    timeout_limit: Duration,
+) -> Result<bool, ControllerError> {
     let deadline = std::time::Instant::now() + timeout_limit;
-    while process_alive(pid) && std::time::Instant::now() < deadline {
+    while worker_identity_alive(identity)? && std::time::Instant::now() < deadline {
         sleep_blocking(Duration::from_millis(50));
     }
-    !process_alive(pid)
+    Ok(!worker_identity_alive(identity)?)
 }
 fn sleep_blocking(duration: Duration) {
     std::thread::sleep(duration);
@@ -2524,13 +3377,19 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
     Ok(hex::decode(normalized)?)
 }
 fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
-    let decoded = decode_hex(value)?;
-    let bytes: [u8; 32] = decoded.try_into().map_err(|bytes: Vec<u8>| {
-        ControllerError::InvalidPayload(format!(
-            "{label} must decode to 32 bytes (got {})",
-            bytes.len()
-        ))
-    })?;
+    let trimmed = value.trim();
+    let normalized = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    if normalized.len() != 64 {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} must decode to 32 bytes (got {} hexadecimal characters)",
+            normalized.len()
+        )));
+    }
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(normalized, &mut bytes)?;
     Ok(bytes)
 }
 fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
@@ -2557,9 +3416,11 @@ fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], 
 }
 fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, ControllerError> {
     let raw_payload = raw_payload.ok_or(ControllerError::MissingPayload)?;
-    let value: JsonValue = json::from_str(raw_payload)
-        .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?;
-    let object = value.as_object().ok_or_else(|| {
+    let value = SensitiveConnectJson(
+        json::from_str(raw_payload)
+            .map_err(|error| ControllerError::InvalidPayload(error.to_string()))?,
+    );
+    let object = value.0.as_object().ok_or_else(|| {
         ControllerError::InvalidPayload("connect payload must be a JSON object".to_owned())
     })?;
     let payload = ConnectPayload {
@@ -2670,6 +3531,10 @@ fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), Controll
     validate_network_policy_entries(&payload.excluded_routes, "excludedRoutes")?;
     validate_network_policy_entries(&payload.dns_servers, "dnsServers")?;
     validate_network_policy_entries(&payload.tunnel_addresses, "tunnelAddresses")?;
+    validate_canonical_cidr_entries(&payload.route_pushes, "routePushes")?;
+    validate_canonical_cidr_entries(&payload.excluded_routes, "excludedRoutes")?;
+    validate_canonical_cidr_entries(&payload.tunnel_addresses, "tunnelAddresses")?;
+    validate_dns_servers(&payload.dns_servers)?;
     if payload.session_id.trim().is_empty() {
         return Err(ControllerError::InvalidPayload(
             "sessionId must not be empty".to_owned(),
@@ -2717,7 +3582,7 @@ fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), Controll
             "helper ticket session id does not match sessionId".to_owned(),
         ));
     }
-    if ticket.expires_at_ms <= unix_now_ms() {
+    if ticket.expires_at_ms <= unix_now_ms()? {
         return Err(ControllerError::InvalidPayload(
             "helper ticket has expired".to_owned(),
         ));
@@ -2757,14 +3622,56 @@ fn validate_network_policy_entries(entries: &[String], label: &str) -> Result<()
     }
     Ok(())
 }
+fn validate_canonical_cidr_entries(entries: &[String], label: &str) -> Result<(), ControllerError> {
+    for (index, entry) in entries.iter().enumerate() {
+        let parsed = parse_cidr(entry).map_err(|_| {
+            ControllerError::InvalidPayload(format!("{label}[{index}] is not a valid CIDR"))
+        })?;
+        let canonical = format!("{}/{}", parsed.address, parsed.prefix);
+        if entry != &canonical {
+            return Err(ControllerError::InvalidPayload(format!(
+                "{label}[{index}] must use canonical CIDR syntax {canonical}"
+            )));
+        }
+    }
+    Ok(())
+}
+fn validate_dns_servers(entries: &[String]) -> Result<(), ControllerError> {
+    for (index, entry) in entries.iter().enumerate() {
+        let address = entry.parse::<IpAddr>().map_err(|_| {
+            ControllerError::InvalidPayload(format!(
+                "dnsServers[{index}] must be a canonical IP address"
+            ))
+        })?;
+        let canonical = address.to_string();
+        if entry != &canonical || address.is_unspecified() || address.is_multicast() {
+            return Err(ControllerError::InvalidPayload(format!(
+                "dnsServers[{index}] must be a canonical unicast IP address"
+            )));
+        }
+    }
+    Ok(())
+}
 fn read_connect_payload_from_stdin() -> Result<ConnectPayload, ControllerError> {
     let mut stdin = io::stdin().lock();
-    let raw_payload = read_bounded(
+    let raw_payload = read_sensitive_bounded(
         &mut stdin,
         MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
         "worker stdin connect frame",
     )?;
     decode_connect_payload_frame(&raw_payload)
+}
+fn read_connect_payload_json_from_stdin() -> Result<WipeBytes, ControllerError> {
+    let mut stdin = io::stdin().lock();
+    let raw_payload = read_sensitive_bounded(
+        &mut stdin,
+        MAX_CONNECT_PAYLOAD_FRAME_BYTES_V1,
+        "connect payload stdin",
+    )?;
+    if raw_payload.is_empty() {
+        return Err(ControllerError::MissingPayload);
+    }
+    Ok(raw_payload)
 }
 fn json_field<'a>(object: &'a JsonMap, keys: &[&str]) -> Option<&'a JsonValue> {
     keys.iter().find_map(|key| object.get(*key))
@@ -3031,7 +3938,9 @@ mod tests {
                 ingress_fee_per_mib: quantity_nanos(7),
                 egress_fee_per_mib: quantity_nanos(11),
             },
-            expires_at_ms: unix_now_ms().saturating_add(60_000),
+            expires_at_ms: unix_now_ms()
+                .expect("valid test clock")
+                .saturating_add(60_000),
         }
     }
     fn test_connect_payload_json(
@@ -3113,7 +4022,7 @@ mod tests {
     #[test]
     fn parse_multiaddr_rejects_non_udp_transport() {
         let err = parse_multiaddr("/ip4/127.0.0.1/tcp/7777/quic").expect_err("must fail");
-        assert!(err.to_string().contains("unsupported transport"));
+        assert!(err.to_string().contains("transport"));
     }
     #[test]
     fn connect_payload_deserializes_camel_case() {
@@ -3174,6 +4083,58 @@ mod tests {
         assert!(error.to_string().contains("exceeds the v1 limit"));
     }
     #[test]
+    fn sensitive_bounded_reader_owns_exact_input_and_rejects_growth() {
+        let mut exact = b"secret".as_slice();
+        let read = read_sensitive_bounded(&mut exact, 6, "test secret").expect("exact limit");
+        assert_eq!(&*read, b"secret");
+
+        let mut oversized = b"secret!".as_slice();
+        let error = match read_sensitive_bounded(&mut oversized, 6, "test secret") {
+            Ok(_) => panic!("growth beyond the secret bound must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("exceeds the v1 limit"));
+    }
+    #[test]
+    fn command_pipe_drain_discards_beyond_the_retention_limit() {
+        let exact = drain_bounded_pipe(io::Cursor::new(b"abc"), 3).expect("exact drain");
+        assert_eq!(
+            exact,
+            BoundedPipeOutput {
+                bytes: b"abc".to_vec(),
+                overflow: false,
+            }
+        );
+        let overflow = drain_bounded_pipe(io::Cursor::new(b"abcdef"), 3).expect("overflow drain");
+        assert_eq!(overflow.bytes, b"abc");
+        assert!(overflow.overflow);
+    }
+    #[test]
+    fn command_deadline_terminates_descendants_holding_output_pipes() {
+        let shell = Path::new("/bin/sh");
+        if !shell.exists() {
+            return;
+        }
+        let started = Instant::now();
+        let error = execute_system_command(
+            "sh",
+            shell,
+            &["-c".to_owned(), "sleep 30 & wait".to_owned()],
+            Duration::from_millis(25),
+        )
+        .expect_err("timed-out command group must fail");
+        assert!(error.to_string().contains("deadline"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "descendant inherited a pipe after command-group cleanup"
+        );
+    }
+    #[tokio::test]
+    async fn tunnel_shutdown_handlers_install_before_network_setup() {
+        let signals = TunnelShutdownSignals::install().expect("install Unix signal handlers");
+        drop(signals);
+    }
+    #[test]
     fn connect_payload_rejects_network_policy_count_before_encoding() {
         let mut payload = test_connect_payload("session-1");
         payload.route_pushes = vec!["10.0.0.0/8".to_owned(); MAX_NETWORK_POLICY_ENTRIES_V1 + 1];
@@ -3221,7 +4182,29 @@ mod tests {
         );
     }
     #[test]
-    fn packet_engine_quic_disables_tls_early_data() {
+    fn connect_payload_rejects_dns_directive_injection() {
+        let mut payload = test_connect_payload("session-1");
+        payload.dns_servers = vec!["1.1.1.1\noptions trust-ad".to_owned()];
+        let error = validate_connect_payload(payload).expect_err("DNS directives must fail");
+        assert!(error.to_string().contains("canonical IP address"));
+    }
+    #[test]
+    fn connect_payload_requires_canonical_network_policy() {
+        let mut payload = test_connect_payload("session-1");
+        payload.route_pushes = vec!["2001:0db8::/64".to_owned()];
+        let error = validate_connect_payload(payload).expect_err("non-canonical CIDR must fail");
+        assert!(error.to_string().contains("canonical CIDR syntax"));
+    }
+    #[test]
+    fn connect_payload_credentials_can_be_wiped_early() {
+        let mut payload = test_connect_payload("session-1");
+        payload.metering_private_key_seed_hex = Some("66".repeat(32));
+        payload.wipe_credentials();
+        assert!(payload.helper_ticket_hex.is_empty());
+        assert!(payload.metering_private_key_seed_hex.is_none());
+    }
+    #[test]
+    fn vpn_quic_disables_tls_early_data() {
         let tls_config = build_tls_client_config([0x55; 32]);
         assert!(
             !tls_config.enable_early_data,
@@ -3375,10 +4358,21 @@ mod tests {
         assert!(error.to_string().contains("invalid cidr"));
     }
     #[test]
+    fn tunnel_owned_addresses_and_routes_never_replace_host_policy() {
+        let address = parse_cidr("10.208.0.2/32").expect("address");
+        let route = parse_cidr("10.20.0.0/16").expect("route");
+        let address_args = tunnel_address_add_args("srvpn0123456789", address);
+        let route_args = tunnel_route_add_args("srvpn0123456789", route);
+        assert_eq!(address_args[1..3], ["address", "add"]);
+        assert_eq!(route_args[1..3], ["route", "add"]);
+        assert!(!address_args.iter().any(|arg| arg == "replace"));
+        assert!(!route_args.iter().any(|arg| arg == "replace"));
+    }
+    #[test]
     fn packet_stream_round_trips_fragmented_payload() {
         let packet = vec![0xAB; 1500];
         let encoded = encode_packet_stream_frame(&packet).expect("encode");
-        let mut decoder = PacketStreamDecoder::default();
+        let mut decoder = PacketStreamDecoder::new(1500).expect("bounded decoder");
         let first = decoder.ingest(&encoded[..700]).expect("first fragment");
         assert!(first.is_empty());
         let second = decoder.ingest(&encoded[700..]).expect("second fragment");
@@ -3388,11 +4382,27 @@ mod tests {
     fn decoder_handles_multiple_packets_in_single_chunk() {
         let first = encode_packet_stream_frame(&[1, 2, 3]).expect("first");
         let second = encode_packet_stream_frame(&[4, 5]).expect("second");
-        let mut decoder = PacketStreamDecoder::default();
+        let mut decoder = PacketStreamDecoder::new(1280).expect("bounded decoder");
         let packets = decoder
             .ingest(&[first.as_slice(), second.as_slice()].concat())
             .expect("decode");
         assert_eq!(packets, vec![vec![1, 2, 3], vec![4, 5]]);
+    }
+    #[test]
+    fn packet_stream_rejects_zero_and_over_mtu_lengths_before_buffering() {
+        let mut zero = PacketStreamDecoder::new(1280).expect("bounded decoder");
+        let error = zero
+            .ingest(&0_u16.to_be_bytes())
+            .expect_err("zero-length packets must fail closed");
+        assert!(error.to_string().contains("outside 1..=1280"));
+
+        let mut oversized = PacketStreamDecoder::new(1280).expect("bounded decoder");
+        let error = oversized
+            .ingest(&1281_u16.to_be_bytes())
+            .expect_err("over-MTU packet must fail before payload buffering");
+        assert!(error.to_string().contains("outside 1..=1280"));
+        assert_eq!(oversized.buffer.len(), PACKET_LEN_PREFIX_BYTES);
+        assert!(oversized.expected_len.is_none());
     }
     #[test]
     fn parse_route_via_dev_extracts_gateway_and_device() {
@@ -3404,22 +4414,24 @@ mod tests {
         );
     }
     #[test]
-    fn desired_interface_name_prefers_env_override() {
-        let original = env::var_os("SORANET_VPN_INTERFACE");
-        // SAFETY: tests run in a controlled process and restore the variable before returning.
-        unsafe { env::set_var("SORANET_VPN_INTERFACE", "vpncustom0") };
+    fn desired_interface_name_is_derived_from_the_authenticated_session() {
         let derived = desired_interface_name("deadbeef").expect("name");
-        match original {
-            Some(value) => {
-                // SAFETY: restoring previous test-local environment value.
-                unsafe { env::set_var("SORANET_VPN_INTERFACE", value) };
-            }
-            None => {
-                // SAFETY: removing the override set for this test.
-                unsafe { env::remove_var("SORANET_VPN_INTERFACE") };
-            }
-        }
-        assert_eq!(derived, "vpncustom0");
+        assert!(derived.starts_with("srvpn"));
+        assert_eq!(derived.len(), 15);
+        assert_ne!(
+            derived,
+            desired_interface_name("cafebabe").expect("other session")
+        );
+    }
+    #[test]
+    fn tun_creation_is_exclusive_and_pins_the_kernel_returned_name() {
+        let flags = linux_tun_creation_flag_bits();
+        assert_ne!(flags & LINUX_IFF_TUN_EXCL_BITS, 0);
+        ensure_exact_tun_interface_name("srvpn0123456789", "srvpn0123456789")
+            .expect("exact kernel name");
+        let error = ensure_exact_tun_interface_name("srvpn0123456789", "srvpn9876543210")
+            .expect_err("renamed or pre-existing interface must fail closed");
+        assert!(error.to_string().contains("instead of requested"));
     }
     #[test]
     fn relay_session_id_matches_torii_derivation() {
@@ -3429,22 +4441,203 @@ mod tests {
         assert_ne!(derived, [0u8; 16]);
     }
     #[test]
-    fn cli_accepts_connect_payload_after_subcommand() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
-        let cli = Cli::try_parse_from(["sora-vpn-controller", "connect", payload]).expect("parse");
-        match cli.command {
-            Command::Connect { payload: parsed } => {
-                assert_eq!(parsed.as_deref(), Some(payload));
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
+    fn wall_clock_before_unix_epoch_fails_without_panicking() {
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(Duration::from_millis(1))
+            .expect("representable pre-epoch time");
+        let error = unix_time_ms_at(before_epoch).expect_err("clock rollback must fail closed");
+        assert!(error.to_string().contains("before the Unix epoch"));
     }
     #[test]
-    fn cli_rejects_run_packet_engine_payload_argument() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.norito","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
-        Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
-            .expect_err("hidden worker payloads must be read from stdin");
-        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine"]).expect("parse");
-        assert!(matches!(cli.command, Command::RunPacketEngine));
+    fn cli_requires_connect_payload_on_stdin() {
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
+        Cli::try_parse_from(["sora-vpn-controller", "connect", payload])
+            .expect_err("connect secrets must not be accepted through argv");
+        let cli = Cli::try_parse_from(["sora-vpn-controller", "connect"]).expect("parse");
+        assert!(matches!(cli.command, Command::Connect));
+    }
+    #[cfg(unix)]
+    fn private_test_state_root(label: &str) -> PathBuf {
+        let nonce = ATOMIC_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "sora-vpn-helper-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&path).expect("create private test root");
+        path
+    }
+    #[test]
+    #[cfg(unix)]
+    fn controller_actions_are_serialized_by_a_stable_lock() {
+        let root = private_test_state_root("controller-lock");
+        let first = acquire_controller_action_lock_at(&root).expect("acquire first lock");
+        let error = acquire_controller_action_lock_at(&root)
+            .err()
+            .expect("concurrent action must fail");
+        assert!(error.to_string().contains("already in progress"));
+        drop(first);
+        drop(acquire_controller_action_lock_at(&root).expect("reacquire released lock"));
+        fs::remove_file(root.join(CONTROLLER_LOCK_FILE_NAME)).expect("remove lock file");
+        fs::remove_dir(root).expect("remove test root");
+    }
+    #[test]
+    #[cfg(unix)]
+    fn state_persistence_is_private_atomic_and_round_trips() {
+        let root = private_test_state_root("roundtrip");
+        let path = root.join(STATE_FILE_NAME);
+        let mut state = State::default();
+        state.message = "first".to_owned();
+        persist_state_at(&path, &state).expect("persist first state");
+        state.message = "second".to_owned();
+        persist_state_at(&path, &state).expect("replace state");
+        let loaded = load_state_at(&path).expect("load state");
+        assert_eq!(loaded.message, "second");
+        assert_eq!(
+            fs::symlink_metadata(&path).expect("metadata").mode() & 0o077,
+            0
+        );
+        fs::remove_file(path).expect("remove state");
+        fs::remove_dir(root).expect("remove test root");
+    }
+    #[test]
+    #[cfg(unix)]
+    fn malformed_existing_state_fails_closed() {
+        let root = private_test_state_root("malformed");
+        let path = root.join(STATE_FILE_NAME);
+        write_file_atomic(&path, b"not a state frame", 0o600, true, "state file")
+            .expect("write malformed fixture");
+        let error = load_state_at(&path).expect_err("malformed state must not become defaults");
+        assert!(error.to_string().contains("not a v1 Norito state frame"));
+        fs::remove_file(path).expect("remove state");
+        fs::remove_dir(root).expect("remove test root");
+    }
+    #[test]
+    #[cfg(unix)]
+    fn state_reads_and_writes_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = private_test_state_root("symlink");
+        let target = root.join("target");
+        write_file_atomic(&target, b"do not replace", 0o600, true, "test target")
+            .expect("write target");
+        let path = root.join(STATE_FILE_NAME);
+        symlink(&target, &path).expect("create state symlink");
+        assert!(load_state_at(&path).is_err());
+        assert!(persist_state_at(&path, &State::default()).is_err());
+        assert_eq!(
+            fs::read(&target).expect("target contents"),
+            b"do not replace"
+        );
+        fs::remove_file(path).expect("remove symlink");
+        fs::remove_file(target).expect("remove target");
+        fs::remove_dir(root).expect("remove test root");
+    }
+    #[test]
+    #[cfg(unix)]
+    fn state_rejects_public_permissions_and_writable_root() {
+        let root = private_test_state_root("permissions");
+        let path = root.join(STATE_FILE_NAME);
+        persist_state_at(&path, &State::default()).expect("persist state");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("relax state mode");
+        assert!(load_state_at(&path).is_err());
+        fs::remove_file(&path).expect("remove state");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o770)).expect("relax root mode");
+        assert!(prepare_private_state_root(&root).is_err());
+        fs::remove_dir(root).expect("remove test root");
+    }
+    #[test]
+    fn terminal_state_retains_network_snapshot_until_repair_succeeds() {
+        let applied = AppliedNetworkState {
+            interface_name: "srvpn0000000000".to_owned(),
+            dns_backend: None,
+            excluded_route_snapshots: Vec::new(),
+        };
+        let mut state = State {
+            network_service: Some("resolvectl".to_owned()),
+            applied_network: Some(applied.clone()),
+            ..State::default()
+        };
+        apply_terminal_network_lifecycle(&mut state, false, true);
+        assert_eq!(state.applied_network, Some(applied));
+        assert_eq!(state.network_service.as_deref(), Some("resolvectl"));
+        apply_terminal_network_lifecycle(&mut state, false, false);
+        assert!(state.applied_network.is_none());
+        assert!(state.network_service.is_none());
+    }
+    #[test]
+    fn state_rejects_active_or_invalid_unbound_worker_identity() {
+        let mut state = State {
+            active: true,
+            ..State::default()
+        };
+        assert!(validate_state_invariants(&state).is_err());
+        state.worker_identity = Some(WorkerProcessIdentity {
+            pid: 0,
+            start_time_ticks: 10,
+            executable_device: 11,
+            executable_inode: 12,
+            role: WorkerRole::Tunnel,
+        });
+        assert!(validate_state_invariants(&state).is_err());
+        state.worker_identity.as_mut().expect("identity").pid = 42;
+        assert!(validate_state_invariants(&state).is_ok());
+    }
+    #[test]
+    fn worker_start_requires_the_exact_controller_persisted_identity_and_session() {
+        let payload = test_connect_payload("session-1");
+        let identity = WorkerProcessIdentity {
+            pid: 42,
+            start_time_ticks: 10,
+            executable_device: 11,
+            executable_inode: 12,
+            role: WorkerRole::Tunnel,
+        };
+        let mut state = State {
+            message: "starting".to_owned(),
+            worker_identity: Some(identity.clone()),
+            session_id: Some(payload.session_id.clone()),
+            relay_endpoint: Some(payload.relay_endpoint.clone()),
+            ..State::default()
+        };
+        authorize_worker_start(&state, &identity, &payload).expect("exact start record");
+
+        state.session_id = Some("different-session".to_owned());
+        assert!(authorize_worker_start(&state, &identity, &payload).is_err());
+        state.session_id = Some(payload.session_id.clone());
+        state.worker_identity.as_mut().expect("identity").pid += 1;
+        assert!(authorize_worker_start(&state, &identity, &payload).is_err());
+        assert!(authorize_worker_start(&State::default(), &identity, &payload).is_err());
+    }
+    #[test]
+    fn linux_process_stat_parser_handles_parentheses_in_command() {
+        let stat = format!(
+            "123 (worker) with parens) S {} 4242",
+            vec!["0"; 18].join(" ")
+        );
+        assert_eq!(parse_linux_process_stat(&stat), Ok(('S', 4242)));
+        assert!(parse_linux_process_stat("123 malformed").is_err());
+    }
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn pidfd_zero_signal_confirms_stable_current_process_handle() {
+        let pidfd = open_pidfd(std::process::id())
+            .expect("pidfd open")
+            .expect("current process is alive");
+        assert!(pidfd_send_signal(&pidfd, 0).expect("zero signal"));
+    }
+    #[test]
+    fn trusted_command_resolution_rejects_caller_paths_and_unknown_tools() {
+        assert!(resolve_trusted_command("/bin/ip").is_none());
+        assert!(resolve_trusted_command("sh").is_none());
+        assert!(resolve_trusted_command("../ip").is_none());
+    }
+    #[test]
+    fn production_state_root_is_fixed() {
+        assert_eq!(
+            default_state_root(),
+            PathBuf::from("/var/lib/sora-vpn-controller")
+        );
     }
 }

@@ -312,6 +312,15 @@ fn source_opening_blinding_context_digest_v1(
 mod commitment_session_v1;
 pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::GlobalLookupProofSessionEntropySealV1;
 use commitment_session_v1::{GlobalLookupCommitmentSessionV1, SourceOpeningCompleteStageV1};
+#[allow(
+    unused_imports,
+    reason = "the source-only existing-radix owner awaits the live Phase-23 bridge"
+)]
+pub(in crate::vega::zk_ams::mkhe) use commitment_session_v1::{
+    RnsNativeExistingRadixCandidateAppendReceiptV1, RnsNativeExistingRadixCandidateAssemblyV1,
+    RnsNativeExistingRadixCandidateBlindingV1, RnsNativeExistingRadixCandidateOwnerV1,
+    RnsNativeExistingRadixCandidateRoleV1,
+};
 struct SourceOpeningLiveV1 {
     proof_session: GlobalLookupProofSessionEntropySealV1,
     group_scalars: ZeroizingT256ScalarVecV1,

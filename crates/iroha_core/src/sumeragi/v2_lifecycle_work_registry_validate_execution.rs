@@ -379,22 +379,30 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
         };
         let displaced = registry.entries.insert(authority.address, installed);
         let staged = StagedDurableValidateCompletion {
-            entries: &mut registry.entries,
-            address: authority.address,
-            request: Some(request),
-            wake: Some(wake),
-            publication: Some(publication),
-            armed: true,
+            rollback: ArmedDurableValidateRollback {
+                entries: &mut registry.entries,
+                address: authority.address,
+                request: Some(request),
+                wake: Some(wake),
+                armed: true,
+            },
+            publication,
         };
         debug_assert!(displaced.is_none());
-        debug_assert!(staged.entries.get(&authority.address).is_some_and(|work| {
-            work.validates_at(authority.address) && work.digest == replacement_digest
-        }));
+        debug_assert!(
+            staged
+                .rollback
+                .entries
+                .get(&authority.address)
+                .is_some_and(|work| {
+                    work.validates_at(authority.address) && work.digest == replacement_digest
+                })
+        );
         drop(displaced);
         Ok(staged)
     }
 }
-impl StagedDurableValidateCompletion<'_> {
+impl ArmedDurableValidateRollback<'_> {
     fn restore(&mut self) -> Option<ExecutedDurableValidateDispatch> {
         if !self.armed {
             return None;
@@ -447,18 +455,22 @@ impl StagedDurableValidateCompletion<'_> {
             wake,
         })
     }
-    /// Permanently retain the already-installed carrier and return its
-    /// precomputed move-only publication metadata.
-    pub(super) fn commit(mut self) -> PublishedDurableValidateCompletion {
-        self.armed = false;
-        self.publication
-            .take()
-            .expect("armed Validate publication retains move-only metadata")
-    }
 }
-impl Drop for StagedDurableValidateCompletion<'_> {
+impl Drop for ArmedDurableValidateRollback<'_> {
     fn drop(&mut self) {
         drop(self.restore());
+    }
+}
+impl StagedDurableValidateCompletion<'_> {
+    /// Permanently retain the already-installed carrier and return its
+    /// precomputed move-only publication metadata.
+    pub(super) fn commit(self) -> PublishedDurableValidateCompletion {
+        let StagedDurableValidateCompletion {
+            mut rollback,
+            publication,
+        } = self;
+        rollback.armed = false;
+        publication
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
@@ -831,8 +843,8 @@ fn certified_pipeline_prepare_certificate_for_test(
         subject: manifest.subject,
         execution_commitment: ValidatedBodyReceipt::for_test(receipt.clone())
             .execution_commitment(),
-        signers: vec![0],
-        aggregate_signature: vec![0xC1],
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xC1; 96],
     }
 }
 #[cfg(test)]

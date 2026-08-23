@@ -149,6 +149,14 @@ pub enum Error {
         /// Position of the failing query.
         index: usize,
     },
+    /// A proof-carried Goldilocks element did not use its unique canonical representation.
+    #[error("non-canonical Goldilocks field element in `{context}` at nested indices {indices:?}")]
+    NonCanonicalGoldilocksElement {
+        /// Stable proof-field name identifying the rejected value.
+        context: &'static str,
+        /// Outer-to-inner vector indices locating the rejected value within that field.
+        indices: Vec<usize>,
+    },
     /// FASTPQ verifier input exceeded a configured limit.
     #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
     VerifierLimitExceeded {

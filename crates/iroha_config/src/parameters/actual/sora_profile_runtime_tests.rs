@@ -162,6 +162,14 @@ fn apply_storage_budget_clamps_component_caps() {
     assert_eq!(
         root.nexus
             .storage
+            .configured_sorafs_max_capacity_bytes()
+            .map(Bytes::get),
+        Some(0),
+        "the pre-clamp operator cap must remain available to fixed profiles"
+    );
+    assert_eq!(
+        root.nexus
+            .storage
             .effective_local_budget_bytes
             .map(Bytes::get),
         Some(1_000)

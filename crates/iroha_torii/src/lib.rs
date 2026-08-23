@@ -5438,8 +5438,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Err(error) => return Ok(error.into_response()),
     };
     let route_group = soracloud_signed_mutation_route_group(&path);
-    let rate_key =
-        soracloud_signed_mutation_rate_key(&parts.headers, &verified.account, route_group);
+    let rate_key = soracloud_signed_mutation_rate_key(&verified.account, route_group);
     if !app.soracloud_mutation_rate_limiter.allow(&rate_key).await {
         return Ok(soracloud_rate_limit_response(route_group, response_format));
     }
@@ -5528,19 +5527,8 @@ fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
     }
 }
 #[cfg(feature = "app_api")]
-fn soracloud_signed_mutation_rate_key(
-    headers: &HeaderMap,
-    account: &AccountId,
-    route_group: &str,
-) -> String {
-    let origin = headers
-        .get(axum::http::header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("no-origin")
-        .chars()
-        .take(256)
-        .collect::<String>();
-    format!("soracloud:{route_group}:account:{account}:origin:{origin}")
+fn soracloud_signed_mutation_rate_key(account: &AccountId, route_group: &str) -> String {
+    format!("soracloud:{route_group}:account:{account}")
 }
 #[cfg(feature = "app_api")]
 fn soracloud_rate_limit_response(
@@ -8809,16 +8797,31 @@ async fn execute_admitted_signed_query_with_opts(
     let admitted = admit_ordinary_query_execution(app, &request, &opts).await?;
     execute_prepared_ordinary_query(app, request, admitted).await
 }
+fn query_response_cursor_query_id(
+    response: &iroha_data_model::query::QueryResponse,
+) -> Option<&str> {
+    match response {
+        iroha_data_model::query::QueryResponse::Iterable(output) => output
+            .continue_cursor
+            .as_ref()
+            .map(|cursor| cursor.query.as_str()),
+        iroha_data_model::query::QueryResponse::Singular(_) => None,
+    }
+}
 fn encode_server_owned_query_response(
     app: &AppState,
     response: iroha_core::query::snapshot::ServerOwnedQueryResponse,
     format: ResponseFormat,
 ) -> Response {
     let (response, memory_lease) = response.into_parts();
+    let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
     let max_response_bytes =
         match usize::try_from(app.ordinary_query_policy.limits.max_response_bytes()) {
             Ok(bytes) => bytes,
             Err(_) => {
+                if let Some(query_id) = cursor_query_id.as_ref() {
+                    app.query_service.drop_query(query_id);
+                }
                 return torii_proxy_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "query_capacity_exceeded",
@@ -8826,24 +8829,49 @@ fn encode_server_owned_query_response(
                 );
             }
         };
+    encode_query_response_with_memory_lease_bounded(
+        app,
+        response,
+        memory_lease,
+        format,
+        max_response_bytes,
+    )
+}
+fn encode_query_response_with_memory_lease_bounded(
+    app: &AppState,
+    response: iroha_data_model::query::QueryResponse,
+    memory_lease: iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease,
+    format: ResponseFormat,
+    max_response_bytes: usize,
+) -> Response {
+    let cursor_query_id = query_response_cursor_query_id(&response).map(ToOwned::to_owned);
     match crate::utils::respond_with_format_bounded(response, format, max_response_bytes) {
         Ok(response) => hold_ordinary_query_memory_in_response_body(
             response,
             OrdinaryQueryResponseMemory::new(memory_lease),
         ),
-        Err(
-            crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
-            | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. },
-        ) => torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "query_capacity_exceeded",
-            "ordinary query response exceeds its admitted body reservation",
-        ),
-        Err(crate::utils::BoundedResponseEncodeError::Serialization) => torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "query_encoding_failed",
-            "ordinary query response serialization failed",
-        ),
+        Err(error) => {
+            if let Some(query_id) = cursor_query_id.as_ref() {
+                app.query_service.drop_query(query_id);
+            }
+            match error {
+                crate::utils::BoundedResponseEncodeError::BodyTooLarge { .. }
+                | crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. } => {
+                    torii_proxy_error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "query_capacity_exceeded",
+                        "ordinary query response exceeds its admitted body reservation",
+                    )
+                }
+                crate::utils::BoundedResponseEncodeError::Serialization => {
+                    torii_proxy_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "query_encoding_failed",
+                        "ordinary query response serialization failed",
+                    )
+                }
+            }
+        }
     }
 }
 #[cfg(feature = "app_api")]
@@ -17498,43 +17526,6 @@ fn soracloud_runtime_status_sections(
             json_object(vec![json_entry("available", false)]),
         );
     };
-    if !runtime.materialization_available() {
-        let snapshot = runtime.snapshot();
-        let state_dir = runtime.state_dir().display().to_string();
-        return (
-            json_object(vec![
-                json_entry("mode", "embedded_runtime_manager"),
-                json_entry("status", "unavailable"),
-                json_entry(
-                    "message",
-                    "irohad is compiled without the `embedded-soracloud-runtime` feature; hosted Inrou materialization is disabled",
-                ),
-                json_entry("observed_height", snapshot.observed_height),
-                json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
-                json_entry("state_dir", state_dir.clone()),
-                json_entry("service_revisions", 0_u64),
-                json_entry("healthy_service_revisions", 0_u64),
-                json_entry("hydrating_service_revisions", 0_u64),
-                json_entry("degraded_service_revisions", 0_u64),
-                json_entry("unavailable_service_revisions", 0_u64),
-                json_entry("apartments", 0_u64),
-                json_entry("running_apartments", 0_u64),
-                json_entry("expired_apartments", 0_u64),
-            ]),
-            json_object(vec![
-                json_entry("enabled", false),
-                json_entry("state_dir", state_dir.clone()),
-                json_entry("observed_height", snapshot.observed_height),
-                json_entry("service_revisions", 0_u64),
-                json_entry("apartments", 0_u64),
-            ]),
-            json_object(vec![
-                json_entry("available", false),
-                json_entry("state_dir", state_dir),
-                json_entry("snapshot", snapshot),
-            ]),
-        );
-    }
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
     let mut service_revisions = 0_u64;
@@ -17660,33 +17651,21 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
     let view = app.state.view();
     let world = view.world();
     let mut active_capability_adverts = 0_u64;
-    let mut proxy_only_validator_count = 0_u64;
     for (_validator_account_id, capability) in world.soracloud_inrou_host_capabilities().iter() {
         if capability.is_active_at(now_ms) {
             active_capability_adverts = active_capability_adverts.saturating_add(1);
-            if capability.proxy_only {
-                proxy_only_validator_count = proxy_only_validator_count.saturating_add(1);
-            }
         }
     }
     let mut hosting_peers = std::collections::BTreeSet::new();
     let mut hosted_replica_count = 0_u64;
     let mut portable_vm = 0_u64;
-    let mut firecracker_kvm = 0_u64;
     for ((_service_name, _service_version), record) in
         world.soracloud_inrou_service_placements().iter()
     {
         for placement in &record.placements {
             hosted_replica_count = hosted_replica_count.saturating_add(1);
             hosting_peers.insert(placement.peer_id.clone());
-            match placement.selected_backend {
-                iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm => {
-                    portable_vm = portable_vm.saturating_add(1);
-                }
-                iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::FirecrackerKvm => {
-                    firecracker_kvm = firecracker_kvm.saturating_add(1);
-                }
-            }
+            portable_vm = portable_vm.saturating_add(1);
         }
     }
     json_object(vec![
@@ -17696,13 +17675,9 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
             u64::try_from(hosting_peers.len()).unwrap_or(u64::MAX),
         ),
         json_entry("hosted_replica_count", hosted_replica_count),
-        json_entry("proxy_only_validator_count", proxy_only_validator_count),
         json_entry(
             "backend_mix",
-            json_object(vec![
-                json_entry("portable_vm", portable_vm),
-                json_entry("firecracker_kvm", firecracker_kvm),
-            ]),
+            json_object(vec![json_entry("portable_vm", portable_vm)]),
         ),
     ])
 }
@@ -23232,6 +23207,22 @@ struct AdmittedToriiProxySnapshot {
     ordinary_query_memory: Option<OrdinaryQueryResponseMemory>,
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn bounded_torii_proxy_snapshot_diagnostic_body(
+    diagnostic: &str,
+    max_body_bytes: usize,
+) -> Vec<u8> {
+    let mut end = diagnostic.len().min(max_body_bytes);
+    while !diagnostic.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let bytes = &diagnostic.as_bytes()[..end];
+    let mut body = Vec::new();
+    if body.try_reserve_exact(bytes.len()).is_ok() {
+        body.extend_from_slice(bytes);
+    }
+    body
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn response_to_admitted_torii_proxy_snapshot(
     mut response: Response,
     max_body_bytes: usize,
@@ -23246,7 +23237,7 @@ async fn response_to_admitted_torii_proxy_snapshot(
                 snapshot: ToriiProxyHttpResponseV1 {
                     status_code: StatusCode::BAD_GATEWAY.as_u16(),
                     headers: Vec::new(),
-                    body: error.into_bytes(),
+                    body: bounded_torii_proxy_snapshot_diagnostic_body(&error, max_body_bytes),
                 },
                 fanout_reservation,
                 ordinary_query_memory,
@@ -23255,15 +23246,14 @@ async fn response_to_admitted_torii_proxy_snapshot(
     };
     let body = match axum::body::to_bytes(body, max_body_bytes).await {
         Ok(body) => body.to_vec(),
-        Err(error) => {
+        Err(_error) => {
+            const DIAGNOSTIC: &str =
+                "proxied response body could not be collected within configured bounds";
             return AdmittedToriiProxySnapshot {
                 snapshot: ToriiProxyHttpResponseV1 {
                     status_code: StatusCode::BAD_GATEWAY.as_u16(),
                     headers: Vec::new(),
-                    body: format!(
-                        "proxied response body exceeds configured limit of {max_body_bytes} bytes: {error}"
-                    )
-                    .into_bytes(),
+                    body: bounded_torii_proxy_snapshot_diagnostic_body(DIAGNOSTIC, max_body_bytes),
                 },
                 fanout_reservation,
                 ordinary_query_memory,
@@ -25816,6 +25806,13 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         .headers()
         .get(axum::http::header::CONTENT_TYPE.as_str())
         .cloned();
+    let mut reject_codes = response.headers().get_all("x-iroha-reject-code").iter();
+    let reject_code = reject_codes
+        .next()
+        .filter(|_| reject_codes.next().is_none())
+        .filter(|_| status.is_client_error() || status.is_server_error())
+        .filter(|value| value.to_str().is_ok_and(crate::utils::is_valid_reject_code))
+        .cloned();
     let max_response_bytes =
         public_dataspace_upstream_response_body_limit(request.endpoint, max_response_bytes);
     let body = match read_reqwest_response_body_bounded(
@@ -25847,6 +25844,11 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         response
             .headers_mut()
             .insert(axum::http::header::CONTENT_TYPE, content_type);
+    }
+    if let Some(reject_code) = reject_code {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-iroha-reject-code"), reject_code);
     }
     insert_routing_headers(&mut response, routing_decision, "external");
     response
@@ -30286,11 +30288,25 @@ fn canonical_stream_high_load_threshold(
     app: &SharedAppState,
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
 ) -> usize {
-    if route.stable_route_id() == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id() {
+    if matches!(
+        route.stable_route_id(),
+        id if id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
+            || id == route_catalog::streaming::BLOCKS_WS.stable_route_id()
+    ) {
         app.high_load_subscription_tx_threshold
     } else {
         app.high_load_stream_tx_threshold
     }
+}
+#[cfg(feature = "app_api")]
+fn canonical_stream_is_sse(
+    route: iroha_torii_shared::route_catalog::RouteDescriptor,
+) -> bool {
+    matches!(
+        route.stable_route_id(),
+        id if id == route_catalog::streaming::EVENTS_SSE.stable_route_id()
+            || id == route_catalog::streaming::CONTRACT_EVENTS_SSE.stable_route_id()
+    )
 }
 #[cfg(feature = "app_api")]
 async fn enforce_canonical_stream_admission(
@@ -30329,6 +30345,11 @@ async fn enforce_canonical_stream_admission(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             ))
             .into_response());
+        }
+    }
+    if canonical_stream_is_sse(admission.route) {
+        if let Some(response) = sse_resume_rejection(req.headers()) {
+            return Ok(response);
         }
     }
     Ok(next.run(req).await)
@@ -36840,6 +36861,7 @@ async fn handle_connect_ws_logic(
         permit.release().await;
         return (code, msg).into_response();
     }
+    let ws = bus.configure_websocket(ws);
     let ws = if let Some(protocol) = token.protocol {
         ws.protocols([protocol])
     } else {
@@ -37156,6 +37178,18 @@ mod connect_token_tests {
         assert!(token.protocol.is_none());
     }
     #[test]
+    fn resolve_connect_ws_token_rejects_duplicate_authorization_headers() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::AUTHORIZATION, "Bearer first-token".parse().unwrap());
+        headers.append(
+            header::AUTHORIZATION,
+            "Bearer second-token".parse().unwrap(),
+        );
+        let err = resolve_connect_ws_token(&headers)
+            .expect_err("ambiguous bearer credentials must fail closed");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+    #[test]
     fn connect_remote_ip_requires_injected_header() {
         let headers = HeaderMap::new();
         let err = connect_remote_ip_from_headers(&headers).expect_err("missing remote addr");
@@ -37187,9 +37221,17 @@ fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<Option<String>, axum::response::Response> {
     use axum::http::{StatusCode, header};
-    let Some(value) = headers.get(header::AUTHORIZATION) else {
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
         return Ok(None);
     };
+    if values.next().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "connect: authorization header must appear exactly once",
+        )
+            .into_response());
+    }
     let value_str = value
         .to_str()
         .map_err(|_| {
@@ -40068,11 +40110,13 @@ fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
 ) -> Result<TxHistoryJwtClaims, String> {
-    let token = auth_header
-        .trim()
-        .strip_prefix("Bearer ")
-        .or_else(|| auth_header.trim().strip_prefix("bearer "))
-        .ok_or_else(|| "Authorization header must use Bearer token".to_string())?;
+    let mut authorization = auth_header.split_whitespace();
+    let scheme = authorization.next().unwrap_or_default();
+    let token = authorization.next().unwrap_or_default();
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() || authorization.next().is_some()
+    {
+        return Err("Authorization header must use Bearer token".to_string());
+    }
     let key = jwt.key.decoding_key(jwt.algorithm)?;
     let mut parts = token.split('.');
     let header_part = parts.next().filter(|part| !part.is_empty());
@@ -40177,16 +40221,28 @@ fn tx_history_viewer_from_headers(
             "transaction history bearer auth is not configured",
         ));
     };
-    let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
-            tx_history_reject(
-                StatusCode::UNAUTHORIZED,
-                "tx_history_authorization_missing",
-                "missing Authorization header",
-            )
-        })?;
+    let mut authorization_values = headers.get_all(axum::http::header::AUTHORIZATION).iter();
+    let authorization_value = authorization_values.next().ok_or_else(|| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_missing",
+            "missing Authorization header",
+        )
+    })?;
+    if authorization_values.next().is_some() {
+        return Err(tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_invalid",
+            "Authorization header must appear exactly once",
+        ));
+    }
+    let auth_header = authorization_value.to_str().map_err(|_| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_invalid",
+            "Authorization header must be visible ASCII",
+        )
+    })?;
     let claims = decode_tx_history_jwt_claims(auth_header, jwt).map_err(|message| {
         tx_history_reject(
             StatusCode::UNAUTHORIZED,

@@ -655,10 +655,80 @@ fn pending_kura_runner_activation_publishes_current_height_without_successor_aut
     assert!(ingress.state.lock().open);
     assert_eq!(super::super::status::v2_status(), Some(expected));
 
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        )),
+        Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert_eq!(ingress.len(), 1);
+    activated
+        .close_ingress(&ingress)
+        .expect("close pending-Kura ingress for a finite finalized drain");
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    assert_eq!(ingress.len(), 1, "closing preserves the admitted prefix");
+    assert!(matches!(
+        ingress.ensure_closed_drained_cut(),
+        Err(reason) if reason.contains("retained physical ownership")
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            valid_ingress_probe(),
+            authenticated_peer_for_test(),
+        )),
+        Err(FairV2IngressPushError::Closed(_))
+    ));
+    assert!(
+        ingress
+            .try_recv_if_checked(|_| true)
+            .expect("drain the closed pending-Kura ingress")
+            .is_some()
+    );
+    assert!(
+        ingress
+            .try_recv_if_checked(|_| true)
+            .expect("observe the finite pending-Kura ingress cut")
+            .is_none()
+    );
+    ingress
+        .ensure_closed_drained_cut()
+        .expect("authenticate the empty closed pending-Kura ingress cut");
+
     drop(activated);
     assert!(!ready.load(Ordering::Acquire));
     assert!(!ingress.state.lock().open);
     super::super::status::clear_v2_status();
+}
+
+#[test]
+fn pending_kura_finalization_closes_and_drains_before_rollover() {
+    let source = include_str!("../v2_runner/lifecycle_pending_kura.rs");
+    let start = source
+        .find("let rollover_ready = activated.with_runner_runtime(")
+        .expect("pending-Kura finalization preflight remains explicit");
+    let end = source[start..]
+        .find("let prepared_successor = {")
+        .map(|offset| start + offset)
+        .expect("pending-Kura successor construction follows rollover");
+    let finalization = &source[start..end];
+    let mut cursor = 0;
+    for token in [
+        "if !rollover_ready",
+        "if !finalized_ingress_closed",
+        "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
+        "drain_decided_lane_recovery_ingress(",
+        "if drained_terminal_ingress",
+        "continue;",
+        "ensure_closed_drained_cut()",
+        "activated.into_finalized_rollover(&mut active_runner)",
+    ] {
+        let offset = finalization[cursor..]
+            .find(token)
+            .unwrap_or_else(|| panic!("pending-Kura finalized drain lost `{token}`"));
+        cursor = cursor.saturating_add(offset).saturating_add(token.len());
+    }
 }
 
 #[test]

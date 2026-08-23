@@ -74,9 +74,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Enqueue a local proposal successor under the immutable lifecycle Validate owner.
     ///
-    /// The coordinator ordinal is already minted by the actor-global source;
-    /// this boundary validates and reuses it rather than allocating a second
-    /// logical lifecycle position.
+    /// The coordinator ordinal is already minted by the shared actor-global
+    /// authority; this boundary validates and reuses it rather than allocating
+    /// a second logical lifecycle position.
     pub(in crate::sumeragi) fn enqueue_local_proposal_with_lifecycle_pending(
         &mut self,
         tag: EventTag,
@@ -85,7 +85,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         validated_receipt: ValidatedBodyReceipt,
         pending: &PendingRuntimeEffectBinding,
         lifecycle_ordinal: u128,
-    ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
+    ) -> Result<LocalProposalReadyCommandAdmission, EnqueueError> {
         if self.fail_closed || lifecycle_ordinal == 0 {
             return Err(EnqueueError::FailClosed);
         }
@@ -102,36 +102,16 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             durable_receipt,
             validated_receipt,
         };
-        if self
-            .ingress
-            .advance_past_coordinator_ordinal(lifecycle_ordinal)
-            .is_err()
-        {
-            self.latch_fail_closed(
-                "lifecycle local-proposal completion could not adopt its durable coordinator ordinal",
-            );
-            return Err(EnqueueError::FailClosed);
-        }
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
         let mut tagged = match preflight {
-            RuntimeCommandAdmissionPreflight::CoalesceOwned {
-                causal_lifecycle_key,
-                admission_ordinal,
-            } if causal_lifecycle_key == *pending.causal_lifecycle_key()
-                && admission_ordinal == lifecycle_ordinal =>
-            {
-                return Ok(identity);
-            }
-            RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
-                return Ok(identity);
-            }
             RuntimeCommandAdmissionPreflight::Coalesce
             | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
-                self.latch_fail_closed(
-                    "lifecycle local-proposal completion changed its immutable owner",
-                );
-                return Err(EnqueueError::FailClosed);
+                // Neither form installs or replaces a runtime owner. The
+                // executor consumes this typed outcome without retaining the
+                // new linear replay value, so a semantically redundant
+                // lifecycle may safely stutter beside an older producer.
+                return Ok(LocalProposalReadyCommandAdmission::Coalesced(identity));
             }
             RuntimeCommandAdmissionPreflight::Admit => {
                 let owner = self.restored_command_owner(
@@ -190,6 +170,33 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 "lifecycle local-proposal completion failed exact queue ownership",
             );
         }
-        result.map(|()| identity)
+        result.map(|()| LocalProposalReadyCommandAdmission::Admitted(identity))
+    }
+}
+
+/// Result of publishing one lifecycle-owned `LocalProposalReady` command.
+///
+/// A coalesced completion consumed no FIFO slot. Its caller must therefore
+/// discard the new linear replay value and leave any older replay incumbent
+/// unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LocalProposalReadyCommandAdmission {
+    /// The command acquired one new serialized FIFO owner.
+    Admitted(LocalProposalReadyCommandIdentity),
+    /// Existing reducer or producer state made the command a semantic stutter.
+    Coalesced(LocalProposalReadyCommandIdentity),
+}
+
+impl LocalProposalReadyCommandAdmission {
+    /// Borrow the inert command identity shared by both outcomes.
+    pub(in crate::sumeragi) const fn command_identity(self) -> LocalProposalReadyCommandIdentity {
+        match self {
+            Self::Admitted(identity) | Self::Coalesced(identity) => identity,
+        }
+    }
+
+    /// Return whether publication consumed no new runtime owner.
+    pub(in crate::sumeragi) const fn was_coalesced(self) -> bool {
+        matches!(self, Self::Coalesced(_))
     }
 }

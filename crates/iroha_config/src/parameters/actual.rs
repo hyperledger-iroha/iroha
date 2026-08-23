@@ -55,6 +55,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
+    soracloud::SoraInrouRuntimeBackendV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -241,8 +242,16 @@ impl SoracloudRuntime {
             "soracloud_runtime.production_mode requires soracloud_runtime.inrou.enabled = true"
         );
         assert!(
-            !self.inrou.proxy_only,
-            "soracloud_runtime.production_mode requires soracloud_runtime.inrou.proxy_only = false"
+            !self.inrou.backends.is_empty(),
+            "soracloud_runtime.production_mode requires a nonempty soracloud_runtime.inrou.backends allowlist"
+        );
+        assert!(
+            self.inrou.backends.len() == 1
+                && self
+                    .inrou
+                    .backends
+                    .contains(&SoraInrouRuntimeBackendV1::PortableVm),
+            "Inrou V1 production hosting accepts only the `portable_vm` backend"
         );
         assert!(
             !self.egress.default_allow,
@@ -294,14 +303,30 @@ impl_default!(SoracloudRuntimeCacheBudgets => {
         }
 });
 /// Resource ceilings for mutable Inrou microVM workloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou VMs hosted concurrently.
-    pub max_concurrent_vms: NonZeroUsize,
+    pub max_concurrent_vms: NonZeroU16,
     /// Whether this node advertises and materializes local Inrou workloads.
     pub enabled: bool,
-    /// Whether the validator should act as a proxy/control-plane node only.
-    pub proxy_only: bool,
+    /// Exact runtime backends this node is permitted to advertise and use.
+    pub backends: BTreeSet<SoraInrouRuntimeBackendV1>,
+    /// Explicit accelerator used by the PortableVM backend.
+    pub portable_vm_acceleration: SoracloudRuntimePortableVmAcceleration,
+    /// Dedicated non-root uid used to execute QEMU, required for PortableVM hosting.
+    pub portable_vm_uid: Option<NonZeroU32>,
+    /// Dedicated non-root primary gid used to execute QEMU, required for PortableVM hosting.
+    pub portable_vm_gid: Option<NonZeroU32>,
+    /// Explicit supplementary gids retained by the QEMU child (for example the KVM device gid).
+    pub portable_vm_supplementary_gids: Vec<NonZeroU32>,
+    /// Root-owned directory used for private, process-attested QMP control sockets.
+    pub portable_vm_control_dir: Option<PathBuf>,
+    /// Maximum aggregate hosted CPU budget in millicores.
+    pub max_cpu_millis: NonZeroU32,
+    /// Maximum aggregate hosted memory budget in bytes.
+    pub max_memory_bytes: NonZeroU64,
+    /// Maximum aggregate hosted writable-storage budget in bytes.
+    pub max_storage_bytes: NonZeroU64,
     /// Maximum compressed size accepted for one bundle archive.
     pub bundle_archive_max_compressed_bytes: NonZeroU64,
     /// Maximum decoded size accepted for one bundle archive.
@@ -321,7 +346,16 @@ impl_default!(SoracloudRuntimeInrou => {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
-            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            backends: BTreeSet::new(),
+            portable_vm_acceleration: SoracloudRuntimePortableVmAcceleration::Tcg,
+            portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
+            portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
+            portable_vm_supplementary_gids: Vec::new(),
+            portable_vm_control_dir: defaults::soracloud_runtime::INROU_PORTABLE_VM_CONTROL_DIR
+                .map(PathBuf::from),
+            max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
+            max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
+            max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
             bundle_archive_max_compressed_bytes:
                 defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
             bundle_archive_max_decoded_bytes:
@@ -371,6 +405,30 @@ impl SoracloudRuntimeInrou {
             self.bundle_archive_max_total_file_bytes <= self.bundle_archive_max_decoded_bytes,
             "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes"
         );
+    }
+}
+/// Exact QEMU accelerator selected for PortableVM execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoracloudRuntimePortableVmAcceleration {
+    /// Deterministic software translation.
+    Tcg,
+    /// Linux KVM acceleration.
+    Kvm,
+    /// macOS Hypervisor.framework acceleration.
+    Hvf,
+    /// Windows Hypervisor Platform acceleration.
+    Whpx,
+}
+impl SoracloudRuntimePortableVmAcceleration {
+    /// Return the exact QEMU `accel` identifier.
+    #[must_use]
+    pub const fn as_qemu_name(self) -> &'static str {
+        match self {
+            Self::Tcg => "tcg",
+            Self::Kvm => "kvm",
+            Self::Hvf => "hvf",
+            Self::Whpx => "whpx",
+        }
     }
 }
 /// Runtime-originated transaction submission settings.
@@ -1161,7 +1219,7 @@ impl_default!(SoranetPrivacy => {
         }
 });
 /// Derived VPN configuration for the native SoraNet tunnel.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SoranetVpn {
     /// Whether the VPN surface is enabled.
     pub enabled: bool,
@@ -1209,6 +1267,54 @@ pub struct SoranetVpn {
     pub guard_directory_path: Option<PathBuf>,
     /// Externally provisioned digest authenticating the exact snapshot bytes.
     pub guard_directory_digest: Option<[u8; 32]>,
+}
+struct RedactedHelperTicketSecret(bool);
+impl fmt::Debug for RedactedHelperTicketSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(if self.0 { "Some([REDACTED])" } else { "None" })
+    }
+}
+impl fmt::Debug for SoranetVpn {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SoranetVpn")
+            .field("enabled", &self.enabled)
+            .field("cell_size_bytes", &self.cell_size_bytes)
+            .field("flow_label_bits", &self.flow_label_bits)
+            .field("cover_to_data_per_mille", &self.cover_to_data_per_mille)
+            .field("max_cover_burst", &self.max_cover_burst)
+            .field("heartbeat_ms", &self.heartbeat_ms)
+            .field("jitter_ms", &self.jitter_ms)
+            .field("padding_budget_ms", &self.padding_budget_ms)
+            .field("guard_refresh", &self.guard_refresh)
+            .field("lease", &self.lease)
+            .field("dns_push_interval", &self.dns_push_interval)
+            .field("exit_class", &self.exit_class)
+            .field("meter_family", &self.meter_family)
+            .field(
+                "helper_ticket_secret",
+                &RedactedHelperTicketSecret(self.helper_ticket_secret.is_some()),
+            )
+            .field("operator_account_id", &self.operator_account_id)
+            .field("lease_fee", &self.lease_fee)
+            .field("settlement_grace", &self.settlement_grace)
+            .field("route_pushes", &self.route_pushes)
+            .field("excluded_routes", &self.excluded_routes)
+            .field("dns_servers", &self.dns_servers)
+            .field("relay_id", &self.relay_id)
+            .field("guard_directory_path", &self.guard_directory_path)
+            .field("guard_directory_digest", &self.guard_directory_digest)
+            .finish()
+    }
+}
+#[cfg(test)]
+#[test]
+fn soranet_vpn_debug_redacts_helper_ticket_secret() {
+    let mut vpn = SoranetVpn::default();
+    vpn.helper_ticket_secret = Some([0xA5; 32]);
+    let rendered = format!("{vpn:?}");
+    assert!(rendered.contains("helper_ticket_secret: Some([REDACTED])"));
+    assert!(!rendered.contains("[165, 165, 165"));
 }
 impl_default!(SoranetVpn => {
         Self {
@@ -2698,6 +2804,19 @@ pub struct NexusStorage {
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
     pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
+}
+impl NexusStorage {
+    /// Return the resolved source SoraFS capacity before Nexus budget clamping.
+    ///
+    /// `None` means no aggregate Nexus storage budget has captured component caps yet. This
+    /// source value can be an explicit operator value or the generic default. The accessor lets
+    /// fixed deployment profiles distinguish an exact source cap from a default, zero, or
+    /// oversized value that normalizes to the same effective cap.
+    #[must_use]
+    pub fn configured_sorafs_max_capacity_bytes(&self) -> Option<Bytes<u64>> {
+        self.configured_component_caps
+            .map(|caps| caps.sorafs_max_capacity_bytes)
+    }
 }
 impl fmt::Debug for NexusStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

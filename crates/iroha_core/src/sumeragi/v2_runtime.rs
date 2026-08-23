@@ -1,14 +1,11 @@
 //! Serialized runtime shell for the authoritative Sumeragi v2 adapter.
 //!
-//! This module owns scheduling and backpressure, not consensus state. Every
-//! admitted command is delivered to [`SumeragiV2Adapter`] by one serialized
-//! class-aware arbiter, and all
-//! returned [`AdapterEffect`] values are handed to callers unchanged. The only
-//! effect inspected here is `EnterView`, because installing a certified view is
-//! the sole event allowed to restart the round and retransmission clocks. The
-//! round deadline grows linearly through a finite protocol ceiling while
-//! retransmission stays fixed. This gives post-GST service additional room
-//! without turning a long-idle height's view into an hours-long wait.
+//! This module owns scheduling and backpressure, not consensus state.
+//! A class-aware arbiter serially delivers admitted commands to [`SumeragiV2Adapter`]
+//! and returns every [`AdapterEffect`] unchanged. Only `EnterView` is inspected:
+//! installing a certified view alone may restart round and retransmission clocks.
+//! The round deadline grows to a finite ceiling while retransmission stays fixed,
+//! giving post-GST service more room without making a long-idle height wait hours.
 //! Every admitted owner freezes both its receiver-local physical predecessor
 //! cut and its logical lifecycle ordinal. A replay admitted at or after that
 //! cut cannot overtake the owner even when the replay retains an older logical
@@ -75,8 +72,8 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
-        LifecycleDecisionApplyLineageV1, PreparedReadyDurableValidateAdapterPreview,
-        PreparedReadyDurableValidateExecution, ReadyDurableValidateAdapterPreviewError,
+        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
+        ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
         runtime_lifecycle_ordinal_authority_after_high_watermark,
@@ -1732,7 +1729,7 @@ impl RuntimeCandidateSemanticStatement {
     /// proposal rounds remain exact consensus coordinates. Only the ordinary,
     /// Prepare, then Commit authority lattice may change beneath the physical
     /// task owner.
-    fn body_stage_authority_relation_to(
+    pub(crate) fn body_stage_authority_relation_to(
         self,
         incoming: Self,
     ) -> Option<RuntimeFetchAuthorityRelation> {
@@ -6254,20 +6251,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .map_err(|_| EnqueueError::FailClosed)?;
         self.next_admission_ordinal = reserved.1;
         Ok(reserved)
-    }
-    /// Adopt an ordinal already minted and durably published by the coordinator.
-    fn advance_past_coordinator_ordinal(
-        &mut self,
-        lifecycle_ordinal: u128,
-    ) -> Result<(), EnqueueError> {
-        self.lifecycle_ordinals
-            .advance_past(lifecycle_ordinal)
-            .map_err(|_| EnqueueError::FailClosed)?;
-        self.next_admission_ordinal = self
-            .lifecycle_ordinals
-            .next_ordinal()
-            .map_err(|_| EnqueueError::FailClosed)?;
-        Ok(())
     }
     /// Atomically validate and publish one or more physical FIFO owners.
     ///
@@ -14860,37 +14843,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 include!("v2_runtime_ready_validate_publication.rs");
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
-    /// Stage the deferred pending-Kura validation and its exact Apply successor.
-    ///
-    /// This no-clock seam is available only after the startup Validate effect's
-    /// positional ownership has left the runtime shell. Failure returns the
-    /// move-only marker unchanged; success retains it inside the adapter's
-    /// drop-inert prepared transition.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(
-        &mut self,
-        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
-        predecessor: &AdapterEffect,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<
-        super::v2::PreparedPendingKuraValidatedApplyV1<'_>,
-        (
-            super::v2::DeferredPendingKuraValidatedMarkerV1,
-            AdapterError,
-        ),
-    > {
-        if self.fail_closed
-            || self.clocks_armed
-            || self.ingress.len() != 0
-            || self.pending_effect_ownership.is_some()
-            || self.last_scheduler_ownership.is_some()
-            || !self.pending_leader_wire_terminals.is_empty()
-        {
-            return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
-        }
-        marker.prepare_apply(&mut self.driver, predecessor, ownership)
-    }
-
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,
@@ -14952,12 +14904,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>, AdapterError>
     {
         // Queued ingress is inert; only active mutation debts exclude Completion.
-        if self.fail_closed
-            || self.pending_effect_ownership.is_some()
+        if self.fail_closed {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        if self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()
         {
-            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+            return Err(AdapterError::RecoveredLifecycleSignCompletionRuntimeDebt);
         }
         self.driver
             .prepare_recovered_lifecycle_sign_completion(authority)
@@ -14977,6 +14931,13 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver
             .prepare_recovered_decision_fetch_store(authority)
+    }
+    /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
+        !self.fail_closed
+            && self.pending_effect_ownership.is_none()
+            && self.last_scheduler_ownership.is_none()
+            && self.pending_leader_wire_terminals.is_empty()
     }
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(
@@ -15893,6 +15854,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         AdapterError,
     > {
         self.driver.replayed_decision_key()
+    }
+    /// Return the complete durable Prepare/Commit authority for the retained body.
+    pub(crate) fn replayed_body_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        self.driver.replayed_body_authority_certificate()
     }
     /// Rebind one independently durable validation marker before replayed
     /// startup effects are dispatched.

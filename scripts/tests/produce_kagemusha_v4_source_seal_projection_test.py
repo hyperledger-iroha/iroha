@@ -855,6 +855,15 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                 ):
                     producer._validate_normalized_unit_graph(canonical(graph))
 
+    def test_boolean_unit_graph_version_is_rejected(self) -> None:
+        graph = copy.deepcopy(self.graph_value)
+        graph["version"] = True
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError, "version is not 1"
+        ):
+            producer._validate_normalized_unit_graph(canonical(graph))
+
     def test_absolute_package_and_source_paths_are_rejected(self) -> None:
         mutations = (
             ("pkg_id", "iroha_core 3.0.0 (path+file:///tmp/iroha)"),

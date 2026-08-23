@@ -353,8 +353,8 @@ Generate a genesis configuration and standard-output in JSON format
   - `iroha3-nexus`:
     Sora Nexus main network
 
-* `--chain-id <CHAIN_ID>` — Optional explicit chain id (overrides profile default)
-* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus` when NPoS is selected; ignored for permissioned manifests
+* `--chain-id <CHAIN_ID>` — Optional explicit chain id. With a profile, it must equal that profile's pinned chain id
+* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for the public `iroha3-taira`/`iroha3-nexus` profiles
 * `--xor-asset-definition-id <BASE58>` — Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus` NPoS manifests; `iroha3-taira` defaults to its live XOR id
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
@@ -500,7 +500,7 @@ Verify one complete authenticated ABI-21/V4 release directory
 
 ###### **Options:**
 
-* `--bundle-dir <BUNDLE_DIR>` — Immutable directory containing the exact ABI-21/V4 release inventory
+* `--bundle-dir <BUNDLE_DIR>` — Immutable directory containing the exact eighteen-file promoted ABI-21/V4 inventory
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy provisioned alongside the candidate release
 * `--benchmark-evidence <BENCHMARK_EVIDENCE>` — Signed physical-device benchmark evidence file
 * `--cryptographic-review <CRYPTOGRAPHIC_REVIEW>` — Canonical signed, candidate-bound cryptographic review Norito file
@@ -516,7 +516,7 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 ###### **Options:**
 
-* `--bundle-dir <BUNDLE_DIR>` — Immutable directory containing the exact ABI-21/V4 release inventory
+* `--bundle-dir <BUNDLE_DIR>` — Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy provisioned alongside the candidate release
 * `--promotion-record <PROMOTION_RECORD>` — New path for the canonical Norito promotion record; it is never overwritten
 * `--benchmark-evidence <BENCHMARK_EVIDENCE>` — Signed physical-device benchmark evidence file

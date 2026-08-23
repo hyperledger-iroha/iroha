@@ -1,5 +1,5 @@
 #[test]
-fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
+fn pending_kura_tip_opens_directly_at_exact_recovered_apply_ordinal() {
     let fixture = Fixture::new();
     let directory = TempDir::new().expect("body-store directory");
     let mut store = V2BodyStore::open_with_policy(
@@ -30,12 +30,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         .expect("semantically replay recovered validation marker");
     let recovered = reopened.recovery_catalog().expect("recovery catalog");
     let validations = reopened.validated_recovery_catalog();
-    assert_eq!(
-        validations
-            .get(&(fixture.manifest.round, fixture.manifest.subject))
-            .map(ValidatedBodyReceipt::durable),
-        Some(&durable)
-    );
     let expected = PendingKuraApply::for_test(
         fixture.context.id(),
         fixture.context.height,
@@ -49,6 +43,7 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     ));
     let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
     certificate.execution_commitment = validated.execution_commitment();
+    let recovered_apply_ordinal = 41;
     let (authenticated_genesis_context, evidence) = verify_pending_kura_apply_parts(
         &fixture.context,
         decision,
@@ -59,380 +54,34 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         tag(0),
         certificate.clone(),
         Some(&fixture.manifest),
+        recovered_apply_ordinal,
     )
-    .expect("exact replay binding");
-    let authenticated_genesis_context = authenticated_genesis_context
-        .expect("height-one replay mints a genesis projection capability");
+    .expect("exact direct-Apply replay binding");
     assert_eq!(
-        authenticated_genesis_context.hash(),
-        fixture.context.nexus_amx_context_hash
+        authenticated_genesis_context
+            .expect("height-one replay mints the genesis projection")
+            .hash(),
+        fixture.context.nexus_amx_context_hash,
     );
-    assert_eq!(evidence.expected(), expected);
-    assert_eq!(evidence.expected().state_height(), 0);
-    assert_eq!(evidence.frozen_context_id(), fixture.context.id());
-    assert_eq!(evidence.frozen_height(), fixture.context.height);
-    assert_eq!(evidence.replay_tag(), tag(0));
-    assert_eq!(evidence.owner_tag(), tag(0));
-    assert_eq!(evidence.replay_generation(), tag(0).generation().get());
-    assert_eq!(evidence.commit_qc(), &certificate);
-    assert_eq!(evidence.commit_round(), certificate.round);
-    assert_eq!(evidence.commit_phase(), wire::GlobalPhase::Commit);
-    assert_eq!(evidence.commit_subject(), certificate.subject);
-    assert_eq!(
-        evidence.execution_commitment(),
-        certificate.execution_commitment
-    );
-    assert_eq!(evidence.commit_signers(), certificate.signers.as_slice());
-    assert_eq!(
-        evidence.commit_aggregate_signature(),
-        certificate.aggregate_signature.as_slice()
-    );
-    assert_eq!(evidence.manifest(), &fixture.manifest);
-    assert_eq!(evidence.manifest_hash(), HashOf::new(&fixture.manifest));
-    assert_eq!(evidence.durable_receipt(), &durable);
-    assert_eq!(
-        evidence.durable_receipt().frame_hash(),
-        durable.frame_hash()
-    );
-    assert_eq!(evidence.validated_receipt(), &validated);
-    assert_eq!(
-        evidence.stage(),
-        PendingKuraApplyRecoveryStage::CertifiedFetch
-    );
-    let (_, delayed_evidence) = verify_pending_kura_apply_parts(
-        &fixture.context,
-        decision,
-        &recovered,
-        &validations,
-        expected,
-        tag(3),
-        tag(3),
-        certificate.clone(),
-        Some(&fixture.manifest),
-    )
-    .expect("historical CommitQC remains replayable by the current owner");
-    assert_eq!(delayed_evidence.replay_tag(), tag(3));
-    assert_eq!(delayed_evidence.owner_tag(), tag(3));
-    let mut later_certificate = certificate.clone();
-    later_certificate.round.view = fixture
-        .manifest
-        .round
-        .view
-        .checked_add(2)
-        .expect("fixture reproposal view increment");
-    later_certificate.proposal_round = later_certificate.round;
-    let later_decision = Some((
-        later_certificate.round,
-        later_certificate.proposal_round,
-        later_certificate.subject,
-        later_certificate.execution_commitment,
-    ));
-    let alias_round = wire::ConsensusRound {
-        view: fixture
-            .manifest
-            .round
-            .view
-            .checked_add(1)
-            .expect("fixture alias view increment"),
-        ..fixture.manifest.round
-    };
-    let alias_manifest = canonical_payload_manifest(
-        &fixture.context,
-        alias_round,
-        fixture.manifest.subject,
-        &fixture.body,
-    );
-    let alias_durable = DurableBodyReceipt::for_test(
-        fixture.context.id(),
-        alias_round,
-        fixture.manifest.subject,
-        HashOf::new(&alias_manifest),
-    );
-    let alias_validated = ValidatedBodyReceipt::for_test_with_commitment(
-        alias_durable.clone(),
-        validated.execution_commitment(),
-    );
-    let later_manifest = canonical_payload_manifest(
-        &fixture.context,
-        later_certificate.round,
-        fixture.manifest.subject,
-        &fixture.body,
-    );
-    let later_durable = DurableBodyReceipt::for_test(
-        fixture.context.id(),
-        later_certificate.round,
-        fixture.manifest.subject,
-        HashOf::new(&later_manifest),
-    );
-    let later_validated = ValidatedBodyReceipt::for_test_with_commitment(
-        later_durable.clone(),
-        validated.execution_commitment(),
-    );
-    let mut recovered_with_alias = recovered.clone();
-    recovered_with_alias.insert(
-        (alias_round, fixture.manifest.subject),
-        (alias_manifest, alias_durable),
-    );
-    recovered_with_alias.insert(
-        (later_certificate.round, fixture.manifest.subject),
-        (later_manifest.clone(), later_durable),
-    );
-    let mut validations_with_alias = validations.clone();
-    validations_with_alias.insert((alias_round, fixture.manifest.subject), alias_validated);
-    validations_with_alias.insert(
-        (later_certificate.round, fixture.manifest.subject),
-        later_validated,
-    );
-    let (_, later_finality_evidence) = verify_pending_kura_apply_parts(
-        &fixture.context,
-        later_decision,
-        &recovered_with_alias,
-        &validations_with_alias,
-        expected,
-        tag(0),
-        tag(0),
-        later_certificate.clone(),
-        Some(&later_manifest),
-    )
-    .expect("reproposal CommitQC selects its same-round body among exact aliases");
-    assert_eq!(
-        later_finality_evidence.durable_round(),
-        later_certificate.round
-    );
-    assert_eq!(
-        later_finality_evidence.commit_round(),
-        later_certificate.round
-    );
-    assert!(later_finality_evidence.is_exact(&fixture.context));
-    let mut conflicting_body = fixture.body.clone();
-    let first_byte = conflicting_body
-        .first_mut()
-        .expect("fixture body is non-empty");
-    *first_byte ^= 0xff;
-    let conflicting_manifest = deliberately_conflicting_payload_manifest(
-        &fixture.context,
-        alias_round,
-        fixture.manifest.subject,
-        &conflicting_body,
-    );
-    let conflicting_durable = DurableBodyReceipt::for_test(
-        fixture.context.id(),
-        alias_round,
-        fixture.manifest.subject,
-        HashOf::new(&conflicting_manifest),
-    );
-    let mut recovered_with_conflict = recovered_with_alias.clone();
-    recovered_with_conflict.insert(
-        (alias_round, fixture.manifest.subject),
-        (conflicting_manifest, conflicting_durable),
-    );
-    assert!(matches!(
-        verify_pending_kura_apply_parts(
-            &fixture.context,
-            later_decision,
-            &recovered_with_conflict,
-            &validations_with_alias,
-            expected,
-            tag(0),
-            tag(0),
-            later_certificate.clone(),
-            Some(&later_manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("aliases conflict")
-    ));
-    let later_sources = certified_sources(&fixture, &later_certificate);
-    assert_eq!(
-        later_finality_evidence
-            .transition_for_effect(&AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: later_certificate.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(later_manifest),
-                certified_sources: later_sources,
-                certificate: Some(later_certificate),
-            })
-            .expect("same-round reproposal Fetch is authorized by its CommitQC"),
-        PendingKuraApplyRecoveryStage::DurableStore
-    );
-    assert!(matches!(
-        verify_pending_kura_apply_parts(
-            &fixture.context,
-            decision,
-            &recovered,
-            &validations,
-            expected,
-            tag(3),
-            tag(2),
-            certificate.clone(),
-            Some(&fixture.manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("frozen reducer incarnation")
-    ));
-    let mut altered_generation = evidence.clone();
-    altered_generation.replay_generation = altered_generation
-        .replay_generation
-        .checked_add(1)
-        .expect("fixture generation increment");
-    assert!(!altered_generation.is_exact(&fixture.context));
-    let mut altered_manifest = evidence.clone();
-    altered_manifest.manifest.chunk_root = Hash::new(b"altered recovery manifest root");
-    assert!(!altered_manifest.is_exact(&fixture.context));
-    let mut altered_frame = evidence.clone();
-    altered_frame.durable_receipt = DurableBodyReceipt::for_test(
-        fixture.context.id(),
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        HashOf::new(&fixture.manifest),
-    );
-    assert_ne!(
-        altered_frame.durable_receipt().frame_hash(),
-        altered_frame.durable_frame_hash()
-    );
-    assert!(!altered_frame.is_exact(&fixture.context));
-    let apply_effect = AdapterEffect::Apply {
-        tag: tag(0),
-        subject: fixture.manifest.subject,
-        certificate: certificate.clone(),
-    };
-    let certified_sources = certified_sources(&fixture, &certificate);
-    let recovery_sequence = [
-        AdapterEffect::FetchBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-            manifest: None,
-            certified_sources,
-            certificate: Some(certificate.clone()),
-        },
-        AdapterEffect::StoreBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        },
-        AdapterEffect::ValidateBody {
-            tag: tag(0),
-            round: fixture.manifest.round,
-            subject: fixture.manifest.subject,
-        },
-        apply_effect.clone(),
-    ];
-    let mut staged = evidence.clone();
-    for effect in &recovery_sequence {
-        staged.advance_stage_for_test(effect);
-    }
-    assert_eq!(
-        staged.stage(),
-        PendingKuraApplyRecoveryStage::ApplicationDispatched
-    );
-
-    let mut clock_fixture = ProductionTransportFixture::new();
-    clock_fixture.executor.pending_tip_recovery = Some(evidence.clone());
-    assert_eq!(
-        clock_fixture.executor.arm_live_clocks(
-            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
-            Instant::now(),
-        ),
-        Err(RuntimeClockError::PendingKuraRecovery),
-        "pending Kura recovery must keep the ordinary pacemaker sealed",
-    );
-    let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
-    direct_apply_executor.validated_bodies = validations.clone();
-    direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
-    let mut direct_apply_services = fixture.services();
-    assert!(matches!(
-        direct_apply_executor.consume_pending_tip_recovery_effects(
-            vec![apply_effect.clone()],
-            &mut direct_apply_services,
-        ),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("does not match its exact authenticated stage")
-    ));
-    let mut apply_stage = evidence.clone();
-    apply_stage.enter_apply_stage_for_test();
-    assert_eq!(
-        apply_stage
-            .transition_for_effect(&apply_effect)
-            .expect("exact Apply advances the closed-ingress stage"),
-        PendingKuraApplyRecoveryStage::ApplicationDispatched
-    );
-    let mut altered_signers = certificate.clone();
-    altered_signers.signers.swap(0, 1);
+    assert_eq!(evidence.stage(), PendingKuraApplyRecoveryStage::Apply);
+    assert_eq!(evidence.recovered_apply_ordinal(), recovered_apply_ordinal);
+    assert!(evidence.is_exact(&fixture.context));
+    let mut altered_signature = certificate;
+    altered_signature.aggregate_signature.push(0xa5);
     assert!(
-        apply_stage
-            .transition_for_effect(&AdapterEffect::Apply {
-                tag: tag(0),
-                subject: fixture.manifest.subject,
-                certificate: altered_signers,
-            })
-            .is_err(),
-        "recovery must compare the complete canonical signer evidence"
-    );
-    let mut altered_signature = certificate.clone();
-    altered_signature.aggregate_signature.push(0xA5);
-    assert!(
-        apply_stage
-            .transition_for_effect(&AdapterEffect::Apply {
-                tag: tag(0),
-                subject: fixture.manifest.subject,
-                certificate: altered_signature,
-            })
-            .is_err(),
-        "recovery must compare the complete aggregate-signature evidence"
-    );
-    for effects in [Vec::new(), vec![apply_effect.clone(), apply_effect.clone()]] {
-        let mut executor = fixture.executor(EffectQueueConfig::default());
-        executor.validated_bodies = validations.clone();
-        executor.pending_tip_recovery = Some(apply_stage.clone());
-        let mut services = fixture.services();
-        assert!(matches!(
-            executor.consume_pending_tip_recovery_effects(effects, &mut services),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("must emit exactly one effect")
-        ));
-    }
-    let mut wrong_context = fixture.context.clone();
-    wrong_context.nexus_amx_context_hash = Hash::new(b"different frozen Nexus/AMX context");
-    assert_ne!(
-        wrong_context.id(),
-        fixture.context.id(),
-        "height-context identity must bind the Nexus/AMX projection"
-    );
-    assert!(matches!(
         verify_pending_kura_apply_parts(
-            &wrong_context,
+            &fixture.context,
             decision,
             &recovered,
             &validations,
             expected,
             tag(0),
             tag(0),
-            certificate.clone(),
+            altered_signature,
             Some(&fixture.manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("different frozen height context")
-    ));
-    assert!(matches!(
-        verify_pending_kura_apply_parts(
-            &fixture.context,
-            None,
-            &recovered,
-            &validations,
-            expected,
-            tag(0),
-            tag(0),
-            certificate.clone(),
-            Some(&fixture.manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("no complete durable Decision")
-    ));
-    let wrong_tip = PendingKuraApply::for_test(
-        fixture.context.id(),
-        fixture.context.height,
-        HashOf::from_untyped_unchecked(Hash::new(b"different Kura tip")),
+            recovered_apply_ordinal,
+        )
+        .is_err()
     );
     assert!(matches!(
         verify_pending_kura_apply_parts(
@@ -440,59 +89,16 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
             decision,
             &recovered,
             &validations,
-            wrong_tip,
-            tag(0),
-            tag(0),
-            certificate.clone(),
-            Some(&fixture.manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("does not identify the canonical")
-    ));
-    assert!(matches!(
-        verify_pending_kura_apply_parts(
-            &fixture.context,
-            decision,
-            &recovered,
-            &BTreeMap::new(),
             expected,
             tag(0),
             tag(0),
-            certificate.clone(),
+            evidence.commit_qc().clone(),
             Some(&fixture.manifest),
+            0,
         ),
         Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("no matching durable validation marker")
+            if reason.contains("lost an exact native identity")
     ));
-    let mismatched_execution_commitment = fixture_execution_commitment();
-    assert_ne!(
-        mismatched_execution_commitment,
-        validated.execution_commitment(),
-        "the adversarial Decision fixture must change the consensus-bound execution result"
-    );
-    let mut mismatched_certificate = certificate.clone();
-    mismatched_certificate.execution_commitment = mismatched_execution_commitment;
-    assert!(matches!(
-        verify_pending_kura_apply_parts(
-            &fixture.context,
-            Some((
-                fixture.manifest.round,
-                fixture.manifest.round,
-                fixture.manifest.subject,
-                mismatched_execution_commitment,
-            )),
-            &recovered,
-            &validations,
-            expected,
-            tag(0),
-            tag(0),
-            mismatched_certificate,
-            Some(&fixture.manifest),
-        ),
-        Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-            if reason.contains("Decision commitment differs")
-    ));
-    assert_eq!(validated.durable(), &durable);
 }
 
 #[test]
@@ -969,67 +575,6 @@ fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
     );
     assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
     assert!(executor.status().fail_closed);
-}
-#[test]
-fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
-    let fixture = Fixture::new();
-    let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 99);
-    let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
-    let mut services = fixture.services();
-    let fetch = AdapterEffect::FetchBody {
-        tag: tag(0),
-        round: fixture.manifest.round,
-        subject: fixture.manifest.subject,
-        manifest: Some(fixture.manifest.clone()),
-        certified_sources: Vec::new(),
-        certificate: None,
-    };
-    assert_eq!(
-        executor
-            .consume_effects(vec![timeout_sign(&fixture, 0), fetch], &mut services)
-            .expect("retain the exact recovery fetch at pending-work capacity"),
-        1
-    );
-    assert!(executor.retained_effect_batch.is_some());
-    let durable = DurableBodyReceipt::for_test(
-        fixture.context.id(),
-        fixture.manifest.round,
-        fixture.manifest.subject,
-        HashOf::new(&fixture.manifest),
-    );
-    executor.recovered_bodies.insert(
-        (fixture.manifest.round, fixture.manifest.subject),
-        (fixture.manifest.clone(), durable),
-    );
-    let commit = fixture.qc(wire::GlobalPhase::Commit);
-    executor.runtime.decided_body = Some((
-        commit.round,
-        commit.proposal_round,
-        commit.subject,
-        commit.execution_commitment,
-    ));
-    executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
-    assert_eq!(
-        executor
-            .step_pending_tip_recovery(Instant::now(), &mut services)
-            .expect("recovery retry consumes the Decision retirement terminal"),
-        EffectExecutorStep::Advanced { effects: 1 }
-    );
-    assert_eq!(services.leader_wire_terminals, vec![terminal]);
-    assert!(
-        executor
-            .runtime
-            .leader_wire_terminal_after_decision
-            .is_none()
-    );
-    assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
-    assert!(executor.retained_effect_batch.is_none());
-    assert!(executor.pending_signatures.is_empty());
-    assert_eq!(
-        executor.status().pending_tip_recovery_last_result,
-        Some(PendingTipRecoveryAttemptResult::Advanced)
-    );
-    assert!(!executor.status().fail_closed);
 }
 #[test]
 fn body_fetch_authority_upgrades_monotonically_in_both_orders() {

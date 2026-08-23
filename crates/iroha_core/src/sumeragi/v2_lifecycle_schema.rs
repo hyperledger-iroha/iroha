@@ -1250,13 +1250,6 @@ pub(crate) enum InitialLifecycleState {
     /// The record is immediately ready.
     Ready,
     /// The record waits on an exact generation.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first-release adapters currently materialize waits after admission; retain the explicit reducer input while its production arms remain authoritative"
-        )
-    )]
     Waiting(WaitToken),
 }
 /// Reserved producer-turn record admitted atomically with Certified Serve.
@@ -1353,6 +1346,14 @@ impl CandidateAdmission {
                 DurablePayloadReference::BodyFrame(_),
                 InitialLifecycleState::Ready,
             ) => true,
+            (
+                LifecycleWorkClass::Fetch,
+                DurablePayloadReference::None,
+                InitialLifecycleState::Waiting(WaitToken {
+                    source: WaitSource::External(_),
+                    observed_generation: 0,
+                }),
+            ) => self.replay_authority.is_certified_body_origin(),
             (LifecycleWorkClass::Fetch, _, _) => false,
             _ => true,
         };

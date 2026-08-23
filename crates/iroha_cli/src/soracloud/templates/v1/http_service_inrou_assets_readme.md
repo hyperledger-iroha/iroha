@@ -21,5 +21,8 @@ eligible hosts hydrate `/inrou/*` from SoraFS. Distribution defaults to global
 and may target explicit geography tags; unknown host geography falls back to
 lower observed latency.
 
-Replace the placeholder `ssh_authorized_keys` entry in `container_manifest.json`
-with a real public key before admission.
+SSH access is disabled by default with `ssh_authorized_keys: []`. Add a real,
+trusted public key only when SSH access is intentionally required.
+
+Outbound network access is isolated by default. Inrou V1 accepts only isolated
+egress or a nonempty allowlist resolving exclusively to public endpoints.

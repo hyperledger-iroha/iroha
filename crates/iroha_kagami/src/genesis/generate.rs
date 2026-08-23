@@ -38,11 +38,11 @@ pub struct Args {
     /// Optional profile: picks Iroha3 chain, cadence, consensus, and VRF defaults for dev/taira/nexus.
     #[clap(long, value_enum, value_name = "PROFILE")]
     profile: Option<GenesisProfile>,
-    /// Optional explicit chain id (overrides profile default).
+    /// Optional explicit chain id. With a profile, it must equal that profile's pinned chain id.
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
-    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus`
-    /// when NPoS is selected; ignored for permissioned manifests.
+    /// Optional VRF seed (hex, 32 bytes). Required for the public
+    /// `iroha3-taira`/`iroha3-nexus` profiles.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
     /// Canonical public XOR asset definition id (Base58). Required for `iroha3-nexus`
@@ -734,6 +734,37 @@ mod consensus_manifest_tests {
         .expect_err("unprofiled genesis generation must name its display chain");
         assert!(error.to_string().contains("--chain-id"));
     }
+
+    #[test]
+    fn taira_profile_rejects_every_noncanonical_chain_override() {
+        let profile = GenesisProfile::Iroha3Taira;
+        let defaults = profile_defaults(profile);
+        for noncanonical in ["iroha3-taira", "taira-shadow"] {
+            let chain = ChainId::from(noncanonical);
+            let error = resolve_profile_settings(
+                Some(profile),
+                Some(&chain),
+                Some(&defaults),
+                SumeragiConsensusMode::Npos,
+                Some([0xA5; 32]),
+                None,
+                None,
+            )
+            .expect_err("Taira profile must reject a substituted chain identity");
+            assert!(error.to_string().contains("expects chain id"));
+        }
+        let resolved = resolve_profile_settings(
+            Some(profile),
+            Some(&defaults.chain_id),
+            Some(&defaults),
+            SumeragiConsensusMode::Npos,
+            Some([0xA5; 32]),
+            None,
+            None,
+        )
+        .expect("canonical Taira chain override is an exact assertion");
+        assert_eq!(resolved.chain, defaults.chain_id);
+    }
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
@@ -861,7 +892,6 @@ mod consensus_manifest_tests {
             "defaults/genesis.json",
             "defaults/kagami/iroha3-dev/genesis.json",
             "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/kagami/iroha3-taira/genesis.json",
             "defaults/nexus/genesis.json",
             "configs/soranexus/nexus/genesis.json",
             "configs/soranexus/taira/genesis.json",

@@ -514,6 +514,7 @@ mod tests {
                             &durable_receipt,
                             &validate_effect,
                             &validate_pending,
+                            None,
                         )
                         .expect("project remote-Proposal Validate replay evidence"),
                 );

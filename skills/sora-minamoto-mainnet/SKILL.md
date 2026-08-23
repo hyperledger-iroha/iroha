@@ -121,8 +121,8 @@ permission_denied`.
 | Default posture | Read-first, testnet writes allowed when requested | Read-only until the user explicitly requests a mainnet mutation |
 | Faucet/bootstrap | Public faucet and runtime-only canary bootstrap can be appropriate | Do not faucet, bootstrap, or auto-onboard unless the user explicitly requests that live mainnet operation |
 | Signing | Runtime-only throwaway signer can be acceptable for rollout checks | Prefer user wallet/client signing and pre-signed transaction envelopes |
-| Failure handling | Rollout scripts can create canary signers and retry funding paths | Report signer, fee, permission, ingress, or chain-health evidence; do not self-fund |
-| Configs | Taira-specific client configs and rollout scripts may apply | Use only operator-provided or user-local Minamoto configs |
+| Failure handling | The compiled `iroha taira write-canary` diagnoses signer, fee, permission, ingress, and chain-health failures | Report signer, fee, permission, ingress, or chain-health evidence; do not self-fund |
+| Configs | Use a runtime-only copy of the Taira canary client example; no rollout scripts are shipped | Use only operator-provided or user-local Minamoto configs |
 
 ## Transaction Workflow
 

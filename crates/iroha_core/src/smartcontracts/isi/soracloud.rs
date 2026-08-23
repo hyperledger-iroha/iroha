@@ -96,10 +96,9 @@ use iroha_data_model::{
         SORA_APP_INFRA_STATE_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
         SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-        SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
         SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
-        SORA_MODEL_ARTIFACT_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+        SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
         SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
         SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
@@ -6444,14 +6443,10 @@ fn accumulate_inrou_host_reservation_usage(
 fn select_inrou_backend_for_host(
     capability: &SoraInrouHostCapabilityRecordV1,
 ) -> Option<SoraInrouRuntimeBackendV1> {
-    if capability
-        .supported_backends
-        .contains(&SoraInrouRuntimeBackendV1::FirecrackerKvm)
-    {
-        Some(SoraInrouRuntimeBackendV1::FirecrackerKvm)
-    } else if capability
-        .supported_backends
-        .contains(&SoraInrouRuntimeBackendV1::PortableVm)
+    if capability.supported_backends.len() == 1
+        && capability
+            .supported_backends
+            .contains(&SoraInrouRuntimeBackendV1::PortableVm)
     {
         Some(SoraInrouRuntimeBackendV1::PortableVm)
     } else {
@@ -12331,7 +12326,7 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         let isi::AdvertiseSoracloudModelHost {
-            mut capability,
+            capability,
             provenance,
         } = self;
         require_soracloud_runtime_authority(authority, state_transaction)?;
@@ -12341,23 +12336,12 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
                 "model host capability validator_account_id must match the transaction authority",
             ));
         }
-        verify_model_host_advertise_provenance(authority, &capability, &provenance)?;
-        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
-        if capability.advertised_at_ms == 0 {
-            capability.advertised_at_ms = now_ms;
-        }
-        if capability.schema_version == 0 {
-            capability.schema_version = SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1;
-        }
-        if capability.heartbeat_expires_at_ms <= capability.advertised_at_ms {
-            return Err(invalid_parameter(
-                "model host capability heartbeat_expires_at_ms must be greater than advertised_at_ms",
-            ));
-        }
-        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         capability
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
+        verify_model_host_advertise_provenance(authority, &capability, &provenance)?;
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         if let Some(detail) = model_host_capability_advert_contradiction_detail(
             state_transaction,
             &capability,
@@ -12484,7 +12468,7 @@ impl Execute for isi::AdvertiseSoracloudInrouHost {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         let isi::AdvertiseSoracloudInrouHost {
-            mut capability,
+            capability,
             provenance,
         } = self;
         require_soracloud_runtime_authority(authority, state_transaction)?;
@@ -12494,18 +12478,10 @@ impl Execute for isi::AdvertiseSoracloudInrouHost {
                 "Inrou host capability validator_account_id must match the transaction authority",
             ));
         }
+        capability
+            .validate()
+            .map_err(|err| invalid_parameter(err.to_string()))?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
-        if capability.schema_version == 0 {
-            capability.schema_version = SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1;
-        }
-        if capability.advertised_at_ms == 0 {
-            capability.advertised_at_ms = now_ms;
-        }
-        if capability.heartbeat_expires_at_ms <= capability.advertised_at_ms {
-            return Err(invalid_parameter(
-                "Inrou host capability heartbeat_expires_at_ms must be greater than advertised_at_ms",
-            ));
-        }
         verify_inrou_host_advertise_provenance(authority, &capability, &provenance)?;
         record_inrou_host_capability(state_transaction, capability)?;
         reconcile_inrou_service_placements(state_transaction, now_ms)

@@ -19,7 +19,7 @@ a signature proves what the provisioned authority attested, not that an
 arbitrary signer maintained that state. A signed lab statement, a Boolean, or
 an unverified certificate array never satisfies this validator. The exact v1
 ``apple_revocation_*`` labels mean current Apple App Attest receipt acceptance
-plus the static policy's certificate-digest revocation check; Apple's
+plus the static policy's exact-`TBSCertificate`-DER digest revocation check; Apple's
 ``attestationData`` endpoint is not represented as a general CRL/OCSP service.
 """
 
@@ -139,7 +139,7 @@ PRODUCTION_POLICY_FIELDS = frozenset(
         "allowed_validation_categories",
         "allowed_bundle_versions",
         "trusted_app_attest_roots",
-        "revoked_certificate_sha256",
+        "revoked_certificate_tbs_sha256",
         "x509_validation_profile",
         "secure_enclave_key_profile",
     }
@@ -570,6 +570,7 @@ def _validate_policy(
 
     roots = policy.get("trusted_app_attest_roots")
     root_digests: list[str] = []
+    root_tbs_digests: list[str] = []
     if not isinstance(roots, list) or not 1 <= len(roots) <= 4:
         errors.append("production iOS policy must contain one to four trusted App Attest roots")
     else:
@@ -584,6 +585,9 @@ def _validate_policy(
             if der is not None:
                 try:
                     certificate = _parse_x509_certificate(der, label)
+                    root_tbs_digests.append(
+                        hashlib.sha256(certificate.tbs_der).hexdigest()
+                    )
                     is_ca, _ = _x509_basic_constraints(certificate, label)
                     _, key_cert_sign = _x509_key_usage(certificate, label)
                     if not is_ca or not key_cert_sign:
@@ -600,7 +604,7 @@ def _validate_policy(
         if root_digests != sorted(set(root_digests)):
             errors.append("production iOS trusted App Attest roots must be ordered by unique digest")
 
-    revoked = policy.get("revoked_certificate_sha256")
+    revoked = policy.get("revoked_certificate_tbs_sha256")
     if (
         not isinstance(revoked, list)
         or len(revoked) > 128
@@ -612,8 +616,10 @@ def _validate_policy(
         )
         or revoked != sorted(set(revoked))
     ):
-        errors.append("production iOS revoked_certificate_sha256 must be a sorted unique digest list")
-    elif set(root_digests) & set(revoked):
+        errors.append(
+            "production iOS revoked_certificate_tbs_sha256 must be a sorted unique digest list"
+        )
+    elif set(root_tbs_digests) & set(revoked):
         errors.append("production iOS trusted root must not also be revoked")
     if len(policy_bytes) > MAX_POLICY_BYTES:
         errors.append("production iOS policy exceeds its byte limit")
@@ -1171,17 +1177,17 @@ def _validate_attestation_certificate_chain(
 ) -> bytes:
     if not 2 <= len(chain_der) <= MAX_X509_CHAIN_CERTIFICATES:
         raise ValueError("App Attest x5c must contain a bounded leaf/intermediate chain")
-    revoked = set(policy["revoked_certificate_sha256"])
+    revoked = set(policy["revoked_certificate_tbs_sha256"])
     seen: set[str] = set()
     chain: list[_X509Certificate] = []
     for index, der in enumerate(chain_der):
-        digest = hashlib.sha256(der).hexdigest()
-        if digest in revoked:
-            raise ValueError("App Attest certificate is revoked by static production policy")
-        if digest in seen:
-            raise ValueError("App Attest certificate chain contains duplicate certificates")
-        seen.add(digest)
         certificate = _parse_x509_certificate(der, f"App Attest x5c[{index}]")
+        tbs_digest = hashlib.sha256(certificate.tbs_der).hexdigest()
+        if tbs_digest in revoked:
+            raise ValueError("App Attest certificate is revoked by static production policy")
+        if tbs_digest in seen:
+            raise ValueError("App Attest certificate chain contains duplicate certificates")
+        seen.add(tbs_digest)
         _validate_x509_time(certificate, evaluation_time_unix_ms, f"App Attest x5c[{index}]")
         chain.append(certificate)
 
@@ -1212,10 +1218,9 @@ def _validate_attestation_certificate_chain(
     anchored = False
     for root_index, root_value in enumerate(policy["trusted_app_attest_roots"]):
         root_der = base64.b64decode(root_value["der_base64"], validate=True)
-        root_digest = hashlib.sha256(root_der).hexdigest()
-        if root_digest in revoked:
-            continue
         root = _parse_x509_certificate(root_der, f"trusted App Attest root[{root_index}]")
+        if hashlib.sha256(root.tbs_der).hexdigest() in revoked:
+            continue
         _validate_x509_time(
             root, evaluation_time_unix_ms, f"trusted App Attest root[{root_index}]"
         )
@@ -1535,7 +1540,11 @@ def _validate_capture_app_code_sign_measurements(
     for field, expected_value in expected.items():
         if value.get(field) != expected_value:
             errors.append(f"{label} {field} does not match production policy")
-    if value.get("bundle_version") not in policy.get("allowed_bundle_versions", []):
+    allowed_bundle_versions = policy.get("allowed_bundle_versions")
+    if (
+        not isinstance(allowed_bundle_versions, list)
+        or value.get("bundle_version") not in allowed_bundle_versions
+    ):
         errors.append(f"{label} bundle_version is not allowed by production policy")
     executable_sha256 = value.get("executable_sha256")
     if (
@@ -1894,7 +1903,7 @@ def _validate_online_freshness_receipt(
     claim does not prove the authority's backing state; production operations
     must provision and audit that service before trusting its pinned key. In
     this exact v1 schema, the revocation-labeled status means a current accepted
-    Apple App Attest receipt refresh/risk result plus static policy revocations,
+    Apple App Attest receipt refresh/risk result plus static policy TBS revocations,
     not an independent Apple PKI CRL/OCSP response.
     """
 

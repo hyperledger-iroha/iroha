@@ -12,6 +12,7 @@ args=(
   soracloud service upgrade
   --container "$SCRIPT_DIR/container_manifest.json"
   --service "$SCRIPT_DIR/service_manifest.json"
+  --bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
   --torii-url "$TORII_URL"
 )
 

@@ -20,6 +20,7 @@ use iroha_crypto::soranet::{
         Ticket as PowTicket, TicketRevocationStore,
     },
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
+    token::{AdmissionToken, DecodeError as AdmissionTokenDecodeError},
 };
 use iroha_data_model::peer::PeerId;
 use message::*;
@@ -156,6 +157,11 @@ where
     rng.try_fill_bytes(&mut challenge).map_err(|error| {
         Error::HandshakeSoranet(format!("SoraNet delegation challenge RNG failed: {error}"))
     })?;
+    if challenge.iter().all(|byte| *byte == 0) {
+        return Err(Error::HandshakeSoranet(
+            "SoraNet delegation challenge RNG returned an all-zero value".to_owned(),
+        ));
+    }
     Ok(challenge)
 }
 /// Runtime configuration shared across `SoraNet` handshake attempts.
@@ -174,7 +180,7 @@ pub struct SoranetHandshakeConfig {
     pow_ticket_ttl: Duration,
     puzzle_params: Option<Arc<PuzzleParameters>>,
     signed_ticket_public_key: Option<Arc<Vec<u8>>>,
-    admission_token: Option<Arc<Vec<u8>>>,
+    admission_token: Option<Arc<AdmissionToken>>,
     revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
     revocation_store_error: Option<Arc<str>>,
     puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
@@ -195,28 +201,18 @@ impl SoranetHandshakeConfig {
         signed_ticket_public_key: Option<Vec<u8>>,
         revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
         revocation_store_error: Option<String>,
-    ) -> Self {
-        let kem_id = match kem_id {
-            1 | 2 => kem_id,
-            other => {
-                iroha_logger::warn!(
-                    kem_id = other,
-                    "unsupported ML-KEM identifier; defaulting to ML-KEM-768 (1)"
-                );
-                1
-            }
-        };
-        let sig_id = match sig_id {
-            1 => sig_id,
-            other => {
-                iroha_logger::warn!(
-                    sig_id = other,
-                    "unsupported signature suite; defaulting to Dilithium3 (1)"
-                );
-                1
-            }
-        };
-        Self {
+    ) -> Result<Self, Error> {
+        if !matches!(kem_id, 1 | 2) {
+            return Err(Error::HandshakeSoranet(format!(
+                "unsupported SoraNet ML-KEM identifier {kem_id}"
+            )));
+        }
+        if sig_id != 1 {
+            return Err(Error::HandshakeSoranet(format!(
+                "unsupported SoraNet signature identifier {sig_id}"
+            )));
+        }
+        Ok(Self {
             relay_id: Arc::new(descriptor_commit.clone()),
             descriptor_commit: Arc::new(descriptor_commit),
             client_capabilities: Arc::new(client_capabilities),
@@ -237,7 +233,7 @@ impl SoranetHandshakeConfig {
                 DEFAULT_OUTBOUND_MINT_CAPACITY,
                 DEFAULT_INBOUND_VERIFY_CAPACITY,
             )),
-        }
+        })
     }
     pub(crate) fn with_puzzle_work_admission(
         mut self,
@@ -336,6 +332,7 @@ impl SoranetHandshakeConfig {
             None,
             None,
         )
+        .expect("built-in SoraNet handshake defaults must be valid")
     }
     pub(crate) fn runtime_params(&self) -> RuntimeParams<'_> {
         RuntimeParams {
@@ -398,14 +395,36 @@ impl SoranetHandshakeConfig {
         let Some(store) = self.revocation_store.as_ref() else {
             return 0;
         };
-        let Ok(guard) = store.lock() else {
+        let Ok(mut guard) = store.lock() else {
             return 0;
         };
-        guard.len(SystemTime::now())
+        match guard.len(SystemTime::now()) {
+            Ok(len) => len,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "soranet pow revocation store unavailable while counting active entries"
+                );
+                0
+            }
+        }
     }
-    /// Attach an admission token to the handshake configuration.
-    pub fn set_admission_token(&mut self, token: Vec<u8>) {
-        self.admission_token = Some(Arc::new(token));
+    /// Decode and attach an admission token to the handshake configuration.
+    ///
+    /// The caller-owned encoded buffer is wiped before this method returns.
+    ///
+    /// # Errors
+    /// Returns [`AdmissionTokenDecodeError`] when `token` is not a canonical
+    /// SoraNet admission-token frame.
+    pub fn set_admission_token(
+        &mut self,
+        mut token: Vec<u8>,
+    ) -> Result<(), AdmissionTokenDecodeError> {
+        let decoded = AdmissionToken::decode(&token);
+        token.fill(0);
+        token.clear();
+        self.admission_token = Some(Arc::new(decoded?));
+        Ok(())
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn pow_parameters(&self) -> PowParameters {
@@ -433,10 +452,9 @@ impl SoranetHandshakeConfig {
     ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
         if let Some(token) = self.admission_token.as_ref() {
             let mut frames = Vec::with_capacity(1);
-            frames.push(token.as_ref().clone());
+            frames.push(token.try_encode()?);
             return Ok(Some(MintedChallenge {
                 frames,
-                ticket: None,
                 admission: None,
             }));
         }
@@ -454,10 +472,8 @@ impl SoranetHandshakeConfig {
                 .map_err(ChallengeMintError::Pow)?
         };
         let admission = self.admission_for_difficulty(ticket.difficulty);
-        let ticket_bytes = ticket.to_vec();
         Ok(Some(MintedChallenge {
-            frames: vec![ticket_bytes.clone()],
-            ticket: Some(ticket_bytes),
+            frames: vec![ticket.to_vec()],
             admission: Some(admission),
         }))
     }
@@ -557,6 +573,9 @@ impl SoranetHandshakeConfig {
 /// Errors encountered while minting `SoraNet` handshake challenges.
 #[derive(Debug, Error)]
 pub enum ChallengeMintError {
+    /// Configured admission token could not be encoded.
+    #[error("admission token encoding failed: {0}")]
+    TokenEncode(#[from] iroha_crypto::soranet::token::EncodeError),
     /// Underlying `PoW` ticket minting failure.
     #[error("pow ticket mint failed: {0}")]
     Pow(#[from] pow::MintError),
@@ -591,14 +610,30 @@ pub struct ChallengeAdmission {
     pub puzzle: Option<PuzzleParameters>,
 }
 /// Minted ticket bytes alongside the admission policy summary.
-#[derive(Debug, Clone)]
 pub struct MintedChallenge {
     /// Handshake frames (token, puzzle) to send before the client hello.
     pub frames: Vec<Vec<u8>>,
-    /// Serialized puzzle ticket if one was minted.
-    pub ticket: Option<Vec<u8>>,
     /// Admission policy applied when minting the ticket.
     pub admission: Option<ChallengeAdmission>,
+}
+impl std::fmt::Debug for MintedChallenge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MintedChallenge")
+            .field("frame_count", &self.frames.len())
+            .field("frames", &"[REDACTED]")
+            .field("admission", &self.admission)
+            .finish()
+    }
+}
+impl MintedChallenge {
+    fn clear_sensitive_bytes(&mut self) {
+        for frame in &mut self.frames {
+            frame.fill(0);
+            frame.clear();
+        }
+        self.frames.clear();
+    }
 }
 async fn mint_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
@@ -14031,10 +14066,16 @@ mod state {
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
             rng = resumed_rng;
-            if let Some(minted) = minted {
+            if let Some(mut minted) = minted {
+                let mut send_result = Ok(());
                 for frame in &minted.frames {
-                    write_handshake_frame(&mut connection.write, frame).await?;
+                    if let Err(error) = write_handshake_frame(&mut connection.write, frame).await {
+                        send_result = Err(error);
+                        break;
+                    }
                 }
+                minted.clear_sensitive_bytes();
+                send_result?;
             }
             write_handshake_frame(&mut connection.write, &client_hello).await?;
             let relay_hello = read_handshake_frame(&mut connection.read).await?;

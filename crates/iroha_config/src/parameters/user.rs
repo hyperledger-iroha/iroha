@@ -976,6 +976,9 @@ pub enum ParseError {
     /// Cryptography configuration contained invalid or unsupported values.
     #[error("Invalid crypto configuration")]
     InvalidCryptoConfig,
+    /// SoraNet handshake configuration selected an unsupported cryptographic suite.
+    #[error("Invalid SoraNet handshake configuration")]
+    InvalidSoranetHandshakeConfig,
     /// Compute lane configuration contained invalid or inconsistent values.
     #[error("Invalid compute configuration")]
     InvalidComputeConfig,
@@ -1250,7 +1253,7 @@ impl Root {
             }
             emitter.emit(report);
         }
-        let (network, block_sync, transaction_gossiper) = self.network.parse();
+        let (network, block_sync, transaction_gossiper) = self.network.parse(&mut emitter);
         let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
@@ -6257,7 +6260,7 @@ impl SoranetHandshake {
     const fn default_trust_gossip() -> bool {
         true
     }
-    fn parse(self) -> actual::SoranetHandshake {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoranetHandshake {
         let Self {
             descriptor_commit,
             client_capabilities,
@@ -6270,17 +6273,37 @@ impl SoranetHandshake {
             pow,
         } = self;
         let resolved_suite = kem_suite.map_or_else(
-            || MlKemSuite::from_kem_id(kem_id).unwrap_or(STREAMING_DEFAULT_KEM_SUITE),
+            || match MlKemSuite::from_kem_id(kem_id) {
+                Some(suite) => suite,
+                None => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSoranetHandshakeConfig).attach(format!(
+                            "network.soranet_handshake.kem_id {kem_id} is unsupported"
+                        )),
+                    );
+                    STREAMING_DEFAULT_KEM_SUITE
+                }
+            },
             |with_origin| with_origin.into_value().into_suite(),
         );
         let resolved_kem_id = resolved_suite.kem_id();
+        let resolved_sig_id = if sig_id == 1 {
+            sig_id
+        } else {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoranetHandshakeConfig).attach(format!(
+                    "network.soranet_handshake.sig_id {sig_id} is unsupported"
+                )),
+            );
+            1
+        };
         actual::SoranetHandshake {
             descriptor_commit: descriptor_commit.map(Into::into),
             client_capabilities: client_capabilities.map(Into::into),
             relay_capabilities: relay_capabilities.map(Into::into),
             trust_gossip,
             kem_id: resolved_kem_id,
-            sig_id,
+            sig_id: resolved_sig_id,
             resume_hash: resume_hash.map(|value| value.map(Into::into)),
             pow: pow.parse(),
         }
@@ -6562,6 +6585,330 @@ impl SoranetPrivacy {
         }
     }
 }
+
+const SORANET_VPN_HELPER_SECRET_HEX_BYTES: usize = 64;
+const SORANET_VPN_HELPER_SECRET_READ_BYTES: usize = SORANET_VPN_HELPER_SECRET_HEX_BYTES + 1;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraNet VPN secret loading requires a defined no-follow open flag");
+
+struct SoranetVpnSecretBuffer([u8; SORANET_VPN_HELPER_SECRET_READ_BYTES]);
+
+#[allow(
+    unsafe_code,
+    reason = "volatile clearing is confined to this uniquely borrowed fixed-size secret buffer"
+)]
+impl Drop for SoranetVpnSecretBuffer {
+    fn drop(&mut self) {
+        for byte in &mut self.0 {
+            // SAFETY: `byte` is a valid, uniquely borrowed byte in this stack buffer.
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
+fn soranet_vpn_effective_uid() -> u32 {
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: `geteuid` has no arguments or memory-safety preconditions.
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn trusted_soranet_vpn_helper_secret_path(path: &Path) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    const STICKY_BIT: u32 = 0o1000;
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "resolved helper ticket secret path must be absolute",
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "helper ticket secret path must name a file",
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "helper ticket secret path must have a parent directory",
+        )
+    })?;
+    // Pin the resolved parent once. This permits system aliases such as macOS
+    // `/var` while ensuring the subsequent open does not traverse a mutable alias.
+    let canonical_parent = fs::canonicalize(parent)?;
+    let effective_uid = soranet_vpn_effective_uid();
+    for ancestor in canonical_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "helper ticket secret parent {} must be a direct directory",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let owner = metadata.uid();
+        if owner != effective_uid && owner != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "helper ticket secret parent {} must be owned by the effective user or root",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let mode = metadata.permissions().mode();
+        let trusted_sticky_root = owner == 0 && mode & STICKY_BIT != 0;
+        if mode & 0o022 != 0 && !trusted_sticky_root {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "helper ticket secret parent {} must not be group- or other-writable",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+    Ok(canonical_parent.join(file_name))
+}
+
+#[cfg(not(unix))]
+fn trusted_soranet_vpn_helper_secret_path(_path: &Path) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure helper ticket secret loading is unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn open_soranet_vpn_helper_secret(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(SORANET_VPN_NOFOLLOW_FLAG)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_soranet_vpn_helper_secret(_path: &Path) -> io::Result<File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure helper ticket secret loading is unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn validate_soranet_vpn_helper_secret_metadata(metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "helper ticket secret must be a direct regular file",
+        ));
+    }
+    let effective_uid = soranet_vpn_effective_uid();
+    if metadata.uid() != effective_uid && metadata.uid() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "helper ticket secret must be owned by the effective user or root",
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "helper ticket secret must have exactly one hard link",
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "helper ticket secret must have no group or other permissions",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_soranet_vpn_helper_secret_metadata(_metadata: &fs::Metadata) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure helper ticket secret loading is unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn same_soranet_vpn_helper_secret_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.mode() == right.mode()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_soranet_vpn_helper_secret_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(test)]
+static SORANET_VPN_SECRET_OPEN_REPLACEMENT: std::sync::Mutex<Option<(PathBuf, PathBuf)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn replace_soranet_vpn_helper_secret_for_test(path: &Path) -> io::Result<()> {
+    let replacement = {
+        let mut hook = SORANET_VPN_SECRET_OPEN_REPLACEMENT
+            .lock()
+            .expect("SoraNet VPN secret replacement hook lock");
+        if hook.as_ref().is_some_and(|(expected, _)| expected == path) {
+            hook.take().map(|(_, replacement)| replacement)
+        } else {
+            None
+        }
+    };
+    if let Some(replacement) = replacement {
+        fs::rename(replacement, path)?;
+    }
+    Ok(())
+}
+
+fn read_soranet_vpn_helper_secret(
+    source: WithOrigin<PathBuf>,
+) -> core::result::Result<[u8; 32], String> {
+    const FIELD: &str = "network.soranet_vpn.helper_ticket_secret_path";
+    let resolved = source.resolve_relative_path();
+    let path = trusted_soranet_vpn_helper_secret_path(&resolved)
+        .map_err(|error| format!("invalid {FIELD} `{}`: {error}", resolved.display()))?;
+    let named_before = fs::symlink_metadata(&path)
+        .map_err(|error| format!("failed to inspect {FIELD} `{}`: {error}", path.display()))?;
+    validate_soranet_vpn_helper_secret_metadata(&named_before)
+        .map_err(|error| format!("invalid {FIELD} `{}`: {error}", path.display()))?;
+    if named_before.len() != SORANET_VPN_HELPER_SECRET_HEX_BYTES as u64 {
+        return Err(format!(
+            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
+            path.display()
+        ));
+    }
+    #[cfg(test)]
+    replace_soranet_vpn_helper_secret_for_test(&path).map_err(|error| {
+        format!(
+            "failed to exercise the {FIELD} replacement hook for `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let mut file = open_soranet_vpn_helper_secret(&path)
+        .map_err(|error| format!("failed to open {FIELD} `{}`: {error}", path.display()))?;
+    let opened_before = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect opened {FIELD} `{}`: {error}",
+            path.display()
+        )
+    })?;
+    validate_soranet_vpn_helper_secret_metadata(&opened_before)
+        .map_err(|error| format!("invalid opened {FIELD} `{}`: {error}", path.display()))?;
+    if !same_soranet_vpn_helper_secret_snapshot(&named_before, &opened_before) {
+        return Err(format!(
+            "{FIELD} `{}` changed while it was opened",
+            path.display()
+        ));
+    }
+
+    let mut encoded = SoranetVpnSecretBuffer([0; SORANET_VPN_HELPER_SECRET_READ_BYTES]);
+    let mut length = 0;
+    while length < encoded.0.len() {
+        let read = file
+            .read(&mut encoded.0[length..])
+            .map_err(|error| format!("failed to read {FIELD} `{}`: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        length += read;
+    }
+    let opened_after = file.metadata().map_err(|error| {
+        format!(
+            "failed to re-inspect opened {FIELD} `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let named_after = fs::symlink_metadata(&path)
+        .map_err(|error| format!("failed to re-inspect {FIELD} `{}`: {error}", path.display()))?;
+    validate_soranet_vpn_helper_secret_metadata(&opened_after)
+        .and_then(|()| validate_soranet_vpn_helper_secret_metadata(&named_after))
+        .map_err(|error| format!("invalid {FIELD} `{}` after read: {error}", path.display()))?;
+    if !same_soranet_vpn_helper_secret_snapshot(&opened_before, &opened_after)
+        || !same_soranet_vpn_helper_secret_snapshot(&opened_after, &named_after)
+    {
+        return Err(format!(
+            "{FIELD} `{}` changed while it was read",
+            path.display()
+        ));
+    }
+    if length != SORANET_VPN_HELPER_SECRET_HEX_BYTES {
+        return Err(format!(
+            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
+            path.display()
+        ));
+    }
+    if !encoded.0[..length]
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(format!(
+            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
+            path.display()
+        ));
+    }
+    let mut secret = [0_u8; 32];
+    hex::decode_to_slice(&encoded.0[..length], &mut secret)
+        .expect("canonical 64-byte hexadecimal validation makes decoding infallible");
+    if secret.iter().all(|byte| *byte == 0) {
+        return Err(format!("{FIELD} `{}` must not be all zero", path.display()));
+    }
+    Ok(secret)
+}
+
 /// User-level configuration container for `Network`.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoranetVpn {
@@ -6604,8 +6951,8 @@ pub struct SoranetVpn {
     /// Meter family identifier.
     #[config(default = "defaults::soranet::vpn::METER_FAMILY.to_string()")]
     pub meter_family: String,
-    /// Optional 32-byte shared secret (hex) used to mint helper-authenticated VPN tickets.
-    pub helper_ticket_secret_hex: Option<String>,
+    /// Owner-private file containing the canonical lowercase hex helper-ticket secret.
+    pub helper_ticket_secret_path: Option<WithOrigin<PathBuf>>,
     /// Relay operator account eligible for receipt settlement.
     #[config(default = "defaults::soranet::vpn::operator_account_id()")]
     pub operator_account_id: String,
@@ -6647,7 +6994,7 @@ impl Default for SoranetVpn {
             dns_push_interval_secs: defaults::soranet::vpn::dns_push_interval_secs_u64(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
-            helper_ticket_secret_hex: None,
+            helper_ticket_secret_path: None,
             operator_account_id: defaults::soranet::vpn::operator_account_id(),
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
@@ -6676,7 +7023,7 @@ impl SoranetVpn {
             dns_push_interval_secs,
             exit_class,
             meter_family,
-            helper_ticket_secret_hex,
+            helper_ticket_secret_path,
             operator_account_id,
             lease_fee,
             settlement_grace_secs,
@@ -6713,21 +7060,11 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let helper_ticket_secret = helper_ticket_secret_hex
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                let normalized = value.trim_start_matches("0x").trim_start_matches("0X");
-                let decoded = hex::decode(normalized).unwrap_or_else(|err| {
-                    panic!("network.soranet_vpn.helper_ticket_secret_hex must be valid hex: {err}")
-                });
-                let bytes: [u8; 32] = decoded.try_into().unwrap_or_else(|_| {
-                    panic!("network.soranet_vpn.helper_ticket_secret_hex must decode to 32 bytes")
-                });
-                bytes
-            });
+        let helper_ticket_secret = helper_ticket_secret_path.map(|source| {
+            read_soranet_vpn_helper_secret(source).unwrap_or_else(|error| panic!("{error}"))
+        });
         if enabled && helper_ticket_secret.is_none() {
-            panic!("network.soranet_vpn.helper_ticket_secret_hex must be set when VPN is enabled");
+            panic!("network.soranet_vpn.helper_ticket_secret_path must be set when VPN is enabled");
         }
         let operator_account_id = parse_account_id_literal(
             &operator_account_id,
@@ -6815,18 +7152,70 @@ impl SoranetVpn {
 #[cfg(test)]
 mod soranet_vpn_tests {
     use super::*;
+
     const TEST_RELAY_ID_HEX: &str =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
-    fn enabled_vpn_config() -> SoranetVpn {
+
+    #[cfg(unix)]
+    struct TestSecretFile {
+        directory: PathBuf,
+        path: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl TestSecretFile {
+        fn new(contents: &[u8]) -> Self {
+            use std::{
+                os::unix::fs::PermissionsExt as _,
+                sync::atomic::{AtomicU64, Ordering},
+            };
+
+            static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+            let directory = loop {
+                let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+                let candidate = std::env::temp_dir().join(format!(
+                    "iroha-config-vpn-secret-{}-{sequence}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => panic!("create VPN secret test directory: {error}"),
+                }
+            };
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                .expect("set private test directory permissions");
+            let path = directory.join("helper-ticket.hex");
+            fs::write(&path, contents).expect("write test helper ticket secret");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("set private test secret permissions");
+            Self { directory, path }
+        }
+
+        fn source(&self) -> WithOrigin<PathBuf> {
+            WithOrigin::inline(self.path.clone())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TestSecretFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[cfg(unix)]
+    fn enabled_vpn_config(secret: &TestSecretFile) -> SoranetVpn {
         SoranetVpn {
             enabled: true,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(secret.source()),
             relay_id_hex: Some(TEST_RELAY_ID_HEX.to_owned()),
             guard_directory_path: Some(PathBuf::from("guard-directory.to")),
             guard_directory_digest_hex: Some("cd".repeat(32)),
             ..SoranetVpn::default()
         }
     }
+
     #[test]
     #[should_panic(expected = "network.soranet_vpn.flow_label_bits must be 24")]
     fn soranet_vpn_rejects_invalid_flow_label_bits() {
@@ -6865,10 +7254,20 @@ mod soranet_vpn_tests {
         assert_eq!(u64::from(u32::MAX), parsed.lease.as_secs());
         assert_eq!("high-security", parsed.exit_class);
     }
+
+    #[cfg(unix)]
     #[test]
-    fn soranet_vpn_accepts_helper_ticket_secret_hex() {
+    fn soranet_vpn_accepts_origin_resolved_private_helper_ticket_secret() {
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let origin = ParameterOrigin::file(
+            ParameterId::from(["network", "soranet_vpn", "helper_ticket_secret_path"]),
+            secret.directory.join("config.toml"),
+        );
         let cfg = SoranetVpn {
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(WithOrigin::new(
+                PathBuf::from("helper-ticket.hex"),
+                origin,
+            )),
             ..SoranetVpn::default()
         };
         let parsed = cfg.parse();
@@ -6882,7 +7281,7 @@ mod soranet_vpn_tests {
         assert_eq!(parsed.dns_servers, defaults::soranet::vpn::dns_servers());
     }
     #[test]
-    #[should_panic(expected = "helper_ticket_secret_hex must be set when VPN is enabled")]
+    #[should_panic(expected = "helper_ticket_secret_path must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_helper_ticket_secret() {
         let cfg = SoranetVpn {
             enabled: true,
@@ -6890,34 +7289,46 @@ mod soranet_vpn_tests {
         };
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "relay_id_hex must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_relay_identity() {
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
         let cfg = SoranetVpn {
             enabled: true,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(secret.source()),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "guard_directory_path must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_guard_directory_path() {
-        let mut cfg = enabled_vpn_config();
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let mut cfg = enabled_vpn_config(&secret);
         cfg.guard_directory_path = None;
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "guard_directory_digest_hex must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_guard_directory_digest() {
-        let mut cfg = enabled_vpn_config();
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let mut cfg = enabled_vpn_config(&secret);
         cfg.guard_directory_digest_hex = None;
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "exactly 64 lowercase hexadecimal characters")]
     fn soranet_vpn_rejects_noncanonical_trust_digest_hex() {
-        let mut cfg = enabled_vpn_config();
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let mut cfg = enabled_vpn_config(&secret);
         cfg.guard_directory_digest_hex = Some("CD".repeat(32));
         let _ = cfg.parse();
     }
@@ -6930,15 +7341,136 @@ mod soranet_vpn_tests {
         };
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
     #[test]
-    #[should_panic(expected = "helper_ticket_secret_hex must decode to 32 bytes")]
-    fn soranet_vpn_rejects_short_helper_ticket_secret_hex() {
+    #[should_panic(expected = "must contain exactly 64 lowercase hexadecimal bytes")]
+    fn soranet_vpn_rejects_short_helper_ticket_secret_file() {
+        let secret = TestSecretFile::new("ab".repeat(16).as_bytes());
         let cfg = SoranetVpn {
-            helper_ticket_secret_hex: Some("ab".repeat(16)),
+            helper_ticket_secret_path: Some(secret.source()),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
     }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must contain exactly 64 lowercase hexadecimal bytes")]
+    fn soranet_vpn_rejects_noncanonical_helper_ticket_secret_file() {
+        let secret = TestSecretFile::new("AB".repeat(32).as_bytes());
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must not be all zero")]
+    fn soranet_vpn_rejects_zero_helper_ticket_secret() {
+        let secret = TestSecretFile::new("00".repeat(32).as_bytes());
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must be a direct regular file")]
+    fn soranet_vpn_rejects_symlinked_helper_ticket_secret() {
+        use std::os::unix::fs::symlink;
+
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let link = secret.directory.join("helper-ticket-link.hex");
+        symlink(&secret.path, &link).expect("create helper ticket secret symlink");
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(WithOrigin::inline(link)),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must have exactly one hard link")]
+    fn soranet_vpn_rejects_hard_linked_helper_ticket_secret() {
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        fs::hard_link(
+            &secret.path,
+            secret.directory.join("helper-ticket-copy.hex"),
+        )
+        .expect("create helper ticket secret hard link");
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "changed while it was opened")]
+    fn soranet_vpn_rejects_helper_ticket_secret_replaced_during_open() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        let replacement = secret.directory.join("replacement.hex");
+        fs::write(&replacement, "cd".repeat(32)).expect("write replacement secret");
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600))
+            .expect("set private replacement permissions");
+        let trusted_path = trusted_soranet_vpn_helper_secret_path(&secret.path)
+            .expect("resolve trusted helper ticket secret path");
+        let trusted_replacement = trusted_path
+            .parent()
+            .expect("trusted secret parent")
+            .join("replacement.hex");
+        *SORANET_VPN_SECRET_OPEN_REPLACEMENT
+            .lock()
+            .expect("SoraNet VPN secret replacement hook lock") =
+            Some((trusted_path, trusted_replacement));
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must have no group or other permissions")]
+    fn soranet_vpn_rejects_nonprivate_helper_ticket_secret() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        fs::set_permissions(&secret.path, fs::Permissions::from_mode(0o640))
+            .expect("make helper ticket secret group-readable");
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[should_panic(expected = "must not be group- or other-writable")]
+    fn soranet_vpn_rejects_untrusted_helper_ticket_secret_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
+        fs::set_permissions(&secret.directory, fs::Permissions::from_mode(0o777))
+            .expect("make helper ticket secret parent writable");
+        let cfg = SoranetVpn {
+            helper_ticket_secret_path: Some(secret.source()),
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
     #[test]
     #[should_panic(expected = "exit_class must be standard|low-latency|high-security")]
     fn soranet_vpn_rejects_unknown_exit_class() {
@@ -7366,6 +7898,7 @@ impl Network {
     #[allow(clippy::too_many_lines)]
     fn parse(
         self,
+        emitter: &mut Emitter<ParseError>,
     ) -> (
         actual::Network,
         actual::BlockSync,
@@ -7547,7 +8080,7 @@ impl Network {
             } else {
                 None
             };
-        let soranet_handshake = soranet_handshake.parse();
+        let soranet_handshake = soranet_handshake.parse(emitter);
         let soranet_privacy = user_soranet_privacy.parse();
         let soranet_vpn = soranet_vpn.parse();
         let scion_listen_endpoint = scion_listen_endpoint.and_then(|endpoint| {
@@ -12832,20 +13365,45 @@ impl SoracloudRuntimeCacheBudgets {
     }
 }
 /// User-level mutable `Inrou` microVM ceilings.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou microVMs hosted concurrently.
     #[config(default = "defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS")]
     #[norito(default = "default_soracloud_runtime_inrou_max_concurrent_vms")]
-    pub max_concurrent_vms: NonZeroUsize,
+    pub max_concurrent_vms: NonZeroU16,
     /// Whether this validator advertises and materializes local Inrou workloads.
     #[config(default = "defaults::soracloud_runtime::INROU_ENABLED")]
     #[norito(default = "default_soracloud_runtime_inrou_enabled")]
     pub enabled: bool,
-    /// Whether this validator should proxy hosted HTTP without materializing replicas.
-    #[config(default = "defaults::soracloud_runtime::INROU_PROXY_ONLY")]
-    #[norito(default = "default_soracloud_runtime_inrou_proxy_only")]
-    pub proxy_only: bool,
+    /// Exact enabled backend name; Inrou V1 accepts only `portable_vm`.
+    #[norito(default)]
+    pub backends: Option<Vec<String>>,
+    /// Exact PortableVM QEMU accelerator: `tcg`, `kvm`, `hvf`, or `whpx`.
+    #[norito(default)]
+    pub portable_vm_acceleration: Option<String>,
+    /// Dedicated non-root uid used to execute QEMU.
+    #[norito(default)]
+    pub portable_vm_uid: Option<NonZeroU32>,
+    /// Dedicated non-root primary gid used to execute QEMU.
+    #[norito(default)]
+    pub portable_vm_gid: Option<NonZeroU32>,
+    /// Supplementary gids retained by QEMU after the privilege drop.
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    pub portable_vm_supplementary_gids: Vec<NonZeroU32>,
+    /// Root-owned base directory for private QMP control sockets.
+    #[norito(default)]
+    pub portable_vm_control_dir: Option<WithOrigin<PathBuf>>,
+    /// Maximum aggregate hosted CPU budget in millicores.
+    #[norito(default)]
+    pub max_cpu_millis: Option<NonZeroU32>,
+    /// Maximum aggregate hosted memory budget in bytes.
+    #[norito(default)]
+    pub max_memory_bytes: Option<NonZeroU64>,
+    /// Maximum aggregate hosted writable-storage budget in bytes.
+    #[norito(default)]
+    pub max_storage_bytes: Option<NonZeroU64>,
     /// Maximum compressed size accepted for one bundle archive.
     #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES")]
     #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_compressed_bytes")]
@@ -12879,14 +13437,11 @@ pub struct SoracloudRuntimeInrou {
     #[norito(default = "default_soracloud_runtime_inrou_stop_grace_ms")]
     pub stop_grace_ms: DurationMs,
 }
-fn default_soracloud_runtime_inrou_max_concurrent_vms() -> NonZeroUsize {
+fn default_soracloud_runtime_inrou_max_concurrent_vms() -> NonZeroU16 {
     defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
 }
 fn default_soracloud_runtime_inrou_enabled() -> bool {
     defaults::soracloud_runtime::INROU_ENABLED
-}
-fn default_soracloud_runtime_inrou_proxy_only() -> bool {
-    defaults::soracloud_runtime::INROU_PROXY_ONLY
 }
 fn default_soracloud_runtime_inrou_bundle_archive_max_compressed_bytes() -> NonZeroU64 {
     defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
@@ -12916,7 +13471,16 @@ fn default_soracloud_runtime_inrou_stop_grace_ms() -> DurationMs {
 impl_default!(SoracloudRuntimeInrou {
     max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
     enabled: defaults::soracloud_runtime::INROU_ENABLED,
-    proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+    backends: None,
+    portable_vm_acceleration: None,
+    portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
+    portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
+    portable_vm_supplementary_gids: Vec::new(),
+    portable_vm_control_dir: defaults::soracloud_runtime::INROU_PORTABLE_VM_CONTROL_DIR
+        .map(|path| WithOrigin::inline(PathBuf::from(path))),
+    max_cpu_millis: None,
+    max_memory_bytes: None,
+    max_storage_bytes: None,
     bundle_archive_max_compressed_bytes:
         defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
     bundle_archive_max_decoded_bytes:
@@ -12998,10 +13562,151 @@ impl SoracloudRuntimeInrou {
                 )),
             );
         }
+        let mut backends = BTreeSet::new();
+        match self.backends.as_ref() {
+            Some(labels) => {
+                for label in labels {
+                    let backend = match label.as_str() {
+                        "portable_vm" => {
+                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm
+                        }
+                        other => {
+                            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                                format!(
+                                    "unsupported soracloud_runtime.inrou backend `{other}`; Inrou V1 accepts only `portable_vm`"
+                                ),
+                            ));
+                            continue;
+                        }
+                    };
+                    if !backends.insert(backend) {
+                        emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                            format!(
+                                "duplicate soracloud_runtime.inrou backend `{label}` is not allowed"
+                            ),
+                        ));
+                    }
+                }
+            }
+            None if self.enabled => {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.inrou.backends is required when Inrou hosting is enabled",
+                ))
+            }
+            None => {}
+        }
+        if self.enabled && backends.is_empty() {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                "soracloud_runtime.inrou.backends must contain at least one backend when Inrou hosting is enabled",
+            ));
+        }
+        let portable_backend_enabled =
+            backends.contains(&iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm);
+        let portable_vm_acceleration = match self.portable_vm_acceleration.as_deref() {
+            Some("tcg") => actual::SoracloudRuntimePortableVmAcceleration::Tcg,
+            Some("kvm") => actual::SoracloudRuntimePortableVmAcceleration::Kvm,
+            Some("hvf") => actual::SoracloudRuntimePortableVmAcceleration::Hvf,
+            Some("whpx") => actual::SoracloudRuntimePortableVmAcceleration::Whpx,
+            Some(other) => {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "unknown soracloud_runtime.inrou.portable_vm_acceleration `{other}`; expected `tcg`, `kvm`, `hvf`, or `whpx`"
+                )));
+                actual::SoracloudRuntimePortableVmAcceleration::Tcg
+            }
+            None if self.enabled && portable_backend_enabled => {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.inrou.portable_vm_acceleration is required when `portable_vm` is enabled",
+                ));
+                actual::SoracloudRuntimePortableVmAcceleration::Tcg
+            }
+            None => actual::SoracloudRuntimePortableVmAcceleration::Tcg,
+        };
+        if !portable_backend_enabled && self.portable_vm_acceleration.is_some() {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                "soracloud_runtime.inrou.portable_vm_acceleration is only valid when `portable_vm` is enabled",
+            ));
+        }
+        for (field, present) in [
+            ("portable_vm_uid", self.portable_vm_uid.is_some()),
+            ("portable_vm_gid", self.portable_vm_gid.is_some()),
+            (
+                "portable_vm_control_dir",
+                self.portable_vm_control_dir.is_some(),
+            ),
+        ] {
+            if self.enabled && portable_backend_enabled && !present {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.{field} is required when `portable_vm` is enabled"
+                    )),
+                );
+            } else if !portable_backend_enabled && present {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.{field} is only valid when `portable_vm` is enabled"
+                    )),
+                );
+            }
+        }
+        if !portable_backend_enabled && !self.portable_vm_supplementary_gids.is_empty() {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                "soracloud_runtime.inrou.portable_vm_supplementary_gids is only valid when `portable_vm` is enabled",
+            ));
+        }
+        let mut portable_vm_supplementary_gids = self.portable_vm_supplementary_gids.clone();
+        portable_vm_supplementary_gids.sort_unstable();
+        if portable_vm_supplementary_gids
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                "soracloud_runtime.inrou.portable_vm_supplementary_gids must not contain duplicates",
+            ));
+            portable_vm_supplementary_gids.dedup();
+        }
+        let portable_vm_control_dir = self
+            .portable_vm_control_dir
+            .as_ref()
+            .map(WithOrigin::resolve_relative_path);
+        if portable_vm_control_dir
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                "soracloud_runtime.inrou.portable_vm_control_dir must resolve to an absolute path",
+            ));
+        }
+        for (field, present) in [
+            ("max_cpu_millis", self.max_cpu_millis.is_some()),
+            ("max_memory_bytes", self.max_memory_bytes.is_some()),
+            ("max_storage_bytes", self.max_storage_bytes.is_some()),
+        ] {
+            if self.enabled && !present {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.{field} is required when Inrou hosting is enabled"
+                    )),
+                );
+            }
+        }
         actual::SoracloudRuntimeInrou {
             max_concurrent_vms: self.max_concurrent_vms,
             enabled: self.enabled,
-            proxy_only: self.proxy_only,
+            backends,
+            portable_vm_acceleration,
+            portable_vm_uid: self.portable_vm_uid,
+            portable_vm_gid: self.portable_vm_gid,
+            portable_vm_supplementary_gids,
+            portable_vm_control_dir,
+            max_cpu_millis: self
+                .max_cpu_millis
+                .unwrap_or(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS),
+            max_memory_bytes: self
+                .max_memory_bytes
+                .unwrap_or(defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES),
+            max_storage_bytes: self
+                .max_storage_bytes
+                .unwrap_or(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES),
             bundle_archive_max_compressed_bytes: self.bundle_archive_max_compressed_bytes,
             bundle_archive_max_decoded_bytes: self.bundle_archive_max_decoded_bytes,
             bundle_archive_max_entries: self.bundle_archive_max_entries,
@@ -34336,6 +35041,91 @@ publish_delay_seconds = 17
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
     #[test]
+    fn storage_budget_preserves_parsed_sorafs_cap_before_clamping() {
+        const BUDGET_BYTES: u64 = 68_719_476_736;
+        const SORAFS_CAP_BYTES: u64 = 13_743_895_347;
+
+        let parse = |configured_cap: Option<u64>| {
+            let mut table = base_table();
+            let nexus = table
+                .entry("nexus")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("nexus table");
+            let mut storage = Table::new();
+            storage.insert(
+                "local_budget_bytes".into(),
+                Value::Integer(i64::try_from(BUDGET_BYTES).expect("budget fits TOML integer")),
+            );
+            let mut weights = Table::new();
+            weights.insert("kura_blocks_bps".into(), Value::Integer(5_500));
+            weights.insert("wsv_snapshots_bps".into(), Value::Integer(2_000));
+            weights.insert("sorafs_bps".into(), Value::Integer(2_000));
+            weights.insert("soranet_spool_bps".into(), Value::Integer(250));
+            weights.insert("soravpn_spool_bps".into(), Value::Integer(250));
+            storage.insert("disk_budget_weights".into(), Value::Table(weights));
+            nexus.insert("storage".into(), Value::Table(storage));
+
+            let mut sorafs_storage = Table::new();
+            sorafs_storage.insert("enabled".into(), Value::Boolean(false));
+            if let Some(cap) = configured_cap {
+                sorafs_storage.insert(
+                    "max_capacity_bytes".into(),
+                    Value::Integer(i64::try_from(cap).expect("capacity fits TOML integer")),
+                );
+            }
+            let mut sorafs = Table::new();
+            sorafs.insert("storage".into(), Value::Table(sorafs_storage));
+            table.insert("sorafs".into(), Value::Table(sorafs));
+            load_root(table)
+        };
+
+        let cases = [
+            (
+                "omitted",
+                None,
+                defaults::sorafs::storage::MAX_CAPACITY_BYTES.get(),
+                SORAFS_CAP_BYTES,
+            ),
+            ("zero", Some(0), 0, SORAFS_CAP_BYTES),
+            (
+                "larger",
+                Some(SORAFS_CAP_BYTES + 1),
+                SORAFS_CAP_BYTES + 1,
+                SORAFS_CAP_BYTES,
+            ),
+            (
+                "smaller",
+                Some(SORAFS_CAP_BYTES - 1),
+                SORAFS_CAP_BYTES - 1,
+                SORAFS_CAP_BYTES - 1,
+            ),
+            (
+                "exact",
+                Some(SORAFS_CAP_BYTES),
+                SORAFS_CAP_BYTES,
+                SORAFS_CAP_BYTES,
+            ),
+        ];
+        for (label, configured, expected_source, expected_effective) in cases {
+            let actual = parse(configured);
+            assert_eq!(
+                actual
+                    .nexus
+                    .storage
+                    .configured_sorafs_max_capacity_bytes()
+                    .map(Bytes::get),
+                Some(expected_source),
+                "{label} source cap"
+            );
+            assert_eq!(
+                actual.torii.sorafs_storage.max_capacity_bytes.get(),
+                expected_effective,
+                "{label} effective cap"
+            );
+        }
+    }
+    #[test]
     fn storage_budget_requests_runtime_derivation_when_left_unset() {
         let actual = load_root(base_table());
         assert!(actual.nexus.storage.local_budget_bytes.is_none());
@@ -34398,7 +35188,9 @@ publish_delay_seconds = 17
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             inrou.max_concurrent_vms => defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
-            inrou.proxy_only => defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            inrou.max_cpu_millis => defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
+            inrou.max_memory_bytes => defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
+            inrou.max_storage_bytes => defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
             inrou.bundle_archive_max_compressed_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
             inrou.bundle_archive_max_decoded_bytes => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
             inrou.bundle_archive_max_entries => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
@@ -34653,23 +35445,30 @@ publish_delay_seconds = 17
         ])
     }
     fn production_soracloud_runtime_table(
-        inrou_posture: Option<(bool, bool)>,
+        inrou_enabled: Option<bool>,
         bounded_egress: bool,
     ) -> Table {
         use std::fmt::Write as _;
 
         let mut source = "production_mode = true\n".to_owned();
-        if let Some((enabled, proxy_only)) = inrou_posture {
+        if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r"
+                r#"
 [inrou]
 enabled = {enabled}
 max_concurrent_vms = 8
-proxy_only = {proxy_only}
+backends = ["portable_vm"]
+portable_vm_acceleration = "tcg"
+portable_vm_uid = 60001
+portable_vm_gid = 60001
+portable_vm_control_dir = "/run/iroha-inrou-test"
+max_cpu_millis = 8000
+max_memory_bytes = 8589934592
+max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-",
+"#,
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -34698,17 +35497,11 @@ max_bytes_per_minute = 1048576
     #[test]
     #[should_panic(expected = "egress.rate_per_minute")]
     fn soracloud_runtime_production_mode_requires_fail_closed_egress_limits() {
-        let _ = load_root(production_soracloud_runtime_table(
-            Some((true, false)),
-            false,
-        ));
+        let _ = load_root(production_soracloud_runtime_table(Some(true), false));
     }
     #[test]
     fn soracloud_runtime_production_mode_accepts_bounded_posture() {
-        let actual = load_root(production_soracloud_runtime_table(
-            Some((true, false)),
-            true,
-        ));
+        let actual = load_root(production_soracloud_runtime_table(Some(true), true));
         let runtime = actual.soracloud_runtime;
         assert!(runtime.production_mode);
         assert_eq!(
@@ -34777,9 +35570,33 @@ max_bytes_per_minute = 1048576
         );
     }
     #[test]
-    #[should_panic(expected = "inrou.proxy_only")]
-    fn soracloud_runtime_production_mode_rejects_proxy_only_inrou() {
-        let _ = load_root(production_soracloud_runtime_table(Some((true, true)), true));
+    #[should_panic(expected = "inrou.backends")]
+    fn soracloud_runtime_enabled_inrou_requires_explicit_backends() {
+        let _ = load_root(table_with_soracloud_runtime("[inrou]\nenabled = true\n"));
+    }
+    #[test]
+    fn soracloud_runtime_rejects_retired_firecracker_backend() {
+        let result =
+            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                r#"
+[inrou]
+enabled = true
+backends = ["firecracker_kvm"]
+max_cpu_millis = 1000
+max_memory_bytes = 1073741824
+max_storage_bytes = 10737418240
+"#,
+            )));
+        assert!(
+            result.is_err(),
+            "Firecracker must not remain selectable through first-release configuration"
+        );
+    }
+    #[test]
+    fn soracloud_runtime_disabled_inrou_keeps_backend_set_empty() {
+        let actual = load_root(table_with_soracloud_runtime(""));
+        assert!(!actual.soracloud_runtime.inrou.enabled);
+        assert!(actual.soracloud_runtime.inrou.backends.is_empty());
     }
     #[test]
     fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
@@ -34817,7 +35634,15 @@ model_weight_bytes = 6144
 [inrou]
 max_concurrent_vms = 5
 enabled = true
-proxy_only = true
+backends = ["portable_vm"]
+portable_vm_acceleration = "tcg"
+portable_vm_uid = 60001
+portable_vm_gid = 60001
+portable_vm_supplementary_gids = [108]
+portable_vm_control_dir = "/run/iroha-inrou-test"
+max_cpu_millis = 5000
+max_memory_bytes = 5368709120
+max_storage_bytes = 10737418240
 bundle_archive_max_compressed_bytes = 10000
 bundle_archive_max_decoded_bytes = 40000
 bundle_archive_max_entries = 123
@@ -34902,7 +35727,9 @@ policy_digest_hex = "{}"
             hf.import_file_allowlist => vec!["*.safetensors".to_string(), "config.json".to_string()],
         );
         assert!(inrou.enabled);
-        assert!(inrou.proxy_only);
+        assert_eq!(inrou.max_cpu_millis.get(), 5_000);
+        assert_eq!(inrou.max_memory_bytes.get(), 5_368_709_120);
+        assert_eq!(inrou.max_storage_bytes.get(), 10_737_418_240);
         assert!(matches!(
             &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority

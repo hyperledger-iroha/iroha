@@ -209,14 +209,35 @@ async fn proofs_list_and_count_with_filters() {
         )
         .await
         .unwrap();
-    let status_err = resp_err.status();
-    let err_body = resp_err.into_body().collect().await.unwrap().to_bytes();
-    let err_json: Vec<norito::json::Value> = norito::json::from_slice(&err_body).unwrap();
-    assert!(err_json.is_empty());
-    assert_eq!(status_err, http::StatusCode::OK);
+    assert_eq!(resp_err.status(), http::StatusCode::BAD_REQUEST);
+
+    for uri in [
+        "/v1/zk/proofs?status=Unknown",
+        "/v1/zk/proofs?has_tag=%C3%A9%C3%A9",
+        "/v1/zk/proofs?order=sideways",
+        "/v1/zk/proofs/count?status=Unknown",
+        "/v1/zk/proofs/count?has_tag=%C3%A9%C3%A9",
+        "/v1/zk/proofs/count?limit=1",
+        "/v1/zk/proofs/count?offset=1",
+        "/v1/zk/proofs/count?order=asc",
+        "/v1/zk/proofs/count?ids_only=false",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                http::Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST, "{uri}");
+    }
 }
 #[tokio::test]
-async fn proofs_list_rejects_over_limit() {
+async fn proofs_list_rejects_zero_and_over_limit() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
@@ -229,18 +250,20 @@ async fn proofs_list_rejects_over_limit() {
         defaults::torii::PROOF_MAX_BODY_BYTES.get(),
         Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS),
     );
-    let result = iroha_torii::handle_list_proofs(
-        state,
-        limits,
-        iroha_torii::MaybeTelemetry::disabled(),
-        iroha_torii::NoritoQuery(iroha_torii::ProofListQuery {
-            limit: Some(50),
-            ..Default::default()
-        }),
-    )
-    .await;
-    assert!(
-        result.is_err(),
-        "requests above the configured page cap must be rejected"
-    );
+    for limit in [0, 50] {
+        let result = iroha_torii::handle_list_proofs(
+            state.clone(),
+            limits,
+            iroha_torii::MaybeTelemetry::disabled(),
+            iroha_torii::NoritoQuery(iroha_torii::ProofListQuery {
+                limit: Some(limit),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "invalid proof page limit {limit} must fail"
+        );
+    }
 }

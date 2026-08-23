@@ -25,8 +25,13 @@ pub const TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1: usize = 1024 * 1024;
 pub const TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1: usize =
     TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1 + TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1;
 /// Maximum cumulative allocation while decoding one first-release proxy request.
+///
+/// The submitted transaction is reconstructed through nested owned proxy,
+/// entrypoint, executable, and instruction containers. Keep that graph under
+/// an explicit eightfold cap while the independent 64 MB body and 73 MB frame
+/// limits continue to bound attacker-controlled source bytes.
 pub const TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1: usize =
-    TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1;
+    TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1.saturating_mul(8);
 /// Maximum encoded proxy-response body plus its bounded HTTP header envelope.
 pub const TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1: usize =
     TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1 + TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1;

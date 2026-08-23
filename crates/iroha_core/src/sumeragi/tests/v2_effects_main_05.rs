@@ -359,6 +359,321 @@ fn decision_commit_broadcast_yields_exact_apply_until_lifecycle_output_settles()
     assert!(services.closed.is_empty());
 }
 #[test]
+fn newly_installed_decision_holds_apply_until_runner_cleanup_acknowledges_exact_subject() {
+    let mut fixture = Fixture::new();
+    fixture.manifest = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, 3),
+        fixture.manifest.subject,
+        &fixture.body,
+    );
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit,
+    };
+    executor.runtime.decision_on_next_step = Some(decision);
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![apply.clone()])));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("retain Apply behind the runner Decision-cleanup fence"),
+        EffectExecutorStep::Advanced { effects: 0 }
+    );
+    assert_eq!(executor.protected_decision, Some(decision));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .expect("new Decision cleanup owner")
+            .owner_tag,
+        tag(0)
+    );
+    assert!(services.apply_tasks.is_empty());
+    assert_ne!(tag(0).view(), decision.0.view);
+    assert_eq!(
+        executor
+            .retained_effect_batch
+            .as_ref()
+            .and_then(|batch| batch.effects.front())
+            .map(|owned| &owned.effect),
+        Some(&apply)
+    );
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("an unacknowledged runner cleanup remains inert"),
+        EffectExecutorStep::Idle
+    );
+    assert!(services.apply_tasks.is_empty());
+
+    let owner_tag = tag(0);
+    let wrong_generation = EventTag::new(
+        owner_tag.height(),
+        owner_tag.view(),
+        Generation::new(owner_tag.generation().get().saturating_add(1)),
+    );
+    assert!(matches!(
+        executor.acknowledge_runner_decision_cleanup(wrong_generation, Some(decision.2),),
+        Err(EffectExecutorError::Contract(_))
+    ));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+
+    executor
+        .acknowledge_runner_decision_cleanup(owner_tag, Some(decision.2))
+        .expect("acknowledge current-owner cleanup for a future-view CommitQC");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch Apply only after exact runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(services.apply_tasks[0].subject(), decision.2);
+    assert!(executor.pending_runner_decision_cleanup.is_none());
+}
+#[test]
+fn decision_cleanup_batch_accepts_zero_or_one_exact_apply_only() {
+    let fixture = Fixture::new();
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit,
+    };
+    assert!(
+        V2EffectExecutor::<FakeRuntime>::new_decision_batch_has_only_exact_apply(
+            &[],
+            decision,
+            Some(tag(0)),
+        )
+    );
+    assert!(
+        V2EffectExecutor::<FakeRuntime>::new_decision_batch_has_only_exact_apply(
+            std::slice::from_ref(&apply),
+            decision,
+            Some(tag(0)),
+        )
+    );
+    assert!(
+        !V2EffectExecutor::<FakeRuntime>::new_decision_batch_has_only_exact_apply(
+            &[apply.clone(), apply.clone()],
+            decision,
+            Some(tag(0)),
+        )
+    );
+    let owner_tag = tag(0);
+    let wrong_generation = EventTag::new(
+        owner_tag.height(),
+        owner_tag.view(),
+        Generation::new(owner_tag.generation().get().saturating_add(1)),
+    );
+    assert!(
+        !V2EffectExecutor::<FakeRuntime>::new_decision_batch_has_only_exact_apply(
+            &[apply],
+            decision,
+            Some(wrong_generation),
+        )
+    );
+}
+#[test]
+fn split_decision_fetch_and_apply_stops_runtime_until_runner_cleanup_acknowledges() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit.clone(),
+    };
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: commit.round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    executor.runtime.decision_on_next_step = Some(decision);
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![fetch])));
+    executor
+        .runtime
+        .steps
+        .push_back(Ok(RuntimeStep::Advanced(vec![apply])));
+
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch Decision Fetch while arming runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .expect("split Decision cleanup owner")
+            .owner_tag,
+        tag(0)
+    );
+    assert_eq!(services.fetch_tasks.len(), 1);
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("do not let delayed Apply overtake runner cleanup"),
+        EffectExecutorStep::Idle
+    );
+    assert_eq!(executor.runtime.steps.len(), 1);
+    assert!(services.apply_tasks.is_empty());
+
+    let owner_tag = tag(0);
+    let advanced_generation = EventTag::new(
+        owner_tag.height(),
+        owner_tag.view(),
+        Generation::new(owner_tag.generation().get().saturating_add(1)),
+    );
+    executor.runtime.round_tag = Some(advanced_generation);
+    assert!(matches!(
+        executor.acknowledge_runner_decision_cleanup(advanced_generation, Some(decision.2),),
+        Err(EffectExecutorError::Contract(_))
+    ));
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .expect("Decision-install cleanup owner remains retained")
+            .owner_tag,
+        owner_tag
+    );
+    executor.runtime.round_tag = Some(owner_tag);
+    executor
+        .acknowledge_runner_decision_cleanup(owner_tag, Some(decision.2))
+        .expect("a split Decision can be acknowledged before Apply is emitted");
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch delayed Apply after runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(services.apply_tasks[0].subject(), decision.2);
+}
+#[test]
+fn pacemaker_decision_holds_apply_until_runner_cleanup_acknowledges() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    install_fsynced_validation_fixture(
+        &mut executor,
+        &mut services,
+        &fixture,
+        fixture.manifest.clone(),
+    );
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let decision = (
+        commit.round,
+        commit.proposal_round,
+        commit.subject,
+        commit.execution_commitment,
+    );
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: commit.subject,
+        certificate: commit,
+    };
+    executor.runtime.decision_on_next_step = Some(decision);
+    executor
+        .runtime
+        .pacemaker_steps
+        .push_back(Ok(Some(RuntimeStep::Advanced(vec![apply]))));
+
+    assert_eq!(
+        executor
+            .step_pacemaker_once(Instant::now(), &mut services)
+            .expect("retain pacemaker Apply behind runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 0 }
+    );
+    assert_eq!(
+        executor
+            .pending_runner_decision_cleanup
+            .map(|pending| pending.decision),
+        Some(decision)
+    );
+    assert_eq!(
+        executor
+            .step_pacemaker_once(Instant::now(), &mut services)
+            .expect("pending cleanup blocks another pacemaker turn"),
+        EffectExecutorStep::Idle
+    );
+    assert!(services.apply_tasks.is_empty());
+
+    executor
+        .acknowledge_runner_decision_cleanup(tag(0), Some(decision.2))
+        .expect("acknowledge pacemaker Decision cleanup");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("dispatch pacemaker Apply after runner cleanup"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(services.apply_tasks[0].subject(), decision.2);
+}
+#[test]
 fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -395,7 +710,7 @@ fn commit_fetch_adopts_and_replaces_matching_parked_physical_lineage() {
         subject: commit.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &commit),
-        certificate: Some(commit),
+        certificate: Some(commit.clone()),
     };
     assert_eq!(
         executor
@@ -1682,7 +1997,7 @@ fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate
         subject: commit.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &commit),
-        certificate: Some(commit),
+        certificate: Some(commit.clone()),
     };
     let commit_validate_ownership = bound_test_effect_ownership(&commit_fetch, tag, 9_016)
         .rebind_as_inherited_adapter_effect(&validate_effect)
@@ -1692,6 +2007,7 @@ fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate
             .binds_durable_decision_authority(decision.0, decision.1, decision.2, decision.3,)
     );
     executor.runtime.decided_body = Some(decision);
+    executor.runtime.durable_body_authority_certificate = Some(commit);
     executor.runtime.exact_effect_ownership =
         Some((validate_effect.clone(), commit_validate_ownership));
 
@@ -1754,11 +2070,12 @@ fn enter_view_preserves_stored_proposal_replay_for_prepare_refined_validate() {
         subject: prepare.subject,
         manifest: Some(fixture.manifest.clone()),
         certified_sources: certified_sources(&fixture, &prepare),
-        certificate: Some(prepare),
+        certificate: Some(prepare.clone()),
     };
     let prepare_validate_ownership = bound_test_effect_ownership(&prepare_fetch, next_tag, 9_018)
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("carry Prepare authority into the protected Validate");
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
     executor
         .retain_effect_batch(vec![validate_effect], vec![prepare_validate_ownership])
         .expect("adopt the Stored Proposal root under Prepare authority");
@@ -1866,6 +2183,176 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
+}
+
+#[test]
+fn published_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()),)
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let initial_validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_validate_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_022)
+        .rebind_as_inherited_adapter_effect(&initial_validate)
+        .expect("project the lifecycle-published Prepare Validate owner");
+    let initial_pending = initial_validate_ownership
+        .exact_pending_adapter_effect_binding(&initial_validate)
+        .expect("seal the lifecycle-published Validate binding");
+    let prepared = executor
+        .prepare_published_lifecycle_validate_retry_marker(&durable)
+        .expect("preflight the direct lifecycle marker catalog")
+        .bind_validate_successor(&initial_validate, &initial_pending)
+        .expect("bind the exact lifecycle-published Validate successor");
+    executor.commit_published_lifecycle_validate_retry_marker(prepared);
+
+    let next_tag = tag(1);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let timer_validate = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_023)
+        .rebind_as_inherited_adapter_effect(&timer_validate)
+        .expect("carry Commit authority into the periodic Validate retry");
+    executor
+        .retain_effect_batch(vec![timer_validate.clone()], vec![timer_ownership])
+        .expect("the periodic Validate stutters at its direct lifecycle marker");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
+    assert_eq!(marker.effect, timer_validate);
+    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn cold_recovered_lifecycle_validate_marker_coalesces_timer_authority_upgrade() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        HashOf::new(&fixture.manifest),
+    );
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()),)
+            .is_none()
+    );
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let initial_validate = AdapterEffect::ValidateBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let initial_validate_ownership = bound_test_effect_ownership(&initial_fetch, tag(0), 9_024)
+        .rebind_as_inherited_adapter_effect(&initial_validate)
+        .expect("project the cold-opened Prepare Validate owner");
+    let initial_pending = initial_validate_ownership
+        .exact_pending_adapter_effect_binding(&initial_validate)
+        .expect("seal the cold-opened Validate binding");
+    executor
+        .install_recovered_published_lifecycle_validate_retry_marker(
+            &initial_validate,
+            &initial_pending,
+            &durable,
+        )
+        .expect("restore the cold-opened Validate retry marker before clock activation");
+
+    let next_tag = tag(1);
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: commit.proposal_round,
+        subject: commit.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &commit),
+        certificate: Some(commit),
+    };
+    let timer_validate = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let timer_ownership = bound_test_effect_ownership(&commit_fetch, next_tag, 9_025)
+        .rebind_as_inherited_adapter_effect(&timer_validate)
+        .expect("carry Commit authority into the recovered periodic Validate retry");
+    executor
+        .retain_effect_batch(vec![timer_validate.clone()], vec![timer_ownership])
+        .expect("the periodic Validate stutters at its cold-recovered marker");
+
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert!(executor.durable_validate_retry_seals.is_empty());
+    assert_eq!(executor.published_lifecycle_validate_retry_markers.len(), 1);
+    let marker = &executor.published_lifecycle_validate_retry_markers[&key];
+    assert_eq!(marker.effect, timer_validate);
+    assert_eq!(marker.statement.phase(), Some(wire::GlobalPhase::Commit));
+    assert_eq!(executor.pending_work(), 0);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
 }
 
 #[test]
@@ -2658,22 +3145,6 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
             if reason.contains("scheduler owner was missing")
     ));
     assert!(services.broadcasts.is_empty());
-    assert!(services.statuses.is_empty());
-    assert!(services.durable_runtime_decision.is_none());
-    assert!(executor.output_guard.restart_required());
-}
-#[test]
-fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    executor.runtime.reject_scheduler_ownership = true;
-    executor.runtime.steps.push_back(Ok(RuntimeStep::Idle));
-    assert!(matches!(
-        executor.step_pending_tip_recovery(Instant::now(), &mut services),
-        Err(EffectExecutorError::Runtime(reason))
-            if reason.contains("scheduler owner was invalid")
-    ));
     assert!(services.statuses.is_empty());
     assert!(services.durable_runtime_decision.is_none());
     assert!(executor.output_guard.restart_required());

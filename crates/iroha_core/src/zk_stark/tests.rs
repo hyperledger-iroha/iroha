@@ -256,6 +256,69 @@ fn synthesized_envelope_verifies_sha256() {
     assert!(verify_stark_fri_envelope(&bytes));
 }
 #[test]
+fn binding_air_rejects_fixed_coefficient_cancellation_rows() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-fixed-coefficient-cancellation".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x61; 32];
+    let one = Fq::one();
+    let two = Fq::from_canonical_u64(2).expect("canonical two");
+    let rows = (0..domain)
+        .map(|index| {
+            let expected = stark_air_row(index, &public_digest).expect("build binding AIR row");
+            let mut forged = expected.clone();
+            forged[0] = Fq::from_canonical_u64(forged[0])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            forged[1] = Fq::from_canonical_u64(forged[1])
+                .expect("canonical row coordinate")
+                .sub(two)
+                .0;
+            forged[2] = Fq::from_canonical_u64(forged[2])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            assert_ne!(forged, expected);
+            forged
+        })
+        .collect::<Vec<_>>();
+
+    // The former fixed coefficients accepted this non-zero residue vector:
+    // 3 * 1 + 5 * (-2) + 7 * 1 = 0 in the proof field.
+    let legacy_collision = Fq::from_canonical_u64(3)
+        .expect("canonical three")
+        .sub(Fq::from_canonical_u64(5).expect("canonical five").mul(two))
+        .add(Fq::from_canonical_u64(7).expect("canonical seven"));
+    assert_eq!(legacy_collision, Fq::zero());
+    assert_eq!(
+        stark_air_composition_value(0, domain, &public_digest, &rows[0], &rows[1]),
+        None,
+        "a sampled forged row must fail the verifier-owned coordinate check"
+    );
+
+    let bytes = prove_stark_fri_zero_composition_air_envelope_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-FIXED-COEFFICIENT-CANCELLATION".to_owned(),
+        "stark/fri/custom-binding-air-fixed-coefficient-cancellation:test".to_owned(),
+        public_digest,
+        rows,
+    )
+    .expect("explicit-row prover constructs the forged cancellation envelope");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "generic binding AIR verifier must reject every sampled forged row"
+    );
+}
+#[test]
 fn public_generic_air_provers_reject_bfv_full_bootstrap_circuit_aliases() {
     let params = StarkFriParamsV1 {
         version: 1,

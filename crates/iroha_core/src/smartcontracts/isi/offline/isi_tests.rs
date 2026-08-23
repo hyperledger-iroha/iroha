@@ -35,7 +35,7 @@ mod tests {
         },
         permission::Permission,
         role::{Role, RoleId},
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        transaction::{Executable, ExecutableBatchItem, FeePaymentIntent, TransactionBuilder},
     };
     use iroha_primitives::{json::Json, numeric::Quantity};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
@@ -44,6 +44,17 @@ mod tests {
         elliptic_curve::sec1::ToEncodedPoint as _,
     };
     const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
+    fn android_status_snapshot() -> OfflineAndroidAttestationStatusSnapshotV1 {
+        OfflineAndroidAttestationStatusSnapshotV1 {
+            version:
+                iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+            payload_sha256: [0x99; 32],
+            response_date_ms: POLICY_TEST_TIME_MS,
+            last_modified_ms: Some(POLICY_TEST_TIME_MS),
+            cache_max_age_seconds: 86_400,
+            non_valid_serials: Vec::new(),
+        }
+    }
     macro_rules! offline_test_transaction {
         ($transaction:ident) => {
             let state = offline_test_state();
@@ -547,6 +558,9 @@ mod tests {
         let validation = body
             .find("validate_offline_attestation_policy_for_release_activation")
             .expect("activation policy validation");
+        let transition_validation = body
+            .find("validate_offline_attestation_policy_transition_from_state")
+            .expect("activation anti-rollback policy transition validation");
         let first_mutation = body
             .find("state_transaction.world.smart_contract_state.insert")
             .expect("activation state publication");
@@ -555,10 +569,11 @@ mod tests {
             .expect("atomic activation promotion-binding consumption");
 
         assert!(
-            validation < promotion_consumption_plan
+            validation < transition_validation
+                && transition_validation < promotion_consumption_plan
                 && promotion_consumption_plan < first_mutation
                 && first_mutation < promotion_consumption_commit,
-            "promotion identity and replay plus bounded policy must be rejected before atomic state publication",
+            "bounded policy, anti-rollback transition, promotion identity, and replay must be rejected before atomic state publication",
         );
     }
     #[test]
@@ -603,6 +618,7 @@ mod tests {
         permit: KagemushaV4TairaCanaryPermitV1,
         reservation: KagemushaV4TairaCanaryReservationV1,
         exact_call_hash: Hash,
+        canary_transaction: SignedTransaction,
         canary_transaction_wire: Vec<u8>,
     }
     fn canary_consensus_controller() -> KeyPair {
@@ -615,7 +631,15 @@ mod tests {
         state_transaction: &StateTransaction<'_, '_>,
         nonce: u32,
     ) -> CanaryConsensusFixture {
+        canary_consensus_fixture_for_key(state_transaction, nonce, &ALICE_KEYPAIR)
+    }
+    fn canary_consensus_fixture_for_key(
+        state_transaction: &StateTransaction<'_, '_>,
+        nonce: u32,
+        canary_key: &KeyPair,
+    ) -> CanaryConsensusFixture {
         let controller = canary_consensus_controller();
+        let canary_authority = AccountId::new(canary_key.public_key().clone());
         let binding = KagemushaV4PromotionBindingV1 {
             promotion_controller: controller.public_key().clone(),
             promotion_reservation: canary_consensus_digest(b"canary reservation"),
@@ -637,7 +661,7 @@ mod tests {
             binding,
             activation_expectations_artifact: canary_consensus_digest(b"canary expectations"),
             activation_finality_receipt: canary_consensus_digest(b"canary receipt"),
-            canary_authority: ALICE_ID.clone(),
+            canary_authority: canary_authority.clone(),
             canonical_torii_origin: "https://taira.example".to_owned(),
             authorized_at_unix_ms: POLICY_TEST_TIME_MS - 1_000,
             expires_at_unix_ms: POLICY_TEST_TIME_MS + 60_000,
@@ -660,7 +684,7 @@ mod tests {
         );
         let mut builder = TransactionBuilder::new(
             state_transaction.network_id().clone(),
-            ALICE_ID.clone(),
+            canary_authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([RecordKagemushaTairaCanaryV4::new(permit.clone())])
@@ -670,7 +694,7 @@ mod tests {
         builder.set_nonce(
             core::num::NonZeroU32::new(nonce).expect("non-zero canary transaction nonce"),
         );
-        let canary_transaction = builder.sign(ALICE_KEYPAIR.private_key());
+        let canary_transaction = builder.sign(canary_key.private_key());
         let canary_transaction_wire = canary_transaction
             .encode_wire_v1()
             .expect("canonical canary transaction wire");
@@ -698,8 +722,23 @@ mod tests {
             permit,
             exact_call_hash: Hash::from(canary_transaction.hash_as_entrypoint()),
             reservation,
+            canary_transaction,
             canary_transaction_wire,
         }
+    }
+    fn bind_canary_consensus_wire(
+        fixture: &CanaryConsensusFixture,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) {
+        let identity =
+            crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(
+                &fixture.canary_transaction,
+            )
+            .expect("derive canary signed-wire binding")
+            .expect("single direct canary record has a signed-wire binding");
+        assert_eq!(identity, fixture.reservation.body.canary_transaction_wire);
+        state_transaction.kagemusha_taira_canary_external_entrypoint = true;
+        state_transaction.kagemusha_taira_canary_wire_identity = Some(identity);
     }
     fn commit_canary_activation_binding(
         binding: &KagemushaV4PromotionBindingV1,
@@ -802,6 +841,34 @@ mod tests {
                 "tampered {case} must not reserve markers",
             );
         }
+
+        let controller = canary_consensus_controller();
+        let mut inconsistent = canary_consensus_fixture(&transaction, 7).reservation;
+        inconsistent.body.canary_transaction_intent =
+            HashOf::from_untyped_unchecked(Hash::new(b"signed mismatched canary intent"));
+        let mut oversized = canary_consensus_fixture(&transaction, 7).reservation;
+        oversized.body.canary_transaction_wire.byte_len = u64::MAX;
+        for (case, mut reservation) in [("intent", inconsistent), ("wire length", oversized)] {
+            reservation.signature = SignatureOf::try_from_hash(
+                controller.private_key(),
+                reservation.body.signing_hash(),
+            )
+            .expect("controller signs malformed reservation fixture");
+            let error = AuthorizeKagemushaTairaCanaryV4::new(reservation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("signed malformed reservation must fail structurally");
+            assert!(
+                error
+                    .to_string()
+                    .contains("invalid_taira_canary_authorization"),
+                "unexpected signed {case} error: {error}",
+            );
+        }
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_before,
+            "signed malformed reservations must not reserve markers",
+        );
     }
     #[test]
     fn taira_canary_exact_two_step_rejects_altered_call_then_consumes_once() {
@@ -835,6 +902,30 @@ mod tests {
             replay_keys_after_authorization,
             "idempotent authorization publication must not add markers",
         );
+        let controller = canary_consensus_controller();
+        let mut same_call_different_reservation = fixture.reservation.clone();
+        same_call_different_reservation
+            .body
+            .canary_transaction_wire
+            .sha256[0] ^= 1;
+        same_call_different_reservation.signature = SignatureOf::try_from_hash(
+            controller.private_key(),
+            same_call_different_reservation.body.signing_hash(),
+        )
+        .expect("controller signs the conflicting exact reservation");
+        let conflicting = AuthorizeKagemushaTairaCanaryV4::new(same_call_different_reservation)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("the same call hash cannot hide a different exact reservation");
+        assert!(
+            conflicting
+                .to_string()
+                .contains("canary_authorization_replay")
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_after_authorization,
+            "conflicting exact reservation rejection must not mutate markers",
+        );
         let distinct_nonce = canary_consensus_fixture(&transaction, 8);
         let different_exact = AuthorizeKagemushaTairaCanaryV4::new(distinct_nonce.reservation)
             .execute(&ALICE_ID, &mut transaction)
@@ -848,7 +939,7 @@ mod tests {
             transaction.world.kagemusha_replay_keys.iter().count(),
             replay_keys_after_authorization,
         );
-
+        bind_canary_consensus_wire(&fixture, &mut transaction);
         transaction.tx_call_hash = Some(Hash::new(b"altered same-permit transaction"));
         let altered = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
             .execute(&ALICE_ID, &mut transaction)
@@ -858,8 +949,8 @@ mod tests {
             transaction.world.kagemusha_replay_keys.iter().count(),
             replay_keys_after_authorization,
         );
-
         transaction.tx_call_hash = Some(fixture.exact_call_hash);
+        bind_canary_consensus_wire(&fixture, &mut transaction);
         let mismatched_authority = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
             .execute(&BOB_ID, &mut transaction)
             .expect_err("the exact call still requires the permitted relayer authority");
@@ -877,6 +968,7 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect("the exactly authorized ordinary canary consumes its one-shot marker");
         let replay_keys_after_canary = transaction.world.kagemusha_replay_keys.iter().count();
+        bind_canary_consensus_wire(&fixture, &mut transaction);
         let duplicate = RecordKagemushaTairaCanaryV4::new(fixture.permit.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("the exact canary cannot execute twice");
@@ -907,13 +999,87 @@ mod tests {
         );
     }
     #[test]
+    fn taira_canary_complete_wire_rejects_alternate_valid_proof_for_same_intent() {
+        offline_test_transaction!(transaction);
+        let canary_key = KeyPair::from_seed(vec![0xD4; 32], Algorithm::MlDsa);
+        let authority = AccountId::new(canary_key.public_key().clone());
+        let first = canary_consensus_fixture_for_key(&transaction, 7, &canary_key);
+        let second = canary_consensus_fixture_for_key(&transaction, 7, &canary_key);
+        for transaction in [&first.canary_transaction, &second.canary_transaction] {
+            transaction
+                .verify_signature()
+                .expect("independent ML-DSA canary proof verifies");
+        }
+        assert_eq!(first.permit, second.permit);
+        assert_eq!(
+            first.canary_transaction.hash(),
+            second.canary_transaction.hash()
+        );
+        assert_eq!(first.exact_call_hash, second.exact_call_hash);
+        let wire_identity = |transaction: &SignedTransaction| {
+            crate::smartcontracts::isi::offline::signed_kagemusha_taira_canary_wire_identity_v1(
+                transaction,
+            )
+            .expect("derive canary wire")
+        };
+        let first_wire = wire_identity(&first.canary_transaction)
+            .expect("first transaction has exact direct Record shape");
+        let second_wire = wire_identity(&second.canary_transaction)
+            .expect("second transaction has exact direct Record shape");
+        assert_ne!(first_wire, second_wire);
+        let multi_record = TransactionBuilder::new(
+            transaction.network_id().clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            RecordKagemushaTairaCanaryV4::new(first.permit.clone()),
+            RecordKagemushaTairaCanaryV4::new(first.permit.clone()),
+        ])
+        .sign(canary_key.private_key());
+        assert_eq!(wire_identity(&multi_record), None);
+        let batch = TransactionBuilder::new(
+            transaction.network_id().clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(
+                RecordKagemushaTairaCanaryV4::new(first.permit.clone()).into(),
+            )]
+            .into(),
+        ))
+        .sign(canary_key.private_key());
+        assert_eq!(wire_identity(&batch), None);
+        commit_canary_activation_binding(&first.permit.body.binding, &mut transaction);
+        AuthorizeKagemushaTairaCanaryV4::new(first.reservation.clone())
+            .execute(&authority, &mut transaction)
+            .expect("first exact signed wire is authorized");
+        let markers_after_authorization = transaction.world.kagemusha_replay_keys.iter().count();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.tx_call_hash = Some(second.exact_call_hash);
+        transaction.kagemusha_taira_canary_wire_identity = Some(second_wire);
+        let error = RecordKagemushaTairaCanaryV4::new(second.permit)
+            .execute(&authority, &mut transaction)
+            .expect_err("alternate valid proof wire must not consume the authorization");
+        assert!(error.to_string().contains("canary_authorization_missing"));
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            markers_after_authorization
+        );
+        transaction.kagemusha_taira_canary_wire_identity = Some(first_wire);
+        RecordKagemushaTairaCanaryV4::new(first.permit)
+            .execute(&authority, &mut transaction)
+            .expect("the exactly authorized complete wire consumes the canary");
+    }
+    #[test]
     fn taira_canary_rejects_invalid_and_expired_permits_before_marker_consumption() {
         offline_test_transaction!(transaction);
         let fixture = canary_consensus_fixture(&transaction, 7);
         commit_canary_activation_binding(&fixture.permit.body.binding, &mut transaction);
         transaction.tx_call_hash = Some(fixture.exact_call_hash);
+        bind_canary_consensus_wire(&fixture, &mut transaction);
         let markers_before = transaction.world.kagemusha_replay_keys.iter().count();
-
         let mut invalid = fixture.permit.clone();
         invalid.body.canonical_torii_origin = "https://different.example".to_owned();
         let invalid_error = RecordKagemushaTairaCanaryV4::new(invalid)
@@ -924,7 +1090,6 @@ mod tests {
                 .to_string()
                 .contains("invalid_taira_canary_permit")
         );
-
         let controller = canary_consensus_controller();
         let mut expired = fixture.permit;
         expired.body.expires_at_height = NonZeroU64::new(1).expect("non-zero expired height");
@@ -1252,248 +1417,7 @@ mod tests {
             "valid offline instructions must execute regardless of local service state"
         );
     }
-    fn release_activation_device_policy() -> OfflineDeviceAttestationPolicy {
-        let mut policy = default_offline_device_attestation_policy()
-            .expect("built-in roots form a valid activation-policy template");
-        policy.require_ios_app_policy = true;
-        policy.require_android_app_policy = true;
-        policy.ios_apps = vec![ios_assertion_policy()];
-        policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
-            package_name: "com.pk.retailwallet".to_owned(),
-            signing_certificate_sha256: vec![vec![0x55; 32]],
-        }];
-        policy
-    }
-    #[test]
-    fn release_activation_device_policy_is_production_and_fail_closed() {
-        let policy = release_activation_device_policy();
-        validate_offline_attestation_policy_for_release_activation(&policy, 0)
-            .expect("exact production policy must be activation-eligible");
-        let mut missing_android_gate = policy.clone();
-        missing_android_gate.require_android_app_policy = false;
-        assert!(
-            validate_offline_attestation_policy_for_release_activation(&missing_android_gate, 0,)
-                .is_err(),
-            "activation must not publish an Android fail-open policy",
-        );
-        let mut development_ios = policy.clone();
-        development_ios.ios_apps[0].environment = "development".to_owned();
-        assert!(
-            validate_offline_attestation_policy_for_release_activation(&development_ios, 0)
-                .is_err(),
-            "activation must not publish a development App Attest policy",
-        );
-        let mut control_character_ios = policy.clone();
-        control_character_ios.ios_apps[0].bundle_id = "io.soramitsu.\npk".to_owned();
-        assert!(
-            validate_offline_attestation_policy_for_release_activation(&control_character_ios, 0,)
-                .is_err(),
-            "activation must reject control characters in application identities",
-        );
-        let mut maximum_revocations = policy;
-        maximum_revocations.revoked_certificate_sha256 = (1
-            ..=OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1)
-            .map(|index| {
-                let mut digest = [0_u8; 32];
-                digest[..8].copy_from_slice(&(index as u64).to_le_bytes());
-                digest.to_vec()
-            })
-            .collect();
-        validate_offline_attestation_policy_for_release_activation(&maximum_revocations, 0)
-            .expect("the exact revocation-list limit remains activation eligible");
-        maximum_revocations
-            .revoked_certificate_sha256
-            .push(vec![0xA5; 32]);
-        assert!(
-            validate_offline_attestation_policy_for_release_activation(&maximum_revocations, 0)
-                .is_err(),
-            "activation must reject a policy above the revocation-list limit",
-        );
-    }
-    #[test]
-    fn production_device_policy_constructor_binds_explicit_apps_and_builtin_roots() {
-        let policy = production_offline_device_attestation_policy_v1(
-            "TEAMID1234".to_owned(),
-            "io.soramitsu.pk".to_owned(),
-            vec![10, 4],
-            vec!["42".to_owned(), "41".to_owned()],
-            "com.pk.retailwallet".to_owned(),
-            vec![[0x66; 32], [0x55; 32]],
-            1_800_000_000_000,
-        )
-        .expect("explicit production app identities should build a fail-closed policy");
-        assert_eq!(policy.trusted_roots.len(), 3);
-        assert!(policy.require_ios_app_policy);
-        assert!(policy.require_android_app_policy);
-        assert_eq!(
-            policy.ios_apps[0].allowed_validation_categories,
-            vec![4, 10]
-        );
-        assert_eq!(
-            policy.ios_apps[0].allowed_bundle_versions,
-            vec!["41".to_owned(), "42".to_owned()]
-        );
-        assert_eq!(
-            policy.android_apps[0].signing_certificate_sha256,
-            vec![vec![0x55; 32], vec![0x66; 32]]
-        );
-    }
-    #[test]
-    fn production_device_policy_constructor_rejects_duplicate_operator_input() {
-        let error = production_offline_device_attestation_policy_v1(
-            "TEAMID1234".to_owned(),
-            "io.soramitsu.pk".to_owned(),
-            vec![4, 4],
-            vec!["42".to_owned()],
-            "com.pk.retailwallet".to_owned(),
-            vec![[0x55; 32]],
-            1_800_000_000_000,
-        )
-        .expect_err("duplicate policy input must not be silently normalized");
-        assert!(error.contains("must not contain duplicates"));
-    }
-    #[test]
-    fn offline_device_attestation_policy_shape_bounds_are_exact() {
-        let baseline = default_offline_device_attestation_policy()
-            .expect("built-in roots form a valid policy template");
-
-        let mut roots = baseline.clone();
-        roots.trusted_roots = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1)
-            .map(|index| baseline.trusted_roots[index % 2].clone())
-            .collect();
-        validate_offline_attestation_policy_bounds(&roots)
-            .expect("the exact total and per-platform root limits are admitted");
-        roots.trusted_roots.push(baseline.trusted_roots[0].clone());
-        assert!(validate_offline_attestation_policy_bounds(&roots).is_err());
-
-        let mut platform_roots = baseline.clone();
-        platform_roots.trusted_roots = vec![
-            baseline.trusted_roots[0].clone();
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1
-        ];
-        validate_offline_attestation_policy_bounds(&platform_roots)
-            .expect("the exact per-platform root limit is admitted");
-        platform_roots
-            .trusted_roots
-            .push(baseline.trusted_roots[0].clone());
-        assert!(validate_offline_attestation_policy_bounds(&platform_roots).is_err());
-
-        let mut root_der = baseline.clone();
-        root_der.trusted_roots = vec![baseline.trusted_roots[0].clone()];
-        root_der.trusted_roots[0].der =
-            vec![0xA5; OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1];
-        validate_offline_attestation_policy_bounds(&root_der)
-            .expect("the exact trusted-root DER limit is admitted");
-        root_der.trusted_roots[0].der.push(0xA5);
-        assert!(validate_offline_attestation_policy_bounds(&root_der).is_err());
-
-        let mut revoked = baseline.clone();
-        revoked.revoked_certificate_sha256 =
-            vec![vec![0xA5; 32]; OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1];
-        validate_offline_attestation_policy_bounds(&revoked)
-            .expect("the exact revocation-list limit is admitted");
-        revoked.revoked_certificate_sha256.push(vec![0x5A; 32]);
-        assert!(validate_offline_attestation_policy_bounds(&revoked).is_err());
-
-        let ios_app = ios_assertion_policy();
-        let mut ios_apps = baseline.clone();
-        ios_apps.ios_apps =
-            vec![ios_app.clone(); OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1];
-        validate_offline_attestation_policy_bounds(&ios_apps)
-            .expect("the exact iOS app-count limit is admitted");
-        ios_apps.ios_apps.push(ios_app.clone());
-        assert!(validate_offline_attestation_policy_bounds(&ios_apps).is_err());
-
-        let android_app = OfflineAndroidAppAttestationPolicy {
-            package_name: "com.example.boundary".to_owned(),
-            signing_certificate_sha256: vec![vec![0x5A; 32]],
-        };
-        let mut android_apps = baseline.clone();
-        android_apps.android_apps =
-            vec![android_app.clone(); OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1];
-        validate_offline_attestation_policy_bounds(&android_apps)
-            .expect("the exact Android app-count limit is admitted");
-        android_apps.android_apps.push(android_app.clone());
-        assert!(validate_offline_attestation_policy_bounds(&android_apps).is_err());
-
-        let mut ios_nested = baseline.clone();
-        ios_nested.ios_apps = vec![ios_app];
-        ios_nested.ios_apps[0].team_id =
-            "T".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1);
-        ios_nested.ios_apps[0].bundle_id =
-            "b".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        ios_nested.ios_apps[0].allowed_validation_categories = vec![1, 2, 3, 4, 5, 6, 10];
-        ios_nested.ios_apps[0].allowed_bundle_versions = (0
-            ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1)
-            .map(|index| index.to_string())
-            .collect();
-        ios_nested.ios_apps[0].allowed_bundle_versions[0] =
-            "v".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1);
-        validate_offline_attestation_policy_bounds(&ios_nested)
-            .expect("the exact nested iOS limits are admitted");
-        ios_nested.ios_apps[0].team_id.push('T');
-        assert!(validate_offline_attestation_policy_bounds(&ios_nested).is_err());
-        ios_nested.ios_apps[0].team_id.pop();
-        ios_nested.ios_apps[0].bundle_id.push('b');
-        assert!(validate_offline_attestation_policy_bounds(&ios_nested).is_err());
-        ios_nested.ios_apps[0].bundle_id.pop();
-        ios_nested.ios_apps[0]
-            .allowed_validation_categories
-            .push(10);
-        assert!(validate_offline_attestation_policy_bounds(&ios_nested).is_err());
-        ios_nested.ios_apps[0].allowed_validation_categories.pop();
-        ios_nested.ios_apps[0]
-            .allowed_bundle_versions
-            .push("overflow".to_owned());
-        assert!(validate_offline_attestation_policy_bounds(&ios_nested).is_err());
-        ios_nested.ios_apps[0].allowed_bundle_versions.pop();
-        ios_nested.ios_apps[0].allowed_bundle_versions[0].push('v');
-        assert!(validate_offline_attestation_policy_bounds(&ios_nested).is_err());
-
-        let mut android_nested = baseline.clone();
-        android_nested.android_apps = vec![android_app];
-        android_nested.android_apps[0].package_name =
-            "p".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        android_nested.android_apps[0].signing_certificate_sha256 = vec![
-            vec![0x5A; 32];
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1
-        ];
-        validate_offline_attestation_policy_bounds(&android_nested)
-            .expect("the exact nested Android limits are admitted");
-        android_nested.android_apps[0].package_name.push('p');
-        assert!(validate_offline_attestation_policy_bounds(&android_nested).is_err());
-        android_nested.android_apps[0].package_name.pop();
-        android_nested.android_apps[0]
-            .signing_certificate_sha256
-            .push(vec![0xA5; 32]);
-        assert!(validate_offline_attestation_policy_bounds(&android_nested).is_err());
-
-        let mut canonical = baseline;
-        canonical.trusted_roots = vec![canonical.trusted_roots[0].clone(); 4];
-        for root in &mut canonical.trusted_roots {
-            root.der = vec![0xA5; OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1];
-        }
-        while norito::encode_canonical(&canonical)
-            .expect("boundary policy encodes")
-            .len()
-            > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
-        {
-            canonical.trusted_roots[3]
-                .der
-                .pop()
-                .expect("four maximum roots exceed the canonical policy limit");
-        }
-        assert_eq!(
-            norito::encode_canonical(&canonical)
-                .expect("exact-boundary policy encodes")
-                .len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
-        );
-        validate_offline_attestation_policy_bounds(&canonical)
-            .expect("the exact canonical policy limit is admitted");
-        canonical.trusted_roots[3].der.push(0xA5);
-        assert!(validate_offline_attestation_policy_bounds(&canonical).is_err());
-    }
+    include!("isi_attestation_policy_release_tests.rs");
     #[test]
     fn release_activation_authority_requires_both_exact_governance_permissions() {
         fn authorization_result(permissions: Vec<Permission>) -> Result<(), Error> {
@@ -1608,18 +1532,37 @@ mod tests {
         encoded.extend_from_slice(value);
         encoded
     }
+    fn android_root_of_trust_fixture(
+        verified_boot_key: &[u8],
+        device_locked: u8,
+        verified_boot_state: u8,
+        verified_boot_hash: &[u8],
+    ) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&test_der_tlv(&[0x04], verified_boot_key));
+        body.extend_from_slice(&test_der_tlv(&[0x01], &[device_locked]));
+        body.extend_from_slice(&test_der_tlv(&[0x0A], &[verified_boot_state]));
+        body.extend_from_slice(&test_der_tlv(&[0x04], verified_boot_hash));
+        test_der_tlv(&[0x30], &body)
+    }
     fn android_key_description_usage_count_fixture(
         software_usage_count_limit: bool,
         hardware_usage_count_limit: bool,
+        hardware_root_of_trust: bool,
     ) -> Vec<u8> {
-        fn authorization_list(with_usage_count_limit: bool) -> Vec<u8> {
-            let body = if with_usage_count_limit {
+        fn authorization_list(with_usage_count_limit: bool, with_root: bool) -> Vec<u8> {
+            let mut body = if with_usage_count_limit {
                 let one = test_der_tlv(&[0x02], &[1]);
                 // Context-specific constructed high tag [405].
                 test_der_tlv(&[0xBF, 0x83, 0x15], &one)
             } else {
                 Vec::new()
             };
+            if with_root {
+                let root = android_root_of_trust_fixture(&[0xA5], 0xFF, 0, &[0x5A; 32]);
+                // Context-specific constructed high tag [704].
+                body.extend_from_slice(&test_der_tlv(&[0xBF, 0x85, 0x40], &root));
+            }
             test_der_tlv(&[0x30], &body)
         }
         let mut body = Vec::new();
@@ -1629,23 +1572,103 @@ mod tests {
         body.extend_from_slice(&test_der_tlv(&[0x0A], &[1]));
         body.extend_from_slice(&test_der_tlv(&[0x04], &[0xA5]));
         body.extend_from_slice(&test_der_tlv(&[0x04], &[]));
-        body.extend_from_slice(&authorization_list(software_usage_count_limit));
-        body.extend_from_slice(&authorization_list(hardware_usage_count_limit));
+        body.extend_from_slice(&authorization_list(software_usage_count_limit, false));
+        body.extend_from_slice(&authorization_list(
+            hardware_usage_count_limit,
+            hardware_root_of_trust,
+        ));
         test_der_tlv(&[0x30], &body)
     }
     #[test]
     fn android_usage_count_limit_must_be_hardware_enforced() {
         let hardware = parse_android_key_description(&android_key_description_usage_count_fixture(
-            false, true,
+            false, true, true,
         ))
         .expect("hardware-enforced usageCountLimit is admitted");
         assert_eq!(hardware.usage_count_limit, Some(1));
+        let mut zero_keymint_version =
+            android_key_description_usage_count_fixture(false, true, true);
+        let version_offset = zero_keymint_version
+            .windows(3)
+            .position(|window| window == [0x02, 0x01, 0x04])
+            .expect("KeyMint version fixture");
+        zero_keymint_version[version_offset + 2] = 0;
+        assert!(parse_android_key_description(&zero_keymint_version).is_err());
         assert!(
             parse_android_key_description(&android_key_description_usage_count_fixture(
-                true, false,
+                true, false, true,
             ))
             .is_err(),
             "a software-only usageCountLimit must not satisfy the hardware one-use profile",
+        );
+    }
+    #[test]
+    fn android_root_of_trust_must_be_hardware_verified_and_complete() {
+        let valid = android_root_of_trust_fixture(&[0xA5], 0xFF, 0, &[0x5A; 32]);
+        validate_android_root_of_trust(&valid).expect("locked verified-boot rootOfTrust");
+        for invalid in [
+            android_root_of_trust_fixture(&[], 0xFF, 0, &[0x5A; 32]),
+            android_root_of_trust_fixture(&[0xA5], 0, 0, &[0x5A; 32]),
+            android_root_of_trust_fixture(&[0xA5], 1, 0, &[0x5A; 32]),
+            android_root_of_trust_fixture(&[0xA5], 0xFF, 1, &[0x5A; 32]),
+            android_root_of_trust_fixture(&[0xA5], 0xFF, 0, &[0x5A; 31]),
+        ] {
+            assert!(validate_android_root_of_trust(&invalid).is_err());
+        }
+
+        let software_root = test_der_tlv(&[0xBF, 0x85, 0x40], &valid);
+        assert!(parse_android_authorization_list(&software_root, false).is_err());
+        assert!(
+            parse_android_key_description(&android_key_description_usage_count_fixture(
+                false, true, false,
+            ))
+            .is_err(),
+            "rootOfTrust is mandatory even for an otherwise valid hardware authorization list",
+        );
+    }
+    #[test]
+    fn android_authorization_list_rejects_duplicate_unknown_tags() {
+        let unknown = test_der_tlv(&[0xBF, 0x1F], &[]);
+        let mut duplicated = unknown.clone();
+        duplicated.extend_from_slice(&unknown);
+        assert!(parse_android_authorization_list(&duplicated, false).is_err());
+    }
+    #[test]
+    fn android_application_id_must_bind_one_exact_package_and_signer() {
+        let signing_digest = [0x55; 32];
+        let mut application_id = AndroidAttestationApplicationId {
+            packages: vec![AndroidAttestationPackageInfo {
+                package_name: "com.pk.retailwallet".to_owned(),
+            }],
+            signature_digests: vec![signing_digest.to_vec()],
+        };
+        validate_android_attestation_application_id_matches(
+            &application_id,
+            "com.pk.retailwallet",
+            &signing_digest,
+        )
+        .expect("one exact package and signer must pass");
+
+        application_id.packages.push(AndroidAttestationPackageInfo {
+            package_name: "com.attacker.shareduid".to_owned(),
+        });
+        assert!(
+            validate_android_attestation_application_id_matches(
+                &application_id,
+                "com.pk.retailwallet",
+                &signing_digest,
+            )
+            .is_err()
+        );
+        application_id.packages.pop();
+        application_id.signature_digests.push(vec![0x66; 32]);
+        assert!(
+            validate_android_attestation_application_id_matches(
+                &application_id,
+                "com.pk.retailwallet",
+                &signing_digest,
+            )
+            .is_err()
         );
     }
     fn android_online_registration(
@@ -1738,6 +1761,7 @@ mod tests {
         let mut policy =
             default_offline_device_attestation_policy().expect("built-in attestation roots");
         policy.require_android_app_policy = true;
+        policy.android_status_snapshot = Some(android_status_snapshot());
         policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
             package_name: "com.pk.retailwallet".to_owned(),
             signing_certificate_sha256: vec![vec![0x55; 32]],
@@ -1878,11 +1902,14 @@ mod tests {
         offline_test_transaction!(state_transaction);
         let (asset, authorization, wrong_signature, state_key) =
             committed_android_replay_fixture(&mut state_transaction);
+        let release_policy = effective_offline_device_attestation_policy(&state_transaction)
+            .expect("installed release policy");
         let unauthorized = authenticate_kagemusha_v4_redeem_submission_before_replay(
             &ALICE_ID,
             asset.definition(),
             &BOB_ID,
             &authorization,
+            &release_policy,
             &state_transaction,
         );
         let Err(error) = unauthorized else {
@@ -1894,6 +1921,7 @@ mod tests {
             asset.definition(),
             &ALICE_ID,
             &wrong_signature,
+            &release_policy,
             &state_transaction,
         );
         let Err(error) = malformed else {
@@ -1911,6 +1939,7 @@ mod tests {
             asset.definition(),
             &ALICE_ID,
             &authorization,
+            &release_policy,
             &state_transaction,
         )
         .expect("authorized exact retry");
@@ -2075,7 +2104,7 @@ mod tests {
             .expect("installed attestation policy");
         let mut rotated: OfflineDeviceAttestationPolicy =
             norito::decode_from_bytes(&policy_bytes).expect("decode test policy");
-        rotated.revoked_certificate_sha256.push(vec![0xA7; 32]);
+        rotated.revoked_certificate_tbs_sha256.push(vec![0xA7; 32]);
         state_transaction.world.smart_contract_state.insert(
             (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
             norito::to_bytes(&rotated).expect("rotated policy must encode"),
@@ -2093,6 +2122,109 @@ mod tests {
             Some(&registration_before),
             "rejected use after policy rotation must not consume the hardware lifecycle"
         );
+    }
+    #[test]
+    fn release_scoped_redemption_survives_singleton_policy_rotation() {
+        offline_test_transaction!(state_transaction);
+        let asset = offline_test_asset(&ALICE_ID).definition().clone();
+        let assertion_key = online_assertion_signing_key(0x68);
+        let registration = android_online_registration(
+            &ALICE_ID,
+            &asset,
+            &assertion_key,
+            POLICY_TEST_TIME_MS + 60_000,
+        );
+        let authorization = android_online_authorization(&registration, &assertion_key);
+        install_android_online_registration(&mut state_transaction, registration);
+        let release_policy = effective_offline_device_attestation_policy(&state_transaction)
+            .expect("installed release policy");
+        let mut rotated = release_policy.clone();
+        rotated.revoked_certificate_tbs_sha256.push(vec![0xA8; 32]);
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            norito::to_bytes(&rotated).expect("rotated policy must encode"),
+        );
+
+        let topup_error =
+            ensure_registered_kagemusha_v2_device(&authorization, &asset, &state_transaction)
+                .err()
+                .expect("new issuance must remain bound to the current singleton policy");
+        assert!(topup_error.to_string().contains("attestation_policy_changed"));
+        let (_, replay) = authenticate_kagemusha_v4_redeem_submission_before_replay(
+            &ALICE_ID,
+            &asset,
+            &ALICE_ID,
+            &authorization,
+            &release_policy,
+            &state_transaction,
+        )
+        .expect("an old live registration remains valid for its exact release policy");
+        assert!(matches!(replay, KagemushaV4ReplayStatus::Fresh(_)));
+    }
+    #[test]
+    fn release_scoped_redemption_accepts_only_compatible_current_policy_reregistration() {
+        offline_test_transaction!(state_transaction);
+        let asset = offline_test_asset(&ALICE_ID).definition().clone();
+        let assertion_key = online_assertion_signing_key(0x69);
+        let registration = android_online_registration(
+            &ALICE_ID,
+            &asset,
+            &assertion_key,
+            POLICY_TEST_TIME_MS + 60_000,
+        );
+        let authorization = android_online_authorization(&registration, &assertion_key);
+        let mut release_policy =
+            default_offline_device_attestation_policy().expect("built-in attestation roots");
+        release_policy.require_android_app_policy = true;
+        release_policy.android_status_snapshot = Some(android_status_snapshot());
+        release_policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
+            package_name: "com.pk.retailwallet".to_owned(),
+            signing_certificate_sha256: vec![vec![0x55; 32]],
+        }];
+        let mut current_policy = release_policy.clone();
+        current_policy
+            .android_apps
+            .push(OfflineAndroidAppAttestationPolicy {
+                package_name: "com.pk.secondwallet".to_owned(),
+                signing_certificate_sha256: vec![vec![0x56; 32]],
+            });
+        let current_policy_hash = canonical_offline_device_attestation_policy_hash(&current_policy)
+            .expect("current policy hash");
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            norito::to_bytes(&current_policy).expect("current policy must encode"),
+        );
+        install_android_online_registration_with_policy_hash(
+            &mut state_transaction,
+            registration,
+            current_policy_hash,
+        );
+
+        authenticate_kagemusha_v4_redeem_submission_before_replay(
+            &ALICE_ID,
+            &asset,
+            &ALICE_ID,
+            &authorization,
+            &release_policy,
+            &state_transaction,
+        )
+        .expect("a current registration with the exact historical trust basis remains usable");
+
+        let mut stricter_release_policy = release_policy;
+        stricter_release_policy
+            .revoked_certificate_tbs_sha256
+            .push(vec![0xA9; 32]);
+        let error = authenticate_kagemusha_v4_redeem_submission_before_replay(
+            &ALICE_ID,
+            &asset,
+            &ALICE_ID,
+            &authorization,
+            &stricter_release_policy,
+            &state_transaction,
+        )
+        .err()
+        .expect("a current admission cannot replace a stricter historical trust basis");
+        assert!(error.to_string().contains("attestation_policy_changed"));
     }
     #[test]
     fn legacy_registration_state_without_policy_hash_fails_closed() {
@@ -2672,6 +2804,41 @@ mod tests {
             assert_eq!(decoded, policy, "{source:?} stored the wrong policy");
         }
     }
+    #[test]
+    fn stored_android_status_anti_rollback_state_cannot_be_removed() {
+        let mut baseline = default_offline_device_attestation_policy()
+            .expect("bundled offline attestation policy must decode");
+        baseline.android_status_snapshot = Some(android_status_snapshot());
+        let baseline_bytes = norito::to_bytes(&baseline).expect("baseline policy must encode");
+        let mut candidate = baseline.clone();
+        candidate.android_status_snapshot = None;
+
+        offline_test_transaction!(state_transaction);
+        grant_alice_permission(
+            &mut state_transaction,
+            GrantSource::Direct,
+            offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            baseline_bytes.clone(),
+        );
+        let error = SetOfflineDeviceAttestationPolicy::new(candidate)
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("an installed Android status watermark must be retained");
+        assert!(
+            error
+                .to_string()
+                .contains("anti-rollback state cannot be removed")
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY),
+            Some(&baseline_bytes),
+        );
+    }
     #[derive(Clone, Copy, Debug)]
     enum RejectedPolicyUpdate {
         NoPermission,
@@ -2697,7 +2864,9 @@ mod tests {
                 .expect("bundled offline attestation policy must decode");
             let baseline_bytes = norito::to_bytes(&baseline).expect("baseline policy must encode");
             let mut candidate = baseline.clone();
-            candidate.revoked_certificate_sha256.push(vec![0xA5_u8; 32]);
+            candidate
+                .revoked_certificate_tbs_sha256
+                .push(vec![0xA5_u8; 32]);
             offline_test_transaction!(state_transaction);
             state_transaction.world.smart_contract_state.insert(
                 (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
@@ -2758,7 +2927,7 @@ mod tests {
                         GrantSource::Direct,
                         offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
                     );
-                    candidate.revoked_certificate_sha256 = vec![
+                    candidate.revoked_certificate_tbs_sha256 = vec![
                         vec![0xA5; 32];
                         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1
                             + 1
@@ -2844,5 +3013,6 @@ mod tests {
             "the exact manager permission inherited through a role must authorize policy changes"
         );
     }
+    include!("isi_kagemusha_taira_canary_context_tests.rs");
     include!("isi_platform_policy_tests.rs");
 }

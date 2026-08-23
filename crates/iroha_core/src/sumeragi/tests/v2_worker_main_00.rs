@@ -334,12 +334,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
-    fn step_recovery_effects(
-        &mut self,
-        now: Instant,
-    ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_effects(now)
-    }
     fn take_effect_ownership(
         &mut self,
         effects: &[AdapterEffect],

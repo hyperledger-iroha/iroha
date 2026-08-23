@@ -653,11 +653,6 @@ fn durable_validate_fixture_at_view_with_parent(
         height: context.height,
         view,
     };
-    let tag = EventTag::new(
-        round.height,
-        round.view,
-        Generation::new(u64::from(marker) + 1),
-    );
     let leader = context.leader(round.view);
     let leader_index = usize::try_from(leader).expect("durable Validate leader index");
     let header = BlockHeader::new(
@@ -687,6 +682,24 @@ fn durable_validate_fixture_at_view_with_parent(
         .expect("encode durable Validate fixture payload")
         .manifest()
         .clone();
+    durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire)
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn durable_validate_fixture_from_material(
+    marker: u8,
+    verified: VerifiedHeightContext,
+    manifest: wire::PayloadManifest,
+    canonical_wire: Vec<u8>,
+) -> DurableValidateFixture {
+    let round = manifest.round;
+    let subject = manifest.subject;
+    let tag = EventTag::new(
+        round.height,
+        round.view,
+        Generation::new(u64::from(marker) + 1),
+    );
     let expected_manifest_hash = HashOf::new(&manifest);
     let durable_receipt =
         DurableBodyReceipt::for_test(round.context_id, round, subject, expected_manifest_hash);
@@ -1195,6 +1208,128 @@ fn persist_durable_validate_fixture_into_store(
 }
 
 #[cfg(feature = "bls")]
+fn durable_validate_store_fixture_from_existing(
+    mut fixture: DurableValidateFixture,
+    directory: TempDir,
+    store: V2BodyStore,
+    durable: DurableBodyReceipt,
+    execution_commitment: Option<wire::ExecutionCommitment>,
+) -> (
+    DurableValidateFixture,
+    TempDir,
+    V2BodyStore,
+    DurableBodyReceipt,
+) {
+    assert_eq!(durable.manifest_hash(), fixture.expected_manifest_hash);
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixture.effect.clone()
+    else {
+        unreachable!("detached Validate fixture retains one Validate effect")
+    };
+    let mut certificate =
+        certified_pipeline_prepare_certificate_for_test(&fixture.manifest, &durable);
+    if let Some(execution_commitment) = execution_commitment {
+        certificate.execution_commitment = execution_commitment;
+    }
+    let fetch_effect = AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(certificate.clone()),
+    };
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let ordinal = fixture.lease.ordinal();
+    let fetch_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&fetch_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+    )
+    .expect("bind persisted Validate Fetch fixture")
+    .pop()
+    .expect("one persisted Validate Fetch fixture owner");
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("carry persisted Fetch authority into Validate parent Store");
+    let store_pending = store_ownership
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("mint persisted Validate parent binding");
+    let pending = store_pending
+        .project_store_validate_successor(&store_effect, &fixture.effect)
+        .expect("project persisted Store-to-Validate fixture lineage");
+    let (_store_replay, validate_replay) =
+        certified_pipeline_replay_evidence_with_certificate_for_test(
+            tag,
+            &fixture.manifest,
+            &durable,
+            &pending,
+            certificate,
+        )
+        .expect("bind persisted Validate replay to its exact body receipt");
+    let replay_evidence = DurableValidateReplayEvidenceV1::certified(validate_replay);
+    let candidate = replay_evidence
+        .project_installed_validate_candidate(
+            InstalledBodyCandidateProjectionPermit::new(),
+            &fixture.verified,
+            &fixture.effect,
+            &durable,
+            &pending,
+        )
+        .expect("project persisted replay-authorized Validate fixture");
+    let (physical_slots, slot_universe, consumed_slots) = candidate
+        .physical_geometry
+        .normalized()
+        .expect("normalize persisted Validate fixture geometry");
+    assert_eq!(slot_universe, consumed_slots);
+    assert_eq!(physical_slots.len(), 1);
+    let (&slot, &digest) = physical_slots
+        .first_key_value()
+        .expect("one persisted Validate fixture slot");
+    let owner = OwnerId::new(candidate.causal_root, ordinal);
+    let address = ConcreteWorkAddress::new(owner, ordinal, slot)
+        .expect("exact persisted Validate registry address");
+    let removed = fixture
+        .registry
+        .entries
+        .remove(&fixture.address)
+        .expect("replace the synthetic Validate fixture after persistence");
+    assert!(fixture.registry.entries.is_empty());
+    drop(removed);
+    let validate = DurableValidateBody {
+        address,
+        effect: fixture.effect.clone(),
+        pending,
+        durable_receipt: durable.clone(),
+        expected_manifest_hash: fixture.expected_manifest_hash,
+        replay_evidence,
+    };
+    assert!(validate.validates(digest));
+    let work = ConcreteLifecycleWork {
+        digest,
+        kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+    };
+    assert!(work.validates_at(address));
+    fixture.address = address;
+    fixture.slot = slot;
+    fixture.lease.owner = owner;
+    fixture.lease.key = candidate.key;
+    fixture.lease.work_class = candidate.work_class;
+    fixture.lease.stage = candidate.stage;
+    fixture.lease.physical_slots = physical_slots;
+    fixture.store_ownership = store_ownership;
+    assert!(work.validates_at(fixture.address));
+    assert!(fixture.registry.entries.insert(address, work).is_none());
+    (fixture, durable)
+}
+
+#[cfg(feature = "bls")]
 fn claimed_durable_validate_coordinator(fixture: &DurableValidateFixture) -> LifecycleCoordinator {
     let work = fixture
         .registry
@@ -1526,6 +1661,13 @@ struct ReadyDurableValidateFixture {
 }
 
 #[cfg(feature = "bls")]
+struct OwnedReadyDurableValidateFixture {
+    ready: ReadyDurableValidateFixture,
+    store: V2BodyStore,
+    coordinator: LifecycleCoordinator,
+}
+
+#[cfg(feature = "bls")]
 fn ready_durable_validate_fixture(
     marker: u8,
     outcome: ReadyDurableValidateFixtureOutcome,
@@ -1562,6 +1704,23 @@ fn ready_durable_validate_fixture_from_waiting(
     waiting: WaitingDurableValidateFixture,
     outcome: ReadyDurableValidateFixtureOutcome,
 ) -> ReadyDurableValidateFixture {
+    owned_ready_durable_validate_fixture_from_waiting(waiting, outcome).ready
+}
+
+#[cfg(feature = "bls")]
+fn owned_ready_durable_validate_fixture_from_waiting(
+    waiting: WaitingDurableValidateFixture,
+    outcome: ReadyDurableValidateFixtureOutcome,
+) -> OwnedReadyDurableValidateFixture {
+    owned_ready_durable_validate_fixture_from_waiting_with_commitment(waiting, outcome, None)
+}
+
+#[cfg(feature = "bls")]
+fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
+    waiting: WaitingDurableValidateFixture,
+    outcome: ReadyDurableValidateFixtureOutcome,
+    validated_commitment: Option<wire::ExecutionCommitment>,
+) -> OwnedReadyDurableValidateFixture {
     let WaitingDurableValidateFixture {
         fixture,
         _directory,
@@ -1573,7 +1732,9 @@ fn ready_durable_validate_fixture_from_waiting(
     } = waiting;
     let executed = match outcome {
         ReadyDurableValidateFixtureOutcome::Validated => {
-            let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+            let commitment = validated_commitment.unwrap_or_else(|| {
+                ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment()
+            });
             dispatch
                 .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
                 .expect("execute successful Ready Validate fixture")
@@ -1610,11 +1771,15 @@ fn ready_durable_validate_fixture_from_waiting(
         coordinator.records[&lease.ordinal()].state,
         LifecycleState::Ready
     );
-    ReadyDurableValidateFixture {
-        fixture,
-        _directory,
-        holder,
-        lease,
-        durable,
+    OwnedReadyDurableValidateFixture {
+        ready: ReadyDurableValidateFixture {
+            fixture,
+            _directory,
+            holder,
+            lease,
+            durable,
+        },
+        store,
+        coordinator,
     }
 }

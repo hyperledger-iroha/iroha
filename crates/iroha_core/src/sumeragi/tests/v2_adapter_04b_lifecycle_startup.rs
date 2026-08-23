@@ -675,8 +675,8 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             Some(retirement),
             &ingress_ready,
             &ingress,
-        )
-        .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
+    )
+    .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
     assert_eq!(setup_context, context.id());
 
     let mut active_runner =
@@ -1078,15 +1078,50 @@ fn exercise_pending_kura_production_lifecycle(
     assert!(!leader_wire_ingress.state.lock().open);
     assert!(crate::sumeragi::status::v2_status().is_none());
 
+    use super::super::v2_effects::PendingKuraApplyRecoveryStage as Stage;
+    let installed_status =
+        pending
+            .with_runner_setup(&mut setup_runner, |executor, _services| {
+                Ok::<
+                    _,
+                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+                >(executor.status())
+            })
+            .expect("inspect installed pending Kura Apply boundary");
+    assert_eq!(
+        installed_status.pending_tip_recovery_stage,
+        Some(Stage::Apply)
+    );
+    assert_eq!(installed_status.pending_fetches, 0);
+    assert_eq!(installed_status.pending_stores, 0);
+    assert_eq!(installed_status.pending_validations, 0);
+    assert_eq!(installed_status.pending_applications, 0);
+    assert_eq!(installed_status.effect_dispatch_queue.depth, 0);
+    assert_eq!(installed_status.runtime_queues.normal.depth, 0);
+    assert_eq!(installed_status.runtime_queues.progress.depth, 0);
+    assert_eq!(installed_status.runtime_queues.completion.depth, 0);
     let completion_deadline = Instant::now() + Duration::from_secs(5);
+    let mut recovery_stages = Vec::new();
     loop {
         let progress = pending
-            .drive_apply_recovery_turn(&mut setup_runner, 64)
+            .drive_apply_recovery_turn(&mut setup_runner)
             .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
-        let completed = matches!(
-            progress,
-            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Completed { .. }
-        );
+        let (completed, observed_stage) = match progress {
+            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
+                stage,
+                ..
+            }
+            | super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Waiting {
+                stage,
+                ..
+            } => (false, stage),
+            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Completed {
+                ..
+            } => (true, Stage::Completed),
+        };
+        if recovery_stages.last() != Some(&observed_stage) {
+            recovery_stages.push(observed_stage);
+        }
         pending
             .with_runner_setup(&mut setup_runner, |executor, services| {
                 assert!(executor.lifecycle_live_clocks_are_unarmed());
@@ -1125,6 +1160,10 @@ fn exercise_pending_kura_production_lifecycle(
         }
         std::thread::yield_now();
     }
+    assert!(
+        recovery_stages.ends_with(&[Stage::ApplicationDispatched, Stage::Completed]),
+        "pending Kura typed Apply crossed an unexpected stage sequence: {recovery_stages:?}"
+    );
     assert_eq!(
         u64::try_from(state.committed_height()).expect("pending Kura State height fits u64"),
         expected.height()

@@ -1,6 +1,9 @@
 //! Utilities for Norito encoding and Axum integration.
 use axum::{
-    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, IF_NONE_MATCH},
+    },
     response::{IntoResponse, Response},
 };
 use iroha_data_model::{
@@ -25,6 +28,134 @@ const JSON_MIME_TYPE: &str = "application/json";
 pub(crate) const MAX_ERROR_MESSAGE_CHARACTERS: usize = 1024;
 pub(crate) const MAX_ERROR_DETAIL_CHARACTERS: usize = 1024;
 pub(crate) const MAX_REJECT_CODE_BYTES: usize = 128;
+
+/// Return whether any syntactically valid `If-None-Match` validator weakly matches `etag`.
+///
+/// Entity-tag opaque values are case-sensitive. A wildcard is accepted only as the sole
+/// validator, matching the HTTP field grammar.
+#[must_use]
+pub(crate) fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(expected) = http_entity_tag_opaque(etag.as_bytes()) else {
+        return false;
+    };
+    let mut token_count = 0_usize;
+    let mut wildcard = false;
+    let mut matched = false;
+    for value in headers.get_all(IF_NONE_MATCH).iter() {
+        let mut remaining = value.as_bytes();
+        loop {
+            while remaining
+                .first()
+                .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+            {
+                remaining = &remaining[1..];
+            }
+            if remaining.is_empty() {
+                return false;
+            }
+            token_count = match token_count.checked_add(1) {
+                Some(count) => count,
+                None => return false,
+            };
+            if let Some(rest) = remaining.strip_prefix(b"*") {
+                wildcard = true;
+                remaining = rest;
+            } else {
+                let after_prefix = remaining.strip_prefix(b"W/").unwrap_or(remaining);
+                let Some(after_quote) = after_prefix.strip_prefix(b"\"") else {
+                    return false;
+                };
+                let Some(closing_quote) = after_quote.iter().position(|byte| *byte == b'"') else {
+                    return false;
+                };
+                let token_len = remaining.len() - after_quote.len() + closing_quote + 1;
+                let token = &remaining[..token_len];
+                let Some(candidate) = http_entity_tag_opaque(token) else {
+                    return false;
+                };
+                matched |= candidate == expected;
+                remaining = &remaining[token_len..];
+            }
+            while remaining
+                .first()
+                .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+            {
+                remaining = &remaining[1..];
+            }
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(rest) = remaining.strip_prefix(b",") else {
+                return false;
+            };
+            remaining = rest;
+        }
+    }
+    token_count != 0 && if wildcard { token_count == 1 } else { matched }
+}
+
+fn http_entity_tag_opaque(tag: &[u8]) -> Option<&[u8]> {
+    let tag = tag.strip_prefix(b"W/").unwrap_or(tag);
+    let opaque = tag.strip_prefix(b"\"")?.strip_suffix(b"\"")?;
+    opaque
+        .iter()
+        .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte) || *byte >= 0x80)
+        .then_some(opaque)
+}
+
+#[cfg(test)]
+mod cache_validator_tests {
+    use super::if_none_match_matches;
+    use axum::http::{HeaderMap, HeaderValue, header::IF_NONE_MATCH};
+
+    #[test]
+    fn if_none_match_supports_lists_repeated_fields_weak_tags_and_wildcard() {
+        let mut headers = HeaderMap::new();
+        headers.append(IF_NONE_MATCH, HeaderValue::from_static("\"stale\""));
+        headers.append(
+            IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"proof:abc\", \"other\""),
+        );
+        assert!(if_none_match_matches(&headers, "\"proof:abc\""));
+
+        let mut quoted_comma = HeaderMap::new();
+        quoted_comma.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_static("\"stale\", W/\"proof,abc\""),
+        );
+        assert!(if_none_match_matches(&quoted_comma, "\"proof,abc\""));
+
+        let mut obs_text = HeaderMap::new();
+        obs_text.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_bytes(b"\"\x80\", \"proof:abc\"").unwrap(),
+        );
+        assert!(if_none_match_matches(&obs_text, "\"proof:abc\""));
+
+        let mut wildcard = HeaderMap::new();
+        wildcard.insert(IF_NONE_MATCH, HeaderValue::from_static("*"));
+        assert!(if_none_match_matches(&wildcard, "\"proof:abc\""));
+    }
+
+    #[test]
+    fn if_none_match_rejects_case_changes_and_malformed_lists() {
+        for value in [
+            "\"PROOF:ABC\"",
+            "\"proof:abc\"junk",
+            "*, \"proof:abc\"",
+            "\"stale\", malformed, \"proof:abc\"",
+            "\"stale\",",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                IF_NONE_MATCH,
+                HeaderValue::from_bytes(value.as_bytes()).unwrap(),
+            );
+            assert!(!if_none_match_matches(&headers, "\"proof:abc\""), "{value}");
+        }
+    }
+}
+
 /// Bounded stable error code copied into response extensions for telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HttpErrorCode(Arc<str>);

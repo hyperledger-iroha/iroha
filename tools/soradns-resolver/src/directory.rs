@@ -92,6 +92,7 @@ fn validate_listing_bounds(listing: &DirectoryListing) -> Result<()> {
                 entry.file.len()
             );
         }
+        validate_rad_entry_file(entry)?;
         retained = retained
             .checked_add(entry.resolver_id.capacity())
             .and_then(|bytes| bytes.checked_add(entry.rad_sha256.capacity()))
@@ -102,6 +103,23 @@ fn validate_listing_bounds(listing: &DirectoryListing) -> Result<()> {
     if retained > MAX_DIRECTORY_JSON_BYTES {
         eyre::bail!(
             "directory listing retains {retained} bytes; the limit is {MAX_DIRECTORY_JSON_BYTES}"
+        );
+    }
+    Ok(())
+}
+fn validate_rad_entry_file(entry: &DirectoryRadEntry) -> Result<()> {
+    if !entry
+        .resolver_id
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        eyre::bail!("directory RAD resolver_id must use canonical lowercase hexadecimal");
+    }
+    let expected = format!("rad/{}.norito", entry.resolver_id);
+    if entry.file != expected {
+        eyre::bail!(
+            "directory RAD file `{}` must equal the canonical path `{expected}`",
+            entry.file
         );
     }
     Ok(())
@@ -160,5 +178,27 @@ mod tests {
     fn directory_entry_count_accepts_exact_and_rejects_plus_one() {
         validate_directory_entry_count(MAX_RAD_ENTRIES).expect("exact directory count");
         assert!(validate_directory_entry_count(MAX_RAD_ENTRIES + 1).is_err());
+    }
+    #[test]
+    fn directory_rad_file_rejects_traversal_and_noncanonical_identity() {
+        let resolver_id = "ab".repeat(32);
+        let canonical = DirectoryRadEntry {
+            resolver_id: resolver_id.clone(),
+            rad_sha256: "cd".repeat(32),
+            leaf_hash: "ef".repeat(32),
+            file: format!("rad/{resolver_id}.norito"),
+        };
+        validate_rad_entry_file(&canonical).expect("canonical RAD path");
+        let traversal = DirectoryRadEntry {
+            file: "rad/../../etc/passwd".to_owned(),
+            ..canonical.clone()
+        };
+        assert!(validate_rad_entry_file(&traversal).is_err());
+        let uppercase = DirectoryRadEntry {
+            resolver_id: "AB".repeat(32),
+            file: format!("rad/{}.norito", "AB".repeat(32)),
+            ..canonical
+        };
+        assert!(validate_rad_entry_file(&uppercase).is_err());
     }
 }

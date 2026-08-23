@@ -47,12 +47,13 @@ use iroha::{
             SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1, SoraAppStaticSiteBindingV1,
             SoraArtifactDistributionPolicyV1, SoraArtifactKindV1, SoraArtifactRefV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraInrouGuestOsV1,
-            SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1,
-            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1,
-            SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1,
-            SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
-            SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouManifestV1, SoraLeaseVolumeBindingV1,
+            SoraLeaseVolumeKindV1, SoraMailboxContractV1, SoraModelHostCapabilityRecordV1,
+            SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+            SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
             SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -107,15 +108,18 @@ use reqwest::{
     header::{self, HeaderValue},
 };
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriter,
+    CarBuildPlan, CarChunk, CarStreamingWriter, CarWriter, ChunkStore, DirectoryPayload, FilePlan,
+    PayloadSource,
     bundle_archive::{
         BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES, BundleArchiveFile, write_gzip_ustar,
     },
     compute_por_root,
+    verifier::CarVerifier,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
-    MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
+    MetadataEntry, PinPolicy, PinPolicyConstraints, StorageClass as ManifestStorageClass,
+    chunker_registry, validate_manifest,
 };
 use std::{
     cell::RefCell,
@@ -169,6 +173,36 @@ const PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1: u16 = 1;
 const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT: &str = "index.json";
 const SORAFS_DEFAULT_PIN_RETENTION_EPOCHS: u64 = 86_400;
+const TAIRA_INROU_STAGE_SCHEMA_VERSION_V1: u16 = 1;
+const TAIRA_INROU_STAGE_RECEIPT_FILE_V1: &str = "receipt.json";
+const TAIRA_INROU_STAGE_CONTAINER_FILE_V1: &str = "container.json";
+const TAIRA_INROU_STAGE_SERVICE_FILE_V1: &str = "service.json";
+const TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1: &str = "payloads/bundle.bin";
+const TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1: &str = "payloads/guest";
+const TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1: &str = "manifests/bundle.to";
+const TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1: &str = "manifests/aarch64.to";
+const TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1: u64 = 1024 * 1024;
+const TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES: usize = 1024 * 1024;
+const TAIRA_INROU_CANARY_SERVICE_NAME_V1: &str = "taira_inrou_canary";
+const TAIRA_INROU_CANARY_SERVICE_VERSION_V1: &str = "1.0.0";
+const TAIRA_INROU_CANARY_ROUTE_HOST_V1: &str = "taira-inrou-canary.sora";
+const TAIRA_INROU_CANARY_ROUTE_PREFIX_V1: &str = "/api/v1";
+const TAIRA_INROU_CANARY_SERVICE_PORT_V1: u16 = 8787;
+const TAIRA_INROU_CANARY_ENTRYPOINT_V1: &str = "/app/server.py";
+const TAIRA_INROU_CANARY_HEALTHCHECK_V1: &str = "/health";
+const TAIRA_INROU_CANARY_HTTP_SERVICE_ENV_V1: &str = "SORACLOUD_HTTP_SERVICE_NAME";
+const TAIRA_INROU_CANARY_KERNEL_PATH_V1: &str = "/inrou/aarch64/vmlinux";
+const TAIRA_INROU_CANARY_ROOTFS_PATH_V1: &str = "/inrou/aarch64/rootfs.ext4";
+const TAIRA_INROU_CANARY_INITRD_PATH_V1: &str = "/inrou/aarch64/initrd.img";
+const TAIRA_INROU_CANARY_CPU_MILLIS_V1: u32 = 750;
+const TAIRA_INROU_CANARY_MEMORY_BYTES_V1: u64 = 512 * 1024 * 1024;
+const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+const TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1: u32 = 512;
+const TAIRA_INROU_CANARY_MAX_TASKS_V1: u16 = 64;
 const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
 const INROU_BUNDLE_PACK_MAX_SOURCE_BYTES: u64 = INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES - 1024 * 1024;
 const INROU_BUNDLE_PACK_TEMP_ATTEMPTS: usize = 16;
@@ -1757,41 +1791,18 @@ impl AppDeployArgs {
                 static_site_binding_attached,
             )?;
             let mut bundle = bundle;
-            let published_bundle = if let Some(bundle_file) = service
+            let bundle_file = service
                 .bundle_file
                 .as_deref()
                 .map(|path| resolve_manifest_path(&manifest_dir, path))
-            {
-                let published = publish_sorafs_file_artifact(
-                    &bundle_file,
-                    &format!("Soracloud service bundle ({})", service.service_name),
-                    &torii_url,
-                    authority,
-                    key_pair,
-                    self.timeout_secs,
-                )?;
-                if published.payload_hash != bundle.container.bundle_hash {
-                    return Err(eyre!(
-                        "published service bundle `{}` hash {} did not match admitted bundle hash {}",
-                        bundle_file.display(),
-                        published.payload_hash,
-                        bundle.container.bundle_hash
-                    ));
-                }
-                Some(ServiceBundlePublishOutput {
-                    service_name: service.service_name.clone(),
-                    bundle_file: bundle_file.to_string_lossy().into_owned(),
-                    content_cid: published.content_cid,
-                    manifest_digest_hex: published.manifest_digest_hex,
-                    manifest_id_hex: published.manifest_id_hex,
-                    bundle_hash: published.payload_hash.to_string(),
-                    note: "service bundle bytes were published to SoraFS for runtime hydration"
-                        .to_owned(),
-                })
-            } else {
-                None
-            };
-            let published_inrou_guest_images = publish_inrou_guest_image_artifacts(
+                .ok_or_else(|| {
+                    eyre!(
+                        "app service `{}` must declare `bundle_file`; V1 does not accept prepublished or hash-only service bundles",
+                        service.service_name
+                    )
+                })?;
+            let published_artifacts = publish_service_artifacts(
+                &bundle_file,
                 service_workspace_dir.as_deref(),
                 &mut bundle,
                 &torii_url,
@@ -1799,6 +1810,8 @@ impl AppDeployArgs {
                 key_pair,
                 self.timeout_secs,
             )?;
+            let published_bundle = published_artifacts.bundle;
+            let published_inrou_guest_images = published_artifacts.inrou_guest_images;
             let published_public_discovery = attach_public_service_discovery_config(
                 &bundle,
                 &mut initial_service_configs,
@@ -1880,45 +1893,21 @@ impl AppDeployArgs {
             signed_service_requests.clone(),
             key_pair,
         )?;
-        let app_infra_response = match run_app_infra_mutation(
+        let app_infra_response = run_app_infra_mutation(
             mode,
             &app_infra_request,
             &torii_url,
             self.api_token.as_deref(),
             self.timeout_secs,
-        ) {
-            Ok(response) => {
-                for service in &mut services {
-                    service.response = response.clone();
-                }
-                notes.push(
-                    "app mutation submitted the canonical app-level Soracloud infra request"
-                        .to_owned(),
-                );
-                Some(response)
-            }
-            Err(error) if should_fallback_app_infra_to_service_level(&error) => {
-                notes.push(format!(
-                    "app-level Soracloud infra endpoint was unavailable; fell back to service-level {} mutations",
-                    mode.label_lowercase()
-                ));
-                for (service, request) in services.iter_mut().zip(signed_service_requests.iter()) {
-                    service.response = run_signed_service_bundle_mutation(
-                        mode,
-                        request,
-                        &torii_url,
-                        self.api_token.as_deref(),
-                        self.timeout_secs,
-                    )?;
-                }
-                None
-            }
-            Err(error) => {
-                return Err(
-                    error.wrap_err("failed to submit canonical app-level Soracloud infra mutation")
-                );
-            }
-        };
+        )
+        .wrap_err("failed to submit canonical app-level Soracloud infra mutation")?;
+        for service in &mut services {
+            service.response = app_infra_response.clone();
+        }
+        notes.push(
+            "app mutation submitted the canonical app-level Soracloud infra request".to_owned(),
+        );
+        let app_infra_response = Some(app_infra_response);
         if static_site_publication.is_some() {
             notes.push(
                 "app mutation published the configured static site before mutating services"
@@ -2044,54 +2033,16 @@ impl AppStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         );
-        let (endpoint, app_infra_status, source, payload, service_status_note) =
-            match app_status_attempt {
-                Ok((endpoint, app_payload)) => {
-                    let service_status = fetch_torii_soracloud_status(
-                        torii_url,
-                        None,
-                        self.api_token.as_deref(),
-                        self.timeout_secs,
-                    );
-                    match service_status {
-                        Ok((_, service_payload)) => (
-                            endpoint,
-                            Some(app_payload),
-                            "torii_app_infra".to_owned(),
-                            service_payload,
-                            None,
-                        ),
-                        Err(error) => (
-                            endpoint,
-                            Some(app_payload),
-                            "torii_app_infra".to_owned(),
-                            norito::json!({}),
-                            Some(format!(
-                                "service-level detail status was unavailable after app-level status: {error:#}"
-                            )),
-                        ),
-                    }
-                }
-                Err(error) if should_fallback_app_infra_to_service_level(&error) => {
-                    let (endpoint, service_payload) = fetch_torii_soracloud_status(
-                        torii_url,
-                        None,
-                        self.api_token.as_deref(),
-                        self.timeout_secs,
-                    )?;
-                    (
-                        endpoint,
-                        None,
-                        "torii_control_plane".to_owned(),
-                        service_payload,
-                        Some(
-                            "app-level Soracloud infra status endpoint was unavailable; fell back to service-level status"
-                                .to_owned(),
-                        ),
-                    )
-                }
-                Err(error) => return Err(error),
-            };
+        let (endpoint, app_payload) = app_status_attempt?;
+        let (_, payload) = fetch_torii_soracloud_status(
+            torii_url,
+            None,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let app_infra_status = Some(app_payload);
+        let source = "torii_app_infra".to_owned();
+        let service_status_note = None;
         let control_plane_services = payload
             .get("control_plane")
             .and_then(norito::json::Value::as_object)
@@ -2650,7 +2601,7 @@ impl AppReleaseArgs {
         let uses_api_token = self.api_token.is_some();
         let mut notes = Vec::new();
         notes.push(
-            "release composes the manifest-adjacent build-and-sync path with deploy-then-upgrade-on-conflict semantics"
+            "release composes the manifest-adjacent build-and-sync path with one explicit deploy"
                 .to_owned(),
         );
         if uses_api_token {
@@ -2719,7 +2670,7 @@ impl AppReleaseArgs {
             return Ok(AppReleaseOutput {
                 report,
                 mode: "dry_run".to_owned(),
-                release_mode: "deploy_or_upgrade_on_conflict".to_owned(),
+                release_mode: "deploy".to_owned(),
                 torii_url,
                 uses_api_token,
                 skip_build: self.skip_build,
@@ -2746,25 +2697,8 @@ impl AppReleaseArgs {
             api_token: self.api_token.clone(),
             timeout_secs: self.timeout_secs,
         };
-        let (release_mode, release_response) =
-            match deploy_args.run(MutationMode::Deploy, authority, key_pair) {
-                Ok(output) => ("Deploy".to_owned(), output),
-                Err(error) if should_retry_app_deploy_as_upgrade(&error) => {
-                    notes.push(
-                        "release detected an already-deployed app and retried with upgrade"
-                            .to_owned(),
-                    );
-                    let output = AppDeployArgs {
-                        manifest: self.manifest.clone(),
-                        torii_url: Some(torii_url.clone()),
-                        api_token: self.api_token.clone(),
-                        timeout_secs: self.timeout_secs,
-                    }
-                    .run(MutationMode::Upgrade, authority, key_pair)?;
-                    ("Upgrade".to_owned(), output)
-                }
-                Err(error) => return Err(error),
-            };
+        let release_response = deploy_args.run(MutationMode::Deploy, authority, key_pair)?;
+        let release_mode = "Deploy".to_owned();
         notes.extend(release_response.notes.iter().cloned());
         let status_response = AppStatusArgs {
             manifest: self.manifest.clone(),
@@ -3600,6 +3534,22 @@ fn app_service_workspace_dir(
     let service_dir = service_manifest.parent()?;
     (container_dir == service_dir).then(|| container_dir.to_path_buf())
 }
+fn direct_service_artifact_workspace_dir(
+    container_manifest: &Path,
+    service_manifest: &Path,
+    bundle_file: &Path,
+) -> Option<PathBuf> {
+    let manifest_dir = app_service_workspace_dir(container_manifest, service_manifest)?;
+    if manifest_dir.join("inrou").is_dir() {
+        return Some(manifest_dir);
+    }
+    bundle_file
+        .parent()
+        .and_then(Path::parent)
+        .filter(|workspace| workspace.join("inrou").is_dir())
+        .map(Path::to_path_buf)
+        .or(Some(manifest_dir))
+}
 fn app_service_workspace_scripts(
     service_workspace_dir: Option<&Path>,
 ) -> AppLocalServiceWorkspaceScriptsOutput {
@@ -3799,6 +3749,8 @@ fn build_direct_service_mutation_output(
     torii_url: &str,
     uses_api_token: bool,
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
+    published_bundle: ServiceBundlePublishOutput,
+    published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
     response: norito::json::Value,
 ) -> ServiceMutationOutput {
     let mut notes = plan.notes;
@@ -3847,6 +3799,8 @@ fn build_direct_service_mutation_output(
         uses_api_token,
         routes: plan.routes,
         published_public_discovery,
+        published_bundle,
+        published_inrou_guest_images,
         current_version,
         rollout_handle,
         rollout_stage,
@@ -4209,6 +4163,9 @@ define_torii_args! {
         /// Path to a `SoraServiceManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
         service: PathBuf,
+        /// Canonical service bundle bytes to publish before submitting the deployment.
+        #[arg(long, value_name = "PATH")]
+        bundle_file: PathBuf,
         /// Optional JSON file containing a map of inline config values committed atomically with deploy.
         #[arg(long, value_name = "PATH")]
         initial_configs: Option<PathBuf>,
@@ -4229,7 +4186,7 @@ macro_rules! impl_service_bundle_mutation {
                 let plan = build_service_workspace_plan(&self.container, &self.service)?;
                 let container: SoraContainerManifestV1 = load_json(&self.container)?;
                 let service: SoraServiceManifestV1 = load_json(&self.service)?;
-                let bundle = SoraDeploymentBundleV1 {
+                let mut bundle = SoraDeploymentBundleV1 {
                     schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
                     container,
                     service,
@@ -4240,6 +4197,20 @@ macro_rules! impl_service_bundle_mutation {
                 let initial_service_secrets =
                     load_initial_service_secrets(self.initial_secrets.as_deref())?;
                 let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+                let workspace_dir = direct_service_artifact_workspace_dir(
+                    &self.container,
+                    &self.service,
+                    &self.bundle_file,
+                );
+                let published_artifacts = publish_service_artifacts(
+                    &self.bundle_file,
+                    workspace_dir.as_deref(),
+                    &mut bundle,
+                    &torii_url,
+                    authority,
+                    key_pair,
+                    self.timeout_secs,
+                )?;
                 let published_public_discovery = attach_public_service_discovery_config(
                     &bundle,
                     &mut initial_service_configs,
@@ -4268,6 +4239,8 @@ macro_rules! impl_service_bundle_mutation {
                     &torii_url,
                     self.api_token.is_some(),
                     published_public_discovery,
+                    published_artifacts.bundle,
+                    published_artifacts.inrou_guest_images,
                     response,
                 ))
             }
@@ -4287,6 +4260,9 @@ define_torii_args! {
         /// Path to a `SoraServiceManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
         service: PathBuf,
+        /// Canonical service bundle bytes to publish before submitting the upgrade.
+        #[arg(long, value_name = "PATH")]
+        bundle_file: PathBuf,
         /// Optional JSON file containing a map of inline config values committed atomically with upgrade.
         #[arg(long, value_name = "PATH")]
         initial_configs: Option<PathBuf>,
@@ -6451,9 +6427,1787 @@ impl MutationMode {
         }
     }
 }
-fn should_retry_app_deploy_as_upgrade(error: &Report) -> bool {
-    let detail = format!("{error:#}").to_ascii_lowercase();
-    detail.contains("already deployed") || detail.contains("already exists")
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct TairaInrouStageReceiptV1 {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub service_version: String,
+    pub container_file: String,
+    pub service_file: String,
+    pub bundle_payload_file: String,
+    pub bundle_manifest_file: String,
+    pub bundle_hash: String,
+    pub bundle_content_cid: String,
+    pub bundle_manifest_digest_hex: String,
+    pub guest_isa: String,
+    pub guest_payload_dir: String,
+    pub guest_manifest_file: String,
+    pub guest_content_cid: String,
+    pub guest_manifest_digest_hex: String,
+    pub container_manifest_hash: String,
+    pub service_manifest_hash: String,
+}
+struct VerifiedTairaInrouStage {
+    receipt: TairaInrouStageReceiptV1,
+    bundle: SoraDeploymentBundleV1,
+    bundle_manifest: BuiltSorafsManifest,
+    guest_manifest: BuiltSorafsManifest,
+}
+fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) -> Result<()> {
+    if container.bundle_path != TAIRA_INROU_CANARY_ENTRYPOINT_V1
+        || container.entrypoint != TAIRA_INROU_CANARY_ENTRYPOINT_V1
+        || !container.args.is_empty()
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires the exact argument-free `{TAIRA_INROU_CANARY_ENTRYPOINT_V1}` bundle entrypoint"
+        ));
+    }
+    let expected_env = BTreeMap::from([(
+        TAIRA_INROU_CANARY_HTTP_SERVICE_ENV_V1.to_owned(),
+        TAIRA_INROU_CANARY_SERVICE_NAME_V1.to_owned(),
+    )]);
+    if container.env != expected_env {
+        return Err(eyre!(
+            "Taira Inrou canary requires exactly `{TAIRA_INROU_CANARY_HTTP_SERVICE_ENV_V1}={TAIRA_INROU_CANARY_SERVICE_NAME_V1}`; the runtime owns `PORT` and `SORACLOUD_REPLICA_SLOT`"
+        ));
+    }
+    if !container.required_config_names.is_empty()
+        || !container.required_secret_names.is_empty()
+        || !container.config_exports.is_empty()
+    {
+        return Err(eyre!(
+            "Taira Inrou canary must not depend on external config or secret material"
+        ));
+    }
+    let capabilities = &container.capabilities;
+    if capabilities.network != SoraNetworkPolicyV1::Isolated
+        || capabilities.allow_wallet_signing
+        || capabilities.allow_state_writes
+        || capabilities.allow_model_inference
+        || capabilities.allow_model_training
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires the exact isolated, capability-free policy"
+        ));
+    }
+    let resources = container.resources;
+    if resources.cpu_millis.get() != TAIRA_INROU_CANARY_CPU_MILLIS_V1
+        || resources.memory_bytes.get() != TAIRA_INROU_CANARY_MEMORY_BYTES_V1
+        || resources.ephemeral_storage_bytes.get() != TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1
+        || resources.max_open_files.get() != TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1
+        || resources.max_tasks.get() != TAIRA_INROU_CANARY_MAX_TASKS_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou canary resource request must be exactly 750 CPU millis, 512 MiB memory, 2 GiB ephemeral storage, 512 open files, and 64 tasks"
+        ));
+    }
+    if container.lifecycle.healthcheck_path.as_deref() != Some(TAIRA_INROU_CANARY_HEALTHCHECK_V1) {
+        return Err(eyre!(
+            "Taira Inrou canary healthcheck path must be exactly `{TAIRA_INROU_CANARY_HEALTHCHECK_V1}`"
+        ));
+    }
+    let inrou = container
+        .inrou
+        .as_ref()
+        .ok_or_else(|| eyre!("Taira Inrou canary container is missing its Inrou manifest"))?;
+    if inrou.guest_os != SoraInrouGuestOsV1::DebianSlim {
+        return Err(eyre!(
+            "Taira Inrou canary requires the DebianSlim guest contract"
+        ));
+    }
+    if inrou.bootstrap_user_data_path.is_some() {
+        return Err(eyre!(
+            "Taira Inrou canary requires bootstrap user-data to remain disabled"
+        ));
+    }
+    if !inrou.ssh_authorized_keys.is_empty() {
+        return Err(eyre!(
+            "Taira Inrou canary requires SSH access to remain disabled"
+        ));
+    }
+    if inrou.guest_images.len() != 1
+        || !inrou
+            .guest_images
+            .contains_key(&SoraInrouGuestIsaV1::Aarch64)
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires exactly one AArch64 guest-image profile"
+        ));
+    }
+    let aarch64 = &inrou.guest_images[&SoraInrouGuestIsaV1::Aarch64];
+    if aarch64.kernel_image_path != TAIRA_INROU_CANARY_KERNEL_PATH_V1
+        || aarch64.rootfs_image_path != TAIRA_INROU_CANARY_ROOTFS_PATH_V1
+        || aarch64.initrd_image_path.as_deref() != Some(TAIRA_INROU_CANARY_INITRD_PATH_V1)
+        || aarch64.distribution != SoraArtifactDistributionPolicyV1::default()
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires the exact globally distributed AArch64 kernel, rootfs, and initrd paths"
+        ));
+    }
+    Ok(())
+}
+fn validate_taira_inrou_canary_service(service: &SoraServiceManifestV1) -> Result<()> {
+    if service.service_name.as_ref() != TAIRA_INROU_CANARY_SERVICE_NAME_V1
+        || service.service_version != TAIRA_INROU_CANARY_SERVICE_VERSION_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires canonical service identity `{TAIRA_INROU_CANARY_SERVICE_NAME_V1}` version `{TAIRA_INROU_CANARY_SERVICE_VERSION_V1}`"
+        ));
+    }
+    if service.replicas.get() != 4 {
+        return Err(eyre!(
+            "Taira Inrou canary requires exactly four replicas, found {}",
+            service.replicas
+        ));
+    }
+    let route = service
+        .route
+        .as_ref()
+        .ok_or_else(|| eyre!("Taira Inrou canary requires one canonical public route"))?;
+    if route.host != TAIRA_INROU_CANARY_ROUTE_HOST_V1
+        || route.path_prefix != TAIRA_INROU_CANARY_ROUTE_PREFIX_V1
+        || route.service_port.get() != TAIRA_INROU_CANARY_SERVICE_PORT_V1
+        || route.visibility != SoraRouteVisibilityV1::Public
+        || route.tls_mode != SoraTlsModeV1::Required
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires canonical public TLS route `https://{TAIRA_INROU_CANARY_ROUTE_HOST_V1}{TAIRA_INROU_CANARY_ROUTE_PREFIX_V1}` on port {TAIRA_INROU_CANARY_SERVICE_PORT_V1}"
+        ));
+    }
+    if !service.state_bindings.is_empty()
+        || !service.handlers.is_empty()
+        || !service.artifacts.is_empty()
+    {
+        return Err(eyre!(
+            "Taira Inrou canary must not declare deterministic bindings, handlers, or artifacts"
+        ));
+    }
+    Ok(())
+}
+fn validate_taira_inrou_canary_storage(
+    container: &SoraContainerManifestV1,
+    service: &SoraServiceManifestV1,
+) -> Result<()> {
+    let [root, shared] = service.lease_volumes.as_slice() else {
+        return Err(eyre!(
+            "Taira Inrou canary requires exactly one root volume and one shared service volume"
+        ));
+    };
+    if root.volume_name.as_ref() != "root_disk"
+        || root.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume
+        || root.storage_class != StorageClass::Warm
+        || root.mount_path != "/"
+        || root.max_total_bytes.get() != TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1
+        || shared.volume_name.as_ref() != "app_data"
+        || shared.kind != SoraLeaseVolumeKindV1::ServiceLeaseVolume
+        || shared.storage_class != StorageClass::Warm
+        || shared.mount_path != "/lease/app-data"
+        || shared.max_total_bytes.get() != TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires canonical 8 GiB root and 2 GiB shared service-volume geometry"
+        ));
+    }
+    let per_host_storage_bytes = container
+        .resources
+        .ephemeral_storage_bytes
+        .get()
+        .checked_add(root.max_total_bytes.get())
+        .ok_or_else(|| eyre!("Taira Inrou canary per-host storage geometry overflow"))?;
+    let lease_storage_bytes = root
+        .max_total_bytes
+        .get()
+        .checked_add(shared.max_total_bytes.get())
+        .ok_or_else(|| eyre!("Taira Inrou canary lease storage geometry overflow"))?;
+    if per_host_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
+        || lease_storage_bytes != TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1
+    {
+        return Err(eyre!(
+            "Taira Inrou canary storage geometry must total exactly 10 GiB"
+        ));
+    }
+    Ok(())
+}
+fn validate_taira_inrou_canary_bundle(bundle: &SoraDeploymentBundleV1) -> Result<()> {
+    bundle.validate_for_admission()?;
+    if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+        || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+    {
+        return Err(eyre!(
+            "Taira Inrou canary requires the canonical HttpService + Inrou execution plane"
+        ));
+    }
+    validate_taira_inrou_canary_container(&bundle.container)?;
+    validate_taira_inrou_canary_service(&bundle.service)?;
+    validate_taira_inrou_canary_storage(&bundle.container, &bundle.service)?;
+    Ok(())
+}
+#[cfg(unix)]
+fn set_taira_stage_permissions(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .wrap_err_with(|| format!("set owner-only permissions on {}", path.display()))
+}
+#[cfg(not(unix))]
+fn set_taira_stage_permissions(_path: &Path, _mode: u32) -> Result<()> {
+    Ok(())
+}
+fn create_taira_stage_directory(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() || path.file_name().is_none() {
+        return Err(eyre!(
+            "Taira Inrou stage directory must name one concrete directory"
+        ));
+    }
+    validate_taira_path_ancestors(path, "Taira Inrou stage")?;
+    fs::create_dir(path).wrap_err_with(|| {
+        format!(
+            "create fresh Taira Inrou stage directory {}; existing stages are never reused",
+            path.display()
+        )
+    })?;
+    set_taira_stage_permissions(path, 0o700)
+}
+fn validate_taira_path_ancestors(path: &Path, description: &str) -> Result<()> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(eyre!(
+            "{description} path {} must not contain parent traversal",
+            path.display()
+        ));
+    }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(eyre!(
+                        "{description} ancestor {} must not be a symbolic link",
+                        ancestor.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(eyre!(
+                        "{description} ancestor {} must be a directory",
+                        ancestor.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!("inspect {description} ancestor {}", ancestor.display())
+                });
+            }
+        }
+    }
+    Ok(())
+}
+fn create_taira_stage_subdirectory(path: &Path) -> Result<()> {
+    fs::create_dir(path)
+        .wrap_err_with(|| format!("create Taira Inrou stage directory {}", path.display()))?;
+    set_taira_stage_permissions(path, 0o700)
+}
+fn create_taira_stage_member_parent(root: &Path, logical_path: &[String]) -> Result<PathBuf> {
+    let mut current = root.to_path_buf();
+    for component in logical_path
+        .iter()
+        .take(logical_path.len().saturating_sub(1))
+    {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(eyre!(
+                        "Taira guest staging component {} must be one direct directory",
+                        current.display()
+                    ));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir(&current).wrap_err_with(|| {
+                    format!("create Taira guest staging directory {}", current.display())
+                })?;
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!(
+                        "inspect Taira guest staging directory {}",
+                        current.display()
+                    )
+                });
+            }
+        }
+        set_taira_stage_permissions(&current, 0o700)?;
+    }
+    Ok(current)
+}
+fn write_taira_stage_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("create Taira Inrou staged file {}", path.display()))?;
+    file.write_all(bytes)
+        .wrap_err_with(|| format!("write Taira Inrou staged file {}", path.display()))?;
+    file.sync_all()
+        .wrap_err_with(|| format!("synchronize Taira Inrou staged file {}", path.display()))?;
+    set_taira_stage_permissions(path, 0o600)
+}
+#[cfg(unix)]
+fn open_taira_stage_source(path: &Path) -> io::Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?;
+    Ok(fs::File::from(descriptor))
+}
+#[cfg(not(unix))]
+fn open_taira_stage_source(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TairaFileIdentity {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
+    mode: u32,
+    uid: u32,
+    nlink: u64,
+}
+#[cfg(unix)]
+fn taira_metadata_identity(metadata: &fs::Metadata) -> TairaFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+    TairaFileIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        len: metadata.len(),
+        mtime: metadata.mtime(),
+        mtime_nsec: metadata.mtime_nsec(),
+        ctime: metadata.ctime(),
+        ctime_nsec: metadata.ctime_nsec(),
+        mode: metadata.mode(),
+        uid: metadata.uid(),
+        nlink: metadata.nlink(),
+    }
+}
+#[cfg(not(unix))]
+fn taira_metadata_identity(metadata: &fs::Metadata) -> (u64, Option<SystemTime>) {
+    (metadata.len(), metadata.modified().ok())
+}
+fn copy_taira_stage_source_file(
+    source_path: &Path,
+    destination_path: &Path,
+    captured: &fs::Metadata,
+) -> Result<u64> {
+    validate_taira_path_ancestors(source_path, "Taira guest-image source member")?;
+    let mut source = open_taira_stage_source(source_path)
+        .wrap_err_with(|| format!("open Taira guest-image source {}", source_path.display()))?;
+    let opened = source.metadata().wrap_err_with(|| {
+        format!(
+            "inspect opened Taira guest-image source {}",
+            source_path.display()
+        )
+    })?;
+    if !opened.is_file() || taira_metadata_identity(&opened) != taira_metadata_identity(captured) {
+        return Err(eyre!(
+            "Taira guest-image source {} changed before descriptor-bound copy",
+            source_path.display()
+        ));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut destination = options.open(destination_path).wrap_err_with(|| {
+        format!(
+            "create Taira guest-image staged file {}",
+            destination_path.display()
+        )
+    })?;
+    let copy_limit = captured
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| eyre!("Taira guest-image source length overflow"))?;
+    let mut bounded_source = io::Read::take(&mut source, copy_limit);
+    let copied = io::copy(&mut bounded_source, &mut destination).wrap_err_with(|| {
+        format!(
+            "copy Taira guest-image source {} to {}",
+            source_path.display(),
+            destination_path.display()
+        )
+    })?;
+    drop(bounded_source);
+    destination.sync_all().wrap_err_with(|| {
+        format!(
+            "synchronize Taira guest-image staged file {}",
+            destination_path.display()
+        )
+    })?;
+    set_taira_stage_permissions(destination_path, 0o600)?;
+    let opened_after = source.metadata().wrap_err_with(|| {
+        format!(
+            "reinspect opened Taira guest-image source {}",
+            source_path.display()
+        )
+    })?;
+    let named_after = fs::symlink_metadata(source_path).wrap_err_with(|| {
+        format!(
+            "reinspect named Taira guest-image source {}",
+            source_path.display()
+        )
+    })?;
+    validate_taira_path_ancestors(source_path, "Taira guest-image source member")?;
+    if taira_metadata_identity(&opened_after) != taira_metadata_identity(captured)
+        || taira_metadata_identity(&named_after) != taira_metadata_identity(captured)
+        || copied != captured.len()
+    {
+        return Err(eyre!(
+            "Taira guest-image source {} changed during descriptor-bound copy",
+            source_path.display()
+        ));
+    }
+    let destination_metadata = fs::symlink_metadata(destination_path).wrap_err_with(|| {
+        format!(
+            "inspect Taira guest-image staged file {}",
+            destination_path.display()
+        )
+    })?;
+    if !destination_metadata.is_file()
+        || destination_metadata.file_type().is_symlink()
+        || destination_metadata.len() != copied
+    {
+        return Err(eyre!(
+            "Taira guest-image staged file {} does not match the copied source",
+            destination_path.display()
+        ));
+    }
+    Ok(copied)
+}
+fn taira_stage_regular_file_bytes(
+    path: &Path,
+    description: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>> {
+    validate_taira_path_ancestors(path, description)?;
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {description} {}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(eyre!(
+            "{description} {} must be one direct regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1 {
+            return Err(eyre!(
+                "{description} {} must have exactly one hard link",
+                path.display()
+            ));
+        }
+    }
+    if metadata.len() == 0 {
+        return Err(eyre!("{description} {} must not be empty", path.display()));
+    }
+    if metadata.len() > max_bytes {
+        return Err(eyre!(
+            "{description} {} contains {} bytes; maximum is {max_bytes}",
+            path.display(),
+            metadata.len()
+        ));
+    }
+    let expected_len = usize::try_from(metadata.len()).wrap_err_with(|| {
+        format!(
+            "{description} {} is too large for this platform",
+            path.display()
+        )
+    })?;
+    let captured_identity = taira_metadata_identity(&metadata);
+    let mut source = open_taira_stage_source(path).wrap_err_with(|| {
+        format!(
+            "open {description} {} without following links",
+            path.display()
+        )
+    })?;
+    let opened = source
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {description} {}", path.display()))?;
+    if !opened.is_file() || taira_metadata_identity(&opened) != captured_identity {
+        return Err(eyre!(
+            "{description} {} changed before descriptor-bound read",
+            path.display()
+        ));
+    }
+    let mut bytes = vec![0_u8; expected_len];
+    source
+        .read_exact(&mut bytes)
+        .wrap_err_with(|| format!("read exact {description} bytes from {}", path.display()))?;
+    let mut trailing = [0_u8; 1];
+    if source
+        .read(&mut trailing)
+        .wrap_err_with(|| format!("check exact {description} length for {}", path.display()))?
+        != 0
+    {
+        return Err(eyre!(
+            "{description} {} changed length during descriptor-bound read",
+            path.display()
+        ));
+    }
+    let opened_after = source
+        .metadata()
+        .wrap_err_with(|| format!("reinspect opened {description} {}", path.display()))?;
+    let named_after = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("reinspect named {description} {}", path.display()))?;
+    validate_taira_path_ancestors(path, description)?;
+    if !opened_after.is_file()
+        || !named_after.is_file()
+        || named_after.file_type().is_symlink()
+        || taira_metadata_identity(&opened_after) != captured_identity
+        || taira_metadata_identity(&named_after) != captured_identity
+    {
+        return Err(eyre!(
+            "{description} {} changed during descriptor-bound read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+fn decode_taira_stage_json<T>(bytes: &[u8], path: &Path) -> Result<T>
+where
+    T: JsonDeserialize,
+{
+    let text = std::str::from_utf8(bytes)
+        .wrap_err_with(|| format!("decode staged JSON {} as UTF-8", path.display()))?;
+    json::from_str(text).wrap_err_with(|| format!("decode staged JSON {}", path.display()))
+}
+fn taira_direct_member_metadata(
+    root: &Path,
+    logical_path: &[String],
+    description: &str,
+) -> Result<fs::Metadata> {
+    let root_metadata = fs::symlink_metadata(root)
+        .wrap_err_with(|| format!("inspect {description} root {}", root.display()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(eyre!(
+            "{description} root {} must be one direct directory",
+            root.display()
+        ));
+    }
+    if logical_path.is_empty() {
+        return Err(eyre!("{description} path must not be empty"));
+    }
+    let mut current = root.to_path_buf();
+    for (index, component) in logical_path.iter().enumerate() {
+        if component.is_empty() || matches!(component.as_str(), "." | "..") {
+            return Err(eyre!(
+                "{description} path contains non-canonical component `{component}`"
+            ));
+        }
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current)
+            .wrap_err_with(|| format!("inspect {description} {}", current.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(eyre!(
+                "{description} {} must not contain symbolic links",
+                current.display()
+            ));
+        }
+        let is_last = index + 1 == logical_path.len();
+        if is_last {
+            if !metadata.is_file() {
+                return Err(eyre!(
+                    "{description} {} must be one direct regular file",
+                    current.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                if metadata.nlink() != 1 {
+                    return Err(eyre!(
+                        "{description} {} must have exactly one hard link",
+                        current.display()
+                    ));
+                }
+            }
+            return Ok(metadata);
+        }
+        if !metadata.is_dir() {
+            return Err(eyre!(
+                "{description} intermediate component {} must be one direct directory",
+                current.display()
+            ));
+        }
+    }
+    Err(eyre!("{description} path did not resolve to a file"))
+}
+fn taira_stage_logical_member_paths(member_paths: &[String]) -> Result<Vec<Vec<String>>> {
+    let mut logical_paths = member_paths
+        .iter()
+        .map(|path| {
+            let components = path.split('/').map(ToOwned::to_owned).collect::<Vec<_>>();
+            if components.is_empty()
+                || components.iter().any(|component| {
+                    component.is_empty() || matches!(component.as_str(), "." | "..")
+                })
+            {
+                return Err(eyre!(
+                    "Taira guest-image member `{path}` is not one canonical relative path"
+                ));
+            }
+            Ok(components)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    logical_paths.sort();
+    if logical_paths.len() != 3
+        || logical_paths
+            .windows(2)
+            .any(|pair| pair[0] == pair[1] || pair[1].starts_with(&pair[0]))
+    {
+        return Err(eyre!(
+            "Taira guest-image stage requires exactly three distinct non-overlapping member paths"
+        ));
+    }
+    Ok(logical_paths)
+}
+fn taira_stage_guest_total_bytes(file_sizes: impl IntoIterator<Item = u64>) -> Result<u64> {
+    let total = file_sizes.into_iter().try_fold(0_u64, |total, size| {
+        if size == 0 {
+            return Err(eyre!("Taira guest-image members must not be empty"));
+        }
+        total
+            .checked_add(size)
+            .ok_or_else(|| eyre!("Taira guest-image byte length overflow"))
+    })?;
+    if total > TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1 {
+        return Err(eyre!(
+            "Taira guest-image stage contains {total} bytes; maximum is {TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1}"
+        ));
+    }
+    Ok(total)
+}
+fn validate_taira_inrou_rootfs_source_bytes(rootfs_bytes: u64) -> Result<()> {
+    if rootfs_bytes > TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 {
+        return Err(eyre!(
+            "Taira guest rootfs contains {rootfs_bytes} bytes; the canonical root volume allows at most {TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1}"
+        ));
+    }
+    Ok(())
+}
+struct TairaSequentialPayloadReader<'a, P> {
+    source: &'a mut P,
+    offset: u64,
+    length: u64,
+}
+impl<'a, P> TairaSequentialPayloadReader<'a, P> {
+    const fn new(source: &'a mut P, length: u64) -> Self {
+        Self {
+            source,
+            offset: 0,
+            length,
+        }
+    }
+}
+impl<P: PayloadSource> io::Read for TairaSequentialPayloadReader<'_, P> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.offset == self.length || buffer.is_empty() {
+            return Ok(0);
+        }
+        let remaining = usize::try_from((self.length - self.offset).min(buffer.len() as u64))
+            .map_err(|_| io::Error::other("Taira staged payload length exceeds host width"))?;
+        PayloadSource::read_exact(self.source, self.offset, &mut buffer[..remaining])
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.offset = self
+            .offset
+            .checked_add(remaining as u64)
+            .ok_or_else(|| io::Error::other("Taira staged payload offset overflow"))?;
+        Ok(remaining)
+    }
+}
+impl<P: PayloadSource> TairaSequentialPayloadReader<'_, P> {
+    fn finish(self) -> Result<()> {
+        if self.offset != self.length {
+            return Err(eyre!(
+                "Taira staged payload reader consumed {} of {} bytes",
+                self.offset,
+                self.length
+            ));
+        }
+        self.source
+            .ensure_exhausted(self.length)
+            .map_err(|error| eyre!("validate exact Taira staged payload source: {error}"))
+    }
+}
+fn taira_streaming_directory_plan(
+    root: &Path,
+    member_paths: &[String],
+    profile: sorafs_chunker::ChunkProfile,
+) -> Result<CarBuildPlan> {
+    let logical_paths = taira_stage_logical_member_paths(member_paths)?;
+    let mut provisional_files = Vec::with_capacity(logical_paths.len());
+    let mut file_sizes = Vec::with_capacity(logical_paths.len());
+    for logical_path in &logical_paths {
+        let metadata =
+            taira_direct_member_metadata(root, logical_path, "Taira guest-image member")?;
+        file_sizes.push(metadata.len());
+        provisional_files.push(FilePlan {
+            path: logical_path.clone(),
+            first_chunk: 0,
+            chunk_count: 0,
+            size: metadata.len(),
+        });
+    }
+    let total_bytes = taira_stage_guest_total_bytes(file_sizes.iter().copied())?;
+    let mut source = DirectoryPayload::new(root, &provisional_files)
+        .wrap_err("open exact Taira guest-image directory payload")?;
+    let mut chunks = Vec::new();
+    let mut files = Vec::with_capacity(provisional_files.len());
+    let mut payload_hasher = blake3::Hasher::new();
+    let mut global_offset = 0_u64;
+    let mut read_buffer = vec![0_u8; TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES];
+    for provisional in provisional_files {
+        let first_chunk = chunks.len();
+        let mut local_offset = 0_u64;
+        let mut emitted_offset = 0_usize;
+        let mut pending = Vec::with_capacity(
+            TAIRA_INROU_STAGE_STREAM_BUFFER_BYTES.saturating_add(profile.max_size),
+        );
+        let mut chunker = sorafs_chunker::Chunker::try_with_profile(profile)
+            .wrap_err("construct Taira guest-image streaming chunker")?;
+        while local_offset < provisional.size {
+            let count =
+                usize::try_from((provisional.size - local_offset).min(read_buffer.len() as u64))
+                    .map_err(|_| eyre!("Taira guest-image member length exceeds host width"))?;
+            PayloadSource::read_exact(
+                &mut source,
+                global_offset + local_offset,
+                &mut read_buffer[..count],
+            )
+            .map_err(|error| eyre!("read exact Taira guest-image member bytes: {error}"))?;
+            payload_hasher.update(&read_buffer[..count]);
+            pending.extend_from_slice(&read_buffer[..count]);
+            let mut boundaries = Vec::new();
+            chunker.feed(&read_buffer[..count], |boundary| boundaries.push(boundary));
+            let mut consumed = 0_usize;
+            for boundary in boundaries {
+                if boundary.offset != emitted_offset {
+                    return Err(eyre!(
+                        "Taira guest-image streaming chunker emitted non-contiguous geometry"
+                    ));
+                }
+                let end = consumed
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| eyre!("Taira guest-image chunk length overflow"))?;
+                let bytes = pending.get(consumed..end).ok_or_else(|| {
+                    eyre!("Taira guest-image chunk exceeded the bounded streaming buffer")
+                })?;
+                chunks.push(CarChunk {
+                    offset: global_offset + boundary.offset as u64,
+                    length: u32::try_from(boundary.length)
+                        .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
+                    digest: blake3::hash(bytes).into(),
+                    taikai_segment_hint: None,
+                });
+                emitted_offset = emitted_offset
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| eyre!("Taira guest-image emitted offset overflow"))?;
+                consumed = end;
+            }
+            if consumed != 0 {
+                pending.drain(..consumed);
+            }
+            local_offset = local_offset
+                .checked_add(count as u64)
+                .ok_or_else(|| eyre!("Taira guest-image local offset overflow"))?;
+        }
+        if provisional.size != 0 {
+            let mut boundaries = Vec::new();
+            chunker.finish(|boundary| boundaries.push(boundary));
+            for boundary in boundaries {
+                if boundary.offset != emitted_offset || pending.len() != boundary.length {
+                    return Err(eyre!(
+                        "Taira guest-image streaming chunker final geometry is not canonical"
+                    ));
+                }
+                chunks.push(CarChunk {
+                    offset: global_offset + boundary.offset as u64,
+                    length: u32::try_from(boundary.length)
+                        .map_err(|_| eyre!("Taira guest-image chunk length exceeds u32"))?,
+                    digest: blake3::hash(&pending).into(),
+                    taikai_segment_hint: None,
+                });
+                emitted_offset = emitted_offset
+                    .checked_add(boundary.length)
+                    .ok_or_else(|| eyre!("Taira guest-image emitted offset overflow"))?;
+                pending.clear();
+            }
+        }
+        if emitted_offset as u64 != provisional.size || !pending.is_empty() {
+            return Err(eyre!(
+                "Taira guest-image streaming chunker did not cover one member exactly"
+            ));
+        }
+        files.push(FilePlan {
+            path: provisional.path,
+            first_chunk,
+            chunk_count: chunks.len() - first_chunk,
+            size: provisional.size,
+        });
+        global_offset = global_offset
+            .checked_add(provisional.size)
+            .ok_or_else(|| eyre!("Taira guest-image global offset overflow"))?;
+    }
+    PayloadSource::ensure_exhausted(&mut source, total_bytes)
+        .map_err(|error| eyre!("validate exact Taira guest-image source: {error}"))?;
+    let plan = CarBuildPlan {
+        chunk_profile: profile,
+        payload_digest: payload_hasher.finalize(),
+        content_length: total_bytes,
+        chunks,
+        files,
+    };
+    plan.validate()
+        .wrap_err("validate canonical Taira guest-image streaming plan")?;
+    Ok(plan)
+}
+fn taira_stage_manifest(
+    plan: &CarBuildPlan,
+    payload: &[u8],
+    key_pair: &KeyPair,
+    description: &str,
+) -> Result<BuiltSorafsManifest> {
+    let descriptor = chunker_registry::default_descriptor();
+    let writer_error = format!("failed to prepare staged {description} CAR writer");
+    let metadata_error = format!("failed to compute staged {description} CAR metadata");
+    let root_error = format!("staged {description} CAR planning produced no root CID");
+    let por_error = format!("failed to compute staged {description} PoR root");
+    let manifest_error = format!("failed to build staged {description} manifest");
+    let governance_error = format!("failed to attach staged {description} governance proof");
+    let encoding_error = format!("failed to encode staged {description} manifest");
+    let digest_error = format!("failed to compute staged {description} manifest digest");
+    build_sorafs_artifact_manifest(
+        plan,
+        payload,
+        descriptor,
+        key_pair,
+        SorafsManifestBuildLabels {
+            writer: &writer_error,
+            metadata: &metadata_error,
+            root: &root_error,
+            por: &por_error,
+            manifest: &manifest_error,
+            governance: &governance_error,
+            encoding: &encoding_error,
+            digest: &digest_error,
+        },
+    )
+}
+fn taira_stage_directory_manifest(
+    plan: &CarBuildPlan,
+    payload_dir: &Path,
+    key_pair: &KeyPair,
+    description: &str,
+) -> Result<BuiltSorafsManifest> {
+    let descriptor = chunker_registry::default_descriptor();
+    if plan.chunk_profile != descriptor.profile {
+        return Err(eyre!(
+            "staged {description} plan does not use the canonical chunking profile"
+        ));
+    }
+    let mut car_source = DirectoryPayload::new(payload_dir, &plan.files)
+        .wrap_err_with(|| format!("open staged {description} CAR source"))?;
+    let mut car_reader = TairaSequentialPayloadReader::new(&mut car_source, plan.content_length);
+    let car_stats = CarStreamingWriter::new(plan)
+        .write_from_reader(&mut car_reader, io::sink())
+        .wrap_err_with(|| format!("compute staged {description} canonical CAR metadata"))?;
+    car_reader
+        .finish()
+        .wrap_err_with(|| format!("finish staged {description} CAR source"))?;
+    let mut por_source = DirectoryPayload::new(payload_dir, &plan.files)
+        .wrap_err_with(|| format!("open staged {description} PoR source"))?;
+    let mut store = ChunkStore::with_profile(plan.chunk_profile);
+    store
+        .ingest_plan_source(plan, &mut por_source)
+        .wrap_err_with(|| format!("compute staged {description} PoR root"))?;
+    PayloadSource::ensure_exhausted(&mut por_source, plan.content_length)
+        .map_err(|error| eyre!("validate staged {description} PoR source: {error}"))?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("staged {description} CAR planning produced no root CID"))?;
+    if car_stats.root_cids.len() != 1 {
+        return Err(eyre!(
+            "staged {description} CAR must produce exactly one root CID"
+        ));
+    }
+    let retention_epoch = sorafs_pin_retention_epoch()?;
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .chunk_digest_sha3_256(compute_chunk_digest_sha3(&plan.chunks))
+        .por_root(*store.por_tree().root())
+        .content_length(plan.content_length)
+        .car_digest(*car_stats.car_archive_digest.as_bytes())
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err_with(|| format!("build staged {description} manifest"))?;
+    let manifest = attach_sorafs_release_governance(manifest, key_pair)
+        .wrap_err_with(|| format!("attach staged {description} governance proof"))?;
+    let policy = PinPolicyConstraints {
+        require_council_signatures: true,
+        ..PinPolicyConstraints::default()
+    };
+    validate_manifest(&manifest, &policy)
+        .wrap_err_with(|| format!("validate staged {description} manifest"))?;
+    let (bytes, _) = encode_sorafs_manifest_for_storage(&manifest)
+        .wrap_err_with(|| format!("encode staged {description} manifest"))?;
+    let digest_hex = hex::encode(
+        manifest
+            .digest()
+            .wrap_err_with(|| format!("digest staged {description} manifest"))?
+            .as_bytes(),
+    );
+    Ok(BuiltSorafsManifest {
+        manifest,
+        bytes,
+        digest_hex,
+    })
+}
+fn taira_inrou_source_workspace(
+    container_path: &Path,
+    service_path: &Path,
+    bundle_file: &Path,
+) -> Result<PathBuf> {
+    let paths = [container_path, service_path, bundle_file];
+    let mut workspace: Option<PathBuf> = None;
+    for path in paths {
+        validate_taira_path_ancestors(path, "Taira Inrou source")?;
+        let metadata = fs::symlink_metadata(path)
+            .wrap_err_with(|| format!("inspect Taira Inrou source {}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(eyre!(
+                "Taira Inrou source {} must be one direct regular file",
+                path.display()
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if metadata.nlink() != 1 {
+                return Err(eyre!(
+                    "Taira Inrou source {} must have exactly one hard link",
+                    path.display()
+                ));
+            }
+        }
+        let parent = path.parent().ok_or_else(|| {
+            eyre!(
+                "Taira Inrou source {} has no workspace directory",
+                path.display()
+            )
+        })?;
+        let parent_metadata = fs::symlink_metadata(parent)
+            .wrap_err_with(|| format!("inspect Taira Inrou workspace {}", parent.display()))?;
+        if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+            return Err(eyre!(
+                "Taira Inrou workspace {} must be one direct directory",
+                parent.display()
+            ));
+        }
+        let canonical_parent = fs::canonicalize(parent)
+            .wrap_err_with(|| format!("canonicalize Taira Inrou workspace {}", parent.display()))?;
+        if workspace
+            .as_ref()
+            .is_some_and(|expected| expected != &canonical_parent)
+        {
+            return Err(eyre!(
+                "Taira Inrou container, service, bundle, and inrou directory must share one workspace"
+            ));
+        }
+        workspace = Some(canonical_parent);
+    }
+    let workspace = workspace.ok_or_else(|| eyre!("Taira Inrou workspace is empty"))?;
+    let inrou_dir = workspace.join("inrou");
+    let inrou_metadata = fs::symlink_metadata(&inrou_dir).wrap_err_with(|| {
+        format!(
+            "inspect Taira Inrou source directory {}",
+            inrou_dir.display()
+        )
+    })?;
+    if inrou_metadata.file_type().is_symlink() || !inrou_metadata.is_dir() {
+        return Err(eyre!(
+            "Taira Inrou source directory {} must be one direct directory",
+            inrou_dir.display()
+        ));
+    }
+    Ok(workspace)
+}
+fn write_taira_stage_json<T>(path: &Path, value: &T) -> Result<()>
+where
+    T: JsonSerialize + ?Sized,
+{
+    let bytes = json::to_vec_pretty(value)
+        .wrap_err_with(|| format!("encode Taira Inrou staged JSON {}", path.display()))?;
+    write_taira_stage_file(path, &bytes)
+}
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(crate) fn stage_taira_inrou_canary_deployment(
+    container_path: &Path,
+    service_path: &Path,
+    bundle_file: &Path,
+    stage_dir: &Path,
+    key_pair: &KeyPair,
+) -> Result<TairaInrouStageReceiptV1> {
+    let workspace_dir = taira_inrou_source_workspace(container_path, service_path, bundle_file)?;
+    let container_bytes = taira_stage_regular_file_bytes(
+        container_path,
+        "Taira container manifest",
+        TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+    )?;
+    let service_bytes = taira_stage_regular_file_bytes(
+        service_path,
+        "Taira service manifest",
+        TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+    )?;
+    let container: SoraContainerManifestV1 =
+        decode_taira_stage_json(&container_bytes, container_path)?;
+    let service: SoraServiceManifestV1 = decode_taira_stage_json(&service_bytes, service_path)?;
+    let mut bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    validate_taira_inrou_canary_bundle(&bundle)?;
+    reject_prepublished_inrou_guest_images(&bundle)?;
+    let bundle_bytes = taira_stage_regular_file_bytes(
+        bundle_file,
+        "Taira service bundle",
+        INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES,
+    )?;
+    let bundle_hash = Hash::new(&bundle_bytes);
+    if bundle_hash != bundle.container.bundle_hash {
+        return Err(eyre!(
+            "Taira service bundle hash {bundle_hash} does not match admitted hash {}",
+            bundle.container.bundle_hash
+        ));
+    }
+    create_taira_stage_directory(stage_dir)?;
+    let stage_result = (|| -> Result<TairaInrouStageReceiptV1> {
+        let manifests_dir = stage_dir.join("manifests");
+        let payloads_dir = stage_dir.join("payloads");
+        let guest_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+        create_taira_stage_subdirectory(&manifests_dir)?;
+        create_taira_stage_subdirectory(&payloads_dir)?;
+        create_taira_stage_subdirectory(&guest_payload_dir)?;
+        let staged_bundle_path = stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1);
+        write_taira_stage_file(&staged_bundle_path, &bundle_bytes)?;
+        let bundle_plan = CarBuildPlan::single_file_with_profile(
+            &bundle_bytes,
+            chunker_registry::default_descriptor().profile,
+        )
+        .map_err(|error| eyre!("build staged Taira bundle plan: {error}"))?;
+        let bundle_manifest =
+            taira_stage_manifest(&bundle_plan, &bundle_bytes, key_pair, "Taira bundle")?;
+        write_taira_stage_file(
+            &stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1),
+            &bundle_manifest.bytes,
+        )?;
+        let inrou_dir = workspace_dir.join("inrou");
+        let image = bundle
+            .container
+            .inrou
+            .as_ref()
+            .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+            .ok_or_else(|| eyre!("Taira AArch64 guest image disappeared during staging"))?;
+        let rootfs_member_path = inrou_member_path(&image.rootfs_image_path)?;
+        let rootfs_logical_path = rootfs_member_path
+            .split('/')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let member_paths = vec![
+            inrou_member_path(&image.kernel_image_path)?,
+            rootfs_member_path,
+            inrou_member_path(
+                image
+                    .initrd_image_path
+                    .as_deref()
+                    .expect("validated Taira AArch64 image has an initrd"),
+            )?,
+        ];
+        let logical_member_paths = taira_stage_logical_member_paths(&member_paths)?;
+        let source_metadata = logical_member_paths
+            .iter()
+            .map(|logical_path| {
+                taira_direct_member_metadata(
+                    &inrou_dir,
+                    logical_path,
+                    "Taira guest-image source member",
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let source_sizes = source_metadata.iter().map(fs::Metadata::len);
+        taira_stage_guest_total_bytes(source_sizes.clone())?;
+        let rootfs_source_bytes = logical_member_paths
+            .iter()
+            .zip(source_sizes)
+            .find_map(|(logical_path, size)| (logical_path == &rootfs_logical_path).then_some(size))
+            .ok_or_else(|| eyre!("Taira rootfs disappeared from the exact guest-image layout"))?;
+        validate_taira_inrou_rootfs_source_bytes(rootfs_source_bytes)?;
+        let distribution = image.distribution.clone();
+        for (logical_path, source_metadata) in logical_member_paths.iter().zip(&source_metadata) {
+            let member_path = logical_path.join("/");
+            let source = inrou_dir.join(&member_path);
+            let destination = guest_payload_dir.join(&member_path);
+            let parent = create_taira_stage_member_parent(&guest_payload_dir, logical_path)?;
+            if destination.parent() != Some(parent.as_path()) {
+                return Err(eyre!(
+                    "Taira guest staging destination {} escaped its canonical parent",
+                    destination.display()
+                ));
+            }
+            let copied = copy_taira_stage_source_file(&source, &destination, source_metadata)?;
+            if copied != source_metadata.len() {
+                return Err(eyre!(
+                    "Taira guest-image copy {} wrote {copied} of {} bytes",
+                    destination.display(),
+                    source_metadata.len()
+                ));
+            }
+            set_taira_stage_permissions(&destination, 0o600)?;
+        }
+        let guest_plan = taira_streaming_directory_plan(
+            &guest_payload_dir,
+            &member_paths,
+            chunker_registry::default_descriptor().profile,
+        )?;
+        let guest_manifest = taira_stage_directory_manifest(
+            &guest_plan,
+            &guest_payload_dir,
+            key_pair,
+            "Taira guest image",
+        )?;
+        write_taira_stage_file(
+            &stage_dir.join(TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1),
+            &guest_manifest.bytes,
+        )?;
+        let guest_content_cid = encode_content_cid(&guest_manifest.manifest.root_cid);
+        let image = bundle
+            .container
+            .inrou
+            .as_mut()
+            .and_then(|inrou| inrou.guest_images.get_mut(&SoraInrouGuestIsaV1::Aarch64))
+            .ok_or_else(|| eyre!("Taira AArch64 guest image disappeared during rewrite"))?;
+        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: guest_manifest.digest_hex.clone(),
+            content_cid: guest_content_cid.clone(),
+            manifest_id_hex: Some(guest_manifest.digest_hex.clone()),
+            distribution,
+        });
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        validate_taira_inrou_canary_bundle(&bundle)?;
+        let container_manifest_hash = bundle.container_manifest_hash().to_string();
+        let service_manifest_hash = bundle.service_manifest_hash().to_string();
+        write_taira_stage_json(
+            &stage_dir.join(TAIRA_INROU_STAGE_CONTAINER_FILE_V1),
+            &bundle.container,
+        )?;
+        write_taira_stage_json(
+            &stage_dir.join(TAIRA_INROU_STAGE_SERVICE_FILE_V1),
+            &bundle.service,
+        )?;
+        let receipt = TairaInrouStageReceiptV1 {
+            schema_version: TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
+            service_name: bundle.service.service_name.to_string(),
+            service_version: bundle.service.service_version.clone(),
+            container_file: TAIRA_INROU_STAGE_CONTAINER_FILE_V1.to_owned(),
+            service_file: TAIRA_INROU_STAGE_SERVICE_FILE_V1.to_owned(),
+            bundle_payload_file: TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1.to_owned(),
+            bundle_manifest_file: TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1.to_owned(),
+            bundle_hash: bundle_hash.to_string(),
+            bundle_content_cid: encode_content_cid(&bundle_manifest.manifest.root_cid),
+            bundle_manifest_digest_hex: bundle_manifest.digest_hex,
+            guest_isa: SoraInrouGuestIsaV1::Aarch64.as_str().to_owned(),
+            guest_payload_dir: TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1.to_owned(),
+            guest_manifest_file: TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1.to_owned(),
+            guest_content_cid,
+            guest_manifest_digest_hex: guest_manifest.digest_hex,
+            container_manifest_hash,
+            service_manifest_hash,
+        };
+        write_taira_stage_json(&stage_dir.join(TAIRA_INROU_STAGE_RECEIPT_FILE_V1), &receipt)?;
+        Ok(receipt)
+    })();
+    if stage_result.is_err() {
+        let _ = fs::remove_dir_all(stage_dir);
+    }
+    stage_result
+}
+fn validate_taira_stage_layout(receipt: &TairaInrouStageReceiptV1) -> Result<()> {
+    let expected = [
+        (
+            "container_file",
+            receipt.container_file.as_str(),
+            TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
+        ),
+        (
+            "service_file",
+            receipt.service_file.as_str(),
+            TAIRA_INROU_STAGE_SERVICE_FILE_V1,
+        ),
+        (
+            "bundle_payload_file",
+            receipt.bundle_payload_file.as_str(),
+            TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+        ),
+        (
+            "bundle_manifest_file",
+            receipt.bundle_manifest_file.as_str(),
+            TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+        ),
+        (
+            "guest_payload_dir",
+            receipt.guest_payload_dir.as_str(),
+            TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1,
+        ),
+        (
+            "guest_manifest_file",
+            receipt.guest_manifest_file.as_str(),
+            TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+        ),
+    ];
+    for (field, actual, canonical) in expected {
+        if actual != canonical {
+            return Err(eyre!(
+                "Taira Inrou stage receipt {field} must be canonical `{canonical}`, found `{actual}`"
+            ));
+        }
+    }
+    if receipt.schema_version != TAIRA_INROU_STAGE_SCHEMA_VERSION_V1 {
+        return Err(eyre!(
+            "Taira Inrou stage schema must be {}, found {}",
+            TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
+            receipt.schema_version
+        ));
+    }
+    if receipt.guest_isa != SoraInrouGuestIsaV1::Aarch64.as_str() {
+        return Err(eyre!(
+            "Taira Inrou stage guest ISA must be `{}`",
+            SoraInrouGuestIsaV1::Aarch64.as_str()
+        ));
+    }
+    Ok(())
+}
+fn validate_taira_stage_owned_entry(path: &Path, directory: bool, description: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {description} {}", path.display()))?;
+    let expected_kind = if directory {
+        "directory"
+    } else {
+        "regular file"
+    };
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+    {
+        return Err(eyre!(
+            "{description} {} must be one direct {expected_kind}",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let expected_mode = if directory { 0o700 } else { 0o600 };
+        if metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o7777 != expected_mode
+        {
+            return Err(eyre!(
+                "{description} {} must be owned by the effective user with mode {expected_mode:04o}",
+                path.display()
+            ));
+        }
+        if !directory && metadata.nlink() != 1 {
+            return Err(eyre!(
+                "{description} {} must have exactly one hard link",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+fn taira_stage_owned_file_bytes(path: &Path, description: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    validate_taira_stage_owned_entry(path, false, description)?;
+    let bytes = taira_stage_regular_file_bytes(path, description, max_bytes)?;
+    validate_taira_stage_owned_entry(path, false, description)?;
+    Ok(bytes)
+}
+fn validate_exact_taira_stage_tree(stage_dir: &Path, member_paths: &[String]) -> Result<()> {
+    let mut expected = BTreeMap::<PathBuf, bool>::new();
+    for directory in [
+        PathBuf::from("manifests"),
+        PathBuf::from("payloads"),
+        PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1),
+    ] {
+        expected.insert(directory, true);
+    }
+    for file in [
+        TAIRA_INROU_STAGE_RECEIPT_FILE_V1,
+        TAIRA_INROU_STAGE_CONTAINER_FILE_V1,
+        TAIRA_INROU_STAGE_SERVICE_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1,
+        TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1,
+        TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1,
+    ] {
+        expected.insert(PathBuf::from(file), false);
+    }
+    for logical_path in taira_stage_logical_member_paths(member_paths)? {
+        let mut relative = PathBuf::from(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+        for (index, component) in logical_path.iter().enumerate() {
+            relative.push(component);
+            expected.insert(relative.clone(), index + 1 != logical_path.len());
+        }
+    }
+    fn visit(
+        stage_dir: &Path,
+        relative_dir: &Path,
+        expected: &BTreeMap<PathBuf, bool>,
+        seen: &mut BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        let absolute_dir = stage_dir.join(relative_dir);
+        for entry in fs::read_dir(&absolute_dir)
+            .wrap_err_with(|| format!("read Taira stage directory {}", absolute_dir.display()))?
+        {
+            let entry = entry.wrap_err_with(|| {
+                format!("read Taira stage entry in {}", absolute_dir.display())
+            })?;
+            let relative = relative_dir.join(entry.file_name());
+            let Some(directory) = expected.get(&relative).copied() else {
+                return Err(eyre!(
+                    "Taira Inrou stage contains unexpected entry `{}`",
+                    relative.display()
+                ));
+            };
+            if !seen.insert(relative.clone()) {
+                return Err(eyre!(
+                    "Taira Inrou stage contains duplicate entry `{}`",
+                    relative.display()
+                ));
+            }
+            validate_taira_stage_owned_entry(&entry.path(), directory, "Taira Inrou staged entry")?;
+            if directory {
+                visit(stage_dir, &relative, expected, seen)?;
+            }
+        }
+        Ok(())
+    }
+    let mut seen = BTreeSet::new();
+    visit(stage_dir, Path::new(""), &expected, &mut seen)?;
+    if seen.len() != expected.len() {
+        let missing = expected
+            .keys()
+            .find(|path| !seen.contains(*path))
+            .expect("different exact-tree cardinality has one missing entry");
+        return Err(eyre!(
+            "Taira Inrou stage is missing canonical entry `{}`",
+            missing.display()
+        ));
+    }
+    Ok(())
+}
+fn taira_release_signer_bytes(key_pair: &KeyPair) -> Result<[u8; 32]> {
+    let (_, signer_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .wrap_err("Taira SoraFS release signer public key is malformed")?;
+    signer_bytes.try_into().map_err(|_| {
+        eyre!(
+            "Taira SoraFS release signer must be a 32-byte Ed25519 key, got {} bytes",
+            signer_bytes.len()
+        )
+    })
+}
+fn load_taira_stage_manifest(
+    manifest_path: &Path,
+    expected_digest_hex: &str,
+    expected_content_cid: &str,
+    expected_signer: &[u8; 32],
+    description: &str,
+) -> Result<BuiltSorafsManifest> {
+    let bytes = taira_stage_owned_file_bytes(
+        manifest_path,
+        description,
+        sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES as u64,
+    )?;
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(&bytes)
+        .wrap_err_with(|| format!("decode canonical staged {description}"))?;
+    let policy = PinPolicyConstraints {
+        require_council_signatures: true,
+        ..PinPolicyConstraints::default()
+    };
+    validate_manifest(&manifest, &policy)
+        .wrap_err_with(|| format!("validate canonical staged {description}"))?;
+    if manifest.governance.council_signatures.len() != 1
+        || manifest.governance.council_signatures[0].signer != *expected_signer
+    {
+        return Err(eyre!(
+            "staged {description} must carry exactly one governance signature from the active Taira signer"
+        ));
+    }
+    let digest_hex = hex::encode(
+        manifest
+            .digest()
+            .wrap_err_with(|| format!("digest staged {description}"))?
+            .as_bytes(),
+    );
+    if digest_hex != expected_digest_hex {
+        return Err(eyre!(
+            "staged {description} manifest digest {digest_hex} differs from receipt {expected_digest_hex}"
+        ));
+    }
+    let content_cid = encode_content_cid(&manifest.root_cid);
+    if content_cid != expected_content_cid {
+        return Err(eyre!(
+            "staged {description} content CID {content_cid} differs from receipt {expected_content_cid}"
+        ));
+    }
+    Ok(BuiltSorafsManifest {
+        manifest,
+        bytes,
+        digest_hex,
+    })
+}
+fn load_and_verify_taira_stage_manifest(
+    manifest_path: &Path,
+    plan: &CarBuildPlan,
+    payload: &[u8],
+    expected_digest_hex: &str,
+    expected_content_cid: &str,
+    expected_signer: &[u8; 32],
+    description: &str,
+) -> Result<BuiltSorafsManifest> {
+    let built = load_taira_stage_manifest(
+        manifest_path,
+        expected_digest_hex,
+        expected_content_cid,
+        expected_signer,
+        description,
+    )?;
+    let writer = CarWriter::new(plan, payload)
+        .wrap_err_with(|| format!("construct staged {description} CAR verifier"))?;
+    let mut car = Vec::new();
+    writer
+        .write_to(&mut car)
+        .wrap_err_with(|| format!("materialize staged {description} CAR for verification"))?;
+    CarVerifier::verify_full_car_with_plan(&built.manifest, plan, &car)
+        .wrap_err_with(|| format!("verify staged {description} manifest against exact payload"))?;
+    Ok(built)
+}
+fn load_and_verify_taira_stage_directory_manifest(
+    manifest_path: &Path,
+    plan: &CarBuildPlan,
+    payload_dir: &Path,
+    expected_digest_hex: &str,
+    expected_content_cid: &str,
+    expected_signer: &[u8; 32],
+    description: &str,
+) -> Result<BuiltSorafsManifest> {
+    let built = load_taira_stage_manifest(
+        manifest_path,
+        expected_digest_hex,
+        expected_content_cid,
+        expected_signer,
+        description,
+    )?;
+    let descriptor = chunker_registry::default_descriptor();
+    if built.manifest.chunking != ChunkingProfileV1::from_descriptor(descriptor)
+        || plan.chunk_profile != descriptor.profile
+        || built.manifest.content_length != plan.content_length
+        || built.manifest.chunk_digest_sha3_256 != compute_chunk_digest_sha3(&plan.chunks)
+    {
+        return Err(eyre!(
+            "staged {description} manifest geometry does not match the exact directory plan"
+        ));
+    }
+    let mut car_source = DirectoryPayload::new(payload_dir, &plan.files)
+        .wrap_err_with(|| format!("open staged {description} CAR verification source"))?;
+    let mut car_reader = TairaSequentialPayloadReader::new(&mut car_source, plan.content_length);
+    let stats = CarStreamingWriter::new(plan)
+        .write_from_reader(&mut car_reader, io::sink())
+        .wrap_err_with(|| format!("rebuild staged {description} canonical CAR"))?;
+    car_reader
+        .finish()
+        .wrap_err_with(|| format!("finish staged {description} CAR verification source"))?;
+    if stats.root_cids != vec![built.manifest.root_cid.clone()]
+        || stats.dag_codec != built.manifest.dag_codec.0
+        || stats.payload_bytes != plan.content_length
+        || stats.chunk_count != plan.chunks.len()
+        || stats.car_size != built.manifest.car_size
+        || stats.car_archive_digest.as_bytes() != &built.manifest.car_digest
+    {
+        return Err(eyre!(
+            "staged {description} canonical CAR commitments do not match the manifest"
+        ));
+    }
+    let mut por_source = DirectoryPayload::new(payload_dir, &plan.files)
+        .wrap_err_with(|| format!("open staged {description} PoR verification source"))?;
+    let mut store = ChunkStore::with_profile(plan.chunk_profile);
+    store
+        .ingest_plan_source(plan, &mut por_source)
+        .wrap_err_with(|| format!("rebuild staged {description} PoR tree"))?;
+    PayloadSource::ensure_exhausted(&mut por_source, plan.content_length)
+        .map_err(|error| eyre!("validate staged {description} PoR source: {error}"))?;
+    if store.por_tree().root() != &built.manifest.por_root {
+        return Err(eyre!(
+            "staged {description} PoR root does not match the exact directory payload"
+        ));
+    }
+    Ok(built)
+}
+fn load_verified_taira_inrou_stage(
+    stage_dir: &Path,
+    key_pair: &KeyPair,
+) -> Result<VerifiedTairaInrouStage> {
+    validate_taira_stage_owned_entry(stage_dir, true, "Taira Inrou stage")?;
+    let receipt_path = stage_dir.join(TAIRA_INROU_STAGE_RECEIPT_FILE_V1);
+    let receipt_bytes = taira_stage_owned_file_bytes(
+        &receipt_path,
+        "Taira Inrou stage receipt",
+        TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+    )?;
+    let receipt: TairaInrouStageReceiptV1 = decode_taira_stage_json(&receipt_bytes, &receipt_path)?;
+    validate_taira_stage_layout(&receipt)?;
+    let container_path = stage_dir.join(TAIRA_INROU_STAGE_CONTAINER_FILE_V1);
+    let service_path = stage_dir.join(TAIRA_INROU_STAGE_SERVICE_FILE_V1);
+    let container: SoraContainerManifestV1 = decode_taira_stage_json(
+        &taira_stage_owned_file_bytes(
+            &container_path,
+            "Taira staged container manifest",
+            TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+        )?,
+        &container_path,
+    )?;
+    let service: SoraServiceManifestV1 = decode_taira_stage_json(
+        &taira_stage_owned_file_bytes(
+            &service_path,
+            "Taira staged service manifest",
+            TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
+        )?,
+        &service_path,
+    )?;
+    let bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    validate_taira_inrou_canary_bundle(&bundle)?;
+    let image = bundle
+        .container
+        .inrou
+        .as_ref()
+        .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+        .expect("validated Taira bundle has one AArch64 image");
+    let member_paths = vec![
+        inrou_member_path(&image.kernel_image_path)?,
+        inrou_member_path(&image.rootfs_image_path)?,
+        inrou_member_path(
+            image
+                .initrd_image_path
+                .as_deref()
+                .expect("validated Taira AArch64 image has an initrd"),
+        )?,
+    ];
+    validate_exact_taira_stage_tree(stage_dir, &member_paths)?;
+    if bundle.service.service_name.as_ref() != receipt.service_name
+        || bundle.service.service_version != receipt.service_version
+        || bundle.container_manifest_hash().to_string() != receipt.container_manifest_hash
+        || bundle.service_manifest_hash().to_string() != receipt.service_manifest_hash
+    {
+        return Err(eyre!(
+            "Taira Inrou staged manifests do not match the exact receipt identity"
+        ));
+    }
+    let bundle_payload = taira_stage_owned_file_bytes(
+        &stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1),
+        "staged Taira bundle payload",
+        INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES,
+    )?;
+    let bundle_hash = Hash::new(&bundle_payload);
+    if bundle_hash != bundle.container.bundle_hash || bundle_hash.to_string() != receipt.bundle_hash
+    {
+        return Err(eyre!(
+            "Taira Inrou staged bundle payload does not match its admitted and receipted hash"
+        ));
+    }
+    let descriptor = chunker_registry::default_descriptor();
+    let bundle_plan = CarBuildPlan::single_file_with_profile(&bundle_payload, descriptor.profile)
+        .map_err(|error| eyre!("rebuild staged Taira bundle plan: {error}"))?;
+    let expected_signer = taira_release_signer_bytes(key_pair)?;
+    let bundle_manifest = load_and_verify_taira_stage_manifest(
+        &stage_dir.join(TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1),
+        &bundle_plan,
+        &bundle_payload,
+        &receipt.bundle_manifest_digest_hex,
+        &receipt.bundle_content_cid,
+        &expected_signer,
+        "Taira bundle",
+    )?;
+    let guest_payload_dir = stage_dir.join(TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1);
+    let guest_plan =
+        taira_streaming_directory_plan(&guest_payload_dir, &member_paths, descriptor.profile)?;
+    let guest_manifest = load_and_verify_taira_stage_directory_manifest(
+        &stage_dir.join(TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1),
+        &guest_plan,
+        &guest_payload_dir,
+        &receipt.guest_manifest_digest_hex,
+        &receipt.guest_content_cid,
+        &expected_signer,
+        "Taira guest image",
+    )?;
+    let published = bundle
+        .container
+        .inrou
+        .as_ref()
+        .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+        .and_then(|image| image.published_artifact.as_ref())
+        .ok_or_else(|| eyre!("Taira Inrou staged container lacks its published AArch64 ref"))?;
+    if published.manifest_digest_hex != receipt.guest_manifest_digest_hex
+        || published.content_cid != receipt.guest_content_cid
+        || published.manifest_id_hex.as_deref() != Some(receipt.guest_manifest_digest_hex.as_str())
+    {
+        return Err(eyre!(
+            "Taira Inrou staged AArch64 ref does not match the exact staged manifest"
+        ));
+    }
+    Ok(VerifiedTairaInrouStage {
+        receipt,
+        bundle,
+        bundle_manifest,
+        guest_manifest,
+    })
+}
+#[derive(Clone, Debug)]
+pub(crate) struct TairaInrouCanaryDeployment {
+    pub service_name: String,
+    pub service_version: String,
+    pub route_host: String,
+    pub route_path_prefix: String,
+    pub healthcheck_path: String,
+    pub mutation_mode: String,
+    pub bundle_hash: String,
+    pub bundle_content_cid: String,
+    pub bundle_manifest_digest_hex: String,
+    pub guest_content_cid: String,
+    pub guest_manifest_digest_hex: String,
+    pub mutation_response_digest: String,
+}
+pub(crate) fn run_taira_inrou_canary_deployment(
+    config: &ClientConfig,
+    fee_payment: FeePaymentIntent,
+    stage_dir: PathBuf,
+    torii_url: String,
+    api_token: Option<String>,
+    timeout_secs: u64,
+    upgrade: bool,
+) -> Result<TairaInrouCanaryDeployment> {
+    let staged = load_verified_taira_inrou_stage(&stage_dir, &config.key_pair)?;
+    let route = staged
+        .bundle
+        .service
+        .route
+        .as_ref()
+        .expect("verified Taira Inrou stage has a public route");
+    let route_host = route.host.clone();
+    let route_path_prefix = route.path_prefix.clone();
+    let healthcheck_path = staged
+        .bundle
+        .container
+        .lifecycle
+        .healthcheck_path
+        .clone()
+        .expect("verified Taira Inrou stage has /health");
+    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
+        *slot.borrow_mut() = Some(config.clone());
+    });
+    SORACLOUD_FEE_PAYMENT.with(|slot| {
+        *slot.borrow_mut() = Some(Ok(fee_payment));
+    });
+    let mode = if upgrade {
+        MutationMode::Upgrade
+    } else {
+        MutationMode::Deploy
+    };
+    let authority = &config.account;
+    let key_pair = &config.key_pair;
+    register_built_sorafs_manifest(
+        &staged.bundle_manifest,
+        "preseeded Taira service bundle",
+        &torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )?;
+    register_built_sorafs_manifest(
+        &staged.guest_manifest,
+        "preseeded Taira AArch64 guest image",
+        &torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )?;
+    let service_name = staged.bundle.service.service_name.to_string();
+    let response = run_service_bundle_mutation(
+        mode,
+        staged.bundle,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        &torii_url,
+        api_token.as_deref(),
+        timeout_secs,
+        authority,
+        key_pair,
+    )?;
+    let mutation_response_digest = Hash::new(json::to_vec(&response)?).to_string();
+    Ok(TairaInrouCanaryDeployment {
+        service_name,
+        service_version: staged.receipt.service_version,
+        route_host,
+        route_path_prefix,
+        healthcheck_path,
+        mutation_mode: mode.label_lowercase().to_owned(),
+        bundle_hash: staged.receipt.bundle_hash,
+        bundle_content_cid: staged.receipt.bundle_content_cid,
+        bundle_manifest_digest_hex: staged.receipt.bundle_manifest_digest_hex,
+        guest_content_cid: staged.receipt.guest_content_cid,
+        guest_manifest_digest_hex: staged.receipt.guest_manifest_digest_hex,
+        mutation_response_digest,
+    })
 }
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum HfStorageClassArg {
@@ -6789,7 +8543,6 @@ impl SoracloudAppManifestV1 {
 struct SoracloudAppStaticSiteV1 {
     dist_dir: String,
     mount_path: String,
-    #[norito(default = "default_app_static_site_publish_mode")]
     publish_mode: String,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6800,9 +8553,6 @@ struct SoracloudAppStaticSiteV1 {
 }
 const APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING: &str = "RootBinding";
 const APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY: &str = "CidOnly";
-fn default_app_static_site_publish_mode() -> String {
-    APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING.to_owned()
-}
 impl SoracloudAppStaticSiteV1 {
     fn validate(&self) -> Result<()> {
         if self.dist_dir.trim().is_empty() {
@@ -6975,9 +8725,7 @@ struct AppServiceMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    published_bundle: Option<ServiceBundlePublishOutput>,
+    published_bundle: ServiceBundlePublishOutput,
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
@@ -7058,6 +8806,10 @@ struct ServiceMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
+    published_bundle: ServiceBundlePublishOutput,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     current_version: Option<String>,
@@ -8185,14 +9937,6 @@ fn run_app_infra_mutation(
     }
     Ok(payload)
 }
-fn should_fallback_app_infra_to_service_level(error: &Report) -> bool {
-    let detail = format!("{error:#}").to_ascii_lowercase();
-    detail.contains("/v1/soracloud/apps/")
-        && (detail.contains("404")
-            || detail.contains("405")
-            || detail.contains("not found")
-            || detail.contains("unknown"))
-}
 fn build_app_static_site_binding_value(
     app_name: &str,
     _public_url: &str,
@@ -9087,6 +10831,78 @@ fn validate_local_inrou_member(inrou_dir: &Path, member_path: &str) -> Result<St
     }
     Ok(relative_member)
 }
+#[derive(Debug)]
+struct PublishedServiceArtifacts {
+    bundle: ServiceBundlePublishOutput,
+    inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
+}
+fn reject_prepublished_inrou_guest_images(bundle: &SoraDeploymentBundleV1) -> Result<()> {
+    let Some(inrou) = bundle.container.inrou.as_ref() else {
+        return Ok(());
+    };
+    let prepublished = inrou
+        .guest_images
+        .iter()
+        .filter_map(|(guest_isa, image)| image.published_artifact.as_ref().map(|_| guest_isa))
+        .map(|guest_isa| guest_isa.as_str())
+        .collect::<Vec<_>>();
+    if prepublished.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "service `{}` contains prepublished Inrou guest-image refs for [{}]; V1 requires local guest-image members and republishes them before every deploy or upgrade",
+        bundle.service.service_name,
+        prepublished.join(", ")
+    ))
+}
+fn publish_service_artifacts(
+    bundle_file: &Path,
+    service_workspace_dir: Option<&Path>,
+    bundle: &mut SoraDeploymentBundleV1,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<PublishedServiceArtifacts> {
+    reject_prepublished_inrou_guest_images(bundle)?;
+    let published = publish_sorafs_file_artifact(
+        bundle_file,
+        &format!("Soracloud service bundle ({})", bundle.service.service_name),
+        torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )?;
+    if published.payload_hash != bundle.container.bundle_hash {
+        return Err(eyre!(
+            "published service bundle `{}` hash {} did not match admitted bundle hash {}",
+            bundle_file.display(),
+            published.payload_hash,
+            bundle.container.bundle_hash
+        ));
+    }
+    let service_bundle = ServiceBundlePublishOutput {
+        service_name: bundle.service.service_name.to_string(),
+        bundle_file: bundle_file.to_string_lossy().into_owned(),
+        content_cid: published.content_cid,
+        manifest_digest_hex: published.manifest_digest_hex,
+        manifest_id_hex: published.manifest_id_hex,
+        bundle_hash: published.payload_hash.to_string(),
+        note: "service bundle bytes were published to SoraFS for runtime hydration".to_owned(),
+    };
+    let inrou_guest_images = publish_inrou_guest_image_artifacts(
+        service_workspace_dir,
+        bundle,
+        torii_url,
+        authority,
+        key_pair,
+        timeout_secs,
+    )?;
+    Ok(PublishedServiceArtifacts {
+        bundle: service_bundle,
+        inrou_guest_images,
+    })
+}
 fn publish_inrou_guest_image_artifacts(
     service_workspace_dir: Option<&Path>,
     bundle: &mut SoraDeploymentBundleV1,
@@ -9125,27 +10941,6 @@ fn publish_inrou_guest_image_artifacts(
             member_paths.push(inrou_member_path(initrd_image_path)?);
         }
         let distribution = image.distribution.clone();
-        if let Some(mut published_artifact) = image.published_artifact.clone() {
-            published_artifact.distribution = distribution.clone();
-            let image = inrou
-                .guest_images
-                .get_mut(&guest_isa)
-                .expect("guest image exists while reusing published artifact");
-            image.published_artifact = Some(published_artifact.clone());
-            outputs.push(InrouGuestImageArtifactPublishOutput {
-                service_name: service_name.clone(),
-                guest_isa: guest_isa.as_str().to_owned(),
-                source_dir: inrou_dir.join(guest_isa.as_str()).to_string_lossy().into_owned(),
-                hydrate_mount_path: "/inrou".to_owned(),
-                member_paths,
-                content_cid: published_artifact.content_cid.clone(),
-                manifest_digest_hex: published_artifact.manifest_digest_hex.clone(),
-                manifest_id_hex: published_artifact.manifest_id_hex.clone(),
-                distribution,
-                note: "reused a prepublished Inrou guest-image artifact from the manifest and skipped local artifact staging".to_owned(),
-            });
-            continue;
-        }
         member_paths = member_paths
             .into_iter()
             .map(|member_path| {
@@ -13300,7 +15095,7 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
             ),
         ]),
         bootstrap_user_data_path: None,
-        ssh_authorized_keys: vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()],
+        ssh_authorized_keys: Vec::new(),
     }
 }
 fn default_generic_http_service_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
@@ -13391,7 +15186,7 @@ fn build_split_app_live_service_bundle(
     container
         .env
         .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
-    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     container.capabilities.allow_wallet_signing = false;
     container.capabilities.allow_state_writes = false;
     container.capabilities.allow_model_inference = false;
@@ -13614,7 +15409,7 @@ fn apply_init_template_defaults(
             container
                 .env
                 .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
-            container.capabilities.network = SoraNetworkPolicyV1::Open;
+            container.capabilities.network = SoraNetworkPolicyV1::Isolated;
             container.capabilities.allow_wallet_signing = false;
             container.capabilities.allow_state_writes = false;
             container.capabilities.allow_model_inference = false;
@@ -15013,6 +16808,341 @@ mod tests {
         time::Duration,
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
+    fn canonical_taira_inrou_bundle_fixture() -> SoraDeploymentBundleV1 {
+        let mut container = fixture_container();
+        let mut service = fixture_service();
+        let service_name: Name = TAIRA_INROU_CANARY_SERVICE_NAME_V1
+            .parse()
+            .expect("canonical Taira service name");
+        apply_init_template_defaults(
+            InitTemplate::HttpService,
+            &service_name,
+            &mut service,
+            &mut container,
+        )
+        .expect("apply canonical HTTP service defaults");
+        container.bundle_path = TAIRA_INROU_CANARY_ENTRYPOINT_V1.to_owned();
+        container.entrypoint = TAIRA_INROU_CANARY_ENTRYPOINT_V1.to_owned();
+        container.args.clear();
+        container.env.clear();
+        container.env.insert(
+            TAIRA_INROU_CANARY_HTTP_SERVICE_ENV_V1.to_owned(),
+            TAIRA_INROU_CANARY_SERVICE_NAME_V1.to_owned(),
+        );
+        container.required_config_names.clear();
+        container.required_secret_names.clear();
+        container.config_exports.clear();
+        container.capabilities.network = SoraNetworkPolicyV1::Isolated;
+        container.capabilities.allow_wallet_signing = false;
+        container.capabilities.allow_state_writes = false;
+        container.capabilities.allow_model_inference = false;
+        container.capabilities.allow_model_training = false;
+        container.resources.cpu_millis =
+            NonZeroU32::new(TAIRA_INROU_CANARY_CPU_MILLIS_V1).expect("nonzero CPU budget");
+        container.resources.memory_bytes =
+            NonZeroU64::new(TAIRA_INROU_CANARY_MEMORY_BYTES_V1).expect("nonzero memory budget");
+        container.resources.ephemeral_storage_bytes =
+            NonZeroU64::new(TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1)
+                .expect("nonzero ephemeral budget");
+        container.resources.max_open_files =
+            NonZeroU32::new(TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1).expect("nonzero file budget");
+        container.resources.max_tasks =
+            NonZeroU16::new(TAIRA_INROU_CANARY_MAX_TASKS_V1).expect("nonzero task budget");
+        container.lifecycle.healthcheck_path = Some(TAIRA_INROU_CANARY_HEALTHCHECK_V1.to_owned());
+        let inrou = container.inrou.as_mut().expect("Inrou manifest");
+        inrou.guest_os = SoraInrouGuestOsV1::DebianSlim;
+        inrou
+            .guest_images
+            .retain(|guest_isa, _| *guest_isa == SoraInrouGuestIsaV1::Aarch64);
+        let aarch64 = inrou
+            .guest_images
+            .get_mut(&SoraInrouGuestIsaV1::Aarch64)
+            .expect("AArch64 image");
+        aarch64.kernel_image_path = TAIRA_INROU_CANARY_KERNEL_PATH_V1.to_owned();
+        aarch64.rootfs_image_path = TAIRA_INROU_CANARY_ROOTFS_PATH_V1.to_owned();
+        aarch64.initrd_image_path = Some(TAIRA_INROU_CANARY_INITRD_PATH_V1.to_owned());
+        aarch64.distribution = SoraArtifactDistributionPolicyV1::default();
+        aarch64.published_artifact = None;
+        inrou.bootstrap_user_data_path = None;
+        inrou.ssh_authorized_keys.clear();
+        service.service_name = service_name;
+        service.service_version = TAIRA_INROU_CANARY_SERVICE_VERSION_V1.to_owned();
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(4).expect("four replicas");
+        service.route = Some(SoraRouteTargetV1 {
+            host: TAIRA_INROU_CANARY_ROUTE_HOST_V1.to_owned(),
+            path_prefix: TAIRA_INROU_CANARY_ROUTE_PREFIX_V1.to_owned(),
+            service_port: NonZeroU16::new(TAIRA_INROU_CANARY_SERVICE_PORT_V1)
+                .expect("nonzero service port"),
+            visibility: SoraRouteVisibilityV1::Public,
+            tls_mode: SoraTlsModeV1::Required,
+        });
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("root volume name"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/".to_owned(),
+                max_total_bytes: NonZeroU64::new(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1)
+                    .expect("nonzero root volume"),
+            },
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "app_data".parse().expect("shared volume name"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/lease/app-data".to_owned(),
+                max_total_bytes: NonZeroU64::new(TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1)
+                    .expect("nonzero shared volume"),
+            },
+        ];
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        service.container.expected_schema_version = container.schema_version;
+        SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        }
+    }
+    fn refresh_taira_container_reference(bundle: &mut SoraDeploymentBundleV1) {
+        bundle.service.container.manifest_hash = Hash::new(Encode::encode(&bundle.container));
+        bundle.service.container.expected_schema_version = bundle.container.schema_version;
+    }
+    fn assert_taira_canary_validation_error(bundle: &SoraDeploymentBundleV1, needle: &str) {
+        let error = validate_taira_inrou_canary_bundle(bundle)
+            .expect_err("noncanonical Taira canary must fail");
+        assert!(error.to_string().contains(needle), "{error}");
+    }
+    #[test]
+    fn taira_inrou_canary_validator_accepts_exact_v1_bundle() {
+        validate_taira_inrou_canary_bundle(&canonical_taira_inrou_bundle_fixture())
+            .expect("canonical Taira Inrou V1 bundle");
+    }
+    #[test]
+    fn taira_inrou_canary_validator_accepts_published_v1_bundle() {
+        let mut bundle = canonical_taira_inrou_bundle_fixture();
+        let digest_hex = "ab".repeat(32);
+        bundle
+            .container
+            .inrou
+            .as_mut()
+            .expect("Inrou manifest")
+            .guest_images
+            .get_mut(&SoraInrouGuestIsaV1::Aarch64)
+            .expect("AArch64 image")
+            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: digest_hex.clone(),
+            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
+                [0xAB; 32],
+            )),
+            manifest_id_hex: Some(digest_hex),
+            distribution: SoraArtifactDistributionPolicyV1::default(),
+        });
+        refresh_taira_container_reference(&mut bundle);
+        validate_taira_inrou_canary_bundle(&bundle)
+            .expect("canonical published Taira Inrou V1 bundle");
+    }
+    #[test]
+    fn taira_inrou_canary_validator_rejects_identity_and_route_drift() {
+        let mut identity = canonical_taira_inrou_bundle_fixture();
+        identity.service.service_name = "another_canary".parse().expect("alternate service name");
+        assert_taira_canary_validation_error(&identity, "canonical service identity");
+
+        let mut route_bundle = canonical_taira_inrou_bundle_fixture();
+        let route = route_bundle
+            .service
+            .route
+            .as_mut()
+            .expect("canonical route");
+        route.host = "other.sora".to_owned();
+        route.tls_mode = SoraTlsModeV1::Optional;
+        assert_taira_canary_validation_error(&route_bundle, "canonical public TLS route");
+
+        let mut env_bundle = canonical_taira_inrou_bundle_fixture();
+        env_bundle
+            .container
+            .env
+            .insert("PORT".to_owned(), "8787".to_owned());
+        refresh_taira_container_reference(&mut env_bundle);
+        assert_taira_canary_validation_error(&env_bundle, "requires exactly");
+    }
+    #[test]
+    fn taira_inrou_canary_validator_rejects_guest_access_and_path_drift() {
+        let mut ssh = canonical_taira_inrou_bundle_fixture();
+        ssh.container
+            .inrou
+            .as_mut()
+            .expect("Inrou manifest")
+            .ssh_authorized_keys
+            .push("ssh-ed25519 AAAATEST taira-canary".to_owned());
+        refresh_taira_container_reference(&mut ssh);
+        assert_taira_canary_validation_error(&ssh, "SSH access");
+
+        let mut bootstrap = canonical_taira_inrou_bundle_fixture();
+        bootstrap
+            .container
+            .inrou
+            .as_mut()
+            .expect("Inrou manifest")
+            .bootstrap_user_data_path = Some("/inrou/bootstrap.yml".to_owned());
+        refresh_taira_container_reference(&mut bootstrap);
+        assert_taira_canary_validation_error(&bootstrap, "bootstrap user-data");
+
+        let mut guest_path = canonical_taira_inrou_bundle_fixture();
+        guest_path
+            .container
+            .inrou
+            .as_mut()
+            .expect("Inrou manifest")
+            .guest_images
+            .get_mut(&SoraInrouGuestIsaV1::Aarch64)
+            .expect("AArch64 image")
+            .rootfs_image_path = "/inrou/aarch64/other.ext4".to_owned();
+        refresh_taira_container_reference(&mut guest_path);
+        assert_taira_canary_validation_error(&guest_path, "exact globally distributed AArch64");
+    }
+    #[test]
+    fn taira_inrou_canary_validator_rejects_storage_geometry_drift() {
+        let mut bundle = canonical_taira_inrou_bundle_fixture();
+        bundle.service.lease_volumes[0].max_total_bytes =
+            NonZeroU64::new(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 - 1)
+                .expect("smaller root volume");
+        assert_taira_canary_validation_error(&bundle, "canonical 8 GiB root");
+
+        validate_taira_inrou_rootfs_source_bytes(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1)
+            .expect("rootfs at the root-volume boundary");
+        assert!(
+            validate_taira_inrou_rootfs_source_bytes(TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1 + 1)
+                .is_err()
+        );
+    }
+    fn canonical_taira_stage_receipt_fixture() -> TairaInrouStageReceiptV1 {
+        TairaInrouStageReceiptV1 {
+            schema_version: TAIRA_INROU_STAGE_SCHEMA_VERSION_V1,
+            service_name: "taira_inrou_canary".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            container_file: TAIRA_INROU_STAGE_CONTAINER_FILE_V1.to_owned(),
+            service_file: TAIRA_INROU_STAGE_SERVICE_FILE_V1.to_owned(),
+            bundle_payload_file: TAIRA_INROU_STAGE_BUNDLE_PAYLOAD_FILE_V1.to_owned(),
+            bundle_manifest_file: TAIRA_INROU_STAGE_BUNDLE_MANIFEST_FILE_V1.to_owned(),
+            bundle_hash: "hash".to_owned(),
+            bundle_content_cid: "cid".to_owned(),
+            bundle_manifest_digest_hex: "11".repeat(32),
+            guest_isa: SoraInrouGuestIsaV1::Aarch64.as_str().to_owned(),
+            guest_payload_dir: TAIRA_INROU_STAGE_GUEST_PAYLOAD_DIR_V1.to_owned(),
+            guest_manifest_file: TAIRA_INROU_STAGE_GUEST_MANIFEST_FILE_V1.to_owned(),
+            guest_content_cid: "guest-cid".to_owned(),
+            guest_manifest_digest_hex: "22".repeat(32),
+            container_manifest_hash: "container-hash".to_owned(),
+            service_manifest_hash: "service-hash".to_owned(),
+        }
+    }
+    #[test]
+    fn taira_stage_receipt_rejects_noncanonical_or_legacy_layouts() {
+        let canonical = canonical_taira_stage_receipt_fixture();
+        validate_taira_stage_layout(&canonical).expect("canonical stage layout");
+        let mut traversal = canonical.clone();
+        traversal.guest_payload_dir = "../guest".to_owned();
+        assert!(validate_taira_stage_layout(&traversal).is_err());
+        let mut legacy_version = canonical;
+        legacy_version.schema_version = 0;
+        assert!(validate_taira_stage_layout(&legacy_version).is_err());
+    }
+    #[test]
+    fn taira_stage_guest_budget_accepts_real_multi_gibibyte_layout() {
+        let sizes = [27_236_288_u64, 3_085_959_168, 13_923_072];
+        let total = sizes.into_iter().sum::<u64>();
+        assert_eq!(total, 3_127_118_528);
+        assert_eq!(
+            taira_stage_guest_total_bytes(sizes).expect("real Taira guest layout"),
+            total
+        );
+        assert!(total > 3_000_000_000);
+        assert!(total > 512 * 1024 * 1024);
+        assert!(taira_stage_guest_total_bytes([TAIRA_INROU_STAGE_MAX_GUEST_BYTES_V1 + 1]).is_err());
+    }
+    #[test]
+    fn taira_stage_regular_file_read_enforces_exact_byte_limit() {
+        let temp = tempfile::Builder::new()
+            .prefix("taira-stage-read-limit-")
+            .tempdir_in("target")
+            .expect("target tempdir");
+        let source = temp.path().join("source.bin");
+        fs::write(&source, [1_u8, 2, 3, 4]).expect("write boundary source");
+        assert_eq!(
+            taira_stage_regular_file_bytes(&source, "test source", 4)
+                .expect("read boundary source"),
+            [1_u8, 2, 3, 4]
+        );
+        fs::write(&source, [1_u8, 2, 3, 4, 5]).expect("write oversized source");
+        let error = taira_stage_regular_file_bytes(&source, "test source", 4)
+            .expect_err("one byte over must fail");
+        assert!(error.to_string().contains("maximum is 4"), "{error}");
+    }
+    #[test]
+    fn taira_stage_requires_exact_three_member_layout() {
+        let canonical = vec![
+            "aarch64/vmlinuz".to_owned(),
+            "aarch64/rootfs.ext4".to_owned(),
+            "aarch64/initrd.img".to_owned(),
+        ];
+        let logical = taira_stage_logical_member_paths(&canonical).expect("canonical members");
+        assert_eq!(logical.len(), 3);
+        assert!(taira_stage_logical_member_paths(&canonical[..2]).is_err());
+        let traversal = vec![
+            "aarch64/vmlinuz".to_owned(),
+            "../rootfs.ext4".to_owned(),
+            "aarch64/initrd.img".to_owned(),
+        ];
+        assert!(taira_stage_logical_member_paths(&traversal).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_streaming_plan_matches_canonical_eager_directory_plan() {
+        let temp = tempfile::Builder::new()
+            .prefix("taira-streaming-plan-")
+            .tempdir_in("target")
+            .expect("target tempdir");
+        let aarch64 = temp.path().join("aarch64");
+        fs::create_dir(&aarch64).expect("aarch64 directory");
+        fs::write(aarch64.join("initrd.img"), vec![0x11; 333_333]).expect("initrd");
+        fs::write(aarch64.join("rootfs.ext4"), vec![0x22; 1_500_321]).expect("rootfs");
+        fs::write(aarch64.join("vmlinuz"), vec![0x33; 700_777]).expect("kernel");
+        let members = vec![
+            "aarch64/vmlinuz".to_owned(),
+            "aarch64/rootfs.ext4".to_owned(),
+            "aarch64/initrd.img".to_owned(),
+        ];
+        let profile = sorafs_chunker::ChunkProfile::DEFAULT;
+        let (eager, payload) =
+            CarBuildPlan::from_directory_with_profile(temp.path(), profile).expect("eager plan");
+        let streaming =
+            taira_streaming_directory_plan(temp.path(), &members, profile).expect("streaming plan");
+        assert_eq!(streaming, eager);
+        assert_eq!(streaming.payload_digest, blake3::hash(&payload));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn taira_stage_creation_rejects_symlinked_intermediate_parent() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::Builder::new()
+            .prefix("taira-stage-parent-")
+            .tempdir_in("target")
+            .expect("target tempdir");
+        let real_parent = temp.path().join("real");
+        fs::create_dir(&real_parent).expect("real parent");
+        let linked_parent = temp.path().join("linked");
+        symlink(&real_parent, &linked_parent).expect("linked parent");
+        let error = create_taira_stage_directory(&linked_parent.join("stage"))
+            .expect_err("symlinked parent must fail");
+        assert!(
+            error.to_string().contains("must not be a symbolic link"),
+            "{error}"
+        );
+        assert!(!real_parent.join("stage").exists());
+    }
     const STATIC_ASSETS_V1: [&str; 22] = [
         include_str!("soracloud/assets/v1/tests/http_local.sh"),
         include_str!("soracloud/assets/v1/tests/exit_130.sh"),
@@ -15027,7 +17157,7 @@ mod tests {
         include_str!("soracloud/assets/v1/tests/split_release_build.sh"),
         include_str!("soracloud/assets/v1/tests/inrou_reuse_build.sh"),
         concat!(
-            include_str!("soracloud/assets/v1/tests/legacy_static_site.prefix.json"),
+            include_str!("soracloud/assets/v1/tests/missing_static_site_publish_mode.prefix.json"),
             "            }"
         ),
         concat!(
@@ -16041,6 +18171,27 @@ mod tests {
             .expect("write test inrou rootfs");
         }
     }
+    fn prepare_http_service_bundle(dir: &Path, label: &str) -> PathBuf {
+        write_test_inrou_guest_images(&dir.join("http-service/inrou"), label);
+        let bundle_file = dir.join("http-service/build/http-service.tgz");
+        BundlePackArgs {
+            source: dir.join("http-service/app/server.mjs"),
+            archive_path: "app/server.mjs".to_owned(),
+            output: bundle_file.clone(),
+            executable: true,
+        }
+        .run()
+        .expect("pack direct HTTP service bundle");
+        SyncManifestsArgs {
+            app_manifest: None,
+            container: dir.join("container_manifest.json"),
+            service: dir.join("service_manifest.json"),
+            bundle_file: Some(bundle_file.clone()),
+        }
+        .run()
+        .expect("sync direct HTTP service manifests");
+        bundle_file
+    }
     #[derive(Clone)]
     struct MockHttpResponse {
         content_type: &'static str,
@@ -16970,6 +19121,16 @@ mod tests {
             "http://127.0.0.1:8080",
             false,
             None,
+            ServiceBundlePublishOutput {
+                service_name: "echo_console".to_owned(),
+                bundle_file: "service.tgz".to_owned(),
+                content_cid: "bcanary".to_owned(),
+                manifest_digest_hex: "aa".repeat(32),
+                manifest_id_hex: None,
+                bundle_hash: Hash::new(b"service bundle").to_string(),
+                note: "published".to_owned(),
+            },
+            Vec::new(),
             response,
         );
         assert_eq!(output.current_version.as_deref(), Some("1.1.0"));
@@ -19374,8 +21535,8 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut bundle = sample_uploaded_model_bundle();
         let mut finalize = sample_uploaded_model_finalize_payload();
-        bundle.service_name = "legacy_models".parse().expect("legacy service name");
-        finalize.service_name = "legacy_models".to_owned();
+        bundle.service_name = "original_models".parse().expect("original service name");
+        finalize.service_name = "original_models".to_owned();
         apply_uploaded_model_register_service_name_override(
             &mut bundle,
             &mut finalize,
@@ -19544,6 +21705,7 @@ mod tests {
         let err = DeployArgs {
             container: container_path,
             service: service_path,
+            bundle_file: dir.join("service.tgz"),
             initial_configs: None,
             initial_secrets: None,
             torii_url: None,
@@ -19557,6 +21719,7 @@ mod tests {
     #[test]
     fn deploy_returns_manifest_backed_service_projection() {
         let (dir, _) = service_fixture("deploy_service_projection", InitTemplate::HttpService);
+        let bundle_file = prepare_http_service_bundle(&dir, "deploy");
         let deploy_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
@@ -19572,6 +21735,7 @@ mod tests {
         let output = DeployArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
+            bundle_file,
             initial_configs: None,
             initial_secrets: None,
             torii_url: Some(server.base_url.clone()),
@@ -19588,6 +21752,7 @@ mod tests {
         assert_eq!(output.lease_volume_count, 2);
         assert_eq!(output.torii_url, server.base_url);
         assert!(output.uses_api_token);
+        assert_eq!(output.published_inrou_guest_images.len(), 2);
         assert!(output.workspace_dir.contains("deploy_service_projection"));
         assert_optional_path_ends_with(output.workspace_scripts.local_dev.as_deref(), "dev.sh");
         assert!(
@@ -19615,6 +21780,7 @@ mod tests {
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
         let (dir, _) = service_fixture("upgrade_service_projection", InitTemplate::HttpService);
+        let bundle_file = prepare_http_service_bundle(&dir, "upgrade");
         let upgrade_response = norito::json!({ "tx_instructions": [] });
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
@@ -19630,6 +21796,7 @@ mod tests {
         let output = UpgradeArgs {
             container: dir.join("container_manifest.json"),
             service: dir.join("service_manifest.json"),
+            bundle_file,
             initial_configs: None,
             initial_secrets: None,
             torii_url: Some(server.base_url.clone()),
@@ -19646,6 +21813,7 @@ mod tests {
         assert_eq!(output.lease_volume_count, 2);
         assert_eq!(output.torii_url, server.base_url);
         assert!(!output.uses_api_token);
+        assert_eq!(output.published_inrou_guest_images.len(), 2);
         assert!(output.workspace_dir.contains("upgrade_service_projection"));
         assert_optional_path_ends_with(output.workspace_scripts.upgrade.as_deref(), "upgrade.sh");
         assert!(
@@ -19683,7 +21851,18 @@ mod tests {
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
         assert_eq!(container.runtime, SoraContainerRuntimeV1::Inrou);
         assert_eq!(container.bundle_path, "/app/server.mjs");
-        assert!(container.inrou.is_some());
+        assert_eq!(
+            container.capabilities.network,
+            SoraNetworkPolicyV1::Isolated
+        );
+        assert!(
+            container
+                .inrou
+                .as_ref()
+                .expect("Inrou manifest")
+                .ssh_authorized_keys
+                .is_empty()
+        );
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(
@@ -20329,6 +22508,10 @@ mod tests {
             load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
         assert_eq!(live_container.runtime, SoraContainerRuntimeV1::Inrou);
         assert_eq!(
+            live_container.capabilities.network,
+            SoraNetworkPolicyV1::Isolated
+        );
+        assert_eq!(
             live_service.execution_plane,
             SoraServiceExecutionPlaneV1::HttpService
         );
@@ -20375,10 +22558,7 @@ mod tests {
                 .rootfs_image_path,
             "/inrou/aarch64/rootfs.ext4"
         );
-        assert_eq!(
-            inrou.ssh_authorized_keys,
-            vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()]
-        );
+        assert!(inrou.ssh_authorized_keys.is_empty());
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -21146,7 +23326,7 @@ mod tests {
         assert!(live_route_prefix.detail.contains("travel-ops_admin:/admin"));
     }
     #[test]
-    fn app_release_dry_run_reports_build_and_upsert_plan() {
+    fn app_release_dry_run_reports_build_and_deploy_plan() {
         let (dir, _) = split_app_fixture("split_app_release_dry_run");
         let key_pair = soracloud_fixture_key_pair(0x40);
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -21161,7 +23341,7 @@ mod tests {
         .run(&authority, &key_pair)
         .expect("release dry-run should succeed");
         assert_eq!(output.mode, "dry_run");
-        assert_eq!(output.release_mode, "deploy_or_upgrade_on_conflict");
+        assert_eq!(output.release_mode, "deploy");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
         assert!(!output.skip_build);
@@ -21174,7 +23354,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|build| build.mode == "dry_run")
         );
-        assert_notes_contain(&output.notes, "deploy-then-upgrade-on-conflict");
+        assert_notes_contain(&output.notes, "one explicit deploy");
     }
     #[test]
     fn app_release_runs_build_and_then_deploys_split_app() {
@@ -21189,7 +23369,7 @@ mod tests {
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = mock_bundle_mutation_server(
-            "/v1/soracloud/deploy",
+            "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
             "encode pin register response",
@@ -21228,14 +23408,14 @@ mod tests {
             .iter()
             .find(|service| service.service_name == "travel-ops_live")
             .expect("live service output");
-        assert!(live_service.published_bundle.is_some());
+        assert!(!live_service.published_bundle.content_cid.is_empty());
         assert_eq!(live_service.published_inrou_guest_images.len(), 2);
         let vault_service = release_response
             .services
             .iter()
             .find(|service| service.service_name == "travel-ops_vault")
             .expect("vault service output");
-        assert!(vault_service.published_bundle.is_some());
+        assert!(!vault_service.published_bundle.content_cid.is_empty());
         assert!(
             release_response
                 .published_static_site
@@ -21245,12 +23425,14 @@ mod tests {
         let deploy_requests = server
             .requests()
             .into_iter()
-            .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
+            .filter(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/apps/deploy"
+            })
             .count();
-        assert_eq!(deploy_requests, 2);
+        assert_eq!(deploy_requests, 1);
     }
     #[test]
-    fn app_release_reuses_published_inrou_guest_image_artifacts() {
+    fn app_release_rejects_prepublished_inrou_guest_image_artifacts() {
         if !bash_available() {
             return;
         }
@@ -21312,7 +23494,7 @@ mod tests {
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = mock_bundle_mutation_server(
-            "/v1/soracloud/deploy",
+            "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
             "encode pin register response",
@@ -21321,7 +23503,7 @@ mod tests {
         let key_pair = soracloud_fixture_key_pair(0x42);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let output = AppReleaseArgs {
+        let error = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -21330,26 +23512,14 @@ mod tests {
             dry_run: false,
         }
         .run(&authority, &key_pair)
-        .expect("release should succeed with prepublished guest images");
-        let release_response = output
-            .release_response
-            .as_ref()
-            .expect("release must include the mutation response");
-        let live_service = release_response
-            .services
-            .iter()
-            .find(|service| service.service_name == "travel-ops_live")
-            .expect("live service output");
-        assert!(live_service.published_bundle.is_some());
-        assert_eq!(live_service.published_inrou_guest_images.len(), 2);
+        .expect_err("V1 release must reject prepublished guest images");
         assert!(
-            live_service
-                .published_inrou_guest_images
-                .iter()
-                .all(|artifact| artifact
-                    .note
-                    .contains("reused a prepublished Inrou guest-image artifact"))
+            format!("{error:#}").contains("prepublished Inrou guest-image refs"),
+            "unexpected release error: {error:#}"
         );
+        assert!(!server.requests().iter().any(|request| {
+            request.method == "POST" && request.path == "/v1/soracloud/apps/deploy"
+        }));
     }
     #[test]
     fn app_local_plan_rejects_app_service_name_mismatch() {
@@ -21497,16 +23667,13 @@ mod tests {
         );
     }
     #[test]
-    fn app_manifest_static_site_publish_mode_defaults_to_root_binding() {
-        let manifest = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[12])
-            .expect("legacy manifest should parse");
-        assert_eq!(
-            manifest
-                .static_site
-                .as_ref()
-                .map(|site| site.publish_mode.as_str()),
-            Some(APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
-        );
+    fn app_manifest_rejects_missing_static_site_publish_mode() {
+        let error = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[12])
+            .expect_err("first-release app manifests must declare static-site publish_mode");
+        assert!(matches!(
+            error,
+            json::Error::MissingField { ref field } if field == "publish_mode"
+        ));
     }
     #[test]
     fn app_static_site_root_binding_plan_targets_public_host_for_root_binding() {
@@ -22041,10 +24208,17 @@ mod tests {
                 ]
             }
         });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/status".to_owned(),
-            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
-        )]));
+        let encoded = json::to_vec(&payload).expect("encode status payload");
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/apps/travel_ops/status".to_owned(),
+                MockHttpResponse::json(encoded.clone()),
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse::json(encoded),
+            ),
+        ]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
@@ -22198,10 +24372,17 @@ mod tests {
                 ]
             }
         });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/status".to_owned(),
-            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
-        )]));
+        let encoded = json::to_vec(&payload).expect("encode status payload");
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/apps/travel_ops/status".to_owned(),
+                MockHttpResponse::json(encoded.clone()),
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse::json(encoded),
+            ),
+        ]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
@@ -22267,10 +24448,17 @@ mod tests {
                 ]
             }
         });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/status".to_owned(),
-            MockHttpResponse::json(json::to_vec(&payload).expect("encode status payload")),
-        )]));
+        let encoded = json::to_vec(&payload).expect("encode status payload");
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/apps/travel_ops/status".to_owned(),
+                MockHttpResponse::json(encoded.clone()),
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse::json(encoded),
+            ),
+        ]));
         install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
@@ -22335,7 +24523,7 @@ mod tests {
         let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = mock_bundle_mutation_server(
-            "/v1/soracloud/deploy",
+            "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
             "encode pin register response",
@@ -22424,12 +24612,15 @@ mod tests {
         let deploy_request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/apps/deploy")
             .expect("deploy request should be captured");
         let deploy_body: norito::json::Value =
             json::from_slice(&deploy_request.body).expect("decode deploy request");
         let initial_configs = deploy_body
-            .get("initial_service_configs")
+            .get("deploy_services")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|services| services.first())
+            .and_then(|service| service.get("initial_service_configs"))
             .and_then(norito::json::Value::as_object)
             .expect("deploy request must include initial service configs");
         let binding = initial_configs
@@ -22581,7 +24772,7 @@ mod tests {
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = mock_bundle_mutation_server(
-            "/v1/soracloud/deploy",
+            "/v1/soracloud/apps/deploy",
             &draft_response,
             &status_payload,
             "encode pin register response",
@@ -22702,16 +24893,20 @@ mod tests {
             publication.cid_gateway_url, publication.public_url,
             "cid-only apps must publish the frontend under the CID gateway path instead of the host root"
         );
-        let deploy_requests = server
+        let deploy_request = server
             .requests()
             .into_iter()
-            .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
-            .collect::<Vec<_>>();
-        assert_eq!(deploy_requests.len(), 2);
-        for request in deploy_requests {
-            let deploy_body: norito::json::Value =
-                json::from_slice(&request.body).expect("decode deploy request");
-            let initial_configs = deploy_body
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/apps/deploy")
+            .expect("canonical app deploy request");
+        let deploy_body: norito::json::Value =
+            json::from_slice(&deploy_request.body).expect("decode deploy request");
+        let deploy_services = deploy_body
+            .get("deploy_services")
+            .and_then(norito::json::Value::as_array)
+            .expect("app deploy request must include deploy services");
+        assert_eq!(deploy_services.len(), 2);
+        for service in deploy_services {
+            let initial_configs = service
                 .get("initial_service_configs")
                 .and_then(norito::json::Value::as_object)
                 .expect("deploy request must include initial service configs");
@@ -22747,7 +24942,7 @@ mod tests {
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
         let draft_response = norito::json!({ "tx_instructions": [] });
         let server = mock_bundle_mutation_server(
-            "/v1/soracloud/upgrade",
+            "/v1/soracloud/apps/upgrade",
             &draft_response,
             &status_payload,
             "encode pin register response",
@@ -22804,16 +24999,22 @@ mod tests {
             .expect("cid-only app should publish a static site");
         assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
-        let upgrade_requests = server
+        let upgrade_request = server
             .requests()
             .into_iter()
-            .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/upgrade")
-            .collect::<Vec<_>>();
-        assert_eq!(upgrade_requests.len(), 2);
-        for request in upgrade_requests {
-            let upgrade_body: norito::json::Value =
-                json::from_slice(&request.body).expect("decode upgrade request");
-            let initial_configs = upgrade_body
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/apps/upgrade"
+            })
+            .expect("canonical app upgrade request");
+        let upgrade_body: norito::json::Value =
+            json::from_slice(&upgrade_request.body).expect("decode upgrade request");
+        let upgrade_services = upgrade_body
+            .get("upgrade_services")
+            .and_then(norito::json::Value::as_array)
+            .expect("app upgrade request must include upgrade services");
+        assert_eq!(upgrade_services.len(), 2);
+        for service in upgrade_services {
+            let initial_configs = service
                 .get("initial_service_configs")
                 .and_then(norito::json::Value::as_object)
                 .expect("upgrade request must include initial service configs");

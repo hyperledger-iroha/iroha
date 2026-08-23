@@ -553,12 +553,105 @@ activity alone is not backing liquidity. The
 preparation command requires an explicit nonzero policy-evaluation Unix time,
 uses Core's complete consensus validator for trusted X.509 CA structure,
 critical extensions, certificate validity and production app policy, and binds
-that evaluation time into its report. Validators repeat the same validation at
-the activation block's actual timestamp. The
-exact-network escrow is materialized by Core from the live `NetworkId` and
-asset definition. A recursive release, release-derived escrow account, or
-device policy must never be embedded back into genesis: doing so would change
-the genesis hash that those artifacts authenticate.
+that evaluation time into its report. Certificate inputs are bounded to 16 KiB
+each and four Apple or eight Android chain entries. Before semantic X.509
+parsing, Core validates the original bytes as one complete canonical DER
+certificate: an explicit v3 `TBSCertificate`, positive canonical serial of at
+most 20 bytes, raw-identical inner and outer signature
+`AlgorithmIdentifier`, and a signature bit string with zero unused bits. RSA
+PKCS#1 accepts only SHA-256/384/512 with absent or NULL parameters;
+ECDSA-SHA-256/384 and Ed25519 require absent parameters. RSA-PSS requires
+explicit `[0]` hash, `[1]` MGF1, and `[2]` salt fields, the same
+SHA-256/384/512 choice for the signature and MGF1, a digest-sized salt, and no
+trailer override. Non-canonical lengths, nested remainder fields, retagged
+OIDs/NULLs, parameter drift, and MD2/MD5/SHA-1 fail before signature
+verification. Duplicate extensions, unprocessed name/policy constraints,
+unsupported critical extensions, and leaf CA capabilities also fail closed.
+Validity fields use only RFC 5280 whole-second Zulu encodings: `UTCTime`
+through 2049 and `GeneralizedTime` from 2050, with no offsets or fractions.
+Certificate validity is compared against the consensus millisecond clock
+without flooring it to ASN.1 whole seconds: an exact `notAfter` instant is
+valid, and the following millisecond is expired.
+
+Static policy revocation uses `revoked_certificate_tbs_sha256`: SHA-256 of the
+exact raw DER slice presented to the signature verifier as `TBSCertificate`.
+It deliberately does not hash the complete certificate, because the outer
+signature encoding is not the certificate identity and can change without
+changing the signed subject, issuer, key, extensions, or validity. Submitted
+chain entries and external anchors are checked by that TBS identity.
+Trust-root rollover tries exact DER pins before same-subject issuer candidates.
+
+Android scans rootward for the KeyMint attestation extension and requires the
+root-nearest occurrence to be the assertion leaf, so a valid attested CA cannot
+bless an attacker-added leaf. Release activation requires exactly the embedded
+current Apple App Attest root and both embedded current Google Android
+attestation roots, and all three must be governance-active at the release
+evaluation time. The root-nearest non-anchor must classify
+unambiguously as a factory chain or the exact Google RKP identity; unknown and
+mixed identities fail closed. The on-chain KeyMint profile deliberately accepts
+hardware TEE(1) or StrongBox(2); the StrongBox-only physical release-evidence
+slot is a separate qualification requirement. Either level must carry exactly
+one hardware-enforced `rootOfTrust` with a nonempty verified-boot key,
+`deviceLocked=true`, `verifiedBootState=Verified`, and a 32-byte verified-boot
+hash. Authorization-list tags are unique even when Core does not otherwise use
+them. The attestation application id must contain exactly the registered
+package and exactly its registered signing digest; extra shared-UID packages or
+signers fail closed. Every non-target certificate must have reached
+its `notBefore` by admission. Factory-chain non-target expiry may be ignored
+only when the chain uses the legacy Google hardware-attestation root; other
+factory chains must be unexpired at admission. Every RKP non-target certificate
+must be valid both at admission and through the final admitted millisecond
+before the exclusive registration expiry. Governed root activation bounds
+independently cover the whole registration lifetime.
+
+An Android-enabled policy also requires
+`OfflineAndroidAttestationStatusSnapshotV1`. It binds the SHA-256 of the exact
+Google response bytes, HTTP `Date`, optional `Last-Modified`, bounded
+`Cache-Control: max-age`, and a sorted unique list of lowercase, unpadded
+certificate serials whose status is `REVOKED` or `SUSPENDED`. The exact
+response is limited to 256 KiB, 4,096 serials of at most 40 hexadecimal
+characters, and a one-second to 24-hour cache lifetime. Every submitted
+certificate and any external anchor is checked against that list. Freshness is
+the half-open interval
+`[response_date_ms, response_date_ms + max_age)` and must cover the complete
+device-registration and validator-qualification validity windows, not only the
+activation block. Device-registration expiry is already exclusive. Validator
+qualification expiry is inclusive at the signing clock, so its coverage check
+uses the following millisecond as a checked exclusive endpoint; equality with
+the first stale millisecond is rejected. Once installed, the snapshot cannot be
+removed.
+Replacing it permits an identical replay, but otherwise requires a strictly
+later `Date`; `Last-Modified` cannot disappear or decrease, and an equal
+`Last-Modified` cannot accompany changed payload or serial state. This makes
+the signed policy transition fail closed on stale or rolled-back upstream
+state while permitting a newer authenticated status list to remove recovered
+serials.
+
+Capture the fixed upstream response before assembling the governed policy:
+
+```sh
+python3 -I scripts/capture_android_attestation_status.py \
+  --output-directory /absolute/owner-private/new-android-status-capture
+```
+
+The helper connects only to
+`https://android.googleapis.com/attestation/status`, forbids redirects and
+content transformation, bounds the body and serial inventory, and checks
+`Date`, `Age`, `Cache-Control`, `Expires`, and optional `Last-Modified` as one
+fresh cache contract. It publishes create-new mode-`0600` `status.json`,
+`snapshot.json`, and `capture-receipt.json` files beneath a mode-`0700`
+owner-controlled directory. The Android evidence validator re-derives the
+snapshot and receipt from the exact pinned status bytes and headers and rejects
+it once stale. TLS retrieval and the unsigned receipt do not grant consensus
+authority: the promotion controller/governance signature binds the reviewed
+snapshot into the policy. Consensus validates only that deterministic governed
+state and never fetches the network.
+
+Validators repeat policy validation at the activation block's actual
+timestamp. The exact-network escrow is materialized by Core from the live
+`NetworkId` and asset definition. A recursive release, release-derived escrow
+account, or device policy must never be embedded back into genesis: doing so
+would change the genesis hash that those artifacts authenticate.
 
 A validator that will validate a transaction against a particular locally
 cached candidate must have that candidate before the transaction is submitted.
@@ -702,11 +795,11 @@ Catalog export fails closed if that dynamic step transition cannot be proved.
 Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
 the exact reviewed candidate plus its exact ordered eight KRV4 artifacts and
-calls the same ABI-21 prover/verifier/recursion implementation. Its symbols,
-marker-bearing native library, and test host are distinct from production and
-are rejected by production packaging. The normal artifact install and proof
-entrypoints remain unavailable, and device evidence must record that production
-capability stayed false.
+calls the same ABI-21/V4 prover, verifier, and recursion protocol through the
+ABI-22 Connect native bridge. Its symbols, marker-bearing native library, and
+test host are distinct from production and are rejected by production
+packaging. The normal artifact install and proof entrypoints remain unavailable,
+and device evidence must record that production capability stayed false.
 
 The current Taira-testnet evidence policy has one physical-iOS slot and makes
 no Android-parity claim. Its
@@ -719,6 +812,11 @@ output cannot satisfy that slot. Candidate-bound Android evidence remains a
 separate policy slot: its marker-bearing candidate-lab APK is never relabelled
 as the separately attested wallet APK used for StrongBox, rotation, rollback,
 and device-to-device transfer evidence.
+
+The candidate-native builder and both device launches must use the same full
+two-line Xcode 26.6 build identity and the same `iphoneos` SDK identity. Both
+values are authenticated by the native-build manifest and signed evidence;
+Xcode 26.2 or any build/SDK substitution fails closed.
 
 Run the repository corridor without external evidence while preparing a
 candidate:
@@ -844,10 +942,12 @@ explicit signed macOS-build TCB and require external host qualification.
 
 The workstation Xcode layout is not automatically accepted: `/Applications`
 is group-writable on the current host and its selected SDK name is a symlink.
-Production therefore requires Xcode 26.2 build `17C52` under a canonical
-root-owned, non-group-writable hierarchy, with a non-symlink SDK path and signed
-tree identities. Ambient `xcode-select`, `DEVELOPER_DIR`, and `SDKROOT` changes
-cannot select another SDK.
+The authenticated source-seal build corridor therefore requires Xcode 26.2
+build `17C52` under a canonical root-owned, non-group-writable hierarchy, with
+a non-symlink SDK path and signed tree identities. This is separate from the
+Xcode 26.6 candidate-device lane and the production App Attest capture path.
+Ambient `xcode-select`, `DEVELOPER_DIR`, and `SDKROOT` changes cannot select
+another SDK.
 
 The installed macOS 26.2 Seatbelt has not yet completed that qualification.
 With broad Mach and sysctl grants removed, even a minimal `/bin/echo` launch
@@ -1251,11 +1351,12 @@ reverifies both `canary-authorization-submission-journal-v1.norito` and the
 root-private complete `canary-submission-journal-v1.norito` before the first
 authorization POST. Consensus verifies the reservation controller signature,
 network, actual transaction authorizer, exclusive time/height limits, and exact
-activation binding, then reserves only the external canary entrypoint hash.
-Reapplying the same exact reservation is idempotent; another reservation for an
-occupied promotion slot fails. Because the public instruction contains only
-signed hashes, a third party cannot learn and submit the exact canary early to
-poison its pipeline hash.
+activation binding, then reserves the external canary entrypoint hash, complete
+signed-wire identity, and byte-identical signed reservation under the same
+promotion slot. Reapplying that exact reservation is
+idempotent; another call, signed wire, or reservation for an occupied slot fails.
+Because the public instruction contains only signed digests, a third party
+cannot learn and submit the exact canary early to poison its pipeline hash.
 
 `submit-canary` requires separate explicit `--write-authorized` consent, the
 same exact Torii origin, network, and authority, the private byte-identical
@@ -1264,9 +1365,24 @@ before each local commit or network POST, the client advances an
 activation-anchored finality verifier through every observed successor, checks
 that the next-block inclusion margin remains before the exclusive height
 expiry, reads a fresh protected-host time, and reverifies the complete
-authorization. Core accepts `RecordKagemushaTairaCanaryV4` only when the current
-external entrypoint hash equals the reserved hash and the full activation
-binding and permit still match; the exact canary is consumed once. A
+authorization. At each canonical transaction boundary Core clears prior context
+and derives a complete-wire identity only when the enclosing entrypoint is
+itself `External` and contains exactly one direct
+`RecordKagemushaTairaCanaryV4`; top-level Batch, contract, IVM, dynamically
+emitted, and `SealedReveal`-wrapped forms remain unbound. In particular, opening
+a sealed commitment does not reinterpret its inner signed transaction as the
+external evidence carrier reserved by the controller. Core accepts the record
+only for `Ordinary` admission intent and only when both the current external
+entrypoint hash and this
+authorization-proof-bearing signed-wire identity equal their reserved markers
+and the full activation binding and permit still match. The direct record
+affinely takes and clears that wire capability before any child data-trigger
+execution, and the exact canary is consumed once. Autonomous merge producers
+and live or historical followers separately admit only `QueuePlanSynced`
+entrypoints after authenticating their payload or batch commitments. The
+controller-authorized canary is signed with `Ordinary`; changing that intent
+changes its signed entrypoint and complete wire, so merge cannot reclassify it
+as the reserved direct canary. A
 pre-existing status without the corresponding journal, a mismatching journal,
 or an ambiguous submission cannot be retrospectively converted into production
 evidence.
@@ -1292,13 +1408,17 @@ no-replace `post-canary-validator-liveness-challenge-v1.norito`: an
 issuer-signed, canary-bound challenge containing a fresh nonzero OS-random
 nonce, a maximum five-minute interval, and exactly four ordered qualified
 `PeerId`/distinct canonical HTTPS-origin targets. The collector then queries all
-four origins concurrently. Its attestation transport is direct, proxy-free,
-redirect-free, transport-retry-free, bounded to 8 MiB, requests identity
-encoding, rejects every `Content-Encoding`, and requires canonical Norito plus
-`Cache-Control: no-store`. Runtime-configured authentication headers are
-forwarded only to those four operator-precommitted origins; their custody is an
-operator trust input and header values are not persisted in the artifact. A
-status read is only an unsigned tip hint; a `404`
+four origins concurrently. Its status-hint and attestation transports share one
+direct, proxy-free, redirect-free, transport-retry-free client, request identity
+encoding, and reject every `Content-Encoding`. The status hint is the bounded,
+canonical JSON `/status/blocks` scalar. The attestation response is bounded to
+8 MiB and requires canonical Norito plus `Cache-Control: no-store`. The collector
+never forwards the primary Torii
+client's Basic, bearer, cookie, or custom headers to any separately supplied
+validator origin. The attestation request carries only `Accept`,
+`Accept-Encoding`, and the signed-challenge header; a validator that requires
+separate authentication therefore fails closed instead of receiving a reused
+credential. A status read is only an unsigned tip hint; a `404`
 caused by a tip race is retried at the application layer with the same signed
 challenge and a fresh hint while the interval remains open.
 
@@ -1312,7 +1432,10 @@ that chain byte-for-byte. The receipt issuer signs the complete four-observation
 artifact and publishes
 `post-canary-validator-liveness-evidence-v1.norito` no-replace. This proves that
 four distinct qualified signing keys answered the same fresh challenge with a
-durable tip at or after the exact canary. It does not prove continuous uptime,
+durable tip at or after the exact canary. The verified canary capability retains
+the exact controller-authenticated activation-expectations artifact, and the
+liveness verifier rejects substituting another expectations capability even
+when its promotion id and activation intent match. It does not prove continuous uptime,
 physical host independence, uncompromised validator keys, or that all four keys
 voted in one quorum certificate. HTTPS origins and request times are trusted
 collector observations; a reverse proxy can relay a request but cannot forge a
@@ -1320,11 +1443,14 @@ validator signature.
 
 These commands are local primitives, not evidence of a live rollout or
 promotion. Still required are
-real physical App Attest and candidate artifacts, protected collection of all
-four host seals and their identical runtime-effective projections, runtime
-governance and signing inputs, and live four-validator and Taira
-submission/finality evidence. The checked-in verification workflow supplies
-none of those live steps, and no promotion may be inferred from its success.
+a clean immutable source commit with exactly one accepted SSH signature, a
+fresh same-source ABI-22 Connect native artifact, real physical App Attest and
+candidate artifacts, protected collection of all four host seals and their
+identical runtime-effective projections, runtime governance and signing
+inputs, and live four-validator and Taira submission/finality evidence. An
+unsigned mixed commit, dirty checkout, or ignored ABI-19 bridge manifest cannot
+satisfy those inputs. The checked-in verification workflow supplies none of
+those live steps, and no promotion may be inferred from its success.
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external

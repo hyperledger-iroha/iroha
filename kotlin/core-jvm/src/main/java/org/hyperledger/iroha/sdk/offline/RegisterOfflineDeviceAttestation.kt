@@ -15,17 +15,20 @@ import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 
+private const val DEFAULT_REGISTRATION_TRANSACTION_TTL_MS = 100_000L
+
 /** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 class RegisterOfflineDeviceAttestation(
     val networkId: NetworkId,
     val authority: String,
     val registration: DeviceAttestationRegistration,
     val creationTimeMs: Long,
-    val timeToLiveMs: Long? = null,
+    timeToLiveMs: Long? = null,
     val nonce: Long? = null,
     val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
+    val timeToLiveMs: Long? = timeToLiveMs ?: DEFAULT_REGISTRATION_TRANSACTION_TTL_MS
     private val metadataSnapshot = metadata.toMap()
 
     init {
@@ -33,10 +36,10 @@ class RegisterOfflineDeviceAttestation(
             "authority must be exact non-empty text"
         }
         require(creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
-        if (timeToLiveMs != null) {
-            require(timeToLiveMs > 0) { "timeToLiveMs must be positive when present" }
+        requireNotNull(this.timeToLiveMs).let { effectiveTimeToLiveMs ->
+            require(effectiveTimeToLiveMs > 0) { "timeToLiveMs must be positive when present" }
             val validUntil = try {
-                addExact(creationTimeMs, timeToLiveMs)
+                addExact(creationTimeMs, effectiveTimeToLiveMs)
             } catch (ex: ArithmeticException) {
                 throw IllegalArgumentException("transaction lifetime overflows milliseconds", ex)
             }

@@ -1652,7 +1652,13 @@ Root {
         inrou: SoracloudRuntimeInrou {
             max_concurrent_vms: 8,
             enabled: false,
-            proxy_only: false,
+            backends: {
+                PortableVm,
+            },
+            portable_vm_acceleration: Tcg,
+            max_cpu_millis: 8000,
+            max_memory_bytes: 8589934592,
+            max_storage_bytes: 68719476736,
             bundle_archive_max_compressed_bytes: 536870912,
             bundle_archive_max_decoded_bytes: 3221225472,
             bundle_archive_max_entries: 4096,

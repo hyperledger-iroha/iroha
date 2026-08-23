@@ -8,6 +8,9 @@ use crate::{
     settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
     smartcontracts::{
         Execute as _, code,
+        isi::offline::{
+            signed_kagemusha_taira_canary_wire_identity_v1, signed_lifecycle_entrypoint_context,
+        },
         ivm::cache::{ExecutableProgramSummary, IvmCache, ProgramSummary},
     },
     state::{
@@ -5965,12 +5968,8 @@ impl Executor {
         Ok(())
     }
     /// Execute [`SignedTransaction`].
-    ///
     /// # Errors
-    ///
-    /// - Failed to prepare the IVM runtime;
-    /// - Failed to execute the entrypoint of the IVM bytecode;
-    /// - Executor denied the operation.
+    /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
     #[allow(clippy::too_many_lines)]
     pub fn execute_transaction(
         &self,
@@ -5979,17 +5978,28 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
+        state_transaction.bind_privacy_transaction_intent_v1(None);
+        state_transaction.kagemusha_taira_canary_wire_identity = None;
+        state_transaction.kagemusha_release_lifecycle_entrypoint = None;
         if transaction.authority() != authority {
             return Err(ValidationFail::InternalError(
-                "executor authority argument does not match signed transaction authority"
-                    .to_owned(),
+                "signed authority mismatch".into(),
             ));
         }
         trace!("Running transaction execution");
-        state_transaction.bind_privacy_transaction_intent_v1(None);
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
+        if state_transaction.kagemusha_taira_canary_external_entrypoint {
+            state_transaction.kagemusha_taira_canary_wire_identity =
+                signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
+            state_transaction.kagemusha_release_lifecycle_entrypoint =
+                signed_lifecycle_entrypoint_context(&transaction)?;
+        }
+        let call_hash = transaction.hash_as_entrypoint();
+        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
+        let tx_hash = transaction.hash();
+        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let tx_bytes_len = to_bytes(transaction.payload())
             .map(|bytes| bytes.len())
             .map_err(|err| {
@@ -6022,11 +6032,6 @@ impl Executor {
             )
             .map_err(nexus_fee_admission_error_to_validation_fail)?;
         }
-        // Bind the transaction call_hash for ISI event emitters to use in audit fields
-        let call_hash = transaction.hash_as_entrypoint();
-        state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
-        let tx_hash = transaction.hash();
-        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());
@@ -6048,9 +6053,16 @@ impl Executor {
                                         .is_some()
                                 })
                     );
-                    if only_custom_instruction_envelopes {
+                    let exact_kagemusha_release_lifecycle = state_transaction
+                        .kagemusha_release_lifecycle_entrypoint
+                        .is_some()
+                        && transaction.multisig_signatures().is_some();
+                    if only_custom_instruction_envelopes || exact_kagemusha_release_lifecycle {
                         // Allowed: custom instruction envelopes are validated by their respective
                         // runtime handlers (including multisig propose/approve/register paths).
+                        // Kagemusha's narrow direct lifecycle corridor is separately bound to one
+                        // native External instruction and a verified multisignature bundle so its
+                        // independent finality receipts can authenticate that exact transaction.
                     } else {
                         #[cfg(feature = "telemetry")]
                         crate::telemetry::record_social_rejection(
@@ -6058,7 +6070,7 @@ impl Executor {
                             "multisig_direct_sign",
                         );
                         return Err(ValidationFail::NotPermitted(
-                            "direct signing with multisig accounts is forbidden; use multisig propose/approve"
+                            "direct signing with multisig accounts is forbidden outside the exact Kagemusha release lifecycle; use multisig propose/approve"
                                 .to_owned(),
                         ));
                     }
@@ -9340,6 +9352,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
         iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4,
+        iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
         iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
         iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,

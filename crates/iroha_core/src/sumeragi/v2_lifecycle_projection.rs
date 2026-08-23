@@ -46,6 +46,8 @@ use norito::codec::Encode;
 use thiserror::Error;
 const BLOCK_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:block-subject:v1";
 const EXECUTION_COMMITMENT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:execution-commitment:v1";
+const TIMEOUT_CERTIFICATE_ENVELOPE_SUBJECT_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:timeout-certificate-envelope-subject:v1";
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
 const CERTIFIED_SERVE_KEY_SUBJECT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:certified-serve-key-subject:v1";
@@ -2416,7 +2418,7 @@ fn project_broadcast(
                     context,
                     certificate.round,
                     highest.map(|qc| qc.proposal_round),
-                    highest.map(|qc| block_subject(qc.subject)),
+                    Some(timeout_certificate_envelope_subject(certificate)),
                     LifecyclePhase::BroadcastTc,
                     highest.map(|qc| execution_commitment(qc.execution_commitment)),
                 ),
@@ -2609,6 +2611,20 @@ pub(super) fn block_subject(subject: wire::BlockSubject) -> LifecycleDigest {
 /// Derive the lifecycle-domain digest for one exact execution commitment.
 pub(super) fn execution_commitment(commitment: wire::ExecutionCommitment) -> LifecycleDigest {
     domain_digest(EXECUTION_COMMITMENT_DOMAIN, &commitment.encode())
+}
+/// Derive the lifecycle subject for one complete authenticated timeout-certificate envelope.
+///
+/// A same-round certificate may legitimately acquire a different quorum
+/// aggregation while retaining the same highest PrepareQC. Those envelopes
+/// require distinct durable output rows so the newer certificate still enters
+/// service I/O; exact byte retries retain the same key and stutter.
+pub(super) fn timeout_certificate_envelope_subject(
+    certificate: &wire::TimeoutCertificate,
+) -> LifecycleDigest {
+    domain_digest(
+        TIMEOUT_CERTIFICATE_ENVELOPE_SUBJECT_DOMAIN,
+        &certificate.encode(),
+    )
 }
 /// Derive the logical key shared by certified-Fetch admission and its
 /// authenticated late response. Ordinary, uncertified Fetch work is excluded:

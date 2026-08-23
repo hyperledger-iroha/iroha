@@ -1809,6 +1809,7 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
     manifest_sha256: jni::objects::JByteArray<'_>,
     trusted_policy_norito: jni::objects::JByteArray<'_>,
     release_attestation_norito: jni::objects::JByteArray<'_>,
+    internal_validation_receipt_norito: jni::objects::JByteArray<'_>,
     benchmark_evidence: jni::objects::JByteArray<'_>,
     cryptographic_review: jni::objects::JByteArray<'_>,
     promotion_record_norito: jni::objects::JByteArray<'_>,
@@ -1847,6 +1848,13 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_ATTESTATION_BYTES_V1 as usize,
         )
         .ok_or_else(|| "invalid Kagemusha V4 release attestation".to_owned())?;
+        let internal_validation_receipt = read_java_byte_array_bounded(
+            env,
+            &internal_validation_receipt_norito,
+            "internalValidationReceiptNorito",
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1 as usize,
+        )
+        .ok_or_else(|| "invalid Kagemusha V4 internal-validation receipt".to_owned())?;
         let benchmark = read_java_byte_array_bounded(
             env,
             &benchmark_evidence,
@@ -1872,6 +1880,7 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
             || manifest_digest.len() != 32
             || policy.is_empty()
             || attestation.is_empty()
+            || internal_validation_receipt.is_empty()
             || benchmark.is_empty()
             || review.is_empty()
             || promotion.is_empty()
@@ -1903,6 +1912,7 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
             manifest.len(),
             policy.len(),
             attestation.len(),
+            internal_validation_receipt.len(),
             benchmark.len(),
             review.len(),
             promotion.len(),
@@ -1912,6 +1922,7 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
             manifest_len,
             policy_len,
             attestation_len,
+            internal_validation_receipt_len,
             benchmark_len,
             review_len,
             promotion_len,
@@ -1926,6 +1937,9 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
                 policy_len.map_err(|_| "V4 policy exceeds native range".to_owned())?,
                 attestation.as_ptr(),
                 attestation_len.map_err(|_| "V4 attestation exceeds native range".to_owned())?,
+                internal_validation_receipt.as_ptr(),
+                internal_validation_receipt_len
+                    .map_err(|_| "V4 internal-validation receipt exceeds native range".to_owned())?,
                 benchmark.as_ptr(),
                 benchmark_len.map_err(|_| "V4 benchmark exceeds native range".to_owned())?,
                 review.as_ptr(),

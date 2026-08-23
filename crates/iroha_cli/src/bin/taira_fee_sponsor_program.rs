@@ -29,6 +29,8 @@ use std::{
 };
 use toml::Value;
 use url::Url;
+const CANONICAL_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+const CANONICAL_TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 #[derive(Debug, Parser)]
 #[command(
     about = "Create, stage, fund, enroll, and activate an exact Taira fee sponsor program",
@@ -37,9 +39,9 @@ use url::Url;
 struct Args {
     #[arg(long, default_value = "https://taira.sora.org")]
     torii_url: Url,
-    #[arg(long, default_value = "fc56984b-2be7-431d-840e-21514d1883f0")]
+    #[arg(long, default_value = CANONICAL_TAIRA_CHAIN_ID)]
     chain_id: ChainId,
-    #[arg(long, default_value_t = 369)]
+    #[arg(long, default_value_t = CANONICAL_TAIRA_CHAIN_DISCRIMINANT)]
     chain_discriminant: u16,
     /// Canonical Norito JSON document containing one immutable program revision.
     #[arg(long)]
@@ -58,7 +60,7 @@ struct Args {
     #[arg(long = "beneficiary", value_name = "I105")]
     beneficiaries: Vec<String>,
     /// Runtime-only client profile containing the sponsor signer. This command never modifies it.
-    #[arg(long, default_value = "defaults/kagami/iroha3-taira/config.toml")]
+    #[arg(long, default_value = "/run/secrets/taira-canary-client.toml")]
     profile_config: PathBuf,
     #[arg(long, default_value_t = 600)]
     status_timeout_secs: u64,
@@ -142,6 +144,17 @@ fn parse_taira_account(account: &str, discriminant: u16) -> Result<AccountId> {
         .and_then(|address| address.to_account_id())
         .wrap_err_with(|| format!("parse Taira account address `{account}`"))
 }
+fn require_canonical_taira_identity(chain_id: &ChainId, chain_discriminant: u16) -> Result<()> {
+    if chain_id.to_string() != CANONICAL_TAIRA_CHAIN_ID {
+        bail!("Taira chain id must be exactly `{CANONICAL_TAIRA_CHAIN_ID}`; got `{chain_id}`");
+    }
+    if chain_discriminant != CANONICAL_TAIRA_CHAIN_DISCRIMINANT {
+        bail!(
+            "Taira chain discriminant must be exactly {CANONICAL_TAIRA_CHAIN_DISCRIMINANT}; got {chain_discriminant}"
+        );
+    }
+    Ok(())
+}
 fn default_alias_cache_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
     sorafs_manifest::alias_cache::AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -204,6 +217,7 @@ fn provisioning_instructions(
 }
 fn main() -> Result<()> {
     let args = Args::parse();
+    require_canonical_taira_identity(&args.chain_id, args.chain_discriminant)?;
     if args.fund_amount.is_zero() {
         bail!("--fund-amount must be positive");
     }
@@ -375,6 +389,27 @@ mod tests {
                 Vec::new(),
                 NonZeroU64::new(10)
             ))
+        );
+    }
+    #[test]
+    fn taira_identity_rejects_alias_and_discriminant_mismatch() {
+        let canonical = ChainId::from(CANONICAL_TAIRA_CHAIN_ID);
+        require_canonical_taira_identity(&canonical, CANONICAL_TAIRA_CHAIN_DISCRIMINANT)
+            .expect("canonical first-release Taira identity");
+
+        let alias = ChainId::from("iroha3-taira");
+        let alias_error =
+            require_canonical_taira_identity(&alias, CANONICAL_TAIRA_CHAIN_DISCRIMINANT)
+                .expect_err("retired Taira alias must fail");
+        assert!(alias_error.to_string().contains(CANONICAL_TAIRA_CHAIN_ID));
+
+        let discriminant_error =
+            require_canonical_taira_identity(&canonical, CANONICAL_TAIRA_CHAIN_DISCRIMINANT + 1)
+                .expect_err("wrong Taira discriminant must fail");
+        assert!(
+            discriminant_error
+                .to_string()
+                .contains(&CANONICAL_TAIRA_CHAIN_DISCRIMINANT.to_string())
         );
     }
     #[test]

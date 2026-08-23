@@ -157,27 +157,27 @@ final class KagemushaPeerTransportTests: XCTestCase {
             projection.request.payload.assetDefinitionID,
             "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         )
-        XCTAssertEqual(offer.noritoArchive.count, 12_423)
+        XCTAssertEqual(offer.noritoArchive.count, 12_425)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "195269dd8af46ad18cde482111ca8f55b1a7a787275e238e1307910c843d4205"
+            "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"
         )
-        XCTAssertEqual(projection.request.archive.count, 765)
+        XCTAssertEqual(projection.request.archive.count, 753)
         XCTAssertEqual(
             sha256Hex(projection.request.archive),
-            "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
+            "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"
         )
-        XCTAssertEqual(projection.lineageArchive.count, 11_265)
+        XCTAssertEqual(projection.lineageArchive.count, 11_299)
         XCTAssertEqual(
             sha256Hex(projection.lineageArchive),
-            "e10be1c9f0632030a80106347dd06012adfdc01e3963c8cbf84981abc879197e"
+            "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"
         )
-        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 353)
+        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 393)
         XCTAssertEqual(
             sha256Hex(projection.publisherCheckpointEnvelope),
-            "be32a7335889e3f5220c0e14c26a6ad0ca41707a4ab958b05d7035de3767cf95"
+            "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"
         )
-        XCTAssertEqual(message.encoded.count, 12_507)
+        XCTAssertEqual(message.encoded.count, 12_509)
         XCTAssertEqual(
             try IrohaPeerKagemushaAdapterV1.decode(
                 IrohaPeerWireMessageV1.decode(message.encoded),
@@ -231,14 +231,14 @@ final class KagemushaPeerTransportTests: XCTestCase {
             noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.bundleWireNameV4)
         )
         XCTAssertEqual(KagemushaRecursiveSpend.wireVersionV4, 4)
-        XCTAssertEqual(payment.archive.count, 11_887)
+        XCTAssertEqual(payment.archive.count, 12_896)
         XCTAssertEqual(
             sha256Hex(payment.archive),
-            "ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"
+            "37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"
         )
         XCTAssertEqual(
             verifiedRequest.digest.hexEncodedString(),
-            "e9aa5e352f5e14687adac62b40dbcfba2050463624ce3d21377e83fc3f34de08"
+            "cb6508a5aa6b56ada90978d4db638b2176f20f154e9de4ed8a450d95a940c71b"
         )
         XCTAssertEqual(summary.assetDefinitionID, request.payload.assetDefinitionID)
         XCTAssertEqual(summary.amount, request.payload.amount)
@@ -270,7 +270,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,
                 .archiveTooLarge(
-                    actual: 11_887,
+                    actual: 12_896,
                     maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
                 )
             )

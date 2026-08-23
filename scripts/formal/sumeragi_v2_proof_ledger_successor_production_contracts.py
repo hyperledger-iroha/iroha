@@ -335,10 +335,13 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
 if !reservation.preflight(&prepared) {
     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
 }
-reservation.commit(prepared);
+let executor_dispatch = executor
+    .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
+    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+reservation.commit(prepared, executor_dispatch);
 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
 """,
-        "neutral Apply reservation must preflight before one-shot queue publication",
+        "neutral Apply reservation must join executor evidence before one-shot queue publication",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -544,7 +547,11 @@ Ok(LifecycleDecisionApplyCapacityReservationV1 {
         worker_services_path,
         capture,
         """
-LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
+LifecycleCompletionCapacityProbeV1::Apply {
+    ordinal,
+    key,
+    executor_available,
+} => {
     if key.lifecycle_ordinal() != ordinal
         || !key.matches_height_context(&self.context)
         || !apply_keys.insert(key)
@@ -552,7 +559,6 @@ LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
         "shared lifecycle census must bind each Apply probe to one exact height-local key",
         errors,
     )
-
     settlement = _require_rust_item(
         launch_path,
         launch_source,
@@ -563,6 +569,24 @@ LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
         launch_path,
         settlement,
         (
+            "LifecycleDecisionApplyWorkerResultV1::Deferred",
+            "completion.authorizes_sidecar_owner(services, lane_work)",
+            "sidecar.register(lane_work)",
+            "settle_applied_lifecycle_decision_apply_completion_with_status(",
+            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
+        ),
+        "neutral lifecycle Apply result classification and live-height publication mode",
+    )
+    shared_settlement = _require_rust_item(
+        launch_path,
+        launch_source,
+        "settle_applied_lifecycle_decision_apply_completion_with_status",
+        errors,
+    )
+    require_order(
+        launch_path,
+        shared_settlement,
+        (
             "prepare_lifecycle_decision_apply_terminal_transition",
             "executor.prepare_lifecycle_decision_apply_completion(authority)",
             "publish_lifecycle_decision_apply_terminal_transition",
@@ -571,9 +595,23 @@ LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
             "adapter.commit_after_durable_settlement()",
             "executor.commit_lifecycle_decision_apply_finality(finality)",
             "completion.acknowledge_after_owner_settlement()",
+            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
             "super::super::status::set_v2_status(status)",
         ),
-        "neutral lifecycle Apply terminal settlement",
+        "neutral lifecycle Apply durable terminal settlement and mode-gated publication",
+    )
+    pending_settlement = _require_rust_item(
+        launch_path,
+        launch_source,
+        "settle_pending_kura_applied_decision_apply_completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        launch_path,
+        pending_settlement,
+        "LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation",
+        "pending-Kura lifecycle Apply must defer status until no-clock activation",
+        errors,
     )
 
     _require_rust_source_token_sequence(
@@ -918,9 +956,12 @@ let mut next_block_sync_attempt =
             lifecycle_runner_path,
             active_height,
             """
-let discovery_was_outstanding = activated.with_runner_runtime(
+let discovery_was_outstanding = if lane_only_completion_barrier {
+    block_sync_request.is_some()
+} else {
+    activated.with_runner_runtime(
 """,
-            "serialized lifecycle ownership must sample the outstanding discovery request",
+            "serialized lifecycle ownership must preserve the Apply barrier while sampling the outstanding discovery request",
             errors,
         )
         if active_height is not None:
@@ -2206,34 +2247,79 @@ let status = launched
             errors,
             "lifecycle Decision Apply settlement publication",
         )
+        pending_applied_settlement = _require_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "settle_pending_kura_applied_decision_apply_completion",
+            errors,
+        )
+        shared_applied_settlement = _require_rust_item(
+            lifecycle_launch_path,
+            lifecycle_launch_source,
+            "settle_applied_lifecycle_decision_apply_completion_with_status",
+            errors,
+        )
         _require_rust_token_sequence(
             lifecycle_launch_path,
             lifecycle_apply_settlement,
+            """
+settle_applied_lifecycle_decision_apply_completion_with_status(
+    owner,
+    executor,
+    completion,
+    LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
+)
+""",
+            "live lifecycle Decision Apply settlement must select active-height status publication",
+            errors,
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            pending_applied_settlement,
+            """
+settle_applied_lifecycle_decision_apply_completion_with_status(
+    owner,
+    executor,
+    completion,
+    LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation,
+)
+""",
+            "pending-Kura lifecycle Decision Apply settlement must defer status publication until activation",
+            errors,
+        )
+        _require_rust_token_sequence(
+            lifecycle_launch_path,
+            shared_applied_settlement,
             """
 let status = executor.commit_lifecycle_decision_apply_finality(finality);
 let settled = completion.acknowledge_after_owner_settlement();
 assert!(
     matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
-    "borrowed recovered Apply result cannot change before acknowledgement"
+    "borrowed lifecycle Decision Apply result cannot change before acknowledgement"
 );
-super::super::status::set_v2_status(status);
+if matches!(
+    status_publication,
+    LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight
+) {
+    super::super::status::set_v2_status(status);
+}
 Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
 """,
-            "lifecycle Decision Apply settlement must preserve its intentional unguarded final publication",
+            "shared lifecycle Decision Apply settlement must preserve its mode-gated final publication",
             errors,
         )
-        if lifecycle_apply_settlement is not None:
+        if shared_applied_settlement is not None:
             require_token_count(
                 lifecycle_launch_path,
-                "lifecycle Decision Apply settlement publication",
-                lifecycle_apply_settlement.source,
+                "shared lifecycle Decision Apply settlement publication",
+                shared_applied_settlement.source,
                 "super::super::status::set_v2_status(status)",
                 1,
             )
             require_token_count(
                 lifecycle_launch_path,
-                "lifecycle Decision Apply settlement publication",
-                lifecycle_apply_settlement.source,
+                "shared lifecycle Decision Apply settlement publication",
+                shared_applied_settlement.source,
                 "status_publication_enabled",
                 0,
             )

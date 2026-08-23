@@ -268,10 +268,7 @@ impl DurableLiveWalApplyWork {
             && parent_is_exact
     }
 
-    fn predecessor_is_exact_in_coordinator(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> bool {
+    fn predecessor_is_exact_in_coordinator(&self, coordinator: &LifecycleCoordinator) -> bool {
         coordinator
             .records
             .get(&self.parent_address.ordinal)
@@ -402,12 +399,8 @@ impl DurableLiveWalApplyWork {
         digest: LifecycleDigest,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.matches_record(
-            address,
-            digest,
-            coordinator,
-            super::LifecycleState::Ready,
-        ) && coordinator.active_lease.is_none()
+        self.matches_record(address, digest, coordinator, super::LifecycleState::Ready)
+            && coordinator.active_lease.is_none()
             && coordinator.ready_index.contains(&address.ordinal)
     }
 
@@ -588,13 +581,34 @@ impl PreparedLiveValidateApplyRegistryWork {
             && address.slot == PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
     }
 
-    /// Seal the already-prechecked live child together with its detached parent.
-    fn into_concrete(
+    /// Join the closed Apply admission to its moved successful Validate parent.
+    ///
+    /// Failure returns both move-only inputs unchanged so the pre-fsync
+    /// publication transaction can restore the incumbent registry row.
+    fn into_typed_concrete(
         self,
-        parent_address: ConcreteWorkAddress,
         parent: ConcreteLifecycleWork,
         address: ConcreteWorkAddress,
-    ) -> ConcreteLifecycleWork {
+        digest: LifecycleDigest,
+    ) -> Result<ConcreteLifecycleWork, (Self, ConcreteLifecycleWork)> {
+        let parent_address = match &parent.kind {
+            ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
+                completion.address
+            }
+            _ => return Err((self, parent)),
+        };
+        if !self.validates_publication(address.owner, address.ordinal, address.slot, digest)
+            || !parent.validates_at(parent_address)
+            || parent_address == address
+            || parent_address.owner != address.owner
+            || !matches!(
+                &parent.kind,
+                ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
+                    if completion.outcome.validated_receipt() == Some(&self.validated_receipt)
+            )
+        {
+            return Err((self, parent));
+        }
         let Self {
             admission,
             validated_receipt,
@@ -603,7 +617,6 @@ impl PreparedLiveValidateApplyRegistryWork {
         let PreparedLifecycleAdmissionOwnerV1::LiveWal(admission) = owner else {
             unreachable!("prepared live Apply retained another admission origin")
         };
-        let digest = digest_from_hash(admission.bound.pending.exact_effect_identity());
         let work = ConcreteLifecycleWork {
             digest,
             kind: ConcreteLifecycleWorkKind::DurableLiveWalApply(DurableLiveWalApplyWork {
@@ -616,16 +629,34 @@ impl PreparedLiveValidateApplyRegistryWork {
                 dispatch_key: None,
             }),
         };
-        debug_assert!(work.validates_at(address));
-        work
-    }
-
-    /// Consume this closed row into its prevalidated exclusive reservation.
-    pub(in crate::sumeragi) fn install_into(
-        self,
-        reservation: LiveValidateApplyRegistryReservation<'_>,
-    ) {
-        reservation.install_live_apply(self);
+        if work.validates_at(address) {
+            Ok(work)
+        } else {
+            let ConcreteLifecycleWork {
+                kind: ConcreteLifecycleWorkKind::DurableLiveWalApply(carrier),
+                ..
+            } = work
+            else {
+                unreachable!("new live Apply retained its dedicated typed carrier")
+            };
+            let DurableLiveWalApplyWork {
+                admission,
+                candidate,
+                validated_receipt,
+                parent,
+                ..
+            } = carrier;
+            Err((
+                Self {
+                    admission: PreparedLifecycleAdmissionV1 {
+                        owner: PreparedLifecycleAdmissionOwnerV1::LiveWal(admission),
+                        candidate,
+                    },
+                    validated_receipt,
+                },
+                *parent,
+            ))
+        }
     }
 }
 

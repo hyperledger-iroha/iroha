@@ -1,6 +1,6 @@
 use super::*;
 use crate::sumeragi::{
-    InboundBlockMessage,
+    FairV2Ingress, InboundBlockMessage,
     message::BlockMessage,
     v2::{
         AdapterEquivocationEvidence, AdapterError, AdapterFingerprints,
@@ -158,9 +158,11 @@ fn bound_test_apply_ownership(
 #[derive(Default)]
 struct FakeRuntime {
     steps: VecDeque<Result<RuntimeStep<AdapterEffect>, String>>,
+    pacemaker_steps: VecDeque<Result<Option<RuntimeStep<AdapterEffect>>, String>>,
     completions: Vec<RuntimeCompletion>,
     reserved_body_available: Option<BodyAvailableReservation>,
     decided_body: Option<DurableDecision>,
+    durable_body_authority_certificate: Option<wire::QuorumCertificate>,
     decision_on_next_step: Option<DurableDecision>,
     round_tag: Option<EventTag>,
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
@@ -350,11 +352,24 @@ impl EffectRuntime for FakeRuntime {
         }
         step
     }
-    fn step_recovery_effects(
+    fn step_pacemaker_effects(
         &mut self,
-        now: Instant,
-    ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_effects(now)
+        _now: Instant,
+    ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
+        assert!(!self.panic_step, "model safety-WAL pacemaker step panic");
+        if self.scheduler_ownership_ready {
+            return Err("fake runtime scheduler owner was not consumed".to_owned());
+        }
+        let step = self.pacemaker_steps.pop_front().unwrap_or(Ok(None));
+        if matches!(&step, Ok(Some(RuntimeStep::Advanced(_))))
+            && let Some(decision) = self.decision_on_next_step.take()
+        {
+            self.decided_body = Some(decision);
+        }
+        if matches!(&step, Ok(Some(_))) && !self.omit_scheduler_ownership {
+            self.scheduler_ownership_ready = true;
+        }
+        step
     }
     fn take_effect_ownership(
         &mut self,
@@ -509,6 +524,11 @@ impl EffectRuntime for FakeRuntime {
     }
     fn decided_body(&self) -> Result<Option<DurableDecision>, String> {
         Ok(self.decided_body)
+    }
+    fn durable_body_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(self.durable_body_authority_certificate.clone())
     }
     fn reserve_body_available(
         &mut self,

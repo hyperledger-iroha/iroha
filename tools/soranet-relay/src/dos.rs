@@ -1069,12 +1069,7 @@ mod tests {
     };
     use iroha_crypto::soranet::token::compute_issuer_fingerprint;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::{
-        fs,
-        net::SocketAddr,
-        thread,
-        time::{Duration as StdDuration, UNIX_EPOCH},
-    };
+    use std::{fs, net::SocketAddr, thread, time::Duration as StdDuration};
     use tempfile::tempdir;
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))
@@ -1472,7 +1467,7 @@ mod tests {
         .expect("dos controls");
         let relay_id = [0xAB; 32];
         let transcript_hash = [0xCD; 32];
-        let issued = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let issued = SystemTime::now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         let token = AdmissionToken::mint(
@@ -1504,7 +1499,7 @@ mod tests {
         let issuer_hex = hex::encode(keypair.public_key());
         let relay_id = [0x44; 32];
         let transcript_hash = [0x11; 32];
-        let issued = UNIX_EPOCH + Duration::from_secs(2_000_000);
+        let issued = SystemTime::now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(42);
         let token = AdmissionToken::mint(
@@ -1574,7 +1569,7 @@ mod tests {
         let issuer_hex = hex::encode(keypair.public_key());
         let relay_id = [0x55; 32];
         let transcript_hash = [0x66; 32];
-        let issued = UNIX_EPOCH + Duration::from_secs(2_000_000);
+        let issued = SystemTime::now();
         let expires = issued + Duration::from_secs(300);
         let mut rng = StdRng::seed_from_u64(17);
         let token = AdmissionToken::mint(

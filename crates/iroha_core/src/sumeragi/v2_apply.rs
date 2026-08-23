@@ -3170,7 +3170,7 @@ pub(crate) struct V2ApplyService {
 /// Origin-specific authority retained by one lifecycle Decision Apply task.
 enum LifecycleDecisionApplyTaskLineageV1 {
     Live { tag: EventTag },
-    Recovered,
+    Recovered { tag: EventTag },
 }
 
 /// Exact Decision Apply material admitted by the lifecycle registry.
@@ -3209,6 +3209,7 @@ impl LifecycleDecisionApplyTaskV1 {
     /// Bind one recovered registry identity to its unchanged cold carrier material.
     pub(in crate::sumeragi) fn from_recovered_registry_projection(
         dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
+        tag: EventTag,
         subject: wire::BlockSubject,
         certificate: wire::QuorumCertificate,
         validated_receipt: ValidatedBodyReceipt,
@@ -3216,7 +3217,7 @@ impl LifecycleDecisionApplyTaskV1 {
         (dispatch_identity.key().lineage() == LifecycleDecisionApplyLineageV1::Recovered).then_some(
             Self {
                 dispatch_identity,
-                lineage: LifecycleDecisionApplyTaskLineageV1::Recovered,
+                lineage: LifecycleDecisionApplyTaskLineageV1::Recovered { tag },
                 subject,
                 certificate,
                 validated_receipt,
@@ -3244,7 +3245,7 @@ impl LifecycleDecisionApplyTaskV1 {
             LifecycleDecisionApplyTaskLineageV1::Live { .. } => {
                 LifecycleDecisionApplyLineageV1::Live
             }
-            LifecycleDecisionApplyTaskLineageV1::Recovered => {
+            LifecycleDecisionApplyTaskLineageV1::Recovered { .. } => {
                 LifecycleDecisionApplyLineageV1::Recovered
             }
         };
@@ -3253,7 +3254,14 @@ impl LifecycleDecisionApplyTaskV1 {
     fn live_tag(&self) -> Option<EventTag> {
         match self.lineage {
             LifecycleDecisionApplyTaskLineageV1::Live { tag } => Some(tag),
-            LifecycleDecisionApplyTaskLineageV1::Recovered => None,
+            LifecycleDecisionApplyTaskLineageV1::Recovered { .. } => None,
+        }
+    }
+    /// Return the exact reducer incarnation retained by either origin.
+    pub(in crate::sumeragi) const fn exact_tag(&self) -> EventTag {
+        match self.lineage {
+            LifecycleDecisionApplyTaskLineageV1::Live { tag }
+            | LifecycleDecisionApplyTaskLineageV1::Recovered { tag } => tag,
         }
     }
     /// Change only the sealed task/key lineage for cross-lineage rejection tests.
@@ -3269,7 +3277,7 @@ impl LifecycleDecisionApplyTaskV1 {
                 LifecycleDecisionApplyTaskLineageV1::Live { tag: live_tag }
             }
             LifecycleDecisionApplyLineageV1::Recovered => {
-                LifecycleDecisionApplyTaskLineageV1::Recovered
+                LifecycleDecisionApplyTaskLineageV1::Recovered { tag: live_tag }
             }
         };
         self
@@ -4872,3 +4880,7 @@ include!("v2_apply/error_recovery.rs");
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use tests::{
+    ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
+};

@@ -51,7 +51,7 @@ it.
    - Set `listen` to the desired public bind address. `admin_listen` must stay
      on a loopback address. Set `admin_auth_token_path` to a root/operator-only
      file containing 32–256 random printable ASCII bytes; the relay rejects
-     group-writable or world-accessible token files. Export admin telemetry through a
+     any group or other Unix permissions on token files. Export admin telemetry through a
      separately authenticated and encrypted local proxy when remote scraping is
      required.
    - Replace the TLS certificate paths or remove the `tls` section to use the
@@ -62,7 +62,9 @@ it.
      SPKI SHA-256 match those files; startup fails closed on any mismatch.
    - Update the `descriptor_commit_hex` to match the directory-issued descriptor
      and point `descriptor_manifest_path` at the location of the private
-     manifest. The sample assumes `/etc/soranet/relay/secrets/`.
+     manifest. Inline identity secrets are rejected. Give the manifest and TLS
+     private key mode `0600`; symbolic links and group/other permissions fail
+     startup. The sample assumes `/etc/soranet/relay/secrets/`.
   - Ensure the descriptor manifest contains both `ml_kem_private_key_hex`
     (2400-byte hex) and `ml_kem_public_hex` (1184-byte hex) so the relay can
     expose its PQ handshake identity for guard directory generation.
@@ -136,10 +138,9 @@ it.
 3. Place the descriptor manifest (for example copied from
    `config/relay-descriptor-manifest.sample.json`) at
    `/etc/soranet/relay/secrets/relay-descriptor-manifest.json` with
-   permissions `0640` and ownership restricted to the relay operator.
+   permissions `0400` or `0600` and ownership restricted to the relay operator.
    Create `/etc/soranet/relay/secrets/admin-token` with at least 32 random
-   printable ASCII bytes and permissions `0600`, or `0640` with a dedicated
-   read-only relay group; do not place this bearer token in the JSON
+   printable ASCII bytes and permissions `0400` or `0600`; do not place this bearer token in the JSON
    configuration or an environment variable.
 4. Optionally create `/etc/soranet/relay/relay.env` using
    `systemd/relay.env.example` to set `RUST_LOG` or other environment variables.
@@ -186,8 +187,10 @@ if another owner is active. Before applying it:
    - Populate the ML-KEM keypair fields alongside the Ed25519 seed (`ml_kem_private_key_hex`
      and `ml_kem_public_hex`) so the runtime can advertise PQ capabilities.
    - Replace `Secret.stringData["admin-token"]` with at least 32 random
-     printable ASCII bytes. The sample projects the secret with mode `0440`
-     to the relay pod's dedicated `fsGroup`.
+     printable ASCII bytes. Because Kubernetes Secret projections are symlinks,
+     the sample init container copies the `0400` projection into a fresh
+     memory-backed `emptyDir`, changes ownership to the relay UID, and leaves
+     direct `0400` files for the relay to read.
 3. Mount the guard directory snapshot (for example via an additional `Secret`
    or CSI driver) at the path referenced by `guard_directory.snapshot_path` and
    update `expected_snapshot_digest_hex` whenever the committee publishes a new
@@ -235,24 +238,36 @@ The metrics endpoint (`/metrics`) now exposes the guard descriptor commitment vi
 validate that the pinning material served to clients matches the directory
 consensus.
 
+When compliance logging is enabled, `compliance.hash_salt_path` is mandatory and
+must name an owner-private, direct, single-link file containing exactly 64
+lowercase hexadecimal characters with no newline. The relay uses those 32 bytes
+as the keyed BLAKE3 key for endpoint pseudonyms; never place the key inline in
+the public relay configuration.
+
 ## VPN backend daemon
 
 When `vpn.backend_endpoint` is set in the relay configuration, `soranet-relay`
 bridges helper-authenticated VPN traffic to that local privileged endpoint. The
 default endpoint is the permissioned Unix socket
-`unix:/tmp/sora-vpn-backend.sock`. TCP remains available as `tcp://host:port`,
-but both the relay and backend must configure the same 32-byte
-`vpn.backend_bootstrap_secret_hex` / `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX`
-value so bootstrap frames carry a valid keyed MAC. The `sora-vpn-backend`
+`unix:/run/sora-vpn-backend.sock`. TCP remains available as `tcp://host:port`,
+but every Unix or TCP session requires the relay and backend to configure the same 32-byte
+secret through owner-private direct files referenced by
+`vpn.backend_bootstrap_secret_path` and
+`SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH` so bootstrap frames carry a valid
+keyed MAC. The file contains exactly 64 lowercase hexadecimal characters, with
+no whitespace and no all-zero placeholder. The `sora-vpn-backend`
 binary in `tools/sora-vpn-backend` provides that relay-side bridge for Linux
 hosts:
 
 - It listens on `SORANET_VPN_BACKEND_ENDPOINT` (default
-  `unix:/tmp/sora-vpn-backend.sock`).
+  `unix:/run/sora-vpn-backend.sock`). The socket parent chain must be owned by
+  the backend user or root and must not be group- or other-writable.
 - Unix-socket endpoints are chmodded to `0660` and peer credentials are checked
   against `SORANET_VPN_BACKEND_ALLOWED_UID` / `SORANET_VPN_BACKEND_ALLOWED_GID`
   (defaulting to the backend process uid/gid on Linux).
-- TCP endpoints require `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_HEX`; bootstrap
+- All endpoints require `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH`; the file
+  must be direct, singly linked, owner-only, and contain exactly 64 hex
+  characters. Bootstrap
   frames are Norito envelopes with timestamp, nonce, and keyed MAC, and the
   backend rejects stale timestamps, bad MACs, and replayed nonces.
 - It derives a per-session Linux `tun` interface name from

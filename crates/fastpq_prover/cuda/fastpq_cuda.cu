@@ -1214,6 +1214,18 @@ __global__ void fastpq_bn254_fft_kernel(
     }
     __syncthreads();
 
+    for (uint64_t idx = threadIdx.x; idx < column_len; idx += blockDim.x) {
+        const uint64_t reversed = bit_reverse_index(idx, log_len);
+        if (idx < reversed) {
+            const Bn254Value value = bn254_load(column + idx * BN254_LIMBS);
+            const Bn254Value reversed_value =
+                bn254_load(column + reversed * BN254_LIMBS);
+            bn254_store(column + idx * BN254_LIMBS, reversed_value);
+            bn254_store(column + reversed * BN254_LIMBS, value);
+        }
+    }
+    __syncthreads();
+
     uint64_t stage_span = column_len >> 1;
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         uint64_t len = 1ull << (stage + 1u);
@@ -1282,6 +1294,18 @@ __global__ void fastpq_bn254_lde_kernel(
             out_column + idx * BN254_LIMBS,
             bn254_montgomery_mul(value, coset_power)
         );
+    }
+    __syncthreads();
+
+    for (uint64_t idx = threadIdx.x; idx < eval_len; idx += blockDim.x) {
+        const uint64_t reversed = bit_reverse_index(idx, log_len);
+        if (idx < reversed) {
+            const Bn254Value value = bn254_load(out_column + idx * BN254_LIMBS);
+            const Bn254Value reversed_value =
+                bn254_load(out_column + reversed * BN254_LIMBS);
+            bn254_store(out_column + idx * BN254_LIMBS, reversed_value);
+            bn254_store(out_column + reversed * BN254_LIMBS, value);
+        }
     }
     __syncthreads();
 

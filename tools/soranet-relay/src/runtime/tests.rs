@@ -1,12 +1,16 @@
 // Relay runtime, authenticated VPN helper, and fail-closed persistence regressions.
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::ErrorKind,
-        net::TcpListener as StdTcpListener,
-        num::NonZeroU32,
-        sync::Arc,
-        time::{Duration, SystemTime, UNIX_EPOCH},
+    use super::*;
+    use crate::{
+        capability::{
+            GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
+            SignatureId,
+        },
+        config::VpnConfig,
+        constant_rate,
+        privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
+        scheduler::CellClass,
     };
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{
@@ -34,28 +38,81 @@ mod tests {
             },
         },
     };
+
     use iroha_primitives::numeric::Numeric;
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
-    use tempfile::{NamedTempFile, tempdir};
+    use std::{
+        io::ErrorKind,
+        net::TcpListener as StdTcpListener,
+        num::NonZeroU32,
+        sync::Arc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+    use tempfile::{NamedTempFile, TempDir};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt, duplex},
         net::TcpStream,
         time::sleep,
     };
-    use super::*;
-    use crate::{
-        capability::{
-            GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
-            SignatureId,
-        },
-        config::VpnConfig,
-        constant_rate,
-        privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
-        scheduler::CellClass,
-    };
     const TEST_RELAY_ID: RelayId = [0xAB; 32];
+    #[test]
+    fn exit_compliance_context_uses_stable_reason_without_raw_channel() {
+        let error = ExitStreamError::RouteNotProvisioned {
+            stream: "norito-stream",
+            channel: "sensitive-channel-id".to_owned(),
+        };
+        let (stream, channel, reason) = error.compliance_context();
+        assert_eq!(stream, Some("norito-stream"));
+        assert_eq!(channel, Some("sensitive-channel-id"));
+        assert_eq!(reason, "route_not_provisioned");
+        assert!(!reason.contains("sensitive-channel-id"));
+    }
+    #[test]
+    fn operational_tracing_omits_network_and_session_identifiers() {
+        let sources = [include_str!("../runtime.rs"), include_str!("../circuit.rs")];
+        for forbidden in [
+            "remote = %remote",
+            "peer = %peer",
+            "neighbors = ?neighbors",
+            "payload = %String::from_utf8_lossy",
+            "session_id = %hex::encode",
+            "channel = %",
+            "route = %",
+            "room = %",
+            "backend = %",
+            "exit_multiaddr = %",
+            "target = %target_url",
+            "measurement = %",
+            "relay = %",
+            "ignoring text frame from exit adapter: {text}",
+        ] {
+            assert!(
+                sources.iter().all(|source| !source.contains(forbidden)),
+                "operational tracing must not contain `{forbidden}`"
+            );
+        }
+    }
+    fn secure_test_tempfile() -> NamedTempFile {
+        NamedTempFile::new_in(std::env::current_dir().expect("current test directory"))
+            .expect("create private test file")
+    }
+    fn secure_test_identity_manifest() -> NamedTempFile {
+        let file = secure_test_tempfile();
+        std::fs::write(
+            file.path(),
+            r#"{"identity_private_key_hex":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"}"#,
+        )
+        .expect("write private identity manifest");
+        file
+    }
+    fn secure_test_tempdir() -> TempDir {
+        tempfile::Builder::new()
+            .prefix("soranet-relay-test-")
+            .tempdir_in(std::env::current_dir().expect("current test directory"))
+            .expect("create private test directory")
+    }
     fn signed_usage_voucher(key_pair: &KeyPair, body: VpnUsageVoucherBodyV1) -> VpnUsageVoucherV1 {
         VpnUsageVoucherV1::try_sign(body, key_pair.private_key())
             .expect("usage voucher fixture should sign")
@@ -188,7 +245,7 @@ mod tests {
         let bootstrap = build_vpn_backend_bootstrap([0x5A; 16]);
         let (mut writer, mut reader) = duplex(4096);
         let secret = [0xA5; 32];
-        write_vpn_backend_bootstrap(&mut writer, &bootstrap, Some(&secret))
+        write_vpn_backend_bootstrap(&mut writer, &bootstrap, &secret)
             .await
             .expect("bootstrap write");
         let mut magic = [0u8; 8];
@@ -225,19 +282,17 @@ mod tests {
     async fn vpn_backend_bridge_forwards_backend_payloads_into_vpn_frames() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
-        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig {
-            enabled: true,
-            ..VpnConfig::default()
-        }));
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xA1; 16]);
         let helper_ticket = sample_helper_ticket([0xA1; 16]);
-        let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
+        let adapter = VpnAdapter::new(handle.session().clone(), Arc::clone(&overlay));
         let bridge = VpnBridge::new(
             adapter.clone(),
             [0xA1; 16],
             vpn_flow_label_from_session_id([0xA1; 16]),
-        );
+        )
+        .expect("cover scheduler seed");
         let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
@@ -278,19 +333,17 @@ mod tests {
     async fn vpn_backend_bridge_forwards_vpn_payloads_into_backend_stream() {
         let metrics = Arc::new(Metrics::new());
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
-        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig {
-            enabled: true,
-            ..VpnConfig::default()
-        }));
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig::default()));
         let session = overlay.start_session(Arc::clone(&metrics));
         let handle = overlay.bind_session(session, [0xB2; 16]);
         let helper_ticket = sample_helper_ticket([0xB2; 16]);
-        let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
+        let adapter = VpnAdapter::new(handle.session().clone(), Arc::clone(&overlay));
         let bridge = VpnBridge::new(
             adapter.clone(),
             [0xB2; 16],
             vpn_flow_label_from_session_id([0xB2; 16]),
-        );
+        )
+        .expect("cover scheduler seed");
         let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
         let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
         let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
@@ -429,7 +482,7 @@ mod tests {
             artifact.receipt.client_voucher_hash,
             envelope.voucher.hash()
         );
-        let spool_dir = tempdir().expect("spool dir");
+        let spool_dir = secure_test_tempdir();
         let path = spool_vpn_settlement_artifact(spool_dir.path(), &artifact)
             .expect("spool settlement artifact");
         let encoded = std::fs::read(&path).expect("read settlement artifact");
@@ -815,7 +868,7 @@ mod tests {
     }
     #[test]
     fn relay_ticket_replay_is_rejected_after_store_reload() {
-        let dir = tempdir().expect("tempdir");
+        let dir = secure_test_tempdir();
         let path = dir.path().join("relay-ticket-replays.norito");
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
@@ -1036,7 +1089,7 @@ mod tests {
         assert!(RelayRuntime::kaigi_multiaddr_to_websocket("").is_none());
     }
     fn load_config(json: &str) -> RelayConfig {
-        let file = NamedTempFile::new().expect("create temp file");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), json).expect("write config");
         let mut config = RelayConfig::load(file.path()).expect("load config");
         let default_replay_path = config::PowConfig::default().revocation_store_path;
@@ -1095,7 +1148,6 @@ mod tests {
     struct CertificateTestFixture {
         descriptor_commit: [u8; 32],
         bundle: RelayCertificateBundleV2,
-        identity_seed_hex: String,
         bundle_file: NamedTempFile,
         manifest_file: NamedTempFile,
         issuer_ed25519_hex: String,
@@ -1170,9 +1222,9 @@ mod tests {
             let bundle = certificate
                 .issue(&issuer_signing, issuer_mldsa_keys.secret_key())
                 .expect("issue certificate");
-            let bundle_file = NamedTempFile::new().expect("bundle file");
+            let bundle_file = secure_test_tempfile();
             std::fs::write(bundle_file.path(), bundle.to_cbor()).expect("write bundle");
-            let manifest_file = NamedTempFile::new().expect("manifest file");
+            let manifest_file = secure_test_tempfile();
             let manifest_identity_hex = identity_seed_hex.clone();
             std::fs::write(
                 manifest_file.path(),
@@ -1196,7 +1248,6 @@ mod tests {
             Self {
                 descriptor_commit,
                 bundle,
-                identity_seed_hex,
                 bundle_file,
                 manifest_file,
                 issuer_ed25519_hex,
@@ -1225,7 +1276,7 @@ mod tests {
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
                 .expect("generate test certificate");
-        let directory = tempdir().expect("temporary directory");
+        let directory = secure_test_tempdir();
         let certificate_path = directory.path().join("relay-chain.pem");
         let private_key_path = directory.path().join("relay-key.pem");
         let certificate_pem = format!("{}\n", cert.pem());
@@ -1246,6 +1297,12 @@ mod tests {
             .expect_err("max+1 certificates must fail");
         assert!(error.to_string().contains("certificate limit"), "{error}");
         std::fs::write(&private_key_path, signing_key.serialize_pem()).expect("write private key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&private_key_path, std::fs::Permissions::from_mode(0o600))
+                .expect("protect private key");
+        }
         RelayRuntime::load_private_key(&private_key_path).expect("valid private key must load");
         std::fs::write(
             &private_key_path,
@@ -1255,6 +1312,30 @@ mod tests {
         let error = RelayRuntime::load_private_key(&private_key_path)
             .expect_err("max+1 private key must fail before parse");
         assert!(error.to_string().contains("first-release limit"), "{error}");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn relay_tls_private_key_requires_private_direct_file() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let rcgen::CertifiedKey { signing_key, .. } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let directory = secure_test_tempdir();
+        let private_key_path = directory.path().join("relay-key.pem");
+        let link_path = directory.path().join("relay-key.link");
+        std::fs::write(&private_key_path, signing_key.serialize_pem()).expect("write private key");
+        std::fs::set_permissions(&private_key_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set unsafe private-key permissions");
+        let error = RelayRuntime::load_private_key(&private_key_path)
+            .expect_err("world-readable private key must fail closed");
+        assert!(error.to_string().contains("group or other"), "{error}");
+
+        std::fs::set_permissions(&private_key_path, std::fs::Permissions::from_mode(0o600))
+            .expect("protect private key");
+        symlink(&private_key_path, &link_path).expect("create private-key symlink");
+        let error = RelayRuntime::load_private_key(&link_path)
+            .expect_err("private-key symlink must fail closed");
+        assert!(error.to_string().contains("regular file"), "{error}");
     }
     #[test]
     fn vpn_helper_binding_commits_to_authenticated_transport_trust() {
@@ -1305,11 +1386,11 @@ mod tests {
     }
     #[tokio::test]
     async fn vpn_helper_ticket_replay_is_rejected_after_relay_restart() {
-        let directory = tempdir().expect("temporary directory");
+        let directory = secure_test_tempdir();
         let config = VpnConfig {
             enabled: true,
             lease_secs: 60,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(directory.path().join("helper-secret.hex")),
             helper_ticket_replay_store_capacity: 4,
             helper_ticket_replay_store_path: directory.path().join("helper-replays.norito"),
             ..VpnConfig::default()
@@ -1339,14 +1420,14 @@ mod tests {
     }
     #[test]
     fn vpn_helper_ticket_replay_ledger_fails_closed_on_corrupt_state() {
-        let directory = tempdir().expect("temporary directory");
+        let directory = secure_test_tempdir();
         let replay_path = directory.path().join("helper-replays.norito");
         std::fs::write(&replay_path, b"not a norito replay snapshot")
             .expect("write corrupt replay ledger");
         let config = VpnConfig {
             enabled: true,
             lease_secs: 60,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(directory.path().join("helper-secret.hex")),
             helper_ticket_replay_store_capacity: 4,
             helper_ticket_replay_store_path: replay_path,
             ..VpnConfig::default()
@@ -1360,11 +1441,11 @@ mod tests {
     }
     #[test]
     fn vpn_helper_ticket_lifetime_is_bounded_by_relay_lease_policy() {
-        let directory = tempdir().expect("temporary directory");
+        let directory = secure_test_tempdir();
         let config = VpnConfig {
             enabled: true,
             lease_secs: 1,
-            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_secret_path: Some(directory.path().join("helper-secret.hex")),
             helper_ticket_replay_store_capacity: 4,
             helper_ticket_replay_store_path: directory.path().join("helper-replays.norito"),
             ..VpnConfig::default()
@@ -1398,7 +1479,6 @@ mod tests {
         match RelayRuntime::new(config) {
             Err(RelayError::Config(ConfigError::Handshake(message))) => {
                 assert!(message.contains("identity key is required"));
-                assert!(message.contains("handshake.identity_private_key_hex"));
                 assert!(message.contains("handshake.descriptor_manifest_path"));
             }
             Err(other) => panic!("expected missing-identity config error, got {other}"),
@@ -1413,7 +1493,6 @@ mod tests {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "handshake": {{
-                    "identity_private_key_hex": "{identity_hex}",
                     "descriptor_manifest_path": "{manifest}",
                     "certificate": {{
                         "bundle_path": "{bundle}",
@@ -1422,7 +1501,6 @@ mod tests {
                     }}
                 }}
             }}"#,
-            identity_hex = fixture.identity_seed_hex,
             manifest = fixture.manifest_file.path().display(),
             bundle = fixture.bundle_file.path().display(),
             issuer_ed = fixture.issuer_ed25519_hex,
@@ -1447,7 +1525,6 @@ mod tests {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "handshake": {{
-                    "identity_private_key_hex": "{identity_hex}",
                     "descriptor_manifest_path": "{manifest}",
                     "certificate": {{
                         "bundle_path": "{bundle}",
@@ -1456,7 +1533,6 @@ mod tests {
                     }}
                 }}
             }}"#,
-            identity_hex = fixture.identity_seed_hex,
             manifest = fixture.manifest_file.path().display(),
             bundle = fixture.bundle_file.path().display(),
             issuer_ed = fixture.issuer_ed25519_hex,
@@ -1498,7 +1574,6 @@ mod tests {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "handshake": {{
-                    "identity_private_key_hex": "{identity_hex}",
                     "descriptor_manifest_path": "{manifest}",
                     "descriptor_commit_hex": "{mismatch}",
                     "certificate": {{
@@ -1508,7 +1583,6 @@ mod tests {
                     }}
                 }}
             }}"#,
-            identity_hex = fixture.identity_seed_hex,
             manifest = fixture.manifest_file.path().display(),
             bundle = fixture.bundle_file.path().display(),
             issuer_ed = fixture.issuer_ed25519_hex,
@@ -1535,7 +1609,6 @@ mod tests {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "handshake": {{
-                    "identity_private_key_hex": "{identity_hex}",
                     "descriptor_manifest_path": "{manifest}",
                     "certificate": {{
                         "bundle_path": "{bundle}",
@@ -1543,12 +1616,11 @@ mod tests {
                     }}
                 }}
             }}"#,
-            identity_hex = fixture.identity_seed_hex,
             manifest = fixture.manifest_file.path().display(),
             bundle = fixture.bundle_file.path().display(),
             issuer_ed = fixture.issuer_ed25519_hex,
         );
-        let file = NamedTempFile::new().expect("create temp config");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), json).expect("write temp config");
         match RelayConfig::load(file.path()) {
             Err(ConfigError::Handshake(message)) => {
@@ -1657,16 +1729,40 @@ mod tests {
         ));
     }
     #[test]
-    fn runtime_honours_configured_identity_key() {
+    fn append_grease_tlvs_rejects_oversized_aggregate_before_growth() {
+        let err = append_grease_tlvs(vec![0xAA; capability::MAX_CAP_VECTOR_LEN + 1], &[])
+            .expect_err("oversized base vector must fail before appending");
+        assert!(matches!(err, CapabilityError::CapabilityVectorTooLarge));
+
+        let base = vec![0xAA; capability::MAX_CAP_VECTOR_LEN - 4];
+        let err = append_grease_tlvs(
+            base,
+            &[GreaseEntry {
+                ty: 0x7F21,
+                value: vec![0xBB],
+            }],
+        )
+        .expect_err("aggregate GREASE vector must stay within the parser ceiling");
+        assert!(matches!(err, CapabilityError::CapabilityVectorTooLarge));
+    }
+    #[test]
+    fn runtime_honours_private_manifest_identity_key() {
         let seed_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let manifest = secure_test_tempfile();
+        std::fs::write(
+            manifest.path(),
+            format!(r#"{{"identity_private_key_hex":"{seed_hex}"}}"#),
+        )
+        .expect("write identity manifest");
         let json = format!(
             r#"{{
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "handshake": {{
-                    "identity_private_key_hex": "{seed_hex}"
+                    "descriptor_manifest_path": "{manifest_path}"
                 }}
-            }}"#
+            }}"#,
+            manifest_path = manifest.path().display(),
         );
         let config = load_config(&json);
         let runtime = RelayRuntime::new(config).expect("runtime");
@@ -1685,12 +1781,16 @@ mod tests {
     }
     #[test]
     fn runtime_enables_pow_when_required() {
-        let dir = tempdir().expect("tempdir");
+        let dir = secure_test_tempdir();
         let replay_path = dir.path().join("ticket-replays.norito");
+        let manifest = secure_test_identity_manifest();
         let json = format!(
             r#"{{
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
+                "handshake": {{
+                    "descriptor_manifest_path": "{}"
+                }},
                 "pow": {{
                     "required": true,
                     "difficulty": 6,
@@ -1699,6 +1799,7 @@ mod tests {
                     "revocation_store_path": "{}"
                 }}
             }}"#,
+            manifest.path().display(),
             replay_path.display()
         );
         let config = load_config(&json);
@@ -1709,15 +1810,24 @@ mod tests {
         let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
         assert_eq!(replay_state.capacity, 8_192);
     }
+    #[cfg(unix)]
     #[test]
     fn runtime_fails_closed_on_corrupt_ticket_replay_snapshot() {
-        let dir = tempdir().expect("tempdir");
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = secure_test_tempdir();
         let replay_path = dir.path().join("ticket-replays.norito");
         std::fs::write(&replay_path, b"corrupt replay snapshot").expect("write corrupt snapshot");
+        std::fs::set_permissions(&replay_path, std::fs::Permissions::from_mode(0o600))
+            .expect("make corrupt replay snapshot owner-private");
+        let manifest = secure_test_identity_manifest();
         let json = format!(
             r#"{{
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
+                "handshake": {{
+                    "descriptor_manifest_path": "{}"
+                }},
                 "pow": {{
                     "required": true,
                     "difficulty": 6,
@@ -1726,6 +1836,7 @@ mod tests {
                     "revocation_store_path": "{}"
                 }}
             }}"#,
+            manifest.path().display(),
             replay_path.display()
         );
         let config = load_config(&json);
@@ -1743,7 +1854,7 @@ mod tests {
     #[test]
     fn runtime_loads_identity_from_manifest() {
         let seed_hex = "c1d1c2f493ad2db3fbc5ff0bfb8bb4e0f2c5c2d9e9caa8ffd5d38a1808fa4c55";
-        let manifest = NamedTempFile::new().expect("create manifest file");
+        let manifest = secure_test_tempfile();
         std::fs::write(
             manifest.path(),
             format!(
@@ -1783,7 +1894,7 @@ mod tests {
     }
     #[test]
     fn runtime_fails_when_manifest_missing_key() {
-        let manifest = NamedTempFile::new().expect("create manifest file");
+        let manifest = secure_test_tempfile();
         std::fs::write(
             manifest.path(),
             r#"{ "version": 1, "identity": { "note": "no private key yet" } }"#,
@@ -1929,44 +2040,104 @@ mod tests {
     }
     #[test]
     fn admin_authorization_verifies_the_complete_bearer_token() {
-        let file = NamedTempFile::new().expect("admin token file");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef\n")
             .expect("write admin token");
         let authorization =
             AdminAuthorization::load(file.path()).expect("load protected admin token");
+        let rendered = format!("{authorization:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains(&authorization.token_hash.to_hex().to_string()));
         assert!(authorization.matches("soranet-admin-token-0123456789abcdef"));
         assert!(!authorization.matches("soranet-admin-token-0123456789abcdeg"));
         assert!(!authorization.matches("soranet-admin-token-0123456789abcde"));
     }
     #[test]
     fn admin_authorization_rejects_placeholder_secret() {
-        let file = NamedTempFile::new().expect("admin token file");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), b"REPLACE_ME").expect("write placeholder token");
         let err = AdminAuthorization::load(file.path()).expect_err("short token must fail closed");
         assert!(matches!(err, ConfigError::Admin(message) if message.contains("32 to 256")));
     }
     #[cfg(unix)]
     #[test]
-    fn admin_authorization_accepts_dedicated_read_only_group() {
+    fn admin_authorization_rejects_group_readable_secret() {
         use std::os::unix::fs::PermissionsExt as _;
-        let file = NamedTempFile::new().expect("admin token file");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
             .expect("write admin token");
         std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
             .expect("set dedicated-group token permissions");
-        AdminAuthorization::load(file.path()).expect("dedicated read-only group should be allowed");
+        let err = AdminAuthorization::load(file.path()).expect_err("group access must fail");
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("group or other")));
     }
     #[cfg(unix)]
     #[test]
     fn admin_authorization_rejects_world_readable_secret() {
         use std::os::unix::fs::PermissionsExt as _;
-        let file = NamedTempFile::new().expect("admin token file");
+        let file = secure_test_tempfile();
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
             .expect("write admin token");
         std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
             .expect("set world-readable token permissions");
         let err = AdminAuthorization::load(file.path()).expect_err("broad permissions must fail");
-        assert!(matches!(err, ConfigError::Admin(message) if message.contains("other users")));
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("group or other")));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn admin_authorization_rejects_symbolic_link() {
+        use std::os::unix::fs::symlink;
+        let directory = secure_test_tempdir();
+        let target = directory.path().join("admin.token");
+        let link = directory.path().join("admin.link");
+        std::fs::write(&target, b"soranet-admin-token-0123456789abcdef")
+            .expect("write admin token");
+        symlink(&target, &link).expect("create admin token symlink");
+        let err = AdminAuthorization::load(&link).expect_err("symlink must fail closed");
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("regular file")));
+    }
+    #[tokio::test]
+    async fn admin_request_reader_accepts_fragmented_headers() {
+        let (mut writer, mut reader) = duplex(ADMIN_MAX_HEADER_BYTES_V1);
+        let long_header = "a".repeat(2_048);
+        let request = format!("GET /healthz HTTP/1.1\r\nX-Padding: {long_header}\r\n\r\n");
+        writer
+            .write_all(request.as_bytes())
+            .await
+            .expect("write fragmented request fixture");
+        let parsed = RelayRuntime::read_admin_request(&mut reader, Duration::from_secs(1))
+            .await
+            .expect("bounded complete request");
+        assert_eq!(parsed, request);
+    }
+    #[tokio::test]
+    async fn admin_request_reader_rejects_oversized_incomplete_headers() {
+        let (mut writer, mut reader) = duplex(ADMIN_MAX_HEADER_BYTES_V1);
+        writer
+            .write_all(&vec![b'a'; ADMIN_MAX_HEADER_BYTES_V1])
+            .await
+            .expect("write oversized request fixture");
+        let error = RelayRuntime::read_admin_request(&mut reader, Duration::from_secs(1))
+            .await
+            .expect_err("oversized headers must fail closed");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+    }
+    #[tokio::test]
+    async fn admin_request_reader_times_out_stalled_clients() {
+        let (_writer, mut reader) = duplex(64);
+        let error = RelayRuntime::read_admin_request(&mut reader, Duration::from_millis(10))
+            .await
+            .expect_err("stalled request must time out");
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+    }
+    #[test]
+    fn admin_connection_permits_enforce_capacity() {
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = RelayRuntime::try_admin_connection_permit(&permits)
+            .expect("first connection should be admitted");
+        assert!(RelayRuntime::try_admin_connection_permit(&permits).is_none());
+        drop(permit);
+        assert!(RelayRuntime::try_admin_connection_permit(&permits).is_some());
     }
     #[tokio::test]
     async fn admin_endpoint_serves_privacy_events() {
@@ -2006,9 +2177,9 @@ mod tests {
                 proxy_policy_events: Arc::clone(&proxy_policy_events),
                 performance: Arc::clone(&performance),
             };
-            let authorization = AdminAuthorization {
+            let authorization = Arc::new(AdminAuthorization {
                 token_hash: blake3::hash(ADMIN_TOKEN.as_bytes()),
-            };
+            });
             tokio::spawn(async move {
                 let _ =
                     RelayRuntime::serve_admin(resources, TEST_RELAY_ID, addr, mode, authorization)

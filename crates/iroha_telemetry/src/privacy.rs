@@ -16,9 +16,9 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use norito::json;
 use std::{
-    collections::{BTreeMap, VecDeque, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 /// Percentiles exposed for RTT measurements.
@@ -52,6 +52,8 @@ const RTT_BUCKET_BOUNDS_MS: &[u64] = &[
 ];
 /// Number of histogram buckets derived from [`RTT_BUCKET_BOUNDS_MS`].
 const RTT_BUCKET_COUNT: usize = RTT_BUCKET_BOUNDS_MS.len() + 1;
+/// Maximum GAR categories retained in one collector share.
+const MAX_GAR_CATEGORIES_PER_SHARE: usize = 256;
 fn pow_reason_from_detail(detail: Option<&str>) -> SoranetPowFailureReasonV1 {
     let Some(raw) = detail else {
         return SoranetPowFailureReasonV1::InvalidSolution;
@@ -443,12 +445,60 @@ pub enum PrivacyShareError {
         /// Configured bucket width (seconds).
         bucket_secs: u64,
     },
+    /// Share references a bucket later than the server's current bucket.
+    #[error(
+        "bucket start {bucket_start} is in the future; current bucket starts at {current_bucket_start}"
+    )]
+    FutureBucket {
+        /// Bucket start timestamp from the share.
+        bucket_start: u64,
+        /// Start timestamp of the server's current bucket.
+        current_bucket_start: u64,
+    },
+    /// Share references a bucket outside the configured retention window.
+    #[error(
+        "bucket start {bucket_start} is older than the oldest accepted bucket {oldest_bucket_start}"
+    )]
+    StaleBucket {
+        /// Bucket start timestamp from the share.
+        bucket_start: u64,
+        /// Oldest bucket start accepted by the live-ingest window.
+        oldest_bucket_start: u64,
+    },
+    /// A collector bucket has already emitted its final aggregate.
+    #[error("collector bucket starting at {bucket_start} for mode {mode} is already finalized")]
+    BucketAlreadyFinalized {
+        /// Relay mode of the finalized bucket.
+        mode: SoranetPrivacyModeV1,
+        /// Start timestamp of the finalized bucket.
+        bucket_start: u64,
+    },
+    /// The configured pending-bucket capacity has been reached.
+    #[error("collector backlog reached its {capacity}-bucket capacity")]
+    CollectorBacklogFull {
+        /// Maximum number of incomplete collector buckets retained at once.
+        capacity: usize,
+    },
+    /// A collector attempted to replace an already admitted share.
+    #[error("collector {collector_id} submitted conflicting shares for the same bucket")]
+    ConflictingCollectorShare {
+        /// Stable collector identifier carried by both shares.
+        collector_id: u16,
+    },
     /// Share provided an RTT histogram with an unexpected number of buckets.
     #[error("RTT histogram length mismatch: expected {expected}, received {received}")]
     HistogramLengthMismatch {
         /// Expected number of histogram buckets.
         expected: usize,
         /// Histogram buckets provided by the share.
+        received: usize,
+    },
+    /// Share carried more GAR categories than the bounded accumulator permits.
+    #[error("GAR category count exceeds limit: maximum {maximum}, received {received}")]
+    TooManyGarCategories {
+        /// Maximum categories accepted in one share.
+        maximum: usize,
+        /// Categories supplied by the share.
         received: usize,
     },
     /// Share aggregation yielded a negative result where only unsigned totals are allowed.
@@ -485,6 +535,32 @@ pub enum PrivacyEventError {
         /// Underlying JSON decode error.
         #[source]
         source: json::Error,
+    },
+    /// Event references a bucket later than the server's current bucket.
+    #[error(
+        "event timestamp {timestamp} is in a future bucket; current bucket starts at {current_bucket_start}"
+    )]
+    FutureBucket {
+        /// Event timestamp supplied by the relay.
+        timestamp: u64,
+        /// Start timestamp of the server's current bucket.
+        current_bucket_start: u64,
+    },
+    /// Event references a bucket that has already passed its force-flush window.
+    #[error(
+        "event timestamp {timestamp} is older than the oldest accepted bucket {oldest_bucket_start}"
+    )]
+    StaleBucket {
+        /// Event timestamp supplied by the relay.
+        timestamp: u64,
+        /// Oldest bucket start accepted by the live-ingest window.
+        oldest_bucket_start: u64,
+    },
+    /// Too many distinct event buckets are already open.
+    #[error("event backlog reached its {capacity}-bucket capacity")]
+    EventBacklogFull {
+        /// Maximum number of open event buckets retained at once.
+        capacity: usize,
     },
 }
 /// Observed handshake failure reasons surfaced by the aggregator inputs.
@@ -626,17 +702,84 @@ impl SoranetSecureAggregator {
         let hash = gar_category_hash(trimmed);
         self.with_bucket(mode, when, |bucket| bucket.record_gar_category(hash));
     }
-    /// Record a telemetry event expressed via the `SoranetPrivacyEventV1` payload.
-    pub fn record_event(&self, event: &SoranetPrivacyEventV1) {
-        let when = unix_seconds_to_system_time(event.timestamp_unix);
+    /// Record a live telemetry event after validating its bucket against the wall clock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyEventError`] when the event is future-dated, stale, or would exceed the
+    /// bounded open-bucket backlog.
+    pub fn record_event(&self, event: &SoranetPrivacyEventV1) -> Result<(), PrivacyEventError> {
+        self.record_event_at(event, SystemTime::now())
+    }
+    /// Record a live telemetry event using an explicit wall clock for validation.
+    ///
+    /// This variant is intended for deterministic callers and tests. Production ingress should
+    /// normally use [`Self::record_event`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyEventError`] when the event is outside the live admission window or the
+    /// open-bucket backlog is full.
+    pub fn record_event_at(
+        &self,
+        event: &SoranetPrivacyEventV1,
+        now: SystemTime,
+    ) -> Result<(), PrivacyEventError> {
+        let current_idx = bucket_index(now, self.config.bucket_secs);
+        let event_idx = event.timestamp_unix / self.config.bucket_secs;
+        if event_idx > current_idx {
+            return Err(PrivacyEventError::FutureBucket {
+                timestamp: event.timestamp_unix,
+                current_bucket_start: current_idx.saturating_mul(self.config.bucket_secs),
+            });
+        }
+        let retention = self.config.force_flush_buckets.max(1);
+        let oldest_idx = current_idx.saturating_sub(retention.saturating_sub(1));
+        if event_idx < oldest_idx {
+            return Err(PrivacyEventError::StaleBucket {
+                timestamp: event.timestamp_unix,
+                oldest_bucket_start: oldest_idx.saturating_mul(self.config.bucket_secs),
+            });
+        }
+        self.record_event_in_bucket(event, event_idx, Some(current_idx))
+    }
+    /// Record an event without wall-clock freshness checks for bounded offline replay tooling.
+    ///
+    /// The open-bucket capacity remains enforced. Network-facing callers must use
+    /// [`Self::record_event`] instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyEventError::EventBacklogFull`] when too many historical buckets are open.
+    pub fn record_historical_event(
+        &self,
+        event: &SoranetPrivacyEventV1,
+    ) -> Result<(), PrivacyEventError> {
+        let event_idx = event.timestamp_unix / self.config.bucket_secs;
+        self.record_event_in_bucket(event, event_idx, None)
+    }
+    fn record_event_in_bucket(
+        &self,
+        event: &SoranetPrivacyEventV1,
+        event_idx: u64,
+        current_idx: Option<u64>,
+    ) -> Result<(), PrivacyEventError> {
+        let mut state = self.lock_state();
+        if let Some(current_idx) = current_idx {
+            state.flush_ready(current_idx, &self.config);
+        }
+        let bucket_key = (event.mode, event_idx);
+        if !state.open.contains_key(&bucket_key)
+            && state.open.len() >= self.config.max_completed_buckets
+        {
+            return Err(PrivacyEventError::EventBacklogFull {
+                capacity: self.config.max_completed_buckets,
+            });
+        }
+        let bucket = state.open.entry(bucket_key).or_default();
         match &event.kind {
             SoranetPrivacyEventKindV1::HandshakeSuccess(payload) => {
-                self.record_handshake_success(
-                    event.mode,
-                    when,
-                    payload.rtt_ms,
-                    payload.active_circuits_after,
-                );
+                bucket.record_success(payload.rtt_ms, payload.active_circuits_after);
             }
             SoranetPrivacyEventKindV1::HandshakeFailure(payload) => {
                 let reason = match payload.reason {
@@ -647,27 +790,50 @@ impl SoranetSecureAggregator {
                     SoranetPrivacyHandshakeFailureV1::Downgrade => HandshakeFailure::Downgrade,
                     SoranetPrivacyHandshakeFailureV1::Other => HandshakeFailure::Other,
                 };
-                self.record_handshake_failure(event.mode, when, reason, payload.rtt_ms);
+                bucket.record_failure(reason, payload.rtt_ms);
             }
             SoranetPrivacyEventKindV1::Throttle(payload) => {
-                self.record_throttle(event.mode, when, payload.scope.into());
+                bucket.record_throttle(payload.scope.into());
             }
             SoranetPrivacyEventKindV1::ActiveSample(payload) => {
-                self.record_active_sample(event.mode, when, payload.active_circuits);
+                bucket.record_active_sample(payload.active_circuits);
             }
             SoranetPrivacyEventKindV1::VerifiedBytes(payload) => {
-                self.record_verified_bytes(event.mode, when, payload.bytes);
+                if payload.bytes > 0 {
+                    bucket.record_verified_bytes(payload.bytes);
+                }
             }
             SoranetPrivacyEventKindV1::GarAbuseCategory(payload) => {
-                self.record_gar_category(event.mode, when, &payload.label);
+                let label = payload.label.trim();
+                if !label.is_empty() {
+                    bucket.record_gar_category(gar_category_hash(label));
+                }
             }
         }
+        Ok(())
     }
     /// Ingest a newline-delimited JSON payload emitted by relay admin endpoints.
     ///
     /// # Errors
     /// Returns an error when any line fails to parse as a `SoranetPrivacyEventV1`.
     pub fn ingest_ndjson(&self, payload: &str) -> Result<usize, PrivacyEventError> {
+        self.ingest_ndjson_inner(payload, false)
+    }
+    /// Ingest newline-delimited historical events without wall-clock freshness checks.
+    ///
+    /// # Errors
+    /// Returns an error when a line fails to parse or the bounded historical backlog is full.
+    pub fn ingest_historical_ndjson(
+        &self,
+        payload: &str,
+    ) -> Result<usize, PrivacyEventError> {
+        self.ingest_ndjson_inner(payload, true)
+    }
+    fn ingest_ndjson_inner(
+        &self,
+        payload: &str,
+        historical: bool,
+    ) -> Result<usize, PrivacyEventError> {
         let mut count = 0usize;
         for (idx, line) in payload.lines().enumerate() {
             let trimmed = line.trim();
@@ -679,7 +845,11 @@ impl SoranetSecureAggregator {
                     line: idx + 1,
                     source,
                 })?;
-            self.record_event(&event);
+            if historical {
+                self.record_historical_event(&event)?;
+            } else {
+                self.record_event(&event)?;
+            }
             count = count.saturating_add(1);
         }
         Ok(count)
@@ -699,10 +869,61 @@ impl SoranetSecureAggregator {
         &self,
         share: SoranetPrivacyPrioShareV1,
     ) -> Result<(), PrivacyShareError> {
-        let mut state = self
-            .state
-            .lock()
-            .expect("soranet secure aggregator mutex poisoned");
+        self.ingest_prio_share_at(share, SystemTime::now())
+    }
+    /// Ingest a live Prio share using an explicit wall clock for admission checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyShareError`] when the share is future-dated, stale, replayed after bucket
+    /// finalization, exceeds a structural bound, or cannot be combined safely.
+    pub fn ingest_prio_share_at(
+        &self,
+        share: SoranetPrivacyPrioShareV1,
+        now: SystemTime,
+    ) -> Result<(), PrivacyShareError> {
+        let current_idx = bucket_index(now, self.config.bucket_secs);
+        let bucket_idx = share.bucket_start_unix / self.config.bucket_secs;
+        if bucket_idx > current_idx {
+            return Err(PrivacyShareError::FutureBucket {
+                bucket_start: share.bucket_start_unix,
+                current_bucket_start: current_idx.saturating_mul(self.config.bucket_secs),
+            });
+        }
+        let oldest_idx =
+            current_idx.saturating_sub(self.config.max_share_lag_buckets.saturating_sub(1));
+        if bucket_idx < oldest_idx {
+            return Err(PrivacyShareError::StaleBucket {
+                bucket_start: share.bucket_start_unix,
+                oldest_bucket_start: oldest_idx.saturating_mul(self.config.bucket_secs),
+            });
+        }
+        self.ingest_prio_share_inner(share, Some(current_idx))
+    }
+    /// Ingest a historical Prio share without wall-clock freshness checks.
+    ///
+    /// This is reserved for bounded offline replay tooling. Network-facing callers must use
+    /// [`Self::ingest_prio_share`] so hostile timestamps cannot retain accumulator state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyShareError`] when metadata, replay, capacity, or aggregation validation
+    /// fails.
+    pub fn ingest_historical_prio_share(
+        &self,
+        share: SoranetPrivacyPrioShareV1,
+    ) -> Result<(), PrivacyShareError> {
+        self.ingest_prio_share_inner(share, None)
+    }
+    fn ingest_prio_share_inner(
+        &self,
+        share: SoranetPrivacyPrioShareV1,
+        current_idx: Option<u64>,
+    ) -> Result<(), PrivacyShareError> {
+        let mut state = self.lock_state();
+        if let Some(current_idx) = current_idx {
+            state.flush_ready(current_idx, &self.config);
+        }
         if let Some(metrics) = state.ingest_prio_share(share, &self.config)? {
             state.push_completed(metrics, &self.config);
         }
@@ -713,10 +934,7 @@ impl SoranetSecureAggregator {
         &self,
         now: SystemTime,
     ) -> (Vec<SoranetPrivacyBucketMetricsV1>, PrivacyDrainSnapshot) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("soranet secure aggregator mutex poisoned");
+        let mut state = self.lock_state();
         let current_idx = bucket_index(now, self.config.bucket_secs);
         state.flush_ready(current_idx, &self.config);
         let updated_open = state.open_bucket_counts();
@@ -764,18 +982,25 @@ impl SoranetSecureAggregator {
     ) -> (Vec<SoranetPrivacyBucketMetricsV1>, PrivacyDrainSnapshot) {
         self.drain_ready_with_snapshot(SystemTime::now())
     }
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, PrivacyState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     fn with_bucket<F>(&self, mode: SoranetPrivacyModeV1, when: SystemTime, mut update: F)
     where
         F: FnMut(&mut BucketStats),
     {
-        let mut state = self
-            .state
-            .lock()
-            .expect("soranet secure aggregator mutex poisoned");
+        let mut state = self.lock_state();
         let bucket_idx = bucket_index(when, self.config.bucket_secs);
-        let bucket = state.open.entry((mode, bucket_idx)).or_default();
+        let bucket_key = (mode, bucket_idx);
+        if !state.open.contains_key(&bucket_key)
+            && state.open.len() >= self.config.max_completed_buckets
+        {
+            return;
+        }
+        let bucket = state.open.entry(bucket_key).or_default();
         update(bucket);
-        state.flush_ready(bucket_idx, &self.config);
     }
 }
 #[derive(Debug, Default)]
@@ -783,11 +1008,16 @@ struct PrivacyState {
     open: BTreeMap<(SoranetPrivacyModeV1, u64), BucketStats>,
     completed: VecDeque<SoranetPrivacyBucketMetricsV1>,
     collector_shares: BTreeMap<(SoranetPrivacyModeV1, u64), CollectorShareAccumulator>,
+    finalized_collector_buckets: BTreeSet<(SoranetPrivacyModeV1, u64)>,
     evicted_completed: u64,
 }
 impl PrivacyState {
     fn flush_ready(&mut self, current_idx: u64, config: &PrivacyBucketConfig) {
         self.evict_stale_collectors(current_idx, config);
+        self.finalized_collector_buckets.retain(|&(_, bucket_idx)| {
+            bucket_idx <= current_idx
+                && current_idx.saturating_sub(bucket_idx) < config.max_share_lag_buckets
+        });
         let mut ready = Vec::new();
         for (&(mode, bucket_idx), stats) in &self.open {
             let age = current_idx.saturating_sub(bucket_idx);
@@ -840,7 +1070,12 @@ impl PrivacyState {
     }
     fn evict_stale_collectors(&mut self, current_idx: u64, config: &PrivacyBucketConfig) {
         let mut stale = Vec::new();
+        let mut future = Vec::new();
         for (&(mode, bucket_idx), accumulator) in &self.collector_shares {
+            if bucket_idx > current_idx {
+                future.push((mode, bucket_idx));
+                continue;
+            }
             let age = current_idx.saturating_sub(bucket_idx);
             if age >= config.max_share_lag_buckets {
                 stale.push((
@@ -851,8 +1086,12 @@ impl PrivacyState {
                 ));
             }
         }
+        for bucket_key in future {
+            let _ = self.collector_shares.remove(&bucket_key);
+        }
         for (mode, bucket_idx, bucket_start_unix, bucket_duration_secs) in stale {
             let _ = self.collector_shares.remove(&(mode, bucket_idx));
+            self.finalized_collector_buckets.insert((mode, bucket_idx));
             let suppressed = SoranetPrivacyBucketMetricsV1::suppressed_with_reason(
                 mode,
                 bucket_start_unix,
@@ -888,12 +1127,33 @@ impl PrivacyState {
         }
         let bucket_idx = share.bucket_start_unix / config.bucket_secs;
         let bucket_key = (share.mode, bucket_idx);
+        let collector_id = share.collector_id;
+        if self.finalized_collector_buckets.contains(&bucket_key) {
+            return Err(PrivacyShareError::BucketAlreadyFinalized {
+                mode: share.mode,
+                bucket_start: share.bucket_start_unix,
+            });
+        }
+        if !self.collector_shares.contains_key(&bucket_key)
+            && self.collector_shares.len() >= config.max_completed_buckets
+        {
+            return Err(PrivacyShareError::CollectorBacklogFull {
+                capacity: config.max_completed_buckets,
+            });
+        }
         match self.collector_shares.entry(bucket_key) {
             Entry::Occupied(mut occ) => {
                 occ.get_mut().insert(share)?;
                 if occ.get().ready(config.expected_shares) {
-                    let metrics = occ.get().combine(config)?;
+                    let metrics = match occ.get().combine(config) {
+                        Ok(metrics) => metrics,
+                        Err(error) => {
+                            occ.get_mut().shares.remove(&collector_id);
+                            return Err(error);
+                        }
+                    };
                     occ.remove();
+                    self.finalized_collector_buckets.insert(bucket_key);
                     Ok(Some(metrics))
                 } else {
                     Ok(None)
@@ -908,6 +1168,7 @@ impl PrivacyState {
                 accumulator.insert(share)?;
                 if accumulator.ready(config.expected_shares) {
                     let metrics = accumulator.combine(config)?;
+                    self.finalized_collector_buckets.insert(bucket_key);
                     Ok(Some(metrics))
                 } else {
                     vac.insert(accumulator);
@@ -1123,6 +1384,20 @@ impl CollectorShareAccumulator {
             return Err(PrivacyShareError::HistogramLengthMismatch {
                 expected: RTT_BUCKET_COUNT,
                 received: share.rtt_bucket_shares.len(),
+            });
+        }
+        if share.gar_abuse_shares.len() > MAX_GAR_CATEGORIES_PER_SHARE {
+            return Err(PrivacyShareError::TooManyGarCategories {
+                maximum: MAX_GAR_CATEGORIES_PER_SHARE,
+                received: share.gar_abuse_shares.len(),
+            });
+        }
+        if let Some(existing) = self.shares.get(&share.collector_id) {
+            if existing == &share {
+                return Ok(());
+            }
+            return Err(PrivacyShareError::ConflictingCollectorShare {
+                collector_id: share.collector_id,
             });
         }
         self.shares.insert(share.collector_id, share);
@@ -1522,9 +1797,6 @@ fn gar_category_hash(category: &str) -> [u8; 8] {
     let mut truncated = [0u8; 8];
     truncated.copy_from_slice(&digest.as_bytes()[..8]);
     truncated
-}
-fn unix_seconds_to_system_time(seconds: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(seconds)
 }
 impl From<SoranetPrivacyHandshakeFailureV1> for HandshakeFailure {
     fn from(value: SoranetPrivacyHandshakeFailureV1) -> Self {

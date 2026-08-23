@@ -1,12 +1,12 @@
 // Focused tests for Torii's app-local ordinary-query memory corridor.
 #[cfg(test)]
 mod ordinary_query_memory_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
+    use super::*;
     use iroha_core::smartcontracts::isi::query::{
         OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryReservation as _,
     };
-    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
     fn default_geometry() -> (QueryMemoryGeometry, QueryWeightedMemoryPool) {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
@@ -340,6 +340,118 @@ mod ordinary_query_memory_tests {
                 Err(crate::utils::BoundedResponseEncodeError::JsonBodyTooLarge { .. })
             ));
         }
+    }
+    #[test]
+    fn iterable_response_exposes_its_server_cursor_for_failure_cleanup() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+            parameters::ForwardCursor,
+        };
+        let query_id = "ab".repeat(32);
+        let response = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::RoleId(Vec::new())),
+            remaining_items: Some(1),
+            has_more: true,
+            continue_cursor: Some(ForwardCursor {
+                query: query_id.clone(),
+                cursor: std::num::NonZeroU64::new(1).expect("non-zero cursor"),
+                gas_budget: None,
+            }),
+        });
+        assert_eq!(
+            query_response_cursor_query_id(&response),
+            Some(query_id.as_str())
+        );
+    }
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn failed_response_encoding_discards_the_stored_cursor() {
+        use iroha_data_model::{
+            account::Account,
+            domain::Domain,
+            query::{QueryRequest, parameters::ForwardCursor},
+        };
+        let key_pair = tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+            0xd7,
+            "derive cursor-cleanup authority key",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let other = tests_runtime_handlers::checked_torii_test_account_id(
+            0xd8,
+            "derive cursor-cleanup second account",
+        );
+        let domain_id: DomainId =
+            DomainId::try_new("cursor_cleanup", "universal").expect("domain ID");
+        let world = iroha_core::state::World::with(
+            [Domain::new(domain_id).build(&authority)],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(other).build(&authority),
+            ],
+            [],
+        );
+        let app = tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("nonzero cursor-cleanup height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .add_account_permission(&authority, CanReadAllLedgerData.into());
+        transaction.apply();
+        block.commit().expect("commit cursor-cleanup permission");
+
+        let mut query = tests_runtime_handlers::build_find_account_ids_query_for_test();
+        query.params.fetch_size.fetch_size =
+            Some(NonZeroU64::new(1).expect("nonzero cursor-cleanup fetch size"));
+        let request = authorize_query_for_test(QueryRequest::Start(query), authority.clone());
+        let response = execute_admitted_signed_query_with_opts(
+            &app,
+            request,
+            QueryOptions {
+                cursor_mode: Some("stored".to_owned()),
+                ..QueryOptions::default()
+            },
+        )
+        .await
+        .expect("stored query produces a cursor-bearing response");
+        let (response, memory_lease) = response.into_parts();
+        let cursor: ForwardCursor = match &response {
+            iroha_data_model::query::QueryResponse::Iterable(output) => output
+                .continue_cursor
+                .clone()
+                .expect("two accounts with fetch size one produce a cursor"),
+            iroha_data_model::query::QueryResponse::Singular(_) => {
+                panic!("account ID query must be iterable")
+            }
+        };
+        assert!(
+            app.query_service
+                .ordinary_cursor_retained_bytes(&cursor, &authority)
+                .is_ok(),
+            "cursor must exist before response encoding"
+        );
+
+        let encoded = encode_query_response_with_memory_lease_bounded(
+            app.as_ref(),
+            response,
+            memory_lease,
+            ResponseFormat::Json,
+            1,
+        );
+        assert_eq!(encoded.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            app.query_service
+                .ordinary_cursor_retained_bytes(&cursor, &authority)
+                .is_err(),
+            "an undisclosed cursor must be removed when encoding fails"
+        );
     }
     #[cfg(feature = "app_api")]
     #[tokio::test]

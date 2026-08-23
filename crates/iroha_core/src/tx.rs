@@ -819,6 +819,16 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
         )
     })
 }
+
+/// Return whether a direct carrier contains exactly one native Kagemusha lifecycle transition.
+pub(crate) fn instructions_allow_direct_kagemusha_lifecycle_authority(
+    instructions: &[InstructionBox],
+) -> bool {
+    let [instruction] = instructions else {
+        return false;
+    };
+    crate::smartcontracts::isi::offline::direct_lifecycle_entrypoint_kind(instruction).is_some()
+}
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
     TopUp,
@@ -2672,8 +2682,15 @@ impl StateBlock<'_> {
                 | Executable::IvmProved(_)
                 | Executable::Ivm(_) => false,
             };
+            let allows_direct_kagemusha_lifecycle_authority = tx.multisig_signatures().is_some()
+                && matches!(
+                    tx.instructions(),
+                    Executable::Instructions(instructions)
+                        if instructions_allow_direct_kagemusha_lifecycle_authority(instructions)
+                );
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
+                && !allows_direct_kagemusha_lifecycle_authority
             {
                 warn!(
                     authority = %authority,
@@ -2738,9 +2755,7 @@ impl StateBlock<'_> {
             validation_fee_credit,
         })
     }
-    /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
-    ///
-    /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
+    /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -2875,6 +2890,8 @@ impl StateBlock<'_> {
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
+        state_transaction.kagemusha_taira_canary_external_entrypoint =
+            matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);
@@ -5127,6 +5144,32 @@ pub mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
+    fn lifecycle_cancellation_instruction() -> InstructionBox {
+        use iroha_data_model::{
+            isi::offline::CancelKagemushaRecursiveReleaseV4,
+            offline::{
+                KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
+                KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaExactBytesDigestV1,
+                KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseLifecycleReasonV1,
+            },
+        };
+
+        InstructionBox::from(CancelKagemushaRecursiveReleaseV4::new(
+            KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: [0x11; 32],
+                manifest_sha256: [0x22; 32],
+                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                    byte_len: 1,
+                    sha256: [0x33; 32],
+                },
+                transition_id: [0x44; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            },
+        ))
+    }
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
@@ -6629,6 +6672,66 @@ pub mod tests {
             &registration_is_not_first,
             &authority
         ));
+    }
+    #[test]
+    fn direct_kagemusha_lifecycle_authority_requires_one_exact_instruction() {
+        let cancellation = lifecycle_cancellation_instruction();
+        let ordinary = InstructionBox::from(Log::new(Level::INFO, "ordinary".into()));
+
+        assert!(instructions_allow_direct_kagemusha_lifecycle_authority(
+            core::slice::from_ref(&cancellation)
+        ));
+        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(&[]));
+        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(
+            core::slice::from_ref(&ordinary)
+        ));
+        assert!(!instructions_allow_direct_kagemusha_lifecycle_authority(&[
+            cancellation,
+            ordinary,
+        ]));
+    }
+    #[test]
+    fn exact_kagemusha_lifecycle_accepts_verified_multisig_authority_at_stateful_admission() {
+        let member_a = checked_random_tx_keypair();
+        let member_b = checked_random_tx_keypair();
+        let authority = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(member_a.public_key().clone(), 1).expect("member a"),
+                    MultisigMember::new(member_b.public_key().clone(), 1).expect("member b"),
+                ],
+            )
+            .expect("multisig lifecycle authority"),
+        );
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "multisig-kagemusha-lifecycle".parse().unwrap(),
+        );
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([lifecycle_cancellation_instruction()])
+        .sign_multisig([member_a.private_key(), member_b.private_key()]);
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect("multisig lifecycle signatures must verify before stateful admission");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_transaction = block.transaction();
+
+        StateBlock::validate_stateful_admission(accepted.as_ref(), &mut state_transaction, None)
+            .expect("exact lifecycle carrier must pass the narrow multisig admission exception");
     }
     #[test]
     fn missing_authority_self_register_allows_transaction() {

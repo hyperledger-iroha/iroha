@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn load_guard_entry_rejects_unpinned_or_expired_snapshot() {
         let mut unpinned = snapshot_fixture();
-        unpinned.config.expected_snapshot_digest_hex = "00".repeat(32);
+        unpinned.config.expected_snapshot_digest_hex = "01".repeat(32);
         let err = load_guard_entry_at(
             &unpinned.config,
             &unpinned.relay_id,

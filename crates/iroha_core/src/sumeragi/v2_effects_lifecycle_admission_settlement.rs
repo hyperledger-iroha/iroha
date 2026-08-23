@@ -289,6 +289,143 @@ impl<R: EffectRuntime> PreparedRecoveredDurableValidateRetryInstallV1<'_, R> {
     }
 }
 
+/// Inert fingerprint for one Validate row published by the direct lifecycle
+/// Store-to-Validate transaction.
+///
+/// The lifecycle registry owns the executable pending binding. This marker
+/// owns no service work and exists only so periodic reducer retransmission can
+/// prove that the same physical Validate stage is already durable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublishedLifecycleValidateRetryMarkerV1 {
+    effect: AdapterEffect,
+    statement: RuntimeCandidateSemanticStatement,
+    durable_receipt: DurableBodyReceipt,
+}
+
+impl PublishedLifecycleValidateRetryMarkerV1 {
+    fn prepare(
+        effect: &AdapterEffect,
+        durable_receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = effect
+        else {
+            return None;
+        };
+        let statement = pending.candidate_statement()?;
+        if !pending.exactly_binds_adapter_effect(effect)
+            || tag.height() != round.height
+            || durable_receipt.context_id() != round.context_id
+            || durable_receipt.round() != *round
+            || durable_receipt.subject() != *subject
+            || statement.context_id() != round.context_id
+            || statement.proposal_round() != *round
+            || statement.subject() != Some(*subject)
+        {
+            return None;
+        }
+        Some(Self {
+            effect: effect.clone(),
+            statement,
+            durable_receipt: durable_receipt.clone(),
+        })
+    }
+
+    fn project_retry(
+        &self,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<Self, String> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: incumbent_tag,
+                round: incumbent_round,
+                subject: incumbent_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: incoming_tag,
+                round: incoming_round,
+                subject: incoming_subject,
+            },
+        ) = (&self.effect, effect)
+        else {
+            return Err(
+                "published lifecycle Validate marker received another effect stage".to_owned(),
+            );
+        };
+        if (incoming_tag != incumbent_tag && !incoming_tag.strictly_advances(*incumbent_tag))
+            || incoming_round != incumbent_round
+            || incoming_subject != incumbent_subject
+            || self.durable_receipt.round() != *incumbent_round
+            || self.durable_receipt.subject() != *incumbent_subject
+        {
+            return Err(
+                "published lifecycle Validate retry changed its exact body or regressed its tag"
+                    .to_owned(),
+            );
+        }
+        let pending = incoming
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| {
+                "published lifecycle Validate retry lost its exact runtime binding".to_owned()
+            })?;
+        let incoming_statement = pending.candidate_statement().ok_or_else(|| {
+            "published lifecycle Validate retry omitted its candidate statement".to_owned()
+        })?;
+        let relation = self
+            .statement
+            .body_stage_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "published lifecycle Validate retry changed its body or authority commitment"
+                    .to_owned()
+            })?;
+        let statement = match relation {
+            RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                self.statement
+            }
+        };
+        Ok(Self {
+            effect: effect.clone(),
+            statement,
+            durable_receipt: self.durable_receipt.clone(),
+        })
+    }
+}
+
+/// Move-only preflight for installing one direct lifecycle Validate marker
+/// after its LedgerV1 successor is durable.
+#[must_use = "the direct lifecycle Validate marker has not crossed publication"]
+pub(in crate::sumeragi) struct PreparedPublishedLifecycleValidateRetryMarkerV1 {
+    durable_receipt: DurableBodyReceipt,
+    marker: Option<PublishedLifecycleValidateRetryMarkerV1>,
+}
+
+impl PreparedPublishedLifecycleValidateRetryMarkerV1 {
+    /// Bind the preflighted executor catalog slot to the exact Validate
+    /// successor sealed by the registry after the adapter preview.
+    pub(in crate::sumeragi) fn bind_validate_successor(
+        mut self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<Self, String> {
+        let marker = PublishedLifecycleValidateRetryMarkerV1::prepare(
+            effect,
+            &self.durable_receipt,
+            pending,
+        )
+        .ok_or_else(|| {
+            "direct lifecycle Validate marker changed its exact Store successor".to_owned()
+        })?;
+        self.marker = Some(marker);
+        Ok(self)
+    }
+}
+
 impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Begin an atomic sink for the complete storage-authenticated census.
     pub(in crate::sumeragi) fn prepare_recovered_durable_validate_retry_install(
@@ -318,10 +455,94 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// sole decided body which may survive until this per-height executor is
     /// consumed at rollover.
     fn durable_validate_retry_seals_are_finalization_inert(&self) -> bool {
-        self.durable_validate_retry_seals.keys().all(|key| {
-            self.protected_decision
-                .is_some_and(|(_, round, subject, _)| *key == (round, subject))
+        self.durable_validate_retry_seals
+            .keys()
+            .chain(self.published_lifecycle_validate_retry_markers.keys())
+            .all(|key| {
+                self.protected_decision
+                    .is_some_and(|(_, round, subject, _)| *key == (round, subject))
+            })
+    }
+
+    /// Preflight one inert retry marker before the direct Store-to-Validate
+    /// transaction takes the runtime borrow and publishes its Ledger row.
+    pub(in crate::sumeragi) fn prepare_published_lifecycle_validate_retry_marker(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<PreparedPublishedLifecycleValidateRetryMarkerV1, EffectExecutorError> {
+        let key = (durable_receipt.round(), durable_receipt.subject());
+        let retained_body_is_exact =
+            self.recovered_bodies
+                .get(&key)
+                .is_some_and(|(manifest, retained)| {
+                    retained == durable_receipt
+                        && manifest.round == durable_receipt.round()
+                        && manifest.subject == durable_receipt.subject()
+                        && HashOf::new(manifest) == durable_receipt.manifest_hash()
+                });
+        if !retained_body_is_exact
+            || self.durable_bodies.get(&key) != Some(durable_receipt)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "direct lifecycle Validate marker overlaps a foreign executor body owner"
+                    .to_owned(),
+            ));
+        }
+        Ok(PreparedPublishedLifecycleValidateRetryMarkerV1 {
+            durable_receipt: durable_receipt.clone(),
+            marker: None,
         })
+    }
+
+    /// Install the preflighted marker after the direct successor and reducer
+    /// transition have both crossed durable publication.
+    pub(in crate::sumeragi) fn commit_published_lifecycle_validate_retry_marker(
+        &mut self,
+        prepared: PreparedPublishedLifecycleValidateRetryMarkerV1,
+    ) {
+        let marker = prepared
+            .marker
+            .expect("published direct lifecycle Validate retains its sealed marker");
+        assert_eq!(marker.durable_receipt, prepared.durable_receipt);
+        let key = (
+            marker.durable_receipt.round(),
+            marker.durable_receipt.subject(),
+        );
+        assert_eq!(self.durable_bodies.get(&key), Some(&marker.durable_receipt));
+        assert!(!self.pending_durable_validate_admissions.contains_key(&key));
+        assert!(!self.durable_validate_retry_seals.contains_key(&key));
+        let previous = self
+            .published_lifecycle_validate_retry_markers
+            .insert(key, marker);
+        assert!(previous.is_none());
+    }
+
+    /// Reinstall the same inert marker from any authenticated recovered
+    /// durable Validate row before live clocks are armed.
+    pub(in crate::sumeragi) fn install_recovered_published_lifecycle_validate_retry_marker(
+        &mut self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        if self.runtime.live_clocks_are_armed() {
+            return Err(EffectExecutorError::Contract(
+                "recovered lifecycle Validate marker installation followed live clock activation"
+                    .to_owned(),
+            ));
+        }
+        let prepared = self
+            .prepare_published_lifecycle_validate_retry_marker(durable_receipt)?
+            .bind_validate_successor(effect, pending)
+            .map_err(EffectExecutorError::Contract)?;
+        self.commit_published_lifecycle_validate_retry_marker(prepared);
+        Ok(())
     }
 
     /// Exact carrier block hashes still owned by retained missing-sidecar work.
@@ -425,6 +646,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectExecutorError> {
         if self.pending_durable_validate_admissions.contains_key(&key)
             || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
         {
             return Err(EffectExecutorError::Contract(
                 "durable Validate duplicated its exact lifecycle admission owner".to_owned(),
@@ -765,6 +989,81 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    fn payload_chunk_reconstruction_task<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        services: &mut S,
+    ) -> Result<BodyFetchTask, EffectTransportError> {
+        let task = self
+            .pending_fetches
+            .get(&work_id)
+            .ok_or(EffectTransportError::UnknownWork(work_id))?
+            .task
+            .clone();
+        if task.certified_request.is_none() {
+            return Ok(task);
+        }
+        let key = (task.round, task.subject);
+        match self.remote_proposal_replay.get(&key) {
+            Some(RemoteProposalReplayStageV1::Fetch {
+                work_id: replay_work_id,
+                ..
+            }) if *replay_work_id == work_id => Ok(task),
+            Some(_) => Err(self.fail_closed_transport(
+                "certificate-backed payload chunks conflict with the retained Proposal replay stage",
+                services,
+            )),
+            None => {
+                // A certificate-only Fetch gets its body-frame replay
+                // authority from the authenticated CertifiedBodyResponse
+                // lifecycle. Generic chunk reconstruction has no equivalent
+                // authority to carry through Store and Validate, so leave
+                // the exact request/fetch live for that typed response path.
+                Err(EffectTransportError::WrongFetchKind)
+            }
+        }
+    }
+
+    fn accept_payload_chunk_inner<S: V2EffectServices>(
+        &mut self,
+        work_id: EffectWorkId,
+        chunk: wire::PayloadChunk,
+        authenticated_sender: &PeerId,
+        services: &mut S,
+    ) -> Result<(), EffectTransportError> {
+        if self.output_guard.restart_required() {
+            return Err(EffectTransportError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            ));
+        }
+        if let Some(reason) = &self.fatal_reason {
+            return Err(EffectTransportError::FailClosed(reason.clone()));
+        }
+        let task = self.payload_chunk_reconstruction_task(work_id, services)?;
+        let manifest = task
+            .manifest
+            .as_ref()
+            .ok_or(EffectTransportError::WrongFetchKind)?;
+        let authenticated =
+            authenticate_payload_chunk(&self.context, manifest, chunk, authenticated_sender)?;
+        match services.accept_authenticated_chunk(&task, authenticated) {
+            Ok(AuthenticatedChunkDisposition::Accepted) => {}
+            Ok(AuthenticatedChunkDisposition::Rejected) => {
+                self.reject_noncanonical_reconstruction(work_id, services)?;
+                return Err(EffectTransportError::BodyMismatch(
+                    "authenticated chunks reconstructed invalid or noncanonical body data",
+                ));
+            }
+            Err(error) => {
+                let reason = EffectExecutorError::Service(error.to_string()).to_string();
+                self.fatal_reason = Some(reason.clone());
+                services.fail_closed(&reason);
+                return Err(EffectTransportError::FailClosed(reason));
+            }
+        }
+        Ok(())
+    }
+
     /// Retain the exact resultless wire of the already-authenticated staged
     /// genesis as a process-local acquisition source.
     ///
@@ -879,6 +1178,91 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "stored body replay could not project its incumbent Validate owner".to_owned(),
             )
         })
+    }
+
+    /// Rejoin a refined Proposal body owner to the complete durable QC behind it.
+    ///
+    /// Runtime candidate statements are intentionally process-local. They may
+    /// prove positional refinement, but only the reducer-authenticated QC may
+    /// become replay authority in a published lifecycle row.
+    fn exact_remote_proposal_validate_authority_certificate(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<Option<wire::QuorumCertificate>, EffectExecutorError> {
+        let pending = ownership
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| {
+                EffectExecutorError::Contract(
+                    "Proposal Validate lost its exact runtime binding before replay refinement"
+                        .to_owned(),
+                )
+            })?;
+        let statement = pending.candidate_statement().ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "Proposal Validate omitted its route-neutral candidate statement".to_owned(),
+            )
+        })?;
+        let Some(phase) = statement.phase() else {
+            return statement
+                .execution_commitment()
+                .is_none()
+                .then_some(None)
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "ordinary Proposal Validate carried a commitment without quorum authority"
+                            .to_owned(),
+                    )
+                });
+        };
+        let certificate = self
+            .runtime
+            .durable_body_authority_certificate()
+            .map_err(EffectExecutorError::Runtime)?
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "authority-refined Proposal Validate omitted its durable QC".to_owned(),
+                )
+            })?;
+        self.runtime
+            .verify_certificate(&self.context, &certificate)
+            .map_err(|reason| {
+                EffectExecutorError::Contract(format!(
+                    "authority-refined Proposal Validate carried an invalid durable QC: {reason}"
+                ))
+            })?;
+        if certificate.phase != phase
+            || certificate.round != statement.round()
+            || certificate.proposal_round != statement.proposal_round()
+            || certificate.subject != statement.subject().expect("body statement has one subject")
+            || Some(certificate.execution_commitment) != statement.execution_commitment()
+        {
+            return Err(EffectExecutorError::Contract(
+                "authority-refined Proposal Validate changed its durable QC coordinates".to_owned(),
+            ));
+        }
+        let protected = match phase {
+            wire::GlobalPhase::Prepare => {
+                self.protected_decision.is_none()
+                    && self.protected_lock
+                        == Some((certificate.proposal_round, certificate.subject))
+            }
+            wire::GlobalPhase::Commit => {
+                self.protected_decision
+                    == Some((
+                        certificate.round,
+                        certificate.proposal_round,
+                        certificate.subject,
+                        certificate.execution_commitment,
+                    ))
+            }
+        };
+        if !protected {
+            return Err(EffectExecutorError::Contract(
+                "authority-refined Proposal Validate is not the protected durable body".to_owned(),
+            ));
+        }
+        Ok(Some(certificate))
     }
 
     fn preflight_authenticated_genesis_store_completion(
@@ -1222,7 +1606,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         subject: wire::BlockSubject,
         ownership: RuntimeEffectOwnership,
         _services: &mut S,
-    ) -> Result<Option<super::v2::PendingKuraValidatedApplySuccessorV1>, EffectExecutorError> {
+    ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
         let effect = AdapterEffect::ValidateBody {
             tag,
@@ -1235,59 +1619,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "ValidateBody retry changed its exact pending lifecycle owner".to_owned(),
                 ));
             }
-            return Ok(None);
+            return Ok(());
+        }
+        if let Some(marker) = self
+            .published_lifecycle_validate_retry_markers
+            .get_mut(&key)
+        {
+            *marker = marker
+                .project_retry(&effect, &ownership)
+                .map_err(EffectExecutorError::Contract)?;
+            return Ok(());
         }
         if let Some(seal) = self.durable_validate_retry_seals.get_mut(&key) {
             let projected = seal
                 .project_retry(&effect, &ownership)
                 .map_err(EffectExecutorError::Contract)?;
             *seal = projected.seal;
-            return Ok(None);
+            return Ok(());
         }
         let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
             EffectExecutorError::Contract(
                 "ValidateBody has no matching durable body receipt".to_owned(),
             )
         })?;
-        if let Some(recovery) = self.pending_tip_recovery.as_ref() {
-            if recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation
-                || recovery.replay_tag() != tag
-                || recovery.durable_round() != round
-                || recovery.durable_subject() != subject
-                || recovery.durable_receipt() != &receipt
-                || self.validated_bodies.get(&key) != Some(recovery.validated_receipt())
-            {
-                return Err(EffectExecutorError::Contract(
-                    "PendingKura ValidateBody changed its exact recovered validation owner"
-                        .to_owned(),
-                ));
-            }
-            self.ensure_pending_slot()?;
-            let _next_apply_work = self.plan_work_id()?;
-            let marker = self
-                .pending_tip_recovery
-                .as_mut()
-                .expect("pending-Kura validation was checked above")
-                .take_deferred_validated_marker()?;
-            let successor = match self
-                .runtime
-                .commit_pending_kura_validated_apply(marker, &effect, &ownership)
-            {
-                Ok(successor) => successor,
-                Err((marker, error)) => {
-                    self.pending_tip_recovery
-                        .as_mut()
-                        .expect("pending-Kura validation still owns its recovery evidence")
-                        .restore_deferred_validated_marker(marker);
-                    return Err(EffectExecutorError::PendingApplyRecoveryMismatch(error));
-                }
-            };
-            // The independently fsynced marker now enters the reducer through
-            // its real direct successful-validation transition. The returned
-            // Apply is the sole predecessor-projected child and is consumed by
-            // the outer recovery step only after it records the Apply stage.
-            return Ok(Some(successor));
-        }
         if self.authenticated_genesis_replay.contains_key(&key)
             && self.remote_proposal_replay.contains_key(&key)
         {
@@ -1394,6 +1748,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
+        let authority_certificate =
+            self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
         let Some(RemoteProposalReplayStageV1::Stored {
             replay: stored,
             ownership: store_ownership,
@@ -1406,17 +1762,38 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Some((decision_round, proposal_round, decision_subject, execution_commitment))
                 if proposal_round == round && decision_subject == subject =>
             {
+                let decision_certificate = authority_certificate.as_ref().filter(|certificate| {
+                    certificate.phase == wire::GlobalPhase::Commit
+                        && certificate.round == decision_round
+                        && certificate.proposal_round == proposal_round
+                        && certificate.subject == decision_subject
+                        && certificate.execution_commitment == execution_commitment
+                });
+                let Some(decision_certificate) = decision_certificate else {
+                    let previous = self.remote_proposal_replay.insert(
+                        key,
+                        RemoteProposalReplayStageV1::Stored {
+                            replay: stored,
+                            ownership: store_ownership,
+                        },
+                    );
+                    debug_assert!(previous.is_none());
+                    return Err(EffectExecutorError::Contract(
+                        "Decision-refined Proposal Validate lost its exact CommitQC".to_owned(),
+                    ));
+                };
                 stored.project_validate_after_durable_decision(
                     effect.clone(),
                     validate_ownership.clone(),
-                    decision_round,
-                    proposal_round,
-                    decision_subject,
-                    execution_commitment,
+                    decision_certificate,
                 )
             }
             Some(_) => unreachable!("a retained Decision Validate has the protected body key"),
-            None => stored.project_validate(effect.clone(), validate_ownership.clone()),
+            None => stored.project_validate(
+                effect.clone(),
+                validate_ownership.clone(),
+                authority_certificate.as_ref(),
+            ),
         };
         let validate = match validate {
             Ok(validate) => validate,
@@ -1442,5 +1819,102 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             validate.into_pending_durable_validate_admission(),
         )?;
         Ok(None)
+    }
+}
+
+impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Seal the exact pending certified Fetch for its first durable lifecycle admission.
+    ///
+    /// The authenticated response supplies a canonical manifest even when the
+    /// certificate-backed Fetch began manifest-less. No executor owner is
+    /// retired here; the returned replay-bound carrier is consumed only by the
+    /// coordinator/registry/LedgerV1 admission transaction.
+    pub(in crate::sumeragi) fn prepare_lifecycle_certified_fetch_admission(
+        &self,
+        candidate: &CertifiedResponsePriorityCandidate,
+        response: &wire::CertifiedBodyResponse,
+        active_context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+    ) -> Result<
+        super::v2_lifecycle_coordinator::PreparedCertifiedFetchAdmissionV1,
+        EffectTransportError,
+    > {
+        self.validate_lifecycle_ingress_selector_authority()?;
+        if !candidate.matches_authenticated_response(response, &candidate.authenticated_responder)
+            || candidate.response_hash != HashOf::new(response)
+            || candidate.canonical_manifest_hash != HashOf::new(&response.manifest)
+        {
+            return Err(EffectTransportError::BodyMismatch(
+                "certified Fetch admission differs from fresh selector authority",
+            ));
+        }
+        let pending = self
+            .pending_fetches
+            .get(&candidate.work_id)
+            .ok_or(EffectTransportError::UnknownWork(candidate.work_id))?;
+        if pending.task.id() != candidate.work_id
+            || pending.request_hash != Some(candidate.request_hash)
+            || pending.task.certified_request().map(HashOf::new) != Some(candidate.request_hash)
+            || pending.task.round != candidate.round
+            || pending.task.subject != candidate.subject
+            || !pending
+                .task
+                .matches_reconstructed_manifest(&response.manifest)
+        {
+            return Err(EffectTransportError::BodyMismatch(
+                "certified Fetch admission lost its exact pending request owner",
+            ));
+        }
+        let effect = pending.task.adapter_effect();
+        let binding = pending
+            .task
+            .ownership()
+            .exact_pending_adapter_effect_binding(&effect)
+            .map_err(|_| {
+                EffectTransportError::FailClosed(
+                    "pending certified Fetch lost its lifecycle binding".to_owned(),
+                )
+            })?;
+        if &binding != candidate.pending_effect_binding() {
+            return Err(EffectTransportError::BodyMismatch(
+                "certified Fetch admission changed its pending effect binding",
+            ));
+        }
+        super::v2_lifecycle_coordinator::PreparedCertifiedFetchAdmissionV1::prepare(
+            active_context,
+            verified,
+            effect,
+            binding,
+            response.manifest.clone(),
+            candidate.request_hash,
+        )
+        .map_err(|error| {
+            EffectTransportError::FailClosed(format!(
+                "pending certified Fetch lifecycle projection failed: {error:?}"
+            ))
+        })
+    }
+
+    /// Preview one ordinary certified Fetch-to-Store reducer transition.
+    pub(in crate::sumeragi) fn prepare_certified_fetch_store_adapter(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<super::v2::CertifiedFetchStoreAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime.prepare_certified_fetch_store(tag, manifest)
+    }
+
+    /// Preview one ordinary durable Store-to-Validate reducer transition.
+    pub(in crate::sumeragi) fn prepare_durable_store_validate_adapter(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<super::v2::DurableStoreValidateAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime
+            .prepare_durable_store_validate(tag, round, subject, receipt)
     }
 }

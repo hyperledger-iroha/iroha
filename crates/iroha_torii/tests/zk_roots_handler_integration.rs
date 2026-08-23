@@ -188,8 +188,7 @@ fn seeded_zk_roots_state(
         block.transactions.insert_block(
             HashSet::<
                 iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
-            >::new(
-            ),
+            >::new(),
             nonzero!(1_usize),
         );
         let _ = block.commit();

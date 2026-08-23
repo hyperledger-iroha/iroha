@@ -1056,10 +1056,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         0x7d,
         "derive hosted HTTP topology second validator fixture key",
     );
-    let validator_three = checked_torii_test_account_id(
-        0x7e,
-        "derive hosted HTTP topology third validator fixture key",
-    );
     world
         .soracloud_inrou_host_capabilities_mut_for_testing()
         .insert(
@@ -1079,7 +1075,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 max_cpu_millis: 2_000,
                 max_memory_bytes: 2 * 1024 * 1024 * 1024,
                 max_storage_bytes: 16 * 1024 * 1024 * 1024,
-                proxy_only: false,
                 geography_tags: Default::default(),
                 observed_latency_ms: None,
                 advertised_at_ms: 1,
@@ -1094,9 +1089,9 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 schema_version:
                     iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
                 validator_account_id: validator_two.clone(),
-                peer_id: "12D3KooWTopologyHostKvm".to_owned(),
+                peer_id: "12D3KooWTopologyHostPortableTwo".to_owned(),
                 supported_backends: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::FirecrackerKvm,
+                    iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                 ]),
                 supported_guest_isas: std::collections::BTreeSet::from([
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
@@ -1105,33 +1100,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 max_cpu_millis: 1_000,
                 max_memory_bytes: 1024 * 1024 * 1024,
                 max_storage_bytes: 8 * 1024 * 1024 * 1024,
-                proxy_only: false,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
-                advertised_at_ms: 1,
-                heartbeat_expires_at_ms: u64::MAX,
-            },
-        );
-    world
-        .soracloud_inrou_host_capabilities_mut_for_testing()
-        .insert(
-            validator_three.clone(),
-            iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-                validator_account_id: validator_three,
-                peer_id: "12D3KooWTopologyProxyOnly".to_owned(),
-                supported_backends: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
-                ]),
-                supported_guest_isas: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
-                ]),
-                max_hosted_replica_capacity: 0,
-                max_cpu_millis: 0,
-                max_memory_bytes: 0,
-                max_storage_bytes: 0,
-                proxy_only: true,
                 geography_tags: Default::default(),
                 observed_latency_ms: None,
                 advertised_at_ms: 1,
@@ -1163,9 +1131,9 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 2,
                         validator_account_id: validator_two,
-                        peer_id: "12D3KooWTopologyHostKvm".to_owned(),
+                        peer_id: "12D3KooWTopologyHostPortableTwo".to_owned(),
                         selected_backend:
-                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::FirecrackerKvm,
+                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                         selected_geography_tag: None,
                         selection_latency_ms: None,
@@ -1181,7 +1149,7 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         topology
             .get("active_capability_adverts")
             .and_then(norito::json::Value::as_u64),
-        Some(3)
+        Some(2)
     );
     assert_eq!(
         topology
@@ -1195,12 +1163,6 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
             .and_then(norito::json::Value::as_u64),
         Some(2)
     );
-    assert_eq!(
-        topology
-            .get("proxy_only_validator_count")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
     let backend_mix = topology
         .get("backend_mix")
         .and_then(norito::json::Value::as_object)
@@ -1209,13 +1171,7 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         backend_mix
             .get("portable_vm")
             .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        backend_mix
-            .get("firecracker_kvm")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
+        Some(2)
     );
 }
 #[tokio::test]

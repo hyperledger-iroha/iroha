@@ -107,7 +107,7 @@ def build_policy(
     bundle_versions: list[str],
     validation_categories: list[int],
     trusted_root_paths: list[Path],
-    revoked_certificate_sha256: list[str],
+    revoked_certificate_tbs_sha256: list[str],
 ) -> dict[str, object]:
     if not trusted_root_paths or len(trusted_root_paths) > 4:
         raise candidate_evidence.EvidenceError(
@@ -116,7 +116,7 @@ def build_policy(
     for values, label in (
         (bundle_versions, "bundle versions"),
         (validation_categories, "validation categories"),
-        (revoked_certificate_sha256, "revoked certificate digests"),
+        (revoked_certificate_tbs_sha256, "revoked certificate TBS digests"),
     ):
         if len(values) != len(set(values)):
             raise candidate_evidence.EvidenceError(
@@ -142,7 +142,9 @@ def build_policy(
         "allowed_validation_categories": sorted(set(validation_categories)),
         "allowed_bundle_versions": sorted(set(bundle_versions)),
         "trusted_app_attest_roots": roots,
-        "revoked_certificate_sha256": sorted(set(revoked_certificate_sha256)),
+        "revoked_certificate_tbs_sha256": sorted(
+            set(revoked_certificate_tbs_sha256)
+        ),
         "x509_validation_profile": production_evidence.X509_VALIDATION_PROFILE,
         "secure_enclave_key_profile": production_evidence.SECURE_ENCLAVE_KEY_PROFILE,
     }
@@ -267,7 +269,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--trusted-root-der", action="append", type=Path, default=[]
     )
     parser.add_argument(
-        "--revoked-certificate-sha256", action="append", default=[]
+        "--revoked-certificate-tbs-sha256",
+        action="append",
+        default=[],
+        help="SHA-256 of the exact raw DER encoding of a revoked TBSCertificate",
     )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -278,7 +283,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             bundle_versions=args.bundle_version,
             validation_categories=args.validation_category,
             trusted_root_paths=args.trusted_root_der or [DEFAULT_APPLE_ROOT],
-            revoked_certificate_sha256=args.revoked_certificate_sha256,
+            revoked_certificate_tbs_sha256=args.revoked_certificate_tbs_sha256,
         )
         publish_new_policy(args.output, value)
     except candidate_evidence.EvidenceError as error:

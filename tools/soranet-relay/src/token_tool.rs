@@ -281,7 +281,6 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 /// Request parameters for minting an admission token.
-#[derive(Debug, Clone)]
 pub struct MintRequest<'a> {
     /// ML-DSA suite used for signing.
     pub suite: MlDsaSuite,
@@ -333,8 +332,6 @@ impl TokenMetadata {
     }
 }
 /// Minted token bundle containing the raw token and derived metadata.
-/// Minted token bundle containing the raw token and derived metadata.
-#[derive(Debug, Clone)]
 pub struct TokenBundle {
     pub token: AdmissionToken,
     pub metadata: TokenMetadata,
@@ -835,8 +832,10 @@ mod tests {
     }
     #[test]
     fn inspect_rejects_unrepresentable_token_timestamps_without_panic() {
-        let err = inspect_token(&encoded_token_with_times(10, u64::MAX))
-            .expect_err("unrepresentable expires_at should fail closed");
+        let err = match inspect_token(&encoded_token_with_times(10, u64::MAX)) {
+            Ok(_) => panic!("unrepresentable expires_at should fail closed"),
+            Err(err) => err,
+        };
         match err {
             TokenToolError::Decode(token::DecodeError::TimestampOutOfRange { field, value }) => {
                 assert_eq!(field, "expires_at");

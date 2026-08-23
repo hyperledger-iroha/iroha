@@ -54,6 +54,32 @@ enum ExitStreamError {
     #[error("failed to finish exit stream: {0}")]
     SendFinish(io::Error),
 }
+impl ExitStreamError {
+    fn compliance_context(&self) -> (Option<&'static str>, Option<&str>, &'static str) {
+        match self {
+            Self::StreamDisabled { stream } => (Some(*stream), None, "stream_disabled"),
+            Self::RouteNotProvisioned { stream, channel } => {
+                (Some(*stream), Some(channel), "route_not_provisioned")
+            }
+            Self::RouteRequiresAuthentication { stream, channel } => (
+                Some(*stream),
+                Some(channel),
+                "route_requires_authentication",
+            ),
+            Self::AdapterTimeout { stream, .. } => (Some(*stream), None, "adapter_timeout"),
+            Self::AdapterConnect { stream, .. } => (Some(*stream), None, "adapter_connect"),
+            Self::HandshakeEncode { stream, .. } => (Some(*stream), None, "handshake_encode"),
+            Self::AdapterSend { stream, .. } => (Some(*stream), None, "adapter_send"),
+            Self::AdapterReceive { stream, .. } => (Some(*stream), None, "adapter_receive"),
+            Self::RouteLookup(_) => (None, None, "route_lookup"),
+            Self::Read(_) => (None, None, "route_frame_read"),
+            Self::Decode(_) => (None, None, "route_frame_decode"),
+            Self::RecvRead(_) => (None, None, "exit_stream_read"),
+            Self::SendWrite(_) => (None, None, "exit_stream_write"),
+            Self::SendFinish(_) => (None, None, "exit_stream_finish"),
+        }
+    }
+}
 #[derive(Debug, Error)]
 enum IncentiveStreamError {
     #[error("measurement frame length must be non-zero")]

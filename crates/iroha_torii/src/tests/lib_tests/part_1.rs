@@ -2086,6 +2086,21 @@ fn tx_history_jwt_claims_accept_valid_hmac_token() {
 }
 #[cfg(feature = "app_api")]
 #[test]
+fn tx_history_jwt_claims_accept_case_insensitive_bearer_scheme() {
+    let secret = "shared-secret";
+    let token = sample_tx_history_jwt(secret);
+    let jwt = TxHistoryJwtConfig {
+        algorithm: JwtAlgorithm::HS256,
+        key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
+        issuer: Some("pk-cbdc-dev".to_string()),
+        audience: Some("pk-cbdc".to_string()),
+    };
+    let claims = decode_tx_history_jwt_claims(&format!("BEARER   {token}"), &jwt)
+        .expect("Bearer scheme is case-insensitive and allows HTTP whitespace");
+    assert_eq!(claims.sub.as_deref(), Some("operator1@banka"));
+}
+#[cfg(feature = "app_api")]
+#[test]
 fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
     let token = sample_tx_history_jwt("correct-secret");
     let jwt = TxHistoryJwtConfig {
@@ -2214,6 +2229,36 @@ async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
     );
     let response = tx_history_viewer_from_headers(&app, &headers)
         .expect_err("bare subject aliases must be rejected");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn tx_history_viewer_from_headers_rejects_duplicate_authorization_headers() {
+    let mut app = mk_app_state_for_tests();
+    let secret = "shared-secret";
+    let token = sample_tx_history_jwt(secret);
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            jwt: Some(TxHistoryJwtConfig {
+                algorithm: JwtAlgorithm::HS256,
+                key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
+                issuer: Some("pk-cbdc-dev".to_string()),
+                audience: Some("pk-cbdc".to_string()),
+            }),
+            ..TxHistoryAccessPolicy::default()
+        });
+    let mut headers = HeaderMap::new();
+    let authorization = format!("Bearer {token}")
+        .parse()
+        .expect("authorization header");
+    headers.append(axum::http::header::AUTHORIZATION, authorization);
+    headers.append(
+        axum::http::header::AUTHORIZATION,
+        "Bearer attacker-token".parse().unwrap(),
+    );
+    let response = tx_history_viewer_from_headers(&app, &headers)
+        .expect_err("ambiguous bearer credentials must fail closed");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 #[cfg(feature = "zk-stark")]

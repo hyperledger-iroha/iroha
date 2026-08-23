@@ -1,11 +1,7 @@
 fn print_usage() {
     eprintln!("xtask usage:");
-    eprintln!(
-        "  cargo xtask soracloud-inrou-smoke <portable|firecracker|mixed-host> [--inventory <path>]"
-    );
-    eprintln!(
-        "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
-    );
+    eprintln!("  cargo xtask soracloud-inrou-smoke portable");
+    eprintln!("    Run the first-release hosted-HTTP Inrou PortableVm smoke harness.");
     eprintln!(
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
@@ -43,7 +39,7 @@ fn print_usage() {
         "    Measure PoR verification time against the Halo2 verifier budget using the provided manifest/payload (defaults to fixtures/da/reconstruct/rs_parity_v1). Fails if verification exceeds the budget."
     );
     eprintln!(
-        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-taira|iroha3-nexus>] [--out <dir>] [--kagami <path>] [--nexus-xor-asset-definition-id <BASE58>]"
+        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-nexus>] [--out <dir>] [--kagami <path>] [--nexus-xor-asset-definition-id <BASE58>]"
     );
     eprintln!(
         "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; Nexus regeneration requires an explicit canonical XOR asset id."

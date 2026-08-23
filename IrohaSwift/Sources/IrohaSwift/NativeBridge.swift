@@ -1408,22 +1408,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private typealias MldsaGenerateKeypairFn = @convention(c) (
         UInt32,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+        UnsafeMutablePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias MldsaSignFn = @convention(c) (
         UInt32,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias MldsaVerifyFn = @convention(c) (
         UInt32,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt
     ) -> Int32
 
     private typealias ConnectGenerateKeypairFn = @convention(c) (
@@ -6562,9 +6562,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 return mldsaGenerateKeypairFn(
                     UInt32(suiteId),
                     pubBase,
-                    CUnsignedLong(publicKeyLength),
+                    UInt(publicKeyLength),
                     secBase,
-                    CUnsignedLong(secretKeyLength)
+                    UInt(secretKeyLength)
                 )
             }
         }
@@ -6588,11 +6588,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     return mldsaSignFn(
                         UInt32(suiteId),
                         skBase,
-                        CUnsignedLong(secretKey.count),
+                        UInt(secretKey.count),
                         msgBase,
-                        CUnsignedLong(message.count),
+                        UInt(message.count),
                         sigBase,
-                        CUnsignedLong(signatureLength)
+                        UInt(signatureLength)
                     )
                 }
             }
@@ -6624,11 +6624,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                     return mldsaVerifyFn(
                         UInt32(suiteId),
                         pkBase,
-                        CUnsignedLong(publicKey.count),
+                        UInt(publicKey.count),
                         msgBase,
-                        CUnsignedLong(message.count),
+                        UInt(message.count),
                         sigBase,
-                        CUnsignedLong(signature.count)
+                        UInt(signature.count)
                     )
                 }
             }

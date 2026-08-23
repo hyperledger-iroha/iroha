@@ -2,6 +2,7 @@
 
 use std::{
     num::NonZeroUsize,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -17,7 +18,14 @@ use soranet_pq::MlDsaSuite;
 
 use crate::{Error, peer::SoranetHandshakeConfig, puzzle_work_admission::process_wide_admission};
 
-pub fn runtime_from_handshake(
+fn absolute_replay_state_path(path: &Path) -> std::io::Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
+}
+
+pub(crate) fn runtime_from_handshake(
     handshake: ActualSoranetHandshake,
 ) -> Result<Arc<SoranetHandshakeConfig>, Error> {
     let ActualSoranetHandshake {
@@ -80,16 +88,20 @@ pub fn runtime_from_handshake(
             },
         )?;
     let revocation_store = if required {
-        TicketRevocationStore::load(
-            revocation_store_path.as_ref(),
-            revocation_limits,
-            SystemTime::now(),
-        )
-        .map_err(|err| {
-            Error::HandshakeSoranet(format!(
-                "failed to load soranet revocation store at {revocation_store_path}: {err}"
-            ))
-        })?
+        let replay_path = absolute_replay_state_path(Path::new(revocation_store_path.as_ref()))
+            .map_err(|err| {
+                Error::HandshakeSoranet(format!(
+                    "failed to resolve soranet revocation store path {revocation_store_path}: {err}"
+                ))
+            })?;
+        TicketRevocationStore::load(&replay_path, revocation_limits, SystemTime::now()).map_err(
+            |err| {
+                Error::HandshakeSoranet(format!(
+                    "failed to load soranet revocation store at {}: {err}",
+                    replay_path.display()
+                ))
+            },
+        )?
     } else {
         // Production configuration fixes `required = true`. Programmatic test
         // configurations that disable admission use only in-memory replay state.
@@ -112,7 +124,7 @@ pub fn runtime_from_handshake(
         signed_ticket_public_key,
         Some(Arc::new(Mutex::new(revocation_store))),
         None,
-    )
+    )?
     .with_puzzle_work_admission(puzzle_work_admission);
     Ok(Arc::new(config))
 }

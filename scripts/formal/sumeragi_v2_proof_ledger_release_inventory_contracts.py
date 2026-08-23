@@ -71,7 +71,7 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "autonomous_lane_output_has_durable_reconstruction_source",
-        "201b33a705d475efd18a2b3eda36b9a7997d7d1e7f947c7aaa4f81e200409f5b",
+        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82",
     ),
 )
 

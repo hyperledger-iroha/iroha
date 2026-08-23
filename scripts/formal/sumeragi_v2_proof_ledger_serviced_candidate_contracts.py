@@ -2687,14 +2687,15 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
         drain,
         """
 if matches!(&owned.effect, AdapterEffect::Apply { .. })
-    && (!self.pending_durable_validate_admissions.is_empty()
+    && (self.pending_runner_decision_cleanup.is_some()
+        || !self.pending_durable_validate_admissions.is_empty()
         || self.pending_live_wal_sign_admission.is_some()
         || !self.pending_lifecycle_output_admissions.is_empty())
 {
     break;
 }
 """,
-        "Apply must remain at the exact FIFO head until every lifecycle admission owner settles",
+        "Apply must remain at the exact FIFO head until runner cleanup and every lifecycle admission owner settle",
         errors,
     )
     _require_rust_token_sequence(

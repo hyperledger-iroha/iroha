@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
-EXPECTED_CASE_COUNT = 52
-BASELINE_RUST_LINES = 5_195
-MAX_POSTIMAGE_RUST_LINES = 3_125
-MINIMUM_NET_REDUCTION = 2_070
-EXPECTED_ASSET_LENGTH = 465_885
-EXPECTED_ASSET_SHA256 = "eb4e7208a2eed03decc328c9978f703cd216b17af7137ff0d4c604cc13f41e61"
-EXPECTED_CASE_IDS_SHA256 = "c00f7bf8c8c4a38b7cfa0a456ee10ec2bb8573ce6aac5330f5d377025ab298b6"
+EXPECTED_CASE_COUNT = 50
+BASELINE_RUST_LINES = 5_779
+MAX_POSTIMAGE_RUST_LINES = 3_641
+MINIMUM_NET_REDUCTION = 2_138
+EXPECTED_ASSET_LENGTH = 466_108
+EXPECTED_ASSET_SHA256 = "da728945fc0a86eb648a3b29b2a45bf116f21562dbb5907e76acdadcf918c9ec"
+EXPECTED_CASE_IDS_SHA256 = "c3f73d112d37828df1ab8c29af1c06b901e5284f1072aca80b9eb21d4c4f4131"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -29,10 +29,10 @@ HOST_PREIMAGE_SHA256 = {
 }
 HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "23609776f8c036c9b31996796f4a2573d5b89d0abd8e2d38160cd33698ba359a",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "b736a07a6e53fcfcb5a74cb55a1a13f6822d0763fe978c3563190c3f38505cae",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "cafb63f1161f2cd95185b4c46ccb6bd7eb09cd0afee0f5c07afa894c39ad4678",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "bc57cf6e598cf680a57ac43295e7efbd5dc44cd036199144a3e325f4fe3b8fa6",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "12750f0640b1d4cc0361b4567b7aef31fe94d8824bfbd151f6afe62f12ecdbb1",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "75c4bc31584841cf39396c80b93b19e7b10ad4a256e7523ca8ec9a147dad2742",
 }
 
 MIGRATED_TESTS = {

@@ -33,6 +33,7 @@ use super::{
         RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
         RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
         SealedLiveWalPersistedEffectV1, exact_direct_signed_admission_authority,
+        exact_pending_certified_fetch_admission_authority,
     },
     schema::{AttestedReadyValidateDemand, DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -3176,6 +3177,29 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignDispatch<'registry>
     task: Option<crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1>,
     key: RecoveredLifecycleSignDispatchKeyV1,
 }
+/// Exact claimed Sign carrier authorized for durable supersession retirement.
+///
+/// This detached token retains no mutable registry borrow. Publication
+/// revalidates the same carrier and dispatch identity immediately before the
+/// terminal LedgerV1 fsync.
+#[must_use = "superseded recovered Sign has not reached its durable terminal"]
+pub(super) struct PreparedRecoveredLifecycleSignCancellationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    dispatch_key: RecoveredLifecycleSignDispatchKeyV1,
+    _linearity: RecoveredLifecycleSignCancellationLinearityV1,
+}
+struct RecoveredLifecycleSignCancellationLinearityV1;
+impl Drop for RecoveredLifecycleSignCancellationLinearityV1 {
+    fn drop(&mut self) {}
+}
+/// Failure from the recovered Sign carrier-before-Ledger cancellation cut.
+pub(super) enum RecoveredLifecycleSignCancellationPublicationError<E> {
+    /// Current or staged coordinator/registry state failed exact preflight.
+    Preflight(PreparedRecoveredLifecycleSignCancellationV1),
+    /// LedgerV1 publication failed while the incumbent carrier stayed installed.
+    Publication(E, PreparedRecoveredLifecycleSignCancellationV1),
+}
 impl PreparedRecoveredLifecycleSignDispatch<'_> {
     /// Return the immutable queue key without releasing Sign material.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
@@ -3439,6 +3463,29 @@ impl PreparedLifecycleDecisionApplyDispatchV1<'_> {
     /// Return the immutable queue key without releasing the worker task.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.key
+    }
+    /// Check the still-owned task against one authenticated interrupted-tip replay.
+    ///
+    /// This equality oracle exposes no task material or dispatch capability. It
+    /// exists so the executor can advance its no-clock recovery stage only
+    /// beside the exact registry projection which is about to enter the worker
+    /// queue's fail-stop publication cut.
+    pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(
+        &self,
+        context: &wire::HeightContext,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: &wire::QuorumCertificate,
+        validated_receipt: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    ) -> bool {
+        self.key.matches_height_context(context)
+            && self.task.as_ref().is_some_and(|task| {
+                task.dispatch_key() == self.key
+                    && task.exact_tag() == tag
+                    && task.subject() == subject
+                    && task.certificate() == certificate
+                    && task.validated_receipt() == validated_receipt
+            })
     }
     /// Arm the exact carrier and release its task under the reserved queue cut.
     pub(in crate::sumeragi) fn commit_for_worker(
@@ -3722,6 +3769,31 @@ enum ConcreteLifecycleWorkKind {
     DurableRecoveredDecisionApply(DurableRecoveredDecisionApplyWork),
     DurableCertifiedServe(DurableCertifiedServeWork),
     DurableProducerTurn(DurableProducerTurnWork),
+}
+
+impl ConcreteLifecycleWorkRegistry {
+    /// Borrow every exact durable Validate row whose executable lifecycle
+    /// owner was already published before process restart.
+    pub(super) fn recovered_published_validate_retry_markers(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &AdapterEffect,
+            &PendingRuntimeEffectBinding,
+            &DurableBodyReceipt,
+        ),
+    > {
+        self.entries.values().filter_map(|work| {
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+                return None;
+            };
+            work.validate_exact().then_some((
+                &validate.effect,
+                &validate.pending,
+                &validate.durable_receipt,
+            ))
+        })
+    }
 }
 /// One move-only concrete effect paired with its sealed pending authority.
 #[derive(Debug)]

@@ -1,15 +1,26 @@
 //! Fixed resource corridors for resolver inputs and retained state.
 //!
-//! The resolver accepts local operator files and remote Torii/SoraFS payloads.
-//! Keeping their byte, decode, collection, and retained-memory limits together
-//! makes the first-release admission contract explicit and auditable.
+//! The resolver's v1 schema admits independently pinned local snapshots only.
+//! Keeping byte, decode, collection, and retained-memory limits together makes
+//! the first-release admission contract explicit and auditable.
 use eyre::{Result, WrapErr, bail, eyre};
 use norito::{DecodeLimits, json};
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Read,
     path::{Path, PathBuf},
 };
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 /// Maximum speculative capacity reserved before bytes have been observed (64 KiB).
 const MAX_INITIAL_READ_RESERVATION: usize = 64 * 1024;
 /// Maximum size of the resolver's Norito JSON configuration (1 MiB).
@@ -28,10 +39,6 @@ pub const MAX_TLS_CERT_BYTES: usize = 1024 * 1024;
 pub const MAX_TLS_KEY_BYTES: usize = 256 * 1024;
 /// Maximum number of sources of either kind in one configuration.
 pub const MAX_SOURCES_PER_KIND: usize = 256;
-/// Maximum total object references across all configured bundle sources.
-pub const MAX_SOURCE_REFERENCES: usize = 4096;
-/// Maximum number of request headers attached to one source.
-pub const MAX_HEADERS_PER_SOURCE: usize = 64;
 /// Maximum number of addresses in any one listener list.
 pub const MAX_LISTEN_ADDRESSES: usize = 64;
 /// Maximum number of configured static zones.
@@ -113,21 +120,45 @@ pub fn preflight_json(
 /// regular file. The descriptor is read through `max_bytes + 1`, so sparse,
 /// growing, and metadata-underreporting files cannot bypass the ceiling.
 pub fn read_bounded_file(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
+    read_bounded_file_with_policy(path, max_bytes, label, false)
+}
+/// Read one private regular local file through the stable bounded reader.
+///
+/// On Unix, the path must be absolute, every ancestor must be owned by the
+/// effective user or root and reject unsafe writes, and the file must have one
+/// link, a trusted owner, and no group/other permissions at every metadata
+/// observation. Other platforms fail closed until an equivalent owner/ACL
+/// custody policy is implemented.
+pub fn read_bounded_private_file(path: &Path, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
+    read_bounded_file_with_policy(path, max_bytes, label, true)
+}
+fn read_bounded_file_with_policy(
+    path: &Path,
+    max_bytes: usize,
+    label: &str,
+    require_private_permissions: bool,
+) -> Result<Vec<u8>> {
     if max_bytes == 0 {
         bail!("{label} byte limit must be non-zero");
     }
-    let named_before = fs::metadata(path)
+    let trusted_path;
+    let path = if require_private_permissions {
+        trusted_path = trusted_private_file_path(path, label)?;
+        trusted_path.as_path()
+    } else {
+        path
+    };
+    let named_before = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
-    if !named_before.file_type().is_file() {
-        bail!("{label} `{}` is not a regular file", path.display());
-    }
+    validate_file_metadata(&named_before, path, label, require_private_permissions)?;
     admit_metadata_len(&named_before, max_bytes, label, path)?;
-    let mut file = File::open(path)
+    let mut file = open_direct_file(path)
         .wrap_err_with(|| format!("failed to open {label} `{}`", path.display()))?;
     let opened_before = file
         .metadata()
         .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
-    if !opened_before.file_type().is_file() || !same_file_snapshot(&named_before, &opened_before) {
+    validate_file_metadata(&opened_before, path, label, require_private_permissions)?;
+    if !same_file_snapshot(&named_before, &opened_before) {
         bail!("{label} `{}` changed while it was opened", path.display());
     }
     admit_metadata_len(&opened_before, max_bytes, label, path)?;
@@ -138,21 +169,23 @@ pub fn read_bounded_file(path: &Path, max_bytes: usize, label: &str) -> Result<V
     bytes
         .try_reserve_exact(initial_capacity)
         .map_err(|error| eyre!("failed to reserve {label} buffer: {error}"))?;
+    let mut bytes = SensitiveReadBuffer(bytes);
     let read_limit = u64::try_from(max_bytes)
         .map_err(|_| eyre!("{label} byte limit does not fit u64"))?
         .checked_add(1)
         .ok_or_else(|| eyre!("{label} byte limit overflow"))?;
     {
         let mut bounded = (&mut file).take(read_limit);
-        let mut scratch = [0_u8; 8192];
+        let mut scratch = SensitiveReadScratch([0_u8; 8192]);
         loop {
             let read = bounded
-                .read(&mut scratch)
+                .read(&mut scratch.0)
                 .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
             if read == 0 {
                 break;
             }
             let next_len = bytes
+                .0
                 .len()
                 .checked_add(read)
                 .ok_or_else(|| eyre!("{label} length overflow"))?;
@@ -162,26 +195,194 @@ pub fn read_bounded_file(path: &Path, max_bytes: usize, label: &str) -> Result<V
                     path.display()
                 );
             }
-            reserve_observed_append(&mut bytes, next_len, max_bytes, label)?;
-            bytes.extend_from_slice(&scratch[..read]);
+            reserve_observed_append(&mut bytes.0, next_len, max_bytes, label)?;
+            bytes.0.extend_from_slice(&scratch.0[..read]);
         }
     }
     let opened_after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {label} `{}`", path.display()))?;
-    let named_after = fs::metadata(path)
+    let named_after = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to re-inspect {label} `{}`", path.display()))?;
+    validate_file_metadata(&opened_after, path, label, require_private_permissions)?;
+    validate_file_metadata(&named_after, path, label, require_private_permissions)?;
     let observed_len =
-        u64::try_from(bytes.len()).map_err(|_| eyre!("{label} length does not fit u64"))?;
+        u64::try_from(bytes.0.len()).map_err(|_| eyre!("{label} length does not fit u64"))?;
     if observed_len != opened_before.len()
-        || !opened_after.file_type().is_file()
-        || !named_after.file_type().is_file()
         || !same_file_snapshot(&opened_before, &opened_after)
         || !same_file_snapshot(&opened_after, &named_after)
     {
         bail!("{label} `{}` changed while it was read", path.display());
     }
-    Ok(bytes)
+    Ok(bytes.into_vec())
+}
+struct SensitiveReadBuffer(Vec<u8>);
+impl SensitiveReadBuffer {
+    fn clear(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(self.0.as_mut_slice());
+    }
+    fn into_vec(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for SensitiveReadBuffer {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+struct SensitiveReadScratch([u8; 8192]);
+impl Drop for SensitiveReadScratch {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+#[cfg(unix)]
+fn trusted_private_file_path(path: &Path, label: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if !path.is_absolute() {
+        bail!("{label} path must be absolute");
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| eyre!("{label} path must name a file"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| eyre!("{label} path must have a parent directory"))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .wrap_err_with(|| format!("failed to resolve {label} parent `{}`", parent.display()))?;
+    if canonical_parent != parent {
+        bail!(
+            "{label} parent `{}` must not contain symbolic links or traversal",
+            parent.display()
+        );
+    }
+    let effective_uid = current_process_owner_uid()?;
+    for ancestor in canonical_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).wrap_err_with(|| {
+            format!("failed to inspect {label} parent `{}`", ancestor.display())
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!(
+                "{label} parent `{}` must be a direct directory",
+                ancestor.display()
+            );
+        }
+        if !trusted_private_ancestor(metadata.uid(), metadata.mode(), effective_uid) {
+            bail!(
+                "{label} parent `{}` must be owned by the effective user or root and must not be unsafely writable",
+                ancestor.display()
+            );
+        }
+    }
+    Ok(canonical_parent.join(file_name))
+}
+/// Determine the effective Unix identity without unsafe FFI.
+///
+/// An anonymous temporary file is created by the kernel using the effective
+/// credentials of this process; its owner is therefore the identity relevant
+/// to subsequent file-access checks.
+#[cfg(unix)]
+pub fn current_process_owner_uid() -> Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let file = tempfile::tempfile().wrap_err("failed to create effective-identity probe file")?;
+    Ok(file
+        .metadata()
+        .wrap_err("failed to inspect effective-identity probe file")?
+        .uid())
+}
+/// Return whether a private-file ancestor has trusted Unix custody.
+///
+/// Root-owned sticky directories (for example `/tmp`) are safe boundaries for
+/// owner-private descendants. Other group/other-writable directories are
+/// rejected even when owned by the effective user.
+#[cfg(unix)]
+#[must_use]
+pub const fn trusted_private_ancestor(owner_uid: u32, mode: u32, effective_uid: u32) -> bool {
+    let trusted_owner = owner_uid == effective_uid || owner_uid == 0;
+    let rejects_unsafe_writes = mode & 0o022 == 0 || (owner_uid == 0 && mode & 0o1000 != 0);
+    trusted_owner && rejects_unsafe_writes
+}
+#[cfg(not(unix))]
+fn trusted_private_file_path(_path: &Path, label: &str) -> Result<PathBuf> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "{label} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    )
+    .into())
+}
+#[cfg(unix)]
+fn open_direct_file(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(O_NOFOLLOW_FLAG);
+    options.open(path)
+}
+#[cfg(windows)]
+fn open_direct_file(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+#[cfg(not(any(unix, windows)))]
+fn open_direct_file(_path: &Path) -> std::io::Result<File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "stable no-follow file opens are unavailable on this platform",
+    ))
+}
+fn validate_file_metadata(
+    metadata: &fs::Metadata,
+    path: &Path,
+    label: &str,
+    require_private_permissions: bool,
+) -> Result<()> {
+    if !metadata.file_type().is_file() {
+        bail!("{label} `{}` is not a direct regular file", path.display());
+    }
+    #[cfg(unix)]
+    if require_private_permissions {
+        use std::os::unix::fs::MetadataExt as _;
+        let effective_uid = current_process_owner_uid()?;
+        if metadata.uid() != effective_uid && metadata.uid() != 0 {
+            bail!(
+                "{label} `{}` must be owned by the effective user or root",
+                path.display()
+            );
+        }
+        if metadata.nlink() != 1 {
+            bail!(
+                "{label} `{}` must have exactly one hard link",
+                path.display()
+            );
+        }
+        if metadata.mode() & 0o077 != 0 {
+            bail!(
+                "{label} `{}` must have no group or other permissions on Unix",
+                path.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    if require_private_permissions {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!(
+                "{label} cannot be loaded securely on this platform because Unix owner/mode custody checks are unavailable"
+            ),
+        )
+        .into());
+    }
+    Ok(())
 }
 /// Read one local file on the blocking pool using [`read_bounded_file`].
 pub async fn read_bounded_file_async(
@@ -337,6 +538,104 @@ mod tests {
             .expect("write oversized input");
         oversized.flush().expect("flush oversized input");
         assert!(read_bounded_file(oversized.path(), 64, "test input").is_err());
+    }
+    #[test]
+    fn bounded_reader_sensitive_buffers_can_be_explicitly_cleared() {
+        let mut bytes = SensitiveReadBuffer(vec![0xA5; 32]);
+        bytes.clear();
+        assert!(bytes.0.iter().all(|byte| *byte == 0));
+        let scratch = SensitiveReadScratch([0xA5; 8192]);
+        drop(scratch);
+    }
+    #[cfg(not(unix))]
+    #[test]
+    fn private_reader_fails_closed_without_unix_custody_checks() {
+        let error = trusted_private_file_path(Path::new("private-key"), "private key")
+            .expect_err("platform without an equivalent private ACL policy must fail closed");
+        let io_error = error
+            .downcast_ref::<std::io::Error>()
+            .expect("unsupported policy is an I/O error");
+        assert_eq!(io_error.kind(), std::io::ErrorKind::Unsupported);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_local_read_rejects_symbolic_link() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, b"payload").expect("write target");
+        symlink(&target, &link).expect("create symlink");
+        let error = read_bounded_file(&link, 64, "test input")
+            .expect_err("symbolic links must fail closed");
+        assert!(error.to_string().contains("direct regular file"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_private_read_rejects_group_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+            .expect("temporary private input");
+        std::fs::write(file.path(), b"private payload").expect("write private input");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
+            .expect("set group-readable permissions");
+        let error = read_bounded_private_file(file.path(), 64, "private test input")
+            .expect_err("group-readable file must fail closed");
+        assert!(error.to_string().contains("group or other"));
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))
+            .expect("protect private input");
+        assert_eq!(
+            read_bounded_private_file(file.path(), 64, "private test input")
+                .expect("owner-private file")
+                .as_slice(),
+            b"private payload"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_private_read_rejects_hard_links() {
+        let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("temporary directory");
+        let target = directory.path().join("private-key.pem");
+        let alias = directory.path().join("private-key.alias");
+        std::fs::write(&target, b"private payload").expect("write private input");
+        std::fs::hard_link(&target, &alias).expect("create hard-link alias");
+        let error = read_bounded_private_file(&target, 64, "private test input")
+            .expect_err("multi-link private file must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_private_read_rejects_writable_parent_chain() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+            .expect("temporary directory");
+        let target = directory.path().join("private-key.pem");
+        std::fs::write(&target, b"private payload").expect("write private input");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("protect private input");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o777))
+            .expect("make parent writable");
+        let error = read_bounded_private_file(&target, 64, "private test input")
+            .expect_err("writable private-file parent must fail closed");
+        assert!(error.to_string().contains("writable"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_ancestor_policy_rejects_foreign_owner_and_accepts_root_sticky_boundary() {
+        let effective_uid = 1_000;
+        assert!(trusted_private_ancestor(
+            effective_uid,
+            0o700,
+            effective_uid
+        ));
+        assert!(trusted_private_ancestor(0, 0o1777, effective_uid));
+        assert!(!trusted_private_ancestor(2_000, 0o755, effective_uid));
+        assert!(!trusted_private_ancestor(
+            effective_uid,
+            0o777,
+            effective_uid
+        ));
     }
     #[tokio::test]
     async fn bounded_http_accepts_absent_content_length_at_exact_limit() {

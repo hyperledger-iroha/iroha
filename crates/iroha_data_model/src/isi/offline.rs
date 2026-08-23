@@ -1,7 +1,9 @@
 use super::*;
 use crate::offline::{
     KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendReleaseActivationV4,
-    KagemushaRecursiveSpendTopUpRequestV4, KagemushaV4PromotionBindingV1,
+    KagemushaRecursiveSpendTopUpRequestV4, KagemushaV4IssuanceEnableWitnessV1,
+    KagemushaV4PromotionBindingV1, KagemushaV4ReleaseCancellationV1,
+    KagemushaV4ReleaseDeactivationV1, KagemushaV4ReleaseLifecycleValidationError,
     KagemushaV4TairaCanaryPermitV1, KagemushaV4TairaCanaryReservationV1,
     OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
 };
@@ -81,6 +83,72 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
+    /// Enable public Kagemusha V4 issuance after signed post-canary liveness closure.
+    pub struct EnableKagemushaRecursiveIssuanceV4 {
+        /// Complete bounded staged-to-enabled evidence package.
+        pub witness: KagemushaV4IssuanceEnableWitnessV1,
+    }
+}
+impl PartialOrd for EnableKagemushaRecursiveIssuanceV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for EnableKagemushaRecursiveIssuanceV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Permanently cancel a staged Kagemusha V4 release before issuance is enabled.
+    pub struct CancelKagemushaRecursiveReleaseV4 {
+        /// Exact predecessor-bound governance cancellation.
+        pub cancellation: KagemushaV4ReleaseCancellationV1,
+    }
+}
+impl PartialOrd for CancelKagemushaRecursiveReleaseV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for CancelKagemushaRecursiveReleaseV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Permanently stop new issuance from an enabled Kagemusha V4 release.
+    pub struct DeactivateKagemushaRecursiveIssuanceV4 {
+        /// Exact predecessor-bound governance deactivation.
+        pub deactivation: KagemushaV4ReleaseDeactivationV1,
+    }
+}
+impl PartialOrd for DeactivateKagemushaRecursiveIssuanceV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DeactivateKagemushaRecursiveIssuanceV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
     /// Consume one controller-signed, activation-bound Taira canary permit.
     pub struct RecordKagemushaTairaCanaryV4 {
         /// Exact controller permit authenticated again during consensus execution.
@@ -136,6 +204,9 @@ isi! {
 impl crate::seal::Instruction for TopUpKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for RedeemKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for ActivateKagemushaRecursiveReleaseV4 {}
+impl crate::seal::Instruction for EnableKagemushaRecursiveIssuanceV4 {}
+impl crate::seal::Instruction for CancelKagemushaRecursiveReleaseV4 {}
+impl crate::seal::Instruction for DeactivateKagemushaRecursiveIssuanceV4 {}
 impl crate::seal::Instruction for RecordKagemushaTairaCanaryV4 {}
 impl crate::seal::Instruction for AuthorizeKagemushaTairaCanaryV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
@@ -187,6 +258,66 @@ impl ActivateKagemushaRecursiveReleaseV4 {
         Ok(())
     }
 }
+impl EnableKagemushaRecursiveIssuanceV4 {
+    /// Stable wire identifier for staged-to-enabled issuance transition.
+    pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.recursive_release.enable.v1";
+
+    /// Construct a staged-to-enabled issuance transition.
+    #[must_use]
+    pub fn new(witness: KagemushaV4IssuanceEnableWitnessV1) -> Self {
+        Self { witness }
+    }
+
+    /// Validate the bounded witness before consensus execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaV4ReleaseLifecycleValidationError`] for malformed,
+    /// oversized, or cross-spliced lifecycle evidence.
+    pub fn validate(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        self.witness.validate()
+    }
+}
+impl CancelKagemushaRecursiveReleaseV4 {
+    /// Stable wire identifier for staged release cancellation.
+    pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.recursive_release.cancel.v1";
+
+    /// Construct a predecessor-bound staged release cancellation.
+    #[must_use]
+    pub fn new(cancellation: KagemushaV4ReleaseCancellationV1) -> Self {
+        Self { cancellation }
+    }
+
+    /// Validate the cancellation before consensus execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaV4ReleaseLifecycleValidationError`] for malformed or
+    /// oversized transition data.
+    pub fn validate(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        self.cancellation.validate()
+    }
+}
+impl DeactivateKagemushaRecursiveIssuanceV4 {
+    /// Stable wire identifier for enabled issuance deactivation.
+    pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.recursive_release.deactivate.v1";
+
+    /// Construct a predecessor-bound issuance deactivation.
+    #[must_use]
+    pub fn new(deactivation: KagemushaV4ReleaseDeactivationV1) -> Self {
+        Self { deactivation }
+    }
+
+    /// Validate the deactivation before consensus execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaV4ReleaseLifecycleValidationError`] for malformed or
+    /// oversized transition data.
+    pub fn validate(&self) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
+        self.deactivation.validate()
+    }
+}
 impl RecordKagemushaTairaCanaryV4 {
     /// Stable wire identifier for the consensus canary record instruction.
     pub const WIRE_ID: &'static str = "iroha.offline.kagemusha.taira_canary.record.v1";
@@ -226,6 +357,7 @@ impl SetOfflineDeviceAttestationPolicy {
 fn offline_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
+const KAGEMUSHA_V4_ISSUANCE_ENABLE_ISI_DECODE_STACK_BYTES: usize = 32 * 1024 * 1024;
 macro_rules! impl_decode_one_canonical_offline_field {
     ($ty:ident { $field:ident: $field_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -281,11 +413,48 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
         ))
     }
 }
+impl<'a> norito::core::DecodeFromSlice<'a> for EnableKagemushaRecursiveIssuanceV4 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        std::thread::scope(|scope| {
+            let decoder = std::thread::Builder::new()
+                .name("kagemusha-enable-isi-decode".to_owned())
+                .stack_size(KAGEMUSHA_V4_ISSUANCE_ENABLE_ISI_DECODE_STACK_BYTES)
+                .spawn_scoped(scope, move || {
+                    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+                    if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                        return super::decode_packed_instruction_payload::<Self>(bytes);
+                    }
+                    let mut offset = 0usize;
+                    let witness = super::decode_aos_canonical_field::<
+                        KagemushaV4IssuanceEnableWitnessV1,
+                    >(
+                        super::read_aos_field(bytes, &mut offset, flags)?, flags
+                    )?;
+                    if offset != bytes.len() {
+                        return Err(norito::core::Error::LengthMismatch);
+                    }
+                    norito::core::note_payload_access(bytes, offset);
+                    Ok((Self { witness }, offset))
+                })
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            decoder
+                .join()
+                .map_err(|_| norito::core::Error::LengthMismatch)?
+        })
+    }
+}
 impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendTopUpRequestV4
 });
 impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendRedeemRequestV4
+});
+impl_decode_one_canonical_offline_field!(CancelKagemushaRecursiveReleaseV4 {
+    cancellation: KagemushaV4ReleaseCancellationV1
+});
+impl_decode_one_canonical_offline_field!(DeactivateKagemushaRecursiveIssuanceV4 {
+    deactivation: KagemushaV4ReleaseDeactivationV1
 });
 impl_decode_one_canonical_offline_field!(RecordKagemushaTairaCanaryV4 {
     permit: KagemushaV4TairaCanaryPermitV1
@@ -302,9 +471,13 @@ impl_decode_one_canonical_offline_field!(SetOfflineDeviceAttestationPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::offline::KagemushaDevicePublicKeyV2;
+    use crate::offline::{
+        KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1,
+        KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaDevicePublicKeyV2,
+        KagemushaExactBytesDigestV1, KagemushaV4ReleaseLifecycleReasonV1,
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::core::NoritoDeserialize as _;
+    use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
     fn registration_fixture() -> OfflineDeviceAttestationRegistration {
         let account_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
             .expect("derive checked offline attestation fixture keypair");
@@ -347,6 +520,67 @@ mod tests {
             expires_at_ms: 2_000_000_000_000,
         }
     }
+    fn exact_digest(seed: u8) -> KagemushaExactBytesDigestV1 {
+        KagemushaExactBytesDigestV1 {
+            byte_len: u64::from(seed) + 1,
+            sha256: [seed.max(1); 32],
+        }
+    }
+    fn cancellation_fixture() -> KagemushaV4ReleaseCancellationV1 {
+        KagemushaV4ReleaseCancellationV1 {
+            schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            promotion_id: [0x31; 32],
+            manifest_sha256: [0x32; 32],
+            expected_predecessor_lifecycle: exact_digest(0x33),
+            transition_id: [0x34; 32],
+            reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+            evidence: Some(exact_digest(0x35)),
+        }
+    }
+    fn deactivation_fixture() -> KagemushaV4ReleaseDeactivationV1 {
+        KagemushaV4ReleaseDeactivationV1 {
+            schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            promotion_id: [0x31; 32],
+            manifest_sha256: [0x32; 32],
+            expected_predecessor_lifecycle: exact_digest(0x36),
+            transition_id: [0x37; 32],
+            reason: KagemushaV4ReleaseLifecycleReasonV1::EmergencyDeactivation,
+            evidence: None,
+        }
+    }
+    fn assert_instruction_layout_roundtrip<T>(value: T, flags: u8)
+    where
+        T: Clone
+            + core::fmt::Debug
+            + PartialEq
+            + Encode
+            + for<'a> norito::core::DecodeFromSlice<'a>,
+    {
+        let (payload, encoded_flags) = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+            norito::codec::encode_with_header_flags(&value)
+        };
+        assert_eq!(encoded_flags & flags, flags);
+        let (decoded, used) = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(encoded_flags);
+            T::decode_from_slice(&payload).expect("decode instruction payload")
+        };
+        assert_eq!(used, payload.len());
+        assert_eq!(decoded, value);
+
+        let mut trailing = payload;
+        trailing.push(0xA5);
+        let outcome = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(encoded_flags);
+            T::decode_from_slice(&trailing)
+        };
+        assert!(
+            outcome.is_err(),
+            "instruction decoder accepted trailing bytes"
+        );
+    }
     #[test]
     fn device_attestation_instruction_uses_stable_wire_id_and_roundtrips() {
         let instruction = RegisterOfflineDeviceAttestation::new(registration_fixture());
@@ -365,6 +599,57 @@ mod tests {
                 .as_any()
                 .downcast_ref::<RegisterOfflineDeviceAttestation>(),
             Some(&instruction)
+        );
+    }
+    #[test]
+    fn release_lifecycle_terminal_isis_validate_box_and_decode_both_layouts() {
+        let cancellation = CancelKagemushaRecursiveReleaseV4::new(cancellation_fixture());
+        let deactivation = DeactivateKagemushaRecursiveIssuanceV4::new(deactivation_fixture());
+        cancellation.validate().expect("valid cancellation ISI");
+        deactivation.validate().expect("valid deactivation ISI");
+
+        for flags in [
+            norito::core::default_encode_flags(),
+            norito::core::header_flags::PACKED_STRUCT
+                | norito::core::header_flags::COMPACT_LEN
+                | norito::core::header_flags::FIELD_BITSET,
+        ] {
+            assert_instruction_layout_roundtrip(cancellation.clone(), flags);
+            assert_instruction_layout_roundtrip(deactivation.clone(), flags);
+        }
+
+        for (boxed, wire_id) in [
+            (
+                InstructionBox::from(cancellation),
+                CancelKagemushaRecursiveReleaseV4::WIRE_ID,
+            ),
+            (
+                InstructionBox::from(deactivation),
+                DeactivateKagemushaRecursiveIssuanceV4::WIRE_ID,
+            ),
+        ] {
+            assert_eq!(crate::isi::instruction_wire_id(&boxed), Some(wire_id));
+        }
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn release_lifecycle_enable_isi_boxes_and_rejects_trailing_bytes_in_both_layouts() {
+        let instruction = EnableKagemushaRecursiveIssuanceV4::new(
+            crate::offline::lifecycle_enable_witness_wire_fixture(),
+        );
+        instruction.validate().expect("valid enable ISI");
+        for flags in [
+            norito::core::default_encode_flags(),
+            norito::core::header_flags::PACKED_STRUCT
+                | norito::core::header_flags::COMPACT_LEN
+                | norito::core::header_flags::FIELD_BITSET,
+        ] {
+            assert_instruction_layout_roundtrip(instruction.clone(), flags);
+        }
+        let boxed = InstructionBox::from(instruction);
+        assert_eq!(
+            crate::isi::instruction_wire_id(&boxed),
+            Some(EnableKagemushaRecursiveIssuanceV4::WIRE_ID)
         );
     }
 }

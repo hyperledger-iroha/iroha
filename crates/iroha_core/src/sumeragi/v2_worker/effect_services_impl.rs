@@ -672,13 +672,31 @@ impl V2EffectServices for ProductionV2Services {
                         "exhausted bounded Sumeragi v2 interrupted-tip recovery"
                     );
                 }
-                _ => {
+                Some(PendingTipRecoveryAttemptResult::Advanced) => {
                     iroha_logger::debug!(
                         height = status.height,
                         stage = ?status.pending_tip_recovery_stage,
                         attempts = status.pending_tip_recovery_attempts,
                         result = ?status.pending_tip_recovery_last_result,
                         "advanced bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                Some(PendingTipRecoveryAttemptResult::Waiting) => {
+                    iroha_logger::debug!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        result = ?status.pending_tip_recovery_last_result,
+                        "waiting in bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                None => {
+                    iroha_logger::debug!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        fail_closed = status.fail_closed,
+                        "started or fail-stopped a bounded Sumeragi v2 interrupted-tip recovery attempt"
                     );
                 }
             }

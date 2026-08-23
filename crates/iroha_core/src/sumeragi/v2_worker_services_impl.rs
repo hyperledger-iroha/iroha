@@ -482,7 +482,11 @@ impl ProductionV2Services {
                         },
                     )
                 }
-                LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
+                LifecycleCompletionCapacityProbeV1::Apply {
+                    ordinal,
+                    key,
+                    executor_available,
+                } => {
                     if key.lifecycle_ordinal() != ordinal
                         || !key.matches_height_context(&self.context)
                         || !apply_keys.insert(key)
@@ -495,7 +499,7 @@ impl ProductionV2Services {
                         ordinal,
                         LifecycleCompletionPreparedCapacityV1::Apply {
                             key,
-                            available: false,
+                            available: executor_available,
                         },
                     )
                 }
@@ -609,10 +613,11 @@ impl ProductionV2Services {
                     if state.lifecycle_decision_applies.contains_key(key) {
                         return Err("lifecycle Completion Apply is already worker-owned".to_owned());
                     }
-                    *available = io
-                        .command_tx
-                        .queue
-                        .lifecycle_completion_worker_capacity(state);
+                    *available = *available
+                        && io
+                            .command_tx
+                            .queue
+                            .lifecycle_completion_worker_capacity(state);
                 }
                 LifecycleCompletionPreparedCapacityV1::Sign { key, available } => {
                     if state.recovered_lifecycle_signs.contains_key(key) {

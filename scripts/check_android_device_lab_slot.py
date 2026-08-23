@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterable
 import unicodedata
 import zipfile
@@ -32,6 +33,46 @@ except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
         CandidateStageContract,
         validate_candidate_stage_manifest_v2 as _validate_candidate_stage_manifest_v2,
     )
+
+try:
+    from scripts import capture_android_attestation_status as android_status_capture
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    import capture_android_attestation_status as android_status_capture
+
+try:
+    from scripts import android_attestation_certificate_profile as _android_x509
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    import android_attestation_certificate_profile as _android_x509
+
+ANDROID_KEY_ATTESTATION_EXTENSION_OID = _android_x509.ANDROID_KEY_ATTESTATION_EXTENSION_OID
+ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER = (
+    _android_x509.ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER
+)
+ANDROID_SECURITY_LEVEL_STRONGBOX = _android_x509.ANDROID_SECURITY_LEVEL_STRONGBOX
+ANDROID_VERIFIED_BOOT_STATE_VERIFIED = _android_x509.ANDROID_VERIFIED_BOOT_STATE_VERIFIED
+ANDROID_TAG_ALL_APPLICATIONS = _android_x509.ANDROID_TAG_ALL_APPLICATIONS
+ANDROID_TAG_ROOT_OF_TRUST = _android_x509.ANDROID_TAG_ROOT_OF_TRUST
+ANDROID_TAG_ATTESTATION_APPLICATION_ID = _android_x509.ANDROID_TAG_ATTESTATION_APPLICATION_ID
+ANDROID_LEGACY_GOOGLE_ATTESTATION_ROOT_SHA256 = (
+    _android_x509.ANDROID_LEGACY_GOOGLE_ATTESTATION_ROOT_SHA256
+)
+_split_der_certificate_chain = _android_x509._split_der_certificate_chain
+_decode_attestation_certificate_chain = _android_x509._decode_attestation_certificate_chain
+_x509_certificate_serial_and_attestation_extension = (
+    _android_x509._x509_certificate_serial_and_attestation_extension
+)
+_x509_certificate_serial = _android_x509._x509_certificate_serial
+_x509_certificate_validity_and_subject = (
+    _android_x509._x509_certificate_validity_and_subject
+)
+_classify_android_attestation_certificate_chain = (
+    _android_x509._classify_android_attestation_certificate_chain
+)
+_validate_android_attestation_certificate_time_profile = (
+    _android_x509._validate_android_attestation_certificate_time_profile
+)
+_parse_android_key_description = _android_x509._parse_android_key_description
+_certificate_pem = _android_x509._certificate_pem
 
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
@@ -51,17 +92,9 @@ FORBIDDEN_OPENSSL_CHILD_ENV_KEYS: frozenset[str] = frozenset(
         "DYLD_LIBRARY_PATH",
     )
 )
-ANDROID_KEY_ATTESTATION_EXTENSION_OID = "1.3.6.1.4.1.11129.2.1.17"
-ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER = bytes.fromhex(
-    "060a2b06010401d679020111"
-)
 KAGEMUSHA_WALLET_PACKAGE_NAME = "org.hyperledger.iroha.kagemushawallet"
-ANDROID_SECURITY_LEVEL_STRONGBOX = 2
-ANDROID_VERIFIED_BOOT_STATE_VERIFIED = 0
-ANDROID_TAG_ALL_APPLICATIONS = 600
-ANDROID_TAG_ROOT_OF_TRUST = 704
-ANDROID_TAG_ATTESTATION_APPLICATION_ID = 709
 MAX_ANDROID_ATTESTATION_REVOCATION_STATUS_BYTES = 1024 * 1024
+MAX_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_BYTES = 256 * 1024
 MAX_AUTHORITY_TOOL_BYTES = 256 * 1024 * 1024
 # Configured only after all inputs are checked; callers opt in explicitly (no PATH/SDK discovery).
 _ANDROID_EVIDENCE_AUTHORITY: dict[str, Any] | None = None
@@ -729,6 +762,9 @@ def configure_android_evidence_authority(
     attestation_trust_root_sha256: Iterable[str],
     attestation_revocation_status: str | os.PathLike[str],
     attestation_revocation_status_sha256: str,
+    attestation_status_capture_receipt: str | os.PathLike[str],
+    attestation_status_capture_receipt_sha256: str,
+    evaluation_time_ms: int | None = None,
 ) -> list[str]:
     """Install the explicit, digest-pinned local authority configuration."""
 
@@ -815,6 +851,69 @@ def configure_android_evidence_authority(
                         )
                         break
 
+    receipt_path, receipt_bytes, receipt_errors = _read_pinned_authority_file(
+        attestation_status_capture_receipt,
+        attestation_status_capture_receipt_sha256,
+        label="--android-attestation-status-capture-receipt",
+        maximum_bytes=MAX_ANDROID_ATTESTATION_STATUS_CAPTURE_RECEIPT_BYTES,
+    )
+    errors.extend(receipt_errors)
+    capture_receipt: dict[str, Any] | None = None
+    status_snapshot: dict[str, Any] | None = None
+    if receipt_bytes is not None and status_bytes is not None:
+        try:
+            capture_receipt = _strict_json_object_bytes(
+                receipt_bytes,
+                "Android attestation status capture receipt",
+            )
+            receipt_headers = capture_receipt.get("response_headers")
+            captured_at_ms = capture_receipt.get("captured_at_ms")
+            if not isinstance(receipt_headers, dict) or not isinstance(captured_at_ms, int):
+                raise ValueError("Android attestation status capture receipt shape is invalid")
+            header_names = {
+                "date": "Date",
+                "age": "Age",
+                "cache_control": "Cache-Control",
+                "expires": "Expires",
+                "last_modified": "Last-Modified",
+            }
+            headers: list[tuple[str, str]] = []
+            if set(receipt_headers) != set(header_names):
+                raise ValueError("Android attestation status capture receipt headers are incomplete")
+            for field, header in header_names.items():
+                value = receipt_headers[field]
+                if value is not None:
+                    if not isinstance(value, str):
+                        raise ValueError(
+                            "Android attestation status capture receipt header is not a string"
+                        )
+                    headers.append((header, value))
+            status_snapshot, rebuilt_receipt = android_status_capture.build_capture(
+                status_bytes,
+                headers,
+                captured_at_ms=captured_at_ms,
+            )
+            if capture_receipt != rebuilt_receipt:
+                raise ValueError(
+                    "Android attestation status capture receipt does not match exact payload and headers"
+                )
+            evaluated_at_ms = (
+                time.time_ns() // 1_000_000
+                if evaluation_time_ms is None
+                else evaluation_time_ms
+            )
+            fresh_until_ms = rebuilt_receipt["fresh_until_ms"]
+            if (
+                not isinstance(fresh_until_ms, int)
+                or evaluated_at_ms < status_snapshot["response_date_ms"]
+                or evaluated_at_ms >= fresh_until_ms
+            ):
+                raise ValueError(
+                    "Android attestation status capture is stale at authority configuration"
+                )
+        except (android_status_capture.CaptureError, ValueError) as error:
+            errors.append(str(error))
+
     if errors:
         return errors
     assert java_path is not None
@@ -822,6 +921,9 @@ def configure_android_evidence_authority(
     assert openssl_path is not None
     assert status_path is not None
     assert revocation_status is not None
+    assert receipt_path is not None
+    assert capture_receipt is not None
+    assert status_snapshot is not None
     _ANDROID_EVIDENCE_AUTHORITY = {
         "java": {"path": java_path, "sha256": java_sha256},
         "apksigner_jar": {
@@ -834,6 +936,12 @@ def configure_android_evidence_authority(
             "path": status_path,
             "sha256": attestation_revocation_status_sha256,
             "payload": revocation_status,
+        },
+        "attestation_status_capture_receipt": {
+            "path": receipt_path,
+            "sha256": attestation_status_capture_receipt_sha256,
+            "payload": capture_receipt,
+            "snapshot": status_snapshot,
         },
     }
     return []
@@ -859,6 +967,10 @@ def _configure_android_evidence_authority_from_args(
         attestation_revocation_status_sha256=(
             args.android_attestation_revocation_status_sha256
         ),
+        attestation_status_capture_receipt=args.android_attestation_status_capture_receipt,
+        attestation_status_capture_receipt_sha256=(
+            args.android_attestation_status_capture_receipt_sha256
+        ),
     )
 
 
@@ -878,6 +990,31 @@ def android_evidence_authority_projection() -> dict[str, Any] | None:
         "attestation_revocation_status_sha256": authority[
             "attestation_revocation_status"
         ]["sha256"],
+        "attestation_status_capture_receipt_sha256": authority[
+            "attestation_status_capture_receipt"
+        ]["sha256"],
+        "android_status_snapshot": {
+            "payload_sha256": "".join(
+                f"{byte:02x}"
+                for byte in authority["attestation_status_capture_receipt"]["snapshot"][
+                    "payload_sha256"
+                ]
+            ),
+            "response_date_ms": authority["attestation_status_capture_receipt"]["snapshot"][
+                "response_date_ms"
+            ],
+            "last_modified_ms": authority["attestation_status_capture_receipt"]["snapshot"][
+                "last_modified_ms"
+            ],
+            "cache_max_age_seconds": authority["attestation_status_capture_receipt"]["snapshot"][
+                "cache_max_age_seconds"
+            ],
+            "non_valid_serial_count": len(
+                authority["attestation_status_capture_receipt"]["snapshot"][
+                    "non_valid_serials"
+                ]
+            ),
+        },
     }
 
 
@@ -4725,436 +4862,6 @@ def _validate_attestation_certificate_chain_artifact(
         errors.append("attestation certificate chain DER must start with ASN.1 SEQUENCE")
 
 
-class _StrictDerReader:
-    """Small strict DER reader for the Android KeyDescription policy fields."""
-
-    def __init__(self, payload: bytes):
-        self.payload = payload
-        self.offset = 0
-
-    def remaining(self) -> bool:
-        return self.offset < len(self.payload)
-
-    def read(self) -> tuple[int, bool, int, bytes, bytes]:
-        start = self.offset
-        if self.offset >= len(self.payload):
-            raise ValueError("DER value is truncated")
-        first = self.payload[self.offset]
-        self.offset += 1
-        tag_class = first >> 6
-        constructed = bool(first & 0x20)
-        tag = first & 0x1F
-        if tag == 0x1F:
-            tag = 0
-            first_tag_octet = True
-            while True:
-                if self.offset >= len(self.payload):
-                    raise ValueError("DER high tag number is truncated")
-                octet = self.payload[self.offset]
-                self.offset += 1
-                if first_tag_octet and octet == 0x80:
-                    raise ValueError("DER high tag number is non-minimal")
-                first_tag_octet = False
-                if tag > (1 << 31):
-                    raise ValueError("DER tag number is too large")
-                tag = (tag << 7) | (octet & 0x7F)
-                if not octet & 0x80:
-                    break
-            if tag < 31:
-                raise ValueError("DER high tag number is non-minimal")
-        if self.offset >= len(self.payload):
-            raise ValueError("DER length is truncated")
-        first_length = self.payload[self.offset]
-        self.offset += 1
-        if first_length < 0x80:
-            length = first_length
-        else:
-            octets = first_length & 0x7F
-            if octets == 0 or octets > 4 or self.offset + octets > len(self.payload):
-                raise ValueError("DER length is invalid")
-            encoded = self.payload[self.offset : self.offset + octets]
-            self.offset += octets
-            if encoded[0] == 0:
-                raise ValueError("DER length is non-minimal")
-            length = int.from_bytes(encoded, "big")
-            if length < 0x80:
-                raise ValueError("DER length is non-minimal")
-        end = self.offset + length
-        if end > len(self.payload):
-            raise ValueError("DER value is truncated")
-        value = self.payload[self.offset : end]
-        self.offset = end
-        return tag_class, constructed, tag, value, self.payload[start:end]
-
-    def expect(
-        self,
-        tag_class: int,
-        constructed: bool,
-        tag: int,
-        label: str,
-    ) -> bytes:
-        actual_class, actual_constructed, actual_tag, value, _ = self.read()
-        if (actual_class, actual_constructed, actual_tag) != (
-            tag_class,
-            constructed,
-            tag,
-        ):
-            raise ValueError(f"{label} has an unexpected DER tag")
-        return value
-
-    def finish(self, label: str) -> None:
-        if self.remaining():
-            raise ValueError(f"{label} contains trailing DER data")
-
-
-def _der_unsigned_integer(value: bytes, label: str) -> int:
-    if not value or value[0] & 0x80:
-        raise ValueError(f"{label} must be a non-negative DER integer")
-    if len(value) > 1 and value[0] == 0 and not value[1] & 0x80:
-        raise ValueError(f"{label} DER integer is non-minimal")
-    return int.from_bytes(value, "big")
-
-
-def _der_boolean(value: bytes, label: str) -> bool:
-    if value not in (b"\x00", b"\xff"):
-        raise ValueError(f"{label} must be one canonical DER boolean")
-    return value == b"\xff"
-
-
-def _split_der_certificate_chain(payload: bytes) -> list[bytes]:
-    reader = _StrictDerReader(payload)
-    certificates: list[bytes] = []
-    while reader.remaining():
-        tag_class, constructed, tag, _, encoded = reader.read()
-        if (tag_class, constructed, tag) != (0, True, 16):
-            raise ValueError("DER attestation chain must contain only X.509 sequences")
-        certificates.append(encoded)
-    return certificates
-
-
-def _decode_attestation_certificate_chain(relative: str, payload: bytes) -> list[bytes]:
-    suffix = PurePosixPath(relative).suffix.lower()
-    if suffix == ".der":
-        certificates = _split_der_certificate_chain(payload)
-    elif suffix == ".pem":
-        pattern = re.compile(
-            rb"-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)"
-            rb"-----END CERTIFICATE-----"
-        )
-        certificates = []
-        position = 0
-        for match in pattern.finditer(payload):
-            if payload[position : match.start()].strip():
-                raise ValueError("PEM attestation chain contains non-certificate data")
-            encoded = re.sub(rb"\s+", b"", match.group(1))
-            try:
-                certificate = base64.b64decode(encoded, validate=True)
-            except ValueError as error:
-                raise ValueError("PEM attestation chain contains invalid base64") from error
-            parsed = _split_der_certificate_chain(certificate)
-            if len(parsed) != 1 or parsed[0] != certificate:
-                raise ValueError("PEM attestation chain contains invalid certificate DER")
-            certificates.append(certificate)
-            position = match.end()
-        if payload[position:].strip():
-            raise ValueError("PEM attestation chain contains trailing non-certificate data")
-    else:
-        raise ValueError("attestation chain suffix is unsupported")
-    if len(certificates) < 2:
-        raise ValueError("attestation certificate chain must contain at least two certificates")
-    if len(certificates) > 8:
-        raise ValueError("attestation certificate chain contains too many certificates")
-    digests = [hashlib.sha256(certificate).digest() for certificate in certificates]
-    if len(set(digests)) != len(digests):
-        raise ValueError("attestation certificate chain repeats a certificate")
-    return certificates
-
-
-def _x509_certificate_serial_and_attestation_extension(
-    certificate: bytes,
-) -> tuple[str, bytes]:
-    certificate_reader = _StrictDerReader(certificate)
-    certificate_sequence = certificate_reader.expect(0, True, 16, "X.509 certificate")
-    certificate_reader.finish("X.509 certificate")
-    outer = _StrictDerReader(certificate_sequence)
-    _, tbs_constructed, tbs_tag, tbs, _ = outer.read()
-    if not tbs_constructed or tbs_tag != 16:
-        raise ValueError("X.509 TBSCertificate is malformed")
-    outer.expect(0, True, 16, "X.509 signatureAlgorithm")
-    outer.expect(0, False, 3, "X.509 signatureValue")
-    outer.finish("X.509 certificate")
-
-    reader = _StrictDerReader(tbs)
-    first_class, first_constructed, first_tag, first_value, _ = reader.read()
-    if (first_class, first_constructed, first_tag) == (2, True, 0):
-        version_reader = _StrictDerReader(first_value)
-        _der_unsigned_integer(
-            version_reader.expect(0, False, 2, "X.509 version"),
-            "X.509 version",
-        )
-        version_reader.finish("X.509 version")
-        serial_value = reader.expect(0, False, 2, "X.509 serialNumber")
-    elif (first_class, first_constructed, first_tag) == (0, False, 2):
-        serial_value = first_value
-    else:
-        raise ValueError("X.509 TBSCertificate serialNumber is malformed")
-    serial = _der_unsigned_integer(serial_value, "X.509 serialNumber")
-    if serial == 0:
-        raise ValueError("X.509 serialNumber must be positive")
-    for label in (
-        "X.509 signature",
-        "X.509 issuer",
-        "X.509 validity",
-        "X.509 subject",
-        "X.509 subjectPublicKeyInfo",
-    ):
-        reader.expect(0, True, 16, label)
-
-    extension_payload: bytes | None = None
-    while reader.remaining():
-        tag_class, constructed, tag, value, _ = reader.read()
-        if (tag_class, constructed, tag) != (2, True, 3):
-            if tag_class == 2 and tag in {1, 2}:
-                continue
-            raise ValueError("X.509 TBSCertificate contains an unexpected trailing field")
-        if extension_payload is not None:
-            raise ValueError("X.509 TBSCertificate repeats extensions")
-        extension_payload = value
-    if extension_payload is None:
-        raise ValueError("X.509 certificate has no extensions")
-
-    wrapper = _StrictDerReader(extension_payload)
-    extension_sequence = wrapper.expect(0, True, 16, "X.509 extensions")
-    wrapper.finish("X.509 extensions")
-    extensions = _StrictDerReader(extension_sequence)
-    attestation_extension: bytes | None = None
-    oid_value = ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER[2:]
-    while extensions.remaining():
-        encoded_extension = extensions.expect(0, True, 16, "X.509 extension")
-        extension = _StrictDerReader(encoded_extension)
-        oid = extension.expect(0, False, 6, "X.509 extension OID")
-        if extension.remaining():
-            next_class, next_constructed, next_tag, next_value, _ = extension.read()
-            if (next_class, next_constructed, next_tag) == (0, False, 1):
-                _der_boolean(next_value, "X.509 extension critical")
-                value = extension.expect(0, False, 4, "X.509 extension value")
-            elif (next_class, next_constructed, next_tag) == (0, False, 4):
-                value = next_value
-            else:
-                raise ValueError("X.509 extension value is malformed")
-        else:
-            raise ValueError("X.509 extension has no value")
-        extension.finish("X.509 extension")
-        if oid == oid_value:
-            if attestation_extension is not None:
-                raise ValueError("leaf repeats the Android key-attestation extension")
-            attestation_extension = value
-    if attestation_extension is None:
-        raise ValueError(
-            f"leaf certificate is missing Android extension {ANDROID_KEY_ATTESTATION_EXTENSION_OID}"
-        )
-    return format(serial, "x"), attestation_extension
-
-
-def _x509_certificate_serial(certificate: bytes) -> str:
-    certificate_reader = _StrictDerReader(certificate)
-    certificate_sequence = certificate_reader.expect(0, True, 16, "X.509 certificate")
-    certificate_reader.finish("X.509 certificate")
-    outer = _StrictDerReader(certificate_sequence)
-    tbs = outer.expect(0, True, 16, "X.509 TBSCertificate")
-    outer.expect(0, True, 16, "X.509 signatureAlgorithm")
-    outer.expect(0, False, 3, "X.509 signatureValue")
-    outer.finish("X.509 certificate")
-    reader = _StrictDerReader(tbs)
-    first_class, first_constructed, first_tag, first_value, _ = reader.read()
-    if (first_class, first_constructed, first_tag) == (2, True, 0):
-        version = _StrictDerReader(first_value)
-        _der_unsigned_integer(
-            version.expect(0, False, 2, "X.509 version"), "X.509 version"
-        )
-        version.finish("X.509 version")
-        serial_value = reader.expect(0, False, 2, "X.509 serialNumber")
-    elif (first_class, first_constructed, first_tag) == (0, False, 2):
-        serial_value = first_value
-    else:
-        raise ValueError("X.509 TBSCertificate serialNumber is malformed")
-    serial = _der_unsigned_integer(serial_value, "X.509 serialNumber")
-    if serial == 0:
-        raise ValueError("X.509 serialNumber must be positive")
-    return format(serial, "x")
-
-
-def _parse_attestation_application_id(value: bytes) -> tuple[set[str], set[bytes]]:
-    explicit = _StrictDerReader(value)
-    encoded = explicit.expect(0, False, 4, "attestationApplicationId OCTET STRING")
-    explicit.finish("attestationApplicationId")
-    wrapper = _StrictDerReader(encoded)
-    sequence = wrapper.expect(0, True, 16, "attestationApplicationId")
-    wrapper.finish("attestationApplicationId")
-    reader = _StrictDerReader(sequence)
-    packages_bytes = reader.expect(0, True, 17, "attestation packageInfos")
-    digests_bytes = reader.expect(0, True, 17, "attestation signatureDigests")
-    reader.finish("attestationApplicationId")
-
-    packages: set[str] = set()
-    package_reader = _StrictDerReader(packages_bytes)
-    while package_reader.remaining():
-        package_sequence = package_reader.expect(0, True, 16, "attestation packageInfo")
-        package = _StrictDerReader(package_sequence)
-        name_bytes = package.expect(0, False, 4, "attestation packageName")
-        _der_unsigned_integer(
-            package.expect(0, False, 2, "attestation packageVersion"),
-            "attestation packageVersion",
-        )
-        package.finish("attestation packageInfo")
-        try:
-            name = name_bytes.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise ValueError("attestation packageName must be UTF-8") from error
-        if not name or name in packages:
-            raise ValueError("attestationApplicationId repeats or empties a package name")
-        packages.add(name)
-
-    digests: set[bytes] = set()
-    digest_reader = _StrictDerReader(digests_bytes)
-    while digest_reader.remaining():
-        digest = digest_reader.expect(0, False, 4, "attestation signatureDigest")
-        if len(digest) != 32 or digest in digests:
-            raise ValueError("attestationApplicationId has an invalid signing digest")
-        digests.add(digest)
-    if not packages or not digests:
-        raise ValueError("attestationApplicationId must bind a package and signing digest")
-    return packages, digests
-
-
-def _parse_android_root_of_trust(value: bytes) -> None:
-    explicit = _StrictDerReader(value)
-    sequence = explicit.expect(0, True, 16, "rootOfTrust")
-    explicit.finish("rootOfTrust")
-    reader = _StrictDerReader(sequence)
-    verified_boot_key = reader.expect(0, False, 4, "verifiedBootKey")
-    locked = _der_boolean(reader.expect(0, False, 1, "deviceLocked"), "deviceLocked")
-    state = _der_unsigned_integer(
-        reader.expect(0, False, 10, "verifiedBootState"),
-        "verifiedBootState",
-    )
-    verified_boot_hash = (
-        reader.expect(0, False, 4, "verifiedBootHash") if reader.remaining() else None
-    )
-    reader.finish("rootOfTrust")
-    if not verified_boot_key:
-        raise ValueError("verifiedBootKey must be non-empty")
-    if not locked:
-        raise ValueError("Android attestation requires deviceLocked=true")
-    if state != ANDROID_VERIFIED_BOOT_STATE_VERIFIED:
-        raise ValueError("Android attestation requires verifiedBootState=Verified")
-    if verified_boot_hash is None or len(verified_boot_hash) != 32:
-        raise ValueError("Android StrongBox attestation requires a SHA-256 verifiedBootHash")
-
-
-def _parse_android_authorization_list(
-    value: bytes,
-    *,
-    hardware: bool,
-) -> tuple[list[tuple[set[str], set[bytes]]], int]:
-    reader = _StrictDerReader(value)
-    applications: list[tuple[set[str], set[bytes]]] = []
-    roots = 0
-    seen_tags: set[int] = set()
-    while reader.remaining():
-        tag_class, _, tag, entry, _ = reader.read()
-        if tag_class != 2:
-            raise ValueError("Android authorization entry must be context-specific")
-        if tag in seen_tags:
-            raise ValueError(f"Android authorization list repeats tag {tag}")
-        seen_tags.add(tag)
-        if tag == ANDROID_TAG_ALL_APPLICATIONS:
-            raise ValueError("Android attestation must not authorize all applications")
-        if tag == ANDROID_TAG_ATTESTATION_APPLICATION_ID:
-            applications.append(_parse_attestation_application_id(entry))
-        elif tag == ANDROID_TAG_ROOT_OF_TRUST:
-            if not hardware:
-                raise ValueError("rootOfTrust must be hardware-enforced")
-            _parse_android_root_of_trust(entry)
-            roots += 1
-    return applications, roots
-
-
-def _parse_android_key_description(
-    extension: bytes,
-    *,
-    expected_challenge: bytes,
-    expected_package: str,
-    expected_signing_digest: bytes,
-) -> None:
-    wrapper = _StrictDerReader(extension)
-    sequence = wrapper.expect(0, True, 16, "Android KeyDescription")
-    wrapper.finish("Android KeyDescription")
-    reader = _StrictDerReader(sequence)
-    attestation_version = _der_unsigned_integer(
-        reader.expect(0, False, 2, "attestationVersion"), "attestationVersion"
-    )
-    attestation_level = _der_unsigned_integer(
-        reader.expect(0, False, 10, "attestationSecurityLevel"),
-        "attestationSecurityLevel",
-    )
-    keymint_version = _der_unsigned_integer(
-        reader.expect(0, False, 2, "keyMintVersion"), "keyMintVersion"
-    )
-    keymint_level = _der_unsigned_integer(
-        reader.expect(0, False, 10, "keyMintSecurityLevel"),
-        "keyMintSecurityLevel",
-    )
-    challenge = reader.expect(0, False, 4, "attestationChallenge")
-    reader.expect(0, False, 4, "uniqueId")
-    software = reader.expect(0, True, 16, "softwareEnforced")
-    hardware = reader.expect(0, True, 16, "hardwareEnforced")
-    reader.finish("Android KeyDescription")
-    if attestation_version <= 0 or keymint_version <= 0:
-        raise ValueError("Android attestation and KeyMint versions must be positive")
-    if (
-        attestation_level != ANDROID_SECURITY_LEVEL_STRONGBOX
-        or keymint_level != ANDROID_SECURITY_LEVEL_STRONGBOX
-    ):
-        raise ValueError(
-            "Android attestationSecurityLevel and keyMintSecurityLevel must both be StrongBox(2)"
-        )
-    if len(challenge) != 32 or challenge != expected_challenge:
-        raise ValueError("leaf Android attestation challenge is not the exact candidate challenge")
-
-    app_ids: list[tuple[set[str], set[bytes]]] = []
-    root_count = 0
-    parsed_apps, parsed_roots = _parse_android_authorization_list(
-        software, hardware=False
-    )
-    app_ids.extend(parsed_apps)
-    root_count += parsed_roots
-    parsed_apps, parsed_roots = _parse_android_authorization_list(
-        hardware, hardware=True
-    )
-    app_ids.extend(parsed_apps)
-    root_count += parsed_roots
-    if len(app_ids) != 1:
-        raise ValueError("Android attestation must contain exactly one attestationApplicationId")
-    packages, digests = app_ids[0]
-    if packages != {expected_package}:
-        raise ValueError("attestationApplicationId does not bind exactly the wallet package")
-    if digests != {expected_signing_digest}:
-        raise ValueError(
-            "attestationApplicationId does not bind exactly the production wallet signing digest"
-        )
-    if root_count != 1:
-        raise ValueError("Android attestation must contain exactly one hardware rootOfTrust")
-
-
-def _certificate_pem(certificate: bytes) -> bytes:
-    encoded = base64.b64encode(certificate)
-    lines = [encoded[index : index + 64] for index in range(0, len(encoded), 64)]
-    return b"-----BEGIN CERTIFICATE-----\n" + b"\n".join(lines) + (
-        b"\n-----END CERTIFICATE-----\n"
-    )
-
-
 def _run_pinned_openssl(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
     openssl, openssl_sha256 = _configured_authority_tool("openssl")
     checked, _, errors = _read_pinned_authority_file(
@@ -5261,11 +4968,16 @@ def _validate_android_attestation_certificate_chain(
             serials.append(_x509_certificate_serial(certificate))
 
         entries = authority["attestation_revocation_status"]["payload"]["entries"]
-        for serial_number in serials[:-1]:
+        for serial_number in serials:
             if serial_number in entries:
                 raise ValueError(
                     "Android attestation certificate serial is present in the authenticated revocation status"
                 )
+
+        _validate_android_attestation_certificate_time_profile(
+            certificates,
+            evaluation_time_ms=time.time_ns() // 1_000_000,
+        )
 
         with tempfile.TemporaryDirectory(prefix="iroha-android-attestation-") as temp:
             temp_path = Path(temp)
@@ -5292,6 +5004,7 @@ def _validate_android_attestation_certificate_chain(
                         "-x509_strict",
                         "-purpose",
                         "any",
+                        "-no_check_time",
                         "-partial_chain",
                         "-CAfile",
                         os.fspath(paths[index + 1]),
@@ -5307,6 +5020,7 @@ def _validate_android_attestation_certificate_chain(
                 "-x509_strict",
                 "-purpose",
                 "any",
+                "-no_check_time",
                 "-CAfile",
                 os.fspath(roots_path),
             ]
@@ -8748,6 +8462,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Pinned lowercase SHA-256 of the revocation-status JSON.",
     )
     parser.add_argument(
+        "--android-attestation-status-capture-receipt",
+        default=None,
+        help="Canonical absolute capture-receipt JSON for the exact status response.",
+    )
+    parser.add_argument(
+        "--android-attestation-status-capture-receipt-sha256",
+        default=None,
+        help="Pinned lowercase SHA-256 of the status capture receipt.",
+    )
+    parser.add_argument(
         "--confirmation-reference-slot",
         default=None,
         help="Fully authenticated reference slot for an independent candidate rerun.",
@@ -8815,6 +8539,8 @@ def main(argv: list[str] | None = None) -> int:
             args.openssl_sha256,
             args.android_attestation_revocation_status,
             args.android_attestation_revocation_status_sha256,
+            args.android_attestation_status_capture_receipt,
+            args.android_attestation_status_capture_receipt_sha256,
         )
         if any(value is None for value in authority_values):
             print(
@@ -8902,6 +8628,8 @@ def main(argv: list[str] | None = None) -> int:
         args.openssl_sha256,
         args.android_attestation_revocation_status,
         args.android_attestation_revocation_status_sha256,
+        args.android_attestation_status_capture_receipt,
+        args.android_attestation_status_capture_receipt_sha256,
     )
     authority_lists = (
         args.android_attestation_trust_root or [],

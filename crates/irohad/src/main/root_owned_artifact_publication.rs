@@ -6,7 +6,7 @@ use std::{ffi::OsString, fs};
 
 /// Failure before or after the no-replace commit boundary.
 #[derive(Debug)]
-pub enum RootOwnedArtifactPublicationError {
+pub(super) enum RootOwnedArtifactPublicationError {
     /// Publication did not cross the no-replace rename boundary.
     PreCommit(String),
     /// Rename succeeded, but durable or semantic confirmation failed.
@@ -50,7 +50,7 @@ impl RootOwnedArtifactPublicationError {
 
 /// Pinned destination for one root-owned, non-replaceable artifact.
 #[derive(Debug)]
-pub struct RootOwnedNoReplaceArtifactPublicationTarget {
+pub(super) struct RootOwnedNoReplaceArtifactPublicationTarget {
     path: PathBuf,
     label: &'static str,
     #[cfg(unix)]
@@ -76,7 +76,7 @@ unsafe extern "C" {
 #[cfg(target_os = "macos")]
 #[allow(
     unsafe_code,
-    reason = "flistxattr is the descriptor-bound platform API and has no safe standard-library wrapper"
+    reason = "macOS exposes descriptor-bound xattr inspection with hidden compression metadata and has no safe standard-library wrapper"
 )]
 unsafe extern "C" {
     fn flistxattr(
@@ -126,7 +126,7 @@ fn run_bounded_macos_acl_command(
 
 #[cfg(target_os = "macos")]
 /// Reject a path carrying any macOS extended ACL entries.
-pub fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
+pub(super) fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
     let suffix = output.stdout.strip_suffix(b"\n");
     if !output.stderr.is_empty() || suffix.is_none_or(|body| body.contains(&b'\n')) {
@@ -243,6 +243,10 @@ fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> 
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[allow(
+    unsafe_code,
+    reason = "descriptor-bound xattr inspection requires the platform libc"
+)]
 fn require_no_xattrs(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
     use std::os::fd::AsRawFd as _;
 

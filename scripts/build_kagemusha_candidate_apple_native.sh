@@ -187,6 +187,15 @@ if [[ "$("$GIT_BINARY" -C "$ROOT_DIR" rev-parse HEAD)" != "$SOURCE_COMMIT" ]]; t
   exit 65
 fi
 
+XCODE_VERSION="$("$XCODEBUILD_BINARY" -version)"
+if [[ "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '1p')" != "Xcode 26.6" ]] \
+  || [[ ! "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '2p')" =~ ^Build\ version\ [A-Za-z0-9.]+$ ]] \
+  || [[ -n "$(printf '%s\n' "$XCODE_VERSION" | /usr/bin/sed -n '3p')" ]]
+then
+  echo "[kagemusha-apple-native] ERROR: exact Xcode 26.6 with one build-version line is required" >&2
+  exit 69
+fi
+
 BUILD_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/kagemusha-apple-native.XXXXXX")"
 cleanup() {
   rm -rf -- "$BUILD_SESSION"
@@ -199,7 +208,6 @@ mkdir -- "$TARGET_DIR"
 chmod 0700 "$TARGET_DIR"
 SDKROOT="$("$XCRUN_BINARY" --sdk iphoneos --show-sdk-path)"
 SDK_VERSION="$("$XCRUN_BINARY" --sdk iphoneos --show-sdk-version)"
-XCODE_VERSION="$("$XCODEBUILD_BINARY" -version)"
 CARGO_VERSION="$("$CARGO_BINARY" --version --verbose)"
 RUSTC_VERSION="$("$RUSTC_BINARY" --version --verbose)"
 

@@ -3202,6 +3202,18 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
             }
             payload.set_item("providers", entries)?;
         }
+        MultiSourceError::NoPolicyEligibleProviders {
+            chunk_index,
+            providers,
+        } => {
+            payload.set_item("kind", "no_policy_eligible_providers")?;
+            payload.set_item("chunk_index", chunk_index)?;
+            let providers = providers
+                .into_iter()
+                .map(|provider| provider.as_str().to_owned())
+                .collect::<Vec<_>>();
+            payload.set_item("providers", providers)?;
+        }
         MultiSourceError::ExhaustedRetries {
             chunk_index,
             attempts,
@@ -7268,6 +7280,45 @@ mod tests {
                 .expect("reason string");
             assert_eq!(kind, "invalid_plan");
             assert_eq!(reason, "input payload is empty");
+        });
+    }
+    #[test]
+    fn multi_source_policy_exclusion_has_stable_python_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let payload = build_multi_fetch_error_payload(
+                py,
+                MultiSourceError::NoPolicyEligibleProviders {
+                    chunk_index: 3,
+                    providers: vec![
+                        sorafs_car::multi_fetch::ProviderId::new("alpha"),
+                        sorafs_car::multi_fetch::ProviderId::new("beta"),
+                    ],
+                },
+            )
+            .expect("build policy-exclusion payload");
+            let payload = payload.bind(py);
+            let kind: String = payload
+                .get_item("kind")
+                .expect("kind lookup")
+                .expect("kind field")
+                .extract()
+                .expect("kind string");
+            let chunk_index: usize = payload
+                .get_item("chunk_index")
+                .expect("chunk-index lookup")
+                .expect("chunk-index field")
+                .extract()
+                .expect("chunk-index integer");
+            let providers: Vec<String> = payload
+                .get_item("providers")
+                .expect("providers lookup")
+                .expect("providers field")
+                .extract()
+                .expect("provider strings");
+            assert_eq!(kind, "no_policy_eligible_providers");
+            assert_eq!(chunk_index, 3);
+            assert_eq!(providers, ["alpha", "beta"]);
         });
     }
     #[test]

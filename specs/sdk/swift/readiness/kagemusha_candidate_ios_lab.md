@@ -28,7 +28,8 @@ one-time consumption, and promotion-scoped catalog revalidation all pass.
   bundles.
 - The candidate record, standalone Norito manifest, finality roster, exact
   eight KRV4 artifacts, exact 33-file scenario, and independently reviewed
-  clean signed source closure (empty tracked diff and no untracked files).
+  clean source closure with exactly one accepted SSH signature (empty tracked
+  diff and no untracked files).
 - All inputs and output parents are real, owner-private paths outside the
   repository. Signing keys remain runtime-only.
 
@@ -61,6 +62,13 @@ stale native artifact cannot be reused. The device runner rehashes every
 manifest-listed XCFramework input, compiles from a private staged copy,
 rehashes it after Xcode completes, and retains the consumed plist, marker,
 headers, module map, and static archive in the signed raw inventory.
+
+The builder and runner each accept only an exact two-line `xcodebuild -version`
+value whose first line is `Xcode 26.6` and whose second line is its build
+identity. The runner requires that complete value and the selected `iphoneos`
+SDK identity to match the native-build manifest byte-for-byte, and the offline
+validator repeats that check on the signed evidence. Xcode 26.2 is reserved for
+the separate source-seal corridor; it is not valid for this candidate lane.
 
 ## Run the two physical launches
 

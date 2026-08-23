@@ -70,7 +70,8 @@ def test_parse_args_uses_host_arch_and_tmpdir_for_default_output(
 
     args = MODULE.parse_args()
 
-    assert args.output_dir == tmp_path / "iroha-inrou-portable-assets" / "aarch64"
+    owner_tag = str(os.geteuid()) if hasattr(os, "geteuid") else "user"
+    assert args.output_dir == tmp_path / f"iroha-inrou-portable-assets-{owner_tag}" / "aarch64"
     assert args.image_base_url == MODULE.default_image_base_url()
     assert args.force is False
     assert args.print_env is False
@@ -351,6 +352,91 @@ def test_download_writes_temporary_file_then_replaces_destination(
     assert not destination.with_suffix(".xz.tmp").exists()
 
 
+def test_download_rejects_symlinked_destination(monkeypatch, tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"attacker-controlled")
+    destination = tmp_path / "asset.tar.xz"
+    destination.symlink_to(target)
+
+    def fail_urlopen(_url: str):
+        raise AssertionError("symlinked destination must fail before network access")
+
+    monkeypatch.setattr(MODULE.urllib.request, "urlopen", fail_urlopen)
+
+    try:
+        MODULE.download("https://example.invalid/asset.tar.xz", destination)
+    except SystemExit as error:
+        assert "symlinked download destination" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("symlinked download destination was accepted")
+    assert target.read_bytes() == b"attacker-controlled"
+
+
+def test_download_ignores_preplanted_legacy_temporary_symlink(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class FakeResponse(io.BytesIO):
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self.close()
+
+    target = tmp_path / "target"
+    target.write_bytes(b"keep")
+    destination = tmp_path / "asset.tar.xz"
+    destination.with_suffix(".xz.tmp").symlink_to(target)
+    response = FakeResponse(b"verified-download")
+    monkeypatch.setattr(MODULE.urllib.request, "urlopen", lambda _url: response)
+
+    MODULE.download("https://example.invalid/asset.tar.xz", destination)
+
+    assert destination.read_bytes() == b"verified-download"
+    assert target.read_bytes() == b"keep"
+
+
+def test_prepare_output_directory_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    output = tmp_path / "assets"
+    output.symlink_to(target, target_is_directory=True)
+
+    try:
+        MODULE.prepare_output_directory(output)
+    except SystemExit as error:
+        assert "symlinked Inrou asset output directory" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("symlinked output directory was accepted")
+
+
+def test_prepare_output_directory_rejects_other_writable_mode(tmp_path: Path) -> None:
+    output = tmp_path / "assets"
+    output.mkdir(mode=0o700)
+    output.chmod(0o707)
+
+    try:
+        MODULE.prepare_output_directory(output)
+    except SystemExit as error:
+        assert "must not be group/other writable" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("other-writable output directory was accepted")
+
+
+def test_remove_cached_download_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"keep")
+    cached = tmp_path / "SHA512SUMS"
+    cached.symlink_to(target)
+
+    try:
+        MODULE.remove_cached_download(cached)
+    except SystemExit as error:
+        assert "symlinked cached download" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("symlinked cached download was removed")
+    assert target.read_bytes() == b"keep"
+
+
 def test_verify_debian_sums_signature_skips_gpg_when_signature_missing(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -577,6 +663,22 @@ def test_extract_disk_rejects_archive_without_disk_raw(tmp_path: Path) -> None:
         assert str(archive) in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("archive without disk.raw was accepted")
+
+
+def test_extract_disk_rejects_non_regular_disk_member(tmp_path: Path) -> None:
+    archive = tmp_path / "image.tar.xz"
+    with tarfile.open(archive, "w:xz") as tar:
+        member = tarfile.TarInfo("disk.raw")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "elsewhere.raw"
+        tar.addfile(member)
+
+    try:
+        MODULE.extract_disk(archive, tmp_path / "disk.raw", force=True)
+    except SystemExit as error:
+        assert "exactly one regular disk.raw" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("non-regular disk.raw was accepted")
 
 
 def test_extract_disk_reuses_existing_disk_when_not_forced(tmp_path: Path) -> None:
@@ -912,9 +1014,17 @@ def test_main_uses_verified_sums_when_signature_is_available(monkeypatch, tmp_pa
         "verify_pinned_archive",
         lambda *_args: (_ for _ in ()).throw(AssertionError("pinned fallback should not run")),
     )
-    monkeypatch.setattr(MODULE, "extract_disk", lambda *_args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "extract_disk",
+        lambda archive, disk, force: calls.append(("extract_disk", force)),
+    )
     monkeypatch.setattr(MODULE, "root_partition_range", lambda _disk: (0, 1))
-    monkeypatch.setattr(MODULE, "copy_range", lambda *_args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "copy_range",
+        lambda disk, rootfs, offset, length, force: calls.append(("copy_range", force)),
+    )
     monkeypatch.setattr(MODULE, "patch_rootfs", lambda *_args: None)
     monkeypatch.setattr(
         MODULE,
@@ -933,4 +1043,6 @@ def test_main_uses_verified_sums_when_signature_is_available(monkeypatch, tmp_pa
         ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
         ("download", f"https://images.example/base/{archive_name}", archive_name),
         ("verify_archive", archive_name, "SHA512SUMS"),
+        ("extract_disk", True),
+        ("copy_range", True),
     ]

@@ -1562,10 +1562,10 @@ fn validate_certificate_time_bounds(
             reason: "valid_until must be greater than valid_after".to_owned(),
         });
     }
-    if published_at > valid_until {
+    if published_at > valid_after {
         return Err(CertificateError::InvalidFieldValue {
             field: "certificate.published_at",
-            reason: "published_at must not be after valid_until".to_owned(),
+            reason: "published_at must not be after valid_after".to_owned(),
         });
     }
     Ok(())
@@ -3379,12 +3379,13 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
         let mut certificate = sample_certificate();
-        certificate.published_at = certificate.valid_until.saturating_add(1);
+        certificate.published_at = certificate.valid_after.saturating_add(1);
         let err = parse_certificate_payload(&certificate.to_cbor())
-            .expect_err("certificates published after expiry must fail");
+            .expect_err("certificates published after their validity starts must fail");
         match err {
-            CertificateError::InvalidFieldValue { field, .. } => {
+            CertificateError::InvalidFieldValue { field, reason } => {
                 assert_eq!(field, "certificate.published_at");
+                assert!(reason.contains("valid_after"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

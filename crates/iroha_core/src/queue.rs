@@ -1824,6 +1824,7 @@ struct LaneQueueCarrierCleanupOwnerSnapshot<'a> {
 struct LaneQueueCarrierCleanupJournalPreflight {
     active_phases: Vec<LaneQueueReservationRecoveryPhaseV1>,
     finalized_keys: Vec<LaneQueueReservationKeyV2>,
+    replica_keys: Vec<LaneQueueReservationKeyV2>,
 }
 impl LaneQueueCarrierCleanupGate {
     fn from_authorization(
@@ -3105,6 +3106,16 @@ pub enum LaneQueueReservationError {
         /// Entrypoint hash already owned by another exact reservation.
         hash: EntrypointHash,
     },
+    /// Canonical cleanup reached its terminal proof while Queue indexes still own the hash.
+    #[error(
+        "canonical lane queue cleanup for transaction {hash} retained conflicting owners: {owners}"
+    )]
+    TerminalConflict {
+        /// Entrypoint hash whose supposedly terminal Queue ownership remains live.
+        hash: EntrypointHash,
+        /// Stable names of every surviving Queue ownership index.
+        owners: String,
+    },
     /// A distinct ordered release already owns the same retirement or slot.
     #[error("conflicting lane queue release barrier for retirement {retirement_hash}")]
     ReleaseConflict {
@@ -3569,6 +3580,9 @@ pub struct Queue {
     txs_per_user: DashMap<AccountId, usize>,
     /// Lock to synchronize push and remove operations
     push_remove_lock: parking_lot::Mutex<()>,
+    /// Serializes complete Nexus revalidation passes while their per-hash queue fences are
+    /// released between the initial catalog rebuild and stable owner observations.
+    nexus_revalidation_lock: parking_lot::Mutex<()>,
     /// Exact hashes whose journal transition is in progress without the queue mutation lock.
     durability_transitions: parking_lot::Mutex<HashSet<EntrypointHash>>,
     /// Wakes exact-hash removals after an off-lock durability transition publishes or rolls back.
@@ -4316,6 +4330,12 @@ impl FeeAdmissionReservationStore {
 struct ExpiredQueueTransaction {
     tx: AcceptedTransaction<'static>,
     routing: RoutingDecision,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PoppedGlobalAdmissionDisposition {
+    Ordinary,
+    Exact,
+    Retained,
 }
 struct QueueSelectionAttempt<'queue> {
     counter: &'queue AtomicUsize,
@@ -7163,6 +7183,83 @@ impl Queue {
     pub(crate) fn remove_routing_plan_for_test(&self, hash: EntrypointHash) -> bool {
         self.routing_plans.remove(&hash).is_some()
     }
+    fn canonical_queue_hash_terminal_owner_mask_locked(
+        &self,
+        store: &LaneQueueReservationStore,
+        hash: EntrypointHash,
+        ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
+        allow_active_durability_transition: bool,
+    ) -> u32 {
+        #[cfg(feature = "telemetry")]
+        let has_teu_index = self.tx_teu.contains_key(&hash);
+        #[cfg(not(feature = "telemetry"))]
+        let has_teu_index = false;
+        let mut mask = 0_u32;
+        let mut record = |bit: u32, present: bool| {
+            if present {
+                mask |= 1_u32 << bit;
+            }
+        };
+        record(0, store.live_by_entrypoint.contains_key(&hash));
+        record(
+            1,
+            store
+                .commit_barriers
+                .iter()
+                .any(|committed| committed.entrypoint_hash == hash),
+        );
+        record(
+            2,
+            store
+                .plan_tombstoned
+                .iter()
+                .any(|marked| marked.entrypoint_hash == hash),
+        );
+        record(
+            3,
+            store.release_barriers.iter().any(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .any(|prepared| prepared.entrypoint_hash == hash)
+            }),
+        );
+        record(
+            4,
+            store.completed_releases.iter().any(|completion| {
+                completion
+                    .ordered_records
+                    .iter()
+                    .any(|reserved| reserved.key.entrypoint_hash == hash)
+            }),
+        );
+        record(5, self.txs.contains_key(&hash));
+        record(6, self.routing_plans.contains_key(&hash));
+        record(7, self.durable_plan_claims.contains_key(&hash));
+        record(8, self.fifo_order_by_hash.contains_key(&hash));
+        record(9, ownership.global_selection_owners.contains_key(&hash));
+        record(
+            10,
+            !allow_active_durability_transition
+                && ownership.active_durability_transitions.contains(&hash),
+        );
+        record(11, self.removed_hashes.contains_key(&hash));
+        record(12, self.tx_encoded_len.contains_key(&hash));
+        record(13, self.tx_gas_cost.contains_key(&hash));
+        record(14, self.tx_enqueued_at_ms.contains_key(&hash));
+        record(15, self.queued_tx_enqueued_at_ms.contains_key(&hash));
+        record(16, self.expiry_ring_members.contains_key(&hash));
+        record(
+            17,
+            ownership
+                .fee_admission_reservations
+                .live_by_entrypoint
+                .contains_key(&hash),
+        );
+        record(18, has_teu_index);
+        record(19, ownership.fifo_hashes.contains(&hash));
+        mask
+    }
     fn canonical_queue_hash_has_terminal_owner_locked(
         &self,
         store: &LaneQueueReservationStore,
@@ -7170,50 +7267,42 @@ impl Queue {
         ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
         allow_active_durability_transition: bool,
     ) -> bool {
-        #[cfg(feature = "telemetry")]
-        let has_teu_index = self.tx_teu.contains_key(&hash);
-        #[cfg(not(feature = "telemetry"))]
-        let has_teu_index = false;
-        store.live_by_entrypoint.contains_key(&hash)
-            || store
-                .commit_barriers
-                .iter()
-                .any(|committed| committed.entrypoint_hash == hash)
-            || store
-                .plan_tombstoned
-                .iter()
-                .any(|marked| marked.entrypoint_hash == hash)
-            || store.release_barriers.iter().any(|barrier| {
-                barrier
-                    .ordered_keys
-                    .iter()
-                    .any(|prepared| prepared.entrypoint_hash == hash)
-            })
-            || store.completed_releases.iter().any(|completion| {
-                completion
-                    .ordered_records
-                    .iter()
-                    .any(|record| record.key.entrypoint_hash == hash)
-            })
-            || self.txs.contains_key(&hash)
-            || self.routing_plans.contains_key(&hash)
-            || self.durable_plan_claims.contains_key(&hash)
-            || self.fifo_order_by_hash.contains_key(&hash)
-            || ownership.global_selection_owners.contains_key(&hash)
-            || (!allow_active_durability_transition
-                && ownership.active_durability_transitions.contains(&hash))
-            || self.removed_hashes.contains_key(&hash)
-            || self.tx_encoded_len.contains_key(&hash)
-            || self.tx_gas_cost.contains_key(&hash)
-            || self.tx_enqueued_at_ms.contains_key(&hash)
-            || self.queued_tx_enqueued_at_ms.contains_key(&hash)
-            || self.expiry_ring_members.contains_key(&hash)
-            || ownership
-                .fee_admission_reservations
-                .live_by_entrypoint
-                .contains_key(&hash)
-            || has_teu_index
-            || ownership.fifo_hashes.contains(&hash)
+        self.canonical_queue_hash_terminal_owner_mask_locked(
+            store,
+            hash,
+            ownership,
+            allow_active_durability_transition,
+        ) != 0
+    }
+    fn canonical_queue_terminal_owner_labels(mask: u32) -> String {
+        const LABELS: [&str; 20] = [
+            "live_reservation",
+            "commit_barrier",
+            "plan_tombstone_marker",
+            "release_barrier",
+            "completed_release",
+            "transaction",
+            "routing_plan",
+            "durable_plan_claim",
+            "fifo_order",
+            "global_selection",
+            "durability_transition",
+            "removed_hash",
+            "encoded_length",
+            "gas_cost",
+            "enqueue_timestamp",
+            "queued_age",
+            "expiry_membership",
+            "fee_reservation",
+            "teu_index",
+            "fifo_membership",
+        ];
+        LABELS
+            .iter()
+            .enumerate()
+            .filter_map(|(bit, label)| (mask & (1_u32 << bit) != 0).then_some(*label))
+            .collect::<Vec<_>>()
+            .join(",")
     }
     fn preflight_lane_reservation_group_locked(
         &self,
@@ -7222,6 +7311,7 @@ impl Queue {
         ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
         fifo_ordinal_owners: &BTreeMap<u64, EntrypointHash>,
         journal: &mut LaneQueueCarrierCleanupJournalPreflight,
+        allow_committed_replicas: bool,
     ) -> Result<(), LaneQueueReservationError> {
         let mut seen_live = false;
         let mut seen_commit_barrier = false;
@@ -7249,6 +7339,18 @@ impl Queue {
                     ));
                 }
                 seen_finalized = true;
+                if allow_committed_replicas
+                    && self.preflight_committed_replica_owner_locked(
+                        store,
+                        key,
+                        ownership,
+                        fifo_ordinal_owners,
+                        false,
+                    )?
+                {
+                    journal.replica_keys.push(*key);
+                    continue;
+                }
                 if self
                     .canonical_queue_hash_has_terminal_owner_locked(store, hash, ownership, false)
                 {
@@ -7417,6 +7519,105 @@ impl Queue {
         }
         Ok(())
     }
+    /// Classify and authenticate one ordinary FIFO owner for a committed canonical carrier.
+    ///
+    /// The deterministic producer has a durable lane reservation, while other validators can
+    /// still own the same transaction through the ordinary QueuePlan/FIFO corridor. Canonical
+    /// cleanup may consume that replica only when every in-memory index is the exact projection
+    /// of the authenticated reservation key. A partially present or differently bound owner
+    /// fails closed instead of being mistaken for an already-finalized reservation.
+    fn preflight_committed_replica_owner_locked(
+        &self,
+        store: &LaneQueueReservationStore,
+        key: &LaneQueueReservationKeyV2,
+        ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
+        fifo_ordinal_owners: &BTreeMap<u64, EntrypointHash>,
+        allow_active_durability_transition: bool,
+    ) -> Result<bool, LaneQueueReservationError> {
+        let hash = key.entrypoint_hash;
+        let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
+            return Ok(false);
+        };
+        if store.durable_owned_hashes().any(|owned| owned == hash)
+            || store
+                .plan_tombstoned
+                .iter()
+                .any(|marked| marked.entrypoint_hash == hash)
+            || ownership.global_selection_owners.contains_key(&hash)
+            || (!allow_active_durability_transition
+                && ownership.active_durability_transitions.contains(&hash))
+            || !ownership.fifo_hashes.contains(&hash)
+            || self.removed_hashes.contains_key(&hash)
+        {
+            return Err(LaneQueueReservationError::Conflict { hash });
+        }
+        if allow_active_durability_transition
+            && !ownership.active_durability_transitions.contains(&hash)
+        {
+            return Err(LaneQueueReservationError::Conflict { hash });
+        }
+        let fifo_order = self
+            .fifo_order_by_hash
+            .get(&hash)
+            .map(|entry| *entry.value())
+            .ok_or(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash })?;
+        fifo_order
+            .validate()
+            .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+        if fifo_ordinal_owners.get(&fifo_order.ordinal) != Some(&hash) {
+            return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
+        }
+        let claim = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|entry| entry.value().clone())
+            .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
+        claim
+            .global_admission_binding()
+            .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+            .map_err(
+                |reason| LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+                    hash,
+                    reason,
+                },
+            )?;
+        let accepted = tx.as_accepted();
+        let plan = self
+            .routing_plans
+            .get(&hash)
+            .map(|entry| entry.value().clone())
+            .ok_or(LaneQueueReservationError::Conflict { hash })?;
+        let encoded_len = self.tx_encoded_len.get(&hash).map(|entry| *entry.value());
+        let gas_cost = self.tx_gas_cost.get(&hash).map(|entry| *entry.value());
+        let enqueued_at = self
+            .tx_enqueued_at_ms
+            .get(&hash)
+            .map(|entry| *entry.value());
+        let queued_at = self
+            .queued_tx_enqueued_at_ms
+            .get(&hash)
+            .map(|entry| *entry.value());
+        #[cfg(feature = "telemetry")]
+        let has_teu_index = self.tx_teu.contains_key(&hash);
+        #[cfg(not(feature = "telemetry"))]
+        let has_teu_index = true;
+        if accepted.hash_as_entrypoint() != hash
+            || plan.digest() != key.routing_plan_digest
+            || plan.coordinator_leg() != key.coordinator_leg
+            || claim.routing_plan != plan
+            || claim.signed_transaction_hash
+                != crate::tx::exact_signed_transaction_hash(accepted.entrypoint())
+            || enqueued_at != Some(claim.enqueue_timestamp_ms)
+            || queued_at != enqueued_at
+            || encoded_len != Some(Self::compute_tx_encoded_len(accepted))
+            || gas_cost != Self::compute_proposal_gas_cost(accepted).ok()
+            || !self.expiry_ring_members.contains_key(&hash)
+            || !has_teu_index
+        {
+            return Err(LaneQueueReservationError::Conflict { hash });
+        }
+        Ok(true)
+    }
     fn preflight_lane_reservation_plan_journal(
         &self,
         preflight: &LaneQueueCarrierCleanupJournalPreflight,
@@ -7430,6 +7631,138 @@ impl Queue {
             &preflight.finalized_keys,
         )?;
         Ok(())
+    }
+    /// Atomically tombstone every exact ordinary replica QueuePlan after the complete carrier
+    /// batch has passed its read-only in-memory and journal preflight.
+    fn tombstone_committed_replica_plan_journal(
+        &self,
+        replica_keys: &[LaneQueueReservationKeyV2],
+    ) -> Result<(), LaneQueueReservationError> {
+        if replica_keys.is_empty() {
+            return Ok(());
+        }
+        let result = {
+            let mut guard = self.plan_journal.lock();
+            let journal = guard
+                .as_mut()
+                .ok_or(LaneQueueReservationError::JournalNotInstalled)?;
+            journal.remove_exact_global_admission_bindings_strict_durable(replica_keys)
+        };
+        if let Err(error) = result {
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(LaneQueueReservationError::Journal(error));
+        }
+        Ok(())
+    }
+    /// Remove preflighted replica-only in-memory owners under one exact durability transition.
+    ///
+    /// The corresponding QueuePlan tombstones are already durable. Reauthenticating the complete
+    /// set before the first memory mutation makes an internal fence violation fail without a
+    /// partial replica deletion.
+    fn remove_preflighted_committed_replica_owners(
+        &self,
+        replica_keys: &[LaneQueueReservationKeyV2],
+        durability_transition: &QueueDurabilityTransition<'_>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        if replica_keys.is_empty() {
+            return Ok(0);
+        }
+        if !durability_transition.covers_reservation_keys(self, replica_keys) {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "canonical replica cleanup escaped its exact durability-transition scope"
+                    .to_owned(),
+            ));
+        }
+        let queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let store = self.lane_reservations.lock();
+        let global_selection_owners = self.global_selection_owners.lock();
+        let active_durability_transitions = self.durability_transitions.lock();
+        let fee_admission_reservations = self.fee_admission_reservations.lock();
+        let fifo_snapshot = self.fifo_snapshot_locked();
+        let fifo_hashes = fifo_snapshot.iter().copied().collect::<HashSet<_>>();
+        if fifo_hashes.len() != fifo_snapshot.len() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "canonical replica cleanup found a duplicate physical FIFO owner".to_owned(),
+            ));
+        }
+        let mut fifo_ordinal_owners = BTreeMap::new();
+        for entry in &self.fifo_order_by_hash {
+            let hash = *entry.key();
+            let fifo_order = *entry.value();
+            fifo_order
+                .validate()
+                .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
+            if let Some(existing) = fifo_ordinal_owners.insert(fifo_order.ordinal, hash)
+                && existing != hash
+            {
+                return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                    "FIFO ordinal {} is owned by both {existing} and {hash}",
+                    fifo_order.ordinal
+                )));
+            }
+        }
+        let ownership = LaneQueueCarrierCleanupOwnerSnapshot {
+            global_selection_owners: &global_selection_owners,
+            active_durability_transitions: &active_durability_transitions,
+            fee_admission_reservations: &fee_admission_reservations,
+            fifo_hashes: &fifo_hashes,
+        };
+        for key in replica_keys {
+            if !self.preflight_committed_replica_owner_locked(
+                &store,
+                key,
+                &ownership,
+                &fifo_ordinal_owners,
+                true,
+            )? {
+                return Err(LaneQueueReservationError::Conflict {
+                    hash: key.entrypoint_hash,
+                });
+            }
+        }
+        let rows = replica_keys
+            .iter()
+            .map(|key| {
+                let hash = key.entrypoint_hash;
+                let tx = self
+                    .txs
+                    .get(&hash)
+                    .map(|entry| Arc::clone(entry.value()))
+                    .ok_or(LaneQueueReservationError::Conflict { hash })?;
+                let plan = self
+                    .routing_plans
+                    .get(&hash)
+                    .map(|entry| entry.value().clone())
+                    .ok_or(LaneQueueReservationError::Conflict { hash })?;
+                Ok((hash, tx, plan))
+            })
+            .collect::<Result<Vec<_>, LaneQueueReservationError>>()?;
+        drop(ownership);
+        drop(fee_admission_reservations);
+        drop(active_durability_transitions);
+        drop(global_selection_owners);
+        drop(store);
+        let hashes = rows
+            .iter()
+            .map(|(hash, _, _)| *hash)
+            .collect::<HashSet<_>>();
+        let removed_fifo = self.remove_hashes_from_fifo_locked(&hashes);
+        debug_assert_eq!(removed_fifo, hashes.len());
+        for (hash, tx, plan) in &rows {
+            self.durable_plan_claims.remove(hash);
+            self.remove_transaction_locked(tx, plan, None);
+            self.removed_hashes.remove(hash);
+        }
+        {
+            let mut store = self.lane_reservations.lock();
+            self.reconcile_missing_reservation_payloads_locked(&mut store);
+        }
+        drop(queue_guard);
+        self.publish_backpressure_state(self.active_len(), None);
+        Ok(rows.len())
     }
     /// Reauthenticate the positive Queue half of canonical terminal ownership.
     ///
@@ -7496,8 +7829,13 @@ impl Queue {
             // The physical age and expiry rings intentionally retain bounded
             // stale entries for lazy pruning. Their per-hash membership maps
             // are authoritative and must already be absent here.
-            if self.canonical_queue_hash_has_terminal_owner_locked(&store, hash, &ownership, true) {
-                return Err(LaneQueueReservationError::Conflict { hash });
+            let owner_mask = self
+                .canonical_queue_hash_terminal_owner_mask_locked(&store, hash, &ownership, true);
+            if owner_mask != 0 {
+                return Err(LaneQueueReservationError::TerminalConflict {
+                    hash,
+                    owners: Self::canonical_queue_terminal_owner_labels(owner_mask),
+                });
             }
         }
         drop(ownership);
@@ -7596,6 +7934,7 @@ impl Queue {
             &ownership,
             &fifo_ordinal_owners,
             &mut journal_preflight,
+            false,
         )?;
         drop(ownership);
         drop(fee_admission_reservations);
@@ -12180,6 +12519,7 @@ impl Queue {
                 global_selection_owners: parking_lot::Mutex::new(BTreeMap::new()),
                 next_global_selection_owner: AtomicU64::new(1),
                 push_remove_lock: parking_lot::Mutex::new(()),
+                nexus_revalidation_lock: parking_lot::Mutex::new(()),
                 durability_transitions: parking_lot::Mutex::new(HashSet::new()),
                 durability_transition_done: parking_lot::Condvar::new(),
                 lane_reservation_transition_lock: parking_lot::Mutex::new(()),
@@ -12702,13 +13042,13 @@ impl Queue {
         }
         let mut seen = HashSet::with_capacity(remaining_scan);
         let mut pending_status_fault = None;
-        let mut blocked_by_global_admission = false;
+        let mut blocked_by_fifo_predecessor = false;
         let mut conflicting_admission = None;
         let pending = age_ring
             .iter()
             .take(remaining_scan)
             .filter_map(|(hash, enqueued_at_ms)| {
-                if blocked_by_global_admission {
+                if blocked_by_fifo_predecessor {
                     return None;
                 }
                 let is_current = self
@@ -12723,6 +13063,15 @@ impl Queue {
                 {
                     return None;
                 }
+                if self.durability_transition_active(hash) {
+                    // Canonical cleanup and durable admission release the Queue lock while their
+                    // exact journal boundary is synchronized. The transitioning FIFO predecessor
+                    // must stop this complete snapshot: publishing a later global owner would
+                    // overtake it, while publishing this hash would race terminal cleanup after
+                    // its QueuePlan tombstone.
+                    blocked_by_fifo_predecessor = true;
+                    return None;
+                }
                 let transaction = self.txs.get(hash)?;
                 if transaction.value().is_in_blockchain(state_view) {
                     return None;
@@ -12730,16 +13079,16 @@ impl Queue {
                 match self.global_admission_registry_match_for_hash(*hash, state_view) {
                     Ok(None | Some((_, QueuePlanAdmissionRegistryMatch::Exact))) => {}
                     Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {
-                        blocked_by_global_admission = true;
+                        blocked_by_fifo_predecessor = true;
                         return None;
                     }
                     Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
-                        blocked_by_global_admission = true;
+                        blocked_by_fifo_predecessor = true;
                         conflicting_admission = Some((*hash, binding));
                         return None;
                     }
                     Err(reason) => {
-                        blocked_by_global_admission = true;
+                        blocked_by_fifo_predecessor = true;
                         pending_status_fault.get_or_insert((*hash, reason));
                         return None;
                     }
@@ -13015,7 +13364,10 @@ impl Queue {
                 }
                 GossipEntryState::Committed => {
                     drop(tx_arc);
-                    self.remove_committed_hashes([hash], backpressure_telemetry);
+                    self.remove_committed_hashes_without_lane_reservation_ownership(
+                        [hash],
+                        backpressure_telemetry,
+                    );
                 }
                 GossipEntryState::Other => {}
             }
@@ -16026,14 +16378,13 @@ impl Queue {
         let prev = self.inflight_guards.fetch_sub(1, Ordering::Relaxed);
         debug_assert!(prev > 0, "inflight guard counter underflow");
     }
-    /// Reconcile a popped admission; `select_exact` distinguishes selection from TTL retention.
+    /// Reconcile a popped admission against its canonical global owner.
     fn reconcile_popped_global_admission(
         &self,
         hash: EntrypointHash,
         state_view: &StateView,
-        select_exact: bool,
         telemetry: Option<&StateTelemetry>,
-    ) -> bool {
+    ) -> PoppedGlobalAdmissionDisposition {
         let restore = || {
             if let Err(reason) = self.restore_popped_globally_bound_hash(hash, telemetry) {
                 self.mark_accepted_work_validation_fault(
@@ -16045,12 +16396,11 @@ impl Queue {
             }
         };
         match self.global_admission_registry_match_for_hash(hash, state_view) {
-            Ok(None) => return true,
-            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Exact))) if select_exact => return true,
-            Ok(Some((
-                _,
-                QueuePlanAdmissionRegistryMatch::Absent | QueuePlanAdmissionRegistryMatch::Exact,
-            ))) => restore(),
+            Ok(None) => return PoppedGlobalAdmissionDisposition::Ordinary,
+            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Exact))) => {
+                return PoppedGlobalAdmissionDisposition::Exact;
+            }
+            Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => restore(),
             Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
                 match self.reject_exact_queue_plan_admission_claim(&binding) {
                     Ok(true) => {}
@@ -16070,7 +16420,7 @@ impl Queue {
                 telemetry,
             ),
         }
-        false
+        PoppedGlobalAdmissionDisposition::Retained
     }
     /// Pop one transaction, serializing Sumeragi selection with every pop and test-only return.
     fn pop_from_queue(
@@ -16110,20 +16460,30 @@ impl Queue {
                 warn!("Looks like we're experiencing a high load");
                 continue;
             };
-            if let Err(e) = self.check_tx(
+            let mut prechecked_global_admission = None;
+            let check_error = match self.check_tx(
                 tx_arc.as_ref(),
                 tx_arc.as_ref().is_in_blockchain(state_view),
             ) {
-                if matches!(e, Error::Expired)
-                    && !self.reconcile_popped_global_admission(
+                Ok(()) => None,
+                Err(Error::Expired) => {
+                    match self.reconcile_popped_global_admission(
                         hash,
                         state_view,
-                        false,
                         backpressure_telemetry,
-                    )
-                {
-                    return None;
+                    ) {
+                        PoppedGlobalAdmissionDisposition::Ordinary => Some(Error::Expired),
+                        PoppedGlobalAdmissionDisposition::Exact => {
+                            prechecked_global_admission =
+                                Some(PoppedGlobalAdmissionDisposition::Exact);
+                            None
+                        }
+                        PoppedGlobalAdmissionDisposition::Retained => return None,
+                    }
                 }
+                Err(error) => Some(error),
+            };
+            if let Some(e) = check_error {
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -16179,12 +16539,10 @@ impl Queue {
                 }
                 continue;
             }
-            if !self.reconcile_popped_global_admission(
-                hash,
-                state_view,
-                true,
-                backpressure_telemetry,
-            ) {
+            let global_admission = prechecked_global_admission.unwrap_or_else(|| {
+                self.reconcile_popped_global_admission(hash, state_view, backpressure_telemetry)
+            });
+            if global_admission == PoppedGlobalAdmissionDisposition::Retained {
                 return None;
             }
             let routing_plan = match self.immutable_queued_routing_plan_with_view(
@@ -18594,12 +18952,36 @@ impl Queue {
         guards.clear();
         Ok(report)
     }
-    /// Remove committed transactions from the queue by hash, preserving routing metadata.
+    /// Remove committed transactions that have no local durable lane-reservation owner.
+    ///
+    /// Canonical autonomous carriers execute on every validator, but only the
+    /// deterministic lane producer moves the selected transaction out of ordinary
+    /// FIFO ownership and into the reservation journal. Replica validators retain
+    /// their ordinary FIFO copy until the carrier commits. This helper consumes that
+    /// replica-side copy while leaving any live reservation, Commit barrier, or
+    /// release barrier untouched for the exact terminal reservation corridor.
+    pub(crate) fn remove_committed_hashes_without_lane_reservation_ownership(
+        &self,
+        hashes: impl IntoIterator<Item = EntrypointHash>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> usize {
+        self.remove_committed_hashes_inner(hashes, telemetry, true)
+    }
+    /// Remove committed transactions and their indexed queue metadata by hash.
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     pub(crate) fn remove_committed_hashes(
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
+    ) -> usize {
+        self.remove_committed_hashes_inner(hashes, telemetry, false)
+    }
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn remove_committed_hashes_inner(
+        &self,
+        hashes: impl IntoIterator<Item = EntrypointHash>,
+        telemetry: Option<&StateTelemetry>,
+        preserve_lane_reservation_owners: bool,
     ) -> usize {
         let hashes = hashes.into_iter().collect::<Vec<_>>();
         // A hash being made durable is not yet selectable or externally acknowledged. If a
@@ -18621,7 +19003,15 @@ impl Queue {
             }
             let mut removed_inner = 0usize;
             let mut removals = Vec::new();
+            let lane_reservation_owned_hashes = preserve_lane_reservation_owners
+                .then(|| self.lane_reservations.lock().live_hashes());
             for hash in hashes {
+                if lane_reservation_owned_hashes
+                    .as_ref()
+                    .is_some_and(|owned| owned.contains(&hash))
+                {
+                    continue;
+                }
                 let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);
                 let journal_removal = self
                     .routing_plans
@@ -18966,6 +19356,10 @@ impl Queue {
         dataspace_catalog: &DataSpaceCatalog,
         routing_generation_unchanged: bool,
     ) {
+        // Revalidation releases queue ownership after its exact TEU/catalog snapshot so ordinary
+        // queue work can make progress. Serialize the complete passes themselves; otherwise a
+        // second pass can clear aggregates between this pass's per-hash dequeue/enqueue pair.
+        let _revalidation_guard = self.nexus_revalidation_lock.lock();
         let routing_nexus =
             nexus_with_route_catalogs(state_view.nexus(), lane_catalog, dataspace_catalog);
         let block_height = state_view_height_for_routing(state_view);
@@ -18975,6 +19369,21 @@ impl Queue {
             // exact rebuild cut in the same critical section so a newly admitted transaction
             // cannot contribute once during admission and again through this revalidation pass.
             let _queue_guard = self.push_remove_lock.lock();
+            let tracked = self
+                .txs
+                .iter()
+                .map(|entry| *entry.key())
+                .collect::<Vec<_>>();
+            // Keep every existing per-transaction TEU owner present across the rebuild cut.
+            // A reservation/release durability transition may begin immediately after this
+            // lock is released and must never observe (or publish) an owner whose TEU identity
+            // was temporarily cleared. The per-lane aggregates are rebuilt from this exact
+            // snapshot, then the stable-validation pass below removes terminal owners or
+            // refreshes retained owners while holding their transition-index read fence.
+            let prior_teu = tracked
+                .iter()
+                .filter_map(|hash| self.tx_teu.get(hash).map(|info| (*hash, *info.value())))
+                .collect::<Vec<_>>();
             self.tx_teu.clear();
             self.lane_teu_pending.clear();
             self.dataspace_teu_pending.clear();
@@ -18985,10 +19394,10 @@ impl Queue {
                         .insert((lane.id, dataspace.id), PendingTeu::default());
                 }
             }
-            self.txs
-                .iter()
-                .map(|entry| *entry.key())
-                .collect::<Vec<_>>()
+            for (hash, info) in prior_teu {
+                self.record_teu_enqueue_locked(hash, info);
+            }
+            tracked
         };
         #[cfg(not(feature = "telemetry"))]
         let tracked = self
@@ -19003,16 +19412,36 @@ impl Queue {
         let mut corrupt_ownership = Vec::new();
         for hash in tracked {
             // Observe the current owner and all of its immutable indexes under the same
-            // transition-index lock. A hash can disappear after the outer snapshot when an
+            // queue/transition cut. A hash can disappear after the outer snapshot when an
             // admission rolls back or a terminal operation completes; absence is then a normal
             // completed transition, not corrupt ownership of the stale transaction snapshot.
+            // Ordinary committed removal does not create a durability-transition marker, so the
+            // queue lock must remain held through the TEU refresh to prevent stale republication.
+            let queue_guard = self.push_remove_lock.lock();
+            // Reservation state is published before its transition marker is retired. Observe
+            // the locks in their canonical queue -> store -> transition order so a reservation
+            // that finishes after the outer hash/TEU snapshot is still classified from its
+            // current, stable owner rather than from a stale live-hash census.
+            let reservation_store = self.lane_reservations.lock();
             let active_transitions = self.durability_transitions.lock();
             if active_transitions.contains(&hash) {
                 continue;
             }
+            #[cfg(feature = "telemetry")]
+            let terminal_reservation_pending = reservation_store
+                .durable_owned_hashes()
+                .any(|owned_hash| owned_hash == hash);
+            #[cfg(not(feature = "telemetry"))]
+            let terminal_reservation_pending = false;
+            drop(reservation_store);
             let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 continue;
             };
+            #[cfg(feature = "telemetry")]
+            let committed_replica_cleanup_pending =
+                tx.is_in_blockchain(state_view) && self.has_globally_bound_durable_claim(hash);
+            #[cfg(not(feature = "telemetry"))]
+            let committed_replica_cleanup_pending = false;
             let pending =
                 match self.pending_status_with_stable_durability_owner(tx.as_ref(), state_view) {
                     Ok(pending) => pending,
@@ -19021,11 +19450,9 @@ impl Queue {
                         continue;
                     }
                 };
-            if !pending {
+            if !pending && !terminal_reservation_pending && !committed_replica_cleanup_pending {
                 #[cfg(feature = "telemetry")]
-                {
-                    self.tx_teu.remove(&hash);
-                }
+                self.record_teu_dequeue(&hash, None);
                 continue;
             }
             let routing_plan = match self.immutable_queued_routing_plan_in_view(
@@ -19072,26 +19499,17 @@ impl Queue {
                     dataspace_id: routing.dataspace_id,
                     teu,
                 };
-                self.tx_teu.insert(hash, info);
-                self.lane_teu_pending
-                    .entry(routing.lane_id)
-                    .and_modify(|agg| {
-                        agg.teu = agg.teu.saturating_add(teu);
-                        agg.tx_count += 1;
-                    })
-                    .or_insert(PendingTeu { teu, tx_count: 1 });
-                self.dataspace_teu_pending
-                    .entry((routing.lane_id, routing.dataspace_id))
-                    .and_modify(|agg| {
-                        agg.teu = agg.teu.saturating_add(teu);
-                        agg.tx_count += 1;
-                    })
-                    .or_insert(PendingTeu { teu, tx_count: 1 });
+                // The rebuild cut retained the old identity so a concurrent durability
+                // transition could not inherit a transient hole. Replace it only while this
+                // hash's transition-index fence is held, keeping aggregate counts exact.
+                self.record_teu_dequeue(&hash, None);
+                self.record_teu_enqueue_locked(hash, info);
             }
             // Terminal ownership transitions acquire this guard before clearing routing and
             // telemetry indexes. Retain it through the derived publications above so a remover
             // cannot clear the indexes and then race with stale re-publication.
             drop(active_transitions);
+            drop(queue_guard);
         }
         #[cfg(feature = "telemetry")]
         let validation_telemetry = Some(state_view.telemetry);
@@ -19742,6 +20160,9 @@ pub mod tests {
         }
     }
     fn globally_bound_guard_fixture() -> GloballyBoundGuardFixture {
+        globally_bound_guard_fixture_at_height(0)
+    }
+    fn globally_bound_guard_fixture_at_height(authority_height: u64) -> GloballyBoundGuardFixture {
         let dir = tempdir().expect("global guard fixture directory");
         let journal_path = dir.path().join("global_guard_queue_plan.norito");
         let mut state = State::new(
@@ -19750,6 +20171,7 @@ pub mod tests {
             LiveQueryStore::start_test(),
         );
         install_single_validator_topology_for_queue_test(&mut state, 0xB9);
+        seed_committed_height_for_queue_test(&state, authority_height);
         let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -26668,6 +27090,60 @@ pub mod tests {
         assert_eq!(queue.pop_queued_hash(), Some(second_hash));
     }
     #[test]
+    fn bounded_pending_snapshot_defers_durability_transition_without_overtaking_fifo() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
+        let first_hash = first.hash_as_entrypoint();
+        let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
+        let second_hash = second.hash_as_entrypoint();
+        queue.push(first, state.view()).expect("push first");
+        queue.push(second, state.view()).expect("push second");
+
+        let queue_guard = queue.push_remove_lock.lock();
+        let transition = queue
+            .begin_durability_transition_locked([first_hash])
+            .expect("start exact durability transition for the FIFO head");
+        drop(queue_guard);
+
+        let (blocked, blocked_lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
+            .expect("queue selection remains healthy while cleanup is durable");
+        assert!(
+            blocked.is_empty(),
+            "a global snapshot must not publish the transitioning head or overtake it"
+        );
+        assert!(
+            queue.global_selection_owners.lock().is_empty(),
+            "the durability boundary must remain free of newly published global owners"
+        );
+        let queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![first_hash, second_hash],
+            "deferral must preserve exact FIFO order"
+        );
+        drop(queue_guard);
+        drop(blocked_lease);
+        drop(transition);
+
+        let (selected, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
+            .expect("queue selection resumes after the durability boundary");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|transaction| transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>(),
+            vec![first_hash, second_hash],
+        );
+    }
+    #[test]
     fn nexus_revalidation_skips_owner_removed_after_hash_snapshot_without_latching_fault() {
         let fixture = globally_bound_guard_fixture();
         let queue = Arc::clone(&fixture.queue);
@@ -26712,6 +27188,11 @@ pub mod tests {
             "a hash removed after the outer snapshot is completed ownership, not corruption"
         );
         fixture.assert_terminally_removed();
+        #[cfg(feature = "telemetry")]
+        assert!(
+            !queue.tx_teu.contains_key(&hash),
+            "revalidation must not republish TEU after ordinary terminal removal",
+        );
     }
     #[test]
     fn bounded_pending_snapshot_prunes_stale_front_and_excludes_inflight_guard() {

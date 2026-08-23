@@ -42,6 +42,46 @@ where
 {
     norito::decode_canonical(bytes)
 }
+async fn recv_subscription_until<M, S>(
+    stream: &mut S,
+    deadline: tokio::time::Instant,
+) -> Result<M, Error>
+where
+    M: NoritoSerialize,
+    for<'de> M: NoritoDeserialize<'de>,
+    S: futures::Stream<Item = Result<Message, axum::Error>> + Unpin,
+{
+    // Control frames are transport traffic, not a new subscription deadline.
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(Error::ReadTimeout);
+        }
+        let message = tokio::time::timeout_at(deadline, stream.next())
+            .await
+            .map_err(|_err| Error::ReadTimeout)?
+            // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
+            .ok_or(Error::Closed)?
+            .map_err(extract_ws_closed)?;
+        match message {
+            Message::Binary(binary) => {
+                return decode_subscription_request::<M>(binary.as_ref()).map_err(Error::Decode);
+            }
+            Message::Text(_) => {
+                return Err(Error::UnexpectedFrame {
+                    expected: "a binary Norito subscription request",
+                    actual: "text",
+                });
+            }
+            Message::Ping(_) | Message::Pong(_) => {
+                iroha_logger::trace!(?message, "Unexpected message received");
+            }
+            Message::Close(_) => {
+                iroha_logger::trace!(?message, "Close message received");
+                return Err(Error::Closed);
+            }
+        }
+    }
+}
 /// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
 pub struct WebSocketNorito {
@@ -88,71 +128,30 @@ impl WebSocketNorito {
         .map_err(extract_ws_closed)
     }
     /// Receive and decode one canonical, uncompressed Norito request.
+    ///
+    /// The configured timeout is one absolute deadline; ping and pong control frames do not
+    /// extend it.
     pub async fn recv<M>(&mut self) -> Result<M, Error>
     where
         M: NoritoSerialize,
         for<'a> M: NoritoDeserialize<'a>,
         M: Send,
     {
-        // Control frames remain valid while text data frames are a protocol error.
-        loop {
-            let message = tokio::time::timeout(self.timeout, self.ws.next())
-                .await
-                .map_err(|_err| Error::ReadTimeout)?
-                // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
-                .ok_or(Error::Closed)?
-                .map_err(extract_ws_closed)?;
-            match message {
-                Message::Binary(binary) => {
-                    return decode_subscription_request::<M>(binary.as_ref())
-                        .map_err(Error::Decode);
-                }
-                Message::Text(_) => {
-                    return Err(Error::UnexpectedFrame {
-                        expected: "a binary Norito subscription request",
-                        actual: "text",
-                    });
-                }
-                Message::Ping(_) | Message::Pong(_) => {
-                    iroha_logger::trace!(?message, "Unexpected message received");
-                }
-                Message::Close(_) => {
-                    iroha_logger::trace!(?message, "Close message received");
-                    return Err(Error::Closed);
-                }
-            }
-        }
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        recv_subscription_until(&mut self.ws, deadline).await
     }
     /// Receive one canonical request with a custom timeout.
     ///
-    /// Returns [`Error::ReadTimeout`] when `dur` expires.
+    /// Returns [`Error::ReadTimeout`] when the absolute `dur` deadline expires. Ping and pong
+    /// control frames do not extend that deadline.
     pub async fn recv_with_timeout<M>(&mut self, dur: Duration) -> Result<M, Error>
     where
         M: NoritoSerialize,
         for<'a> M: NoritoDeserialize<'a>,
         M: Send,
     {
-        loop {
-            let message = tokio::time::timeout(dur, self.ws.next())
-                .await
-                .map_err(|_err| Error::ReadTimeout)?
-                .ok_or(Error::Closed)?
-                .map_err(extract_ws_closed)?;
-            match message {
-                Message::Binary(binary) => {
-                    return decode_subscription_request::<M>(binary.as_ref())
-                        .map_err(Error::Decode);
-                }
-                Message::Text(_) => {
-                    return Err(Error::UnexpectedFrame {
-                        expected: "a binary Norito subscription request",
-                        actual: "text",
-                    });
-                }
-                Message::Ping(_) | Message::Pong(_) => {}
-                Message::Close(_) => return Err(Error::Closed),
-            }
-        }
+        let deadline = tokio::time::Instant::now() + dur;
+        recv_subscription_until(&mut self.ws, deadline).await
     }
     /// Wait for the peer to close while rejecting post-subscription data frames.
     ///
@@ -226,6 +225,7 @@ impl WebSocketNorito {
 #[cfg(test)]
 mod subscription_decode_tests {
     use super::*;
+    use futures::channel::mpsc;
     use iroha_data_model::{
         block::stream::BlockSubscriptionRequest, events::stream::EventSubscriptionRequest,
     };
@@ -281,6 +281,65 @@ mod subscription_decode_tests {
             NonZeroU64::new(1).expect("subscription height must be non-zero"),
         );
         assert_common_noncanonical_frames_rejected(&request);
+    }
+    #[tokio::test]
+    async fn control_frames_do_not_extend_subscription_deadline() {
+        const READ_TIMEOUT: Duration = Duration::from_millis(100);
+        const PING_INTERVAL: Duration = Duration::from_millis(10);
+        const TEST_GUARD: Duration = Duration::from_secs(1);
+        let (sender, mut receiver) = mpsc::unbounded::<Result<Message, axum::Error>>();
+        sender
+            .unbounded_send(Ok(Message::Ping(axum::body::Bytes::new())))
+            .expect("queue initial ping");
+        sender
+            .unbounded_send(Ok(Message::Pong(axum::body::Bytes::new())))
+            .expect("queue initial pong");
+        let pinger = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(PING_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if sender
+                    .unbounded_send(Ok(Message::Ping(axum::body::Bytes::new())))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+        let result = tokio::time::timeout(
+            TEST_GUARD,
+            recv_subscription_until::<BlockSubscriptionRequest, _>(&mut receiver, deadline),
+        )
+        .await
+        .expect("control frames must not keep the subscription read alive");
+        assert!(matches!(result, Err(Error::ReadTimeout)));
+        drop(receiver);
+        pinger.await.expect("control-frame sender must not panic");
+    }
+    #[tokio::test]
+    async fn subscription_decodes_after_control_frames_before_deadline() {
+        let request = BlockSubscriptionRequest(
+            NonZeroU64::new(1).expect("subscription height must be non-zero"),
+        );
+        let bytes = norito::encode_canonical(&request).expect("encode canonical subscription");
+        let (sender, mut receiver) = mpsc::unbounded::<Result<Message, axum::Error>>();
+        sender
+            .unbounded_send(Ok(Message::Ping(axum::body::Bytes::new())))
+            .expect("queue ping");
+        sender
+            .unbounded_send(Ok(Message::Pong(axum::body::Bytes::new())))
+            .expect("queue pong");
+        sender
+            .unbounded_send(Ok(Message::Binary(bytes.into())))
+            .expect("queue subscription");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let decoded =
+            recv_subscription_until::<BlockSubscriptionRequest, _>(&mut receiver, deadline)
+                .await
+                .expect("subscription must decode before its fixed deadline");
+        assert_eq!(decoded.0, request.0);
     }
 }
 /// Check if websocket was closed normally

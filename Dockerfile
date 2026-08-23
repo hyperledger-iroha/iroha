@@ -22,7 +22,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES="external-software-signer-bin"
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
+ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -130,6 +130,7 @@ RUN set -eu; \
     /usr/local/libexec/iroha-runtime-provider-broker-v1 --help >/dev/null; \
     case "${CONFIG_PROFILE}" in \
         single) \
+            test -x "${BIN_PATH}/iroha3d"; \
             cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \
             cp /tmp/defaults/client.toml "${CONFIG_DIR}/client.toml"; \
             if [ -d /tmp/defaults/config.d ]; then \
@@ -138,12 +139,13 @@ RUN set -eu; \
             fi \
             ;; \
         nexus) \
+            test -x "${BIN_PATH}/iroha3d"; \
             cp /tmp/defaults/nexus/genesis.json "${CONFIG_DIR}/genesis.json"; \
             cp /tmp/defaults/nexus/client.toml "${CONFIG_DIR}/client.toml"; \
             cp /tmp/defaults/nexus/config.toml "${CONFIG_DIR}/config.toml" \
             ;; \
         taira) \
-            : \
+            test -x "${BIN_PATH}/iroha3d_taira" \
             ;; \
         *) \
             echo "Unsupported CONFIG_PROFILE ${CONFIG_PROFILE}" >&2; \

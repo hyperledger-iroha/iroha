@@ -127,19 +127,19 @@ impl TelemetryAccumulator {
             .utilised_gib_seconds
             .checked_div(window_duration as u128)
             .ok_or(TelemetryError::UtilisationOverflow)?;
-        let utilised_capacity_gib = min(self.declared_capacity_gib, avg_utilised as u64);
+        let utilised_capacity_gib = min(self.declared_capacity_gib as u128, avg_utilised) as u64;
         let uptime_percent_milli = if self.uptime_observed_seconds == 0 {
             100_000_u32
         } else {
             let ratio =
-                self.uptime_seconds.saturating_mul(100_000) / self.uptime_observed_seconds.max(1);
-            min(100_000_u64, ratio) as u32
+                (self.uptime_seconds as u128 * 100_000) / self.uptime_observed_seconds as u128;
+            min(100_000_u128, ratio) as u32
         };
         let por_success_percent_milli = if self.por_total == 0 {
             100_000_u32
         } else {
-            let ratio = self.por_successes.saturating_mul(100_000) / self.por_total.max(1);
-            min(100_000_u32, ratio)
+            let ratio = u64::from(self.por_successes) * 100_000 / u64::from(self.por_total);
+            min(100_000_u64, ratio) as u32
         };
         let mut telemetry = CapacityTelemetryV1 {
             version: sorafs_manifest::capacity::CAPACITY_TELEMETRY_VERSION_V1,
@@ -243,6 +243,17 @@ mod tests {
         assert_eq!(payload.utilised_capacity_gib, 125);
     }
     #[test]
+    fn utilisation_clamps_before_narrowing_large_average() {
+        let mut acc = TelemetryAccumulator::new([0xAB; 32], 500, 0);
+        acc.set_window_end_epoch(1).expect("valid window");
+        acc.record_utilisation(u64::MAX, u64::MAX)
+            .expect("large utilisation sample");
+
+        let payload = acc.build_payload().expect("payload");
+
+        assert_eq!(payload.utilised_capacity_gib, 500);
+    }
+    #[test]
     fn window_end_epoch_must_exceed_start() {
         let mut acc = TelemetryAccumulator::new([0u8; 32], 128, 42);
         let err = acc.set_window_end_epoch(42).unwrap_err();
@@ -289,6 +300,20 @@ mod tests {
         let mut acc = TelemetryAccumulator::new([0xAB; 32], 128, 10);
         acc.set_window_end_epoch(20).expect("set end");
         let payload = acc.build_payload().expect("payload");
+        assert_eq!(payload.uptime_percent_milli, 100_000);
+        assert_eq!(payload.por_success_percent_milli, 100_000);
+    }
+    #[test]
+    fn percentages_do_not_saturate_before_division() {
+        let mut acc = TelemetryAccumulator::new([0xAB; 32], 128, 0);
+        acc.set_window_end_epoch(1).expect("valid window");
+        acc.record_uptime_sample(u64::MAX, u64::MAX)
+            .expect("large uptime sample");
+        acc.por_successes = u32::MAX;
+        acc.por_total = u32::MAX;
+
+        let payload = acc.build_payload().expect("payload");
+
         assert_eq!(payload.uptime_percent_milli, 100_000);
         assert_eq!(payload.por_success_percent_milli, 100_000);
     }

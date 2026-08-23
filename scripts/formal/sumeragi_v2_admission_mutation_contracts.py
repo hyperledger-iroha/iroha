@@ -758,7 +758,7 @@ coordinator.restore_validate_sidecar_wait(&identity, registry)?;
         "restart must restore an fsynced sidecar wait before Ready selection",
     )
     require_sequence(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",
         """
 let expected_reservation = match outcome_kind {
     ReadyDurableValidateOutcomeKind::Validated => None,

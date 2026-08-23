@@ -655,6 +655,7 @@ fn run_lifecycle_active_height(
     let mut admitted_discovered_commit_qc = false;
     let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
     let mut canonical_lane_body_recovered = false;
+    let mut finalized_ingress_closed = false;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -667,75 +668,126 @@ fn run_lifecycle_active_height(
         }
         liveness_watchdog.poll(Instant::now());
 
-        activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, _executor, services, _local_proposal| {
-                let now = Instant::now();
-                if now >= next_npos_vrf_retransmit {
-                    broadcast_npos_vrf_messages(
-                        npos_vrf.retransmission(),
-                        output_guard.as_ref(),
-                        services,
+        let lane_only_completion_barrier = producer_claim.blocks_runtime();
+        if lane_only_completion_barrier {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    // Keep only the lane transport needed to recover an exact
+                    // certified sidecar or finish durable output handoff alive.
+                    // In particular, do not reconcile or advance the reducer,
+                    // wake generic deferred Apply work, or admit ordinary
+                    // consensus ingress while the lane-only Completion barrier
+                    // owns the current cut. Once the exact decided Apply is
+                    // dispatched, the decided-lane recovery seam may consume one
+                    // authenticated carrier needed to serve or persist that
+                    // certified artifact, including while Apply completion waits.
+                    if producer_claim.permits_decided_lane_recovery_ingress() {
+                        drain_decided_lane_recovery_ingress(
+                            receiver,
+                            executor,
+                            services,
+                            &mut lane_work,
+                            executor.current_tag().view(),
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server,
+                        )?;
+                    }
+                    drain_lane_relay_ingress(
+                        lane_relay_rx,
+                        &mut lane_work,
+                        executor.current_tag().view(),
+                        control_queue_capacity,
                     )?;
-                    next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
-                }
-                Ok::<_, V2RunnerError>(())
-            },
-        )?;
+                    let now = Instant::now();
+                    if now >= next_lane_retransmit {
+                        lane_work.schedule_retransmission()?;
+                        next_lane_retransmit = deadline_after(now, retransmit_interval);
+                    }
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                },
+            )?;
+        } else {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, _executor, services, _local_proposal| {
+                    let now = Instant::now();
+                    if now >= next_npos_vrf_retransmit {
+                        broadcast_npos_vrf_messages(
+                            npos_vrf.retransmission(),
+                            output_guard.as_ref(),
+                            services,
+                        )?;
+                        next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
+                    }
+                    Ok::<_, V2RunnerError>(())
+                },
+            )?;
+        }
 
-        let discovery_was_outstanding = activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, executor, services, local_proposal| {
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
-                let advert_refresh = services
-                    .service_kura_replica_advert_refresh_turn(Instant::now())
-                    .map_err(V2RunnerError::Service)?;
-                if advert_refresh.fanout_attempted {
-                    iroha_logger::debug!(
-                        height = context.height,
-                        probes = advert_refresh.probes,
-                        retained_source = advert_refresh.retained_source,
-                        scan_active = advert_refresh.scan_active,
-                        "advanced bounded Kura replica-advert refresh"
-                    );
-                }
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
-                let directive = reconcile_executor_locked_body(executor, services)?;
-                local_proposal
-                    .state
-                    .reconcile(LocalProposalOwner::from(directive));
-                lane_work.retain_merge_sidecars_for_global_view(
-                    directive.tag().view(),
-                    directive.locked_subject(),
-                    directive.decided_subject(),
-                )?;
-                drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                services
-                    .replay_buffered_chunks(executor)
-                    .map_err(V2RunnerError::Service)?;
-                if directive.decided_subject().is_none() {
-                    drive_block_sync(
-                        Instant::now(),
-                        &mut next_block_sync_attempt,
-                        retransmit_interval,
-                        &mut block_sync_request,
-                        block_sync,
-                        &common_config.key_pair,
-                        output_guard.as_ref(),
+        let discovery_was_outstanding = if lane_only_completion_barrier {
+            block_sync_request.is_some()
+        } else {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, local_proposal| {
+                    let _ = retry_exact_output_and_apply_sidecar_admissions(
+                        &mut lane_work,
                         services,
+                        control_queue_capacity,
                     )?;
-                }
-                Ok::<_, V2RunnerError>(block_sync_request.is_some())
-            },
-        )?;
+                    let advert_refresh = services
+                        .service_kura_replica_advert_refresh_turn(Instant::now())
+                        .map_err(V2RunnerError::Service)?;
+                    if advert_refresh.fanout_attempted {
+                        iroha_logger::debug!(
+                            height = context.height,
+                            probes = advert_refresh.probes,
+                            retained_source = advert_refresh.retained_source,
+                            scan_active = advert_refresh.scan_active,
+                            "advanced bounded Kura replica-advert refresh"
+                        );
+                    }
+                    let _ = retry_exact_output_and_apply_sidecar_admissions(
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
+                    )?;
+                    let directive = reconcile_executor_locked_body(executor, services)?;
+                    local_proposal
+                        .state
+                        .reconcile(LocalProposalOwner::from(directive));
+                    lane_work.retain_merge_sidecars_for_global_view(
+                        directive.tag().view(),
+                        directive.locked_subject(),
+                        directive.decided_subject(),
+                    )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )?;
+                    drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
+                    services
+                        .replay_buffered_chunks(executor)
+                        .map_err(V2RunnerError::Service)?;
+                    if directive.decided_subject().is_none() {
+                        drive_block_sync(
+                            Instant::now(),
+                            &mut next_block_sync_attempt,
+                            retransmit_interval,
+                            &mut block_sync_request,
+                            block_sync,
+                            &common_config.key_pair,
+                            output_guard.as_ref(),
+                            services,
+                        )?;
+                    }
+                    Ok::<_, V2RunnerError>(block_sync_request.is_some())
+                },
+            )?
+        };
 
         let drain_disposition = drain_lifecycle_v2_ingress(
             &mut activated,
@@ -760,98 +812,138 @@ fn run_lifecycle_active_height(
             continue;
         }
 
-        let (ready_to_finish, lifecycle_yield) = activated.with_runner_runtime(
-            &mut active_runner,
-            |owner, executor, services, local_proposal| {
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
-                let directive = reconcile_executor_locked_body(executor, services)?;
-                local_proposal
-                    .state
-                    .reconcile(LocalProposalOwner::from(directive));
-                lane_work.retain_merge_sidecars_for_global_view(
-                    directive.tag().view(),
-                    directive.locked_subject(),
-                    directive.decided_subject(),
-                )?;
-                drain_lane_relay_ingress(
-                    lane_relay_rx,
-                    &mut lane_work,
-                    executor.current_tag().view(),
-                    control_queue_capacity,
-                )?;
-                drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                let now = Instant::now();
-                if now >= next_lane_retransmit {
-                    let _ = service_historical_recovery_tick(&mut lane_work)?;
-                    lane_work.schedule_autonomous_new_view_timeouts(
-                        now,
-                        executor.current_tag().view(),
-                        round_timeout,
+        let (ready_to_finish, lifecycle_yield) = if drain_disposition
+            .terminal_settlement_stops_runtime()
+        {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, _services, _local_proposal| {
+                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
+                },
+            )?
+        } else {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |owner, executor, services, local_proposal| {
+                    let _ = retry_exact_output_and_apply_sidecar_admissions(
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
                     )?;
-                    lane_work.schedule_retransmission()?;
-                    next_lane_retransmit = deadline_after(now, retransmit_interval);
-                }
-                dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
-                if advance_executor(receiver, owner, executor, services, control_queue_capacity)? {
-                    return Ok::<_, V2RunnerError>((false, true));
-                }
-                let _ = retry_exact_output_and_apply_sidecar_admissions(
-                    &mut lane_work,
-                    services,
-                    control_queue_capacity,
-                )?;
-                let directive = reconcile_executor_locked_body(executor, services)?;
-                local_proposal
-                    .state
-                    .reconcile(LocalProposalOwner::from(directive));
-                lane_work.retain_merge_sidecars_for_global_view(
-                    directive.tag().view(),
-                    directive.locked_subject(),
-                    directive.decided_subject(),
-                )?;
-                if directive.decided_subject().is_none()
-                    && let Some((locked_round, locked)) = directive.locked_body()
-                {
-                    let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
-                    if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()
-                    {
-                        services
-                            .request_locked_candidate(executor.current_tag(), locked_round, locked)
-                            .map_err(V2RunnerError::Service)?;
+                    let directive = reconcile_executor_locked_body(executor, services)?;
+                    local_proposal
+                        .state
+                        .reconcile(LocalProposalOwner::from(directive));
+                    lane_work.retain_merge_sidecars_for_global_view(
+                        directive.tag().view(),
+                        directive.locked_subject(),
+                        directive.decided_subject(),
+                    )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )?;
+                    drain_lane_relay_ingress(
+                        lane_relay_rx,
+                        &mut lane_work,
+                        executor.current_tag().view(),
+                        control_queue_capacity,
+                    )?;
+                    drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
+                    let now = Instant::now();
+                    if now >= next_lane_retransmit {
+                        let _ = service_historical_recovery_tick(&mut lane_work)?;
+                        lane_work.schedule_autonomous_new_view_timeouts(
+                            now,
+                            executor.current_tag().view(),
+                            round_timeout,
+                        )?;
+                        lane_work.schedule_retransmission()?;
+                        next_lane_retransmit = deadline_after(now, retransmit_interval);
                     }
-                }
-                while let Some(prepared) = services.take_prepared_candidate() {
-                    let current = executor.local_proposal_directive()?;
-                    if let Some(events) = local_proposal.state.take_prepared_events(
-                        LocalProposalOwner::from(current),
-                        prepared.tag(),
-                        prepared.subject(),
-                    ) {
-                        let Some(_permit) = output_guard.acquire() else {
-                            return Err(V2RunnerError::RestartRequired);
-                        };
-                        for event in events {
-                            let _ = events_sender.send(EventBox::Pipeline(event));
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+                    let _ = retry_exact_output_and_apply_sidecar_admissions(
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
+                    )?;
+                    if advance_executor(
+                        receiver,
+                        owner,
+                        executor,
+                        services,
+                        control_queue_capacity,
+                    )? {
+                        return Ok::<_, V2RunnerError>((false, true));
+                    }
+                    let _ = retry_exact_output_and_apply_sidecar_admissions(
+                        &mut lane_work,
+                        services,
+                        control_queue_capacity,
+                    )?;
+                    let directive = reconcile_executor_locked_body(executor, services)?;
+                    local_proposal
+                        .state
+                        .reconcile(LocalProposalOwner::from(directive));
+                    lane_work.retain_merge_sidecars_for_global_view(
+                        directive.tag().view(),
+                        directive.locked_subject(),
+                        directive.decided_subject(),
+                    )?;
+                    executor.acknowledge_runner_decision_cleanup(
+                        directive.tag(),
+                        directive.decided_subject(),
+                    )?;
+                    if directive.decided_subject().is_none()
+                        && let Some((locked_round, locked)) = directive.locked_body()
+                    {
+                        let lock_outcome =
+                            lane_work.mark_global_body_locked(locked_round, locked)?;
+                        if lock_outcome == GlobalBodyLockOutcome::Inserted
+                            && local_validator.is_some()
+                        {
+                            services
+                                .request_locked_candidate(
+                                    executor.current_tag(),
+                                    locked_round,
+                                    locked,
+                                )
+                                .map_err(V2RunnerError::Service)?;
                         }
                     }
-                }
-                services
-                    .replay_buffered_chunks(executor)
-                    .map_err(V2RunnerError::Service)?;
-                Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
-            },
-        )?;
+                    while let Some(prepared) = services.take_prepared_candidate() {
+                        let current = executor.local_proposal_directive()?;
+                        if let Some(events) = local_proposal.state.take_prepared_events(
+                            LocalProposalOwner::from(current),
+                            prepared.tag(),
+                            prepared.subject(),
+                        ) {
+                            let Some(_permit) = output_guard.acquire() else {
+                                return Err(V2RunnerError::RestartRequired);
+                            };
+                            for event in events {
+                                let _ = events_sender.send(EventBox::Pipeline(event));
+                            }
+                        }
+                    }
+                    services
+                        .replay_buffered_chunks(executor)
+                        .map_err(V2RunnerError::Service)?;
+                    Ok::<_, V2RunnerError>((executor.ready_to_finish(), false))
+                },
+            )?
+        };
         if lifecycle_yield {
             continue;
+        }
+
+        let apply_terminal_settled = producer_claim.apply_terminal_settled();
+        if apply_terminal_settled && !ready_to_finish {
+            iroha_logger::error!(
+                "recovered Apply terminal settlement did not leave the executor ready for rollover"
+            );
+            output_guard.close_admission_for_restart();
+            return Err(V2RunnerError::RestartRequired);
         }
 
         if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) {
@@ -868,7 +960,9 @@ fn run_lifecycle_active_height(
             }
         }
 
-        let producer_turn =
+        let producer_turn = if apply_terminal_settled {
+            None
+        } else {
             match activated.claim_producer_turn_for_local_proposal(&mut active_runner) {
                 Ok(claimed) => claimed,
                 Err(error) => {
@@ -876,8 +970,9 @@ fn run_lifecycle_active_height(
                     output_guard.close_admission_for_restart();
                     return Err(V2RunnerError::RestartRequired);
                 }
-            };
-        if !ready_to_finish || producer_turn.is_some() {
+            }
+        };
+        if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some()) {
             let scheduled = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, local_proposal| {
@@ -951,6 +1046,34 @@ fn run_lifecycle_active_height(
         }
 
         if rollover_ready {
+            if !finalized_ingress_closed {
+                activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
+                finalized_ingress_closed = true;
+            }
+            let drained_terminal_ingress = activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    let drained = drain_decided_lane_recovery_ingress(
+                        receiver,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        executor.current_tag().view(),
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server,
+                    )?;
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+                    Ok::<_, V2RunnerError>(drained.is_some())
+                },
+            )?;
+            if drained_terminal_ingress {
+                continue;
+            }
+            receiver
+                .ensure_closed_drained_cut()
+                .map_err(V2RunnerError::Service)?;
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,

@@ -213,6 +213,7 @@ fn reopen_authenticated_decision_startup(
 enum DecisionBodyMarkerFixture {
     Validated,
     Rejected,
+    DurableOnly,
 }
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
@@ -273,27 +274,42 @@ fn write_decision_startup_with_body_marker(
         .expect("fsync Decision body-marker body");
     let commitment = execution_commitment(marker);
     let validation = match outcome {
-        DecisionBodyMarkerFixture::Validated => {
-            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
-                Ok::<_, String>(commitment)
-            })
-        }
-        DecisionBodyMarkerFixture::Rejected => {
-            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
-                Err::<wire::ExecutionCommitment, _>(
-                    "deterministic Decision body rejection".to_owned(),
-                )
-            })
-        }
-    }
-    .expect("fsync Decision body outcome marker");
+        DecisionBodyMarkerFixture::Validated => Some(
+            body_store
+                .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                    Ok::<_, String>(commitment)
+                })
+                .expect("fsync Decision body validation marker"),
+        ),
+        DecisionBodyMarkerFixture::Rejected => Some(
+            body_store
+                .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        "deterministic Decision body rejection".to_owned(),
+                    )
+                })
+                .expect("fsync Decision body rejection marker"),
+        ),
+        DecisionBodyMarkerFixture::DurableOnly => None,
+    };
     match outcome {
         DecisionBodyMarkerFixture::Validated => {
-            assert!(validation.validated_receipt().is_some())
+            assert!(
+                validation
+                    .as_ref()
+                    .and_then(|outcome| outcome.validated_receipt())
+                    .is_some()
+            )
         }
         DecisionBodyMarkerFixture::Rejected => {
-            assert!(validation.rejection_reason().is_some())
+            assert!(
+                validation
+                    .as_ref()
+                    .and_then(|outcome| outcome.rejection_reason())
+                    .is_some()
+            )
         }
+        DecisionBodyMarkerFixture::DurableOnly => assert!(validation.is_none()),
     }
     let mut decision = wire::QuorumCertificate {
         round,

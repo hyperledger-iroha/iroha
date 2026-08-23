@@ -289,7 +289,7 @@ async fn soracloud_signed_mutation_middleware_applies_route_body_caps_before_aut
     assert_eq!(upload_response.status(), StatusCode::FORBIDDEN);
 }
 #[tokio::test]
-async fn soracloud_signed_mutation_middleware_rate_limits_account_origin() {
+async fn soracloud_signed_mutation_middleware_rate_limits_account_across_caller_origins() {
     use axum::{Router, routing::post};
     use tower::ServiceExt as _;
     async fn probe() -> axum::response::Response {
@@ -320,7 +320,7 @@ async fn soracloud_signed_mutation_middleware_rate_limits_account_origin() {
     let uri: axum::http::Uri = "/v1/soracloud/hf/deploy".parse().expect("uri");
     let body = br#"{"model":"test"}"#;
     let mut statuses = Vec::new();
-    for _ in 0..2 {
+    for origin in ["https://wallet-a.test", "https://wallet-b.test"] {
         let headers = crate::tests_runtime_handlers::signed_app_headers(
             &account_id,
             &key_pair,
@@ -331,7 +331,7 @@ async fn soracloud_signed_mutation_middleware_rate_limits_account_origin() {
         let mut builder = axum::http::Request::builder()
             .method(method.clone())
             .uri(uri.to_string())
-            .header(axum::http::header::ORIGIN, "https://apps.sora.test");
+            .header(axum::http::header::ORIGIN, origin);
         for (name, value) in &headers {
             builder = builder.header(name, value);
         }
@@ -354,11 +354,6 @@ fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
         0x42,
         "derive Soracloud signed mutation route-group fixture key",
     );
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        axum::http::header::ORIGIN,
-        HeaderValue::from_static("https://apps.sora.test"),
-    );
     assert_eq!(
         super::soracloud_signed_mutation_route_group("/v1/soracloud/deploy"),
         "mutation"
@@ -375,10 +370,10 @@ fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
         super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/deploy"),
         "hf"
     );
-    let model_key = super::soracloud_signed_mutation_rate_key(&headers, &account_id, "model");
-    let hf_key = super::soracloud_signed_mutation_rate_key(&headers, &account_id, "hf");
+    let model_key = super::soracloud_signed_mutation_rate_key(&account_id, "model");
+    let hf_key = super::soracloud_signed_mutation_rate_key(&account_id, "hf");
     assert_ne!(model_key, hf_key);
-    assert!(model_key.contains("origin:https://apps.sora.test"));
+    assert!(!model_key.contains("origin:"));
     assert!(hf_key.contains("soracloud:hf:account:"));
 }
 #[tokio::test]

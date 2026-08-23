@@ -445,6 +445,16 @@ fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families(
             "live ProposalIntent admission omitted typed carrier step {required}"
         );
     }
+    let apply_rejection = live_install
+        .find("candidate.work_class == LifecycleWorkClass::Apply")
+        .expect("generic live WAL admission rejects typed Apply work");
+    let generic_conversion = live_install
+        .find("ConcreteLifecycleWork::from_authorized_exact")
+        .expect("non-Apply live WAL owners retain generic conversion");
+    assert!(
+        apply_rejection < generic_conversion,
+        "live Apply must fail before generic PendingAdapter conversion"
+    );
     let live_validate_install = production
         .split("fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork)")
         .nth(1)

@@ -2,23 +2,55 @@
 
 use super::ProductionLifecycleOwnerV1;
 
+/// Linear proof that owner-open installed one exact recovered Decision Apply row.
+///
+/// The complete registry/coordinator census mints this value with the row's
+/// actor-global ordinal. Pending-tip replay consumes it when joining inert WAL
+/// provenance directly to the canonical lifecycle Apply worker.
+#[must_use = "the recovered Apply carrier permit must enter pending-tip installation"]
+pub(in crate::sumeragi) struct RecoveredPendingKuraApplyCarrierPermitV1 {
+    lifecycle_ordinal: u128,
+    _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
+}
+struct RecoveredPendingKuraApplyCarrierPermitLinearityV1;
+impl Drop for RecoveredPendingKuraApplyCarrierPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl RecoveredPendingKuraApplyCarrierPermitV1 {
+    /// Consume the owner proof and return its exact Ready ordinal.
+    pub(in crate::sumeragi) fn consume_for_executor(self) -> u128 {
+        self.lifecycle_ordinal
+    }
+}
+
 impl ProductionLifecycleOwnerV1 {
-    /// Attach the exact interrupted-tip replay to the storage-only adapter startup.
+    /// Attach interrupted-tip provenance to the recovered Decision Apply startup.
     ///
-    /// Only the pending-Kura authenticated factory calls this after the normal
-    /// owner constructor proved there is no live recovered WAL carrier. The
-    /// replay remains nested in the adapter startup and cannot become an
-    /// independently scheduled Decision-Fetch row.
+    /// Only the pending-Kura authenticated factory calls this after owner-open
+    /// reconstructed the exact Ready Apply carrier from the move-only Decision
+    /// Fetch. The inert replay remains nested in adapter startup and cannot
+    /// become independently scheduled lifecycle work.
     pub(in crate::sumeragi) fn with_pending_kura_apply_replay(
         mut self,
         replay: crate::sumeragi::v2::RecoveredPendingKuraApplyReplayV1,
-    ) -> Self {
+    ) -> Result<Self, &'static str> {
+        let lifecycle_ordinal = self
+            .registry
+            .exact_recovered_decision_apply_ready_ordinal(&self.coordinator)
+            .ok_or(
+                "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier",
+            )?;
+        let apply_carrier = RecoveredPendingKuraApplyCarrierPermitV1 {
+            lifecycle_ordinal,
+            _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1,
+        };
+        let replay = replay.bind_recovered_apply_carrier(apply_carrier);
         let startup = self
             .adapter_startup
             .take()
-            .expect("storage-only pending Kura owner retains adapter startup");
+            .expect("recovered Apply pending Kura owner retains adapter startup");
         self.adapter_startup = Some(startup.with_pending_kura_apply_replay(replay));
-        self
+        Ok(self)
     }
 }
 
@@ -80,6 +112,13 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                 );
             let recovery_registry_impl =
                 include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs")
+                    .replacen(
+                        "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs\");\n",
+                        include_str!(
+                            "v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs"
+                        ),
+                        1,
+                    )
                     .replacen(
                         "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
                         include_str!("v2_lifecycle_work_registry_validate_completion_impl.rs"),
@@ -173,6 +212,11 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
                 .replacen(
                     "include!(\"v2_ready_durable_validate_adapter_preview.rs\");\n",
                     include_str!("v2_ready_durable_validate_adapter_preview.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_recovered_lifecycle_sign_completion.rs\");\n",
+                    include_str!("v2_recovered_lifecycle_sign_completion.rs"),
                     1,
                 )
                 .replacen(
@@ -287,6 +331,7 @@ enum SourceId {
     CertifiedServeStore,
     ConcreteAdmission,
     Coordinator,
+    CoordinatorSupport,
     Effects,
     FairIngress,
     IngressPosition,
@@ -296,7 +341,9 @@ enum SourceId {
     Ledger,
     LifecycleOpen,
     LifecycleRecovery,
-    PendingKura,
+    PendingKuraRecovery,
+    PendingLifecycle,
+    Preactivation,
     Projection,
     Registry,
     RegistryRecovery,
@@ -330,6 +377,7 @@ impl SourceId {
             "certified_serve_store" => Self::CertifiedServeStore,
             "concrete_admission" => Self::ConcreteAdmission,
             "coordinator" => Self::Coordinator,
+            "coordinator_support" => Self::CoordinatorSupport,
             "effects" => Self::Effects,
             "fair_ingress" => Self::FairIngress,
             "ingress_position" => Self::IngressPosition,
@@ -339,7 +387,9 @@ impl SourceId {
             "ledger" => Self::Ledger,
             "lifecycle_open" => Self::LifecycleOpen,
             "lifecycle_recovery" => Self::LifecycleRecovery,
-            "pending_kura" => Self::PendingKura,
+            "pending_kura_recovery" => Self::PendingKuraRecovery,
+            "pending_lifecycle" => Self::PendingLifecycle,
+            "preactivation" => Self::Preactivation,
             "projection" => Self::Projection,
             "registry" => Self::Registry,
             "registry_recovery" => Self::RegistryRecovery,
@@ -385,6 +435,9 @@ fn source(id: SourceId) -> String {
             include_str!("v2_lifecycle_concrete_admission.rs").to_owned()
         }
         SourceId::Coordinator => include_str!("v2_lifecycle_coordinator.rs").to_owned(),
+        SourceId::CoordinatorSupport => {
+            include_str!("v2_lifecycle_coordinator_support.rs").to_owned()
+        }
         SourceId::Effects => reviewed_v2_effects_source_for_test().to_owned(),
         SourceId::FairIngress => include_str!("mod.rs").to_owned(),
         SourceId::IngressPosition => include_str!("v2_lifecycle_ingress_position.rs").to_owned(),
@@ -400,7 +453,9 @@ fn source(id: SourceId) -> String {
             1,
         ),
         SourceId::LifecycleRecovery => include_str!("v2_lifecycle_recovery.rs").to_owned(),
-        SourceId::PendingKura => include_str!("v2_pending_kura_recovery.rs").to_owned(),
+        SourceId::PendingKuraRecovery => include_str!("v2_pending_kura_recovery.rs").to_owned(),
+        SourceId::PendingLifecycle => include_str!("v2_lifecycle_pending_kura.rs").to_owned(),
+        SourceId::Preactivation => include_str!("v2_lifecycle_preactivation.rs").to_owned(),
         SourceId::Projection => include_str!("v2_lifecycle_projection.rs").to_owned(),
         SourceId::Registry => reviewed_lifecycle_work_registry_source_for_test().to_owned(),
         SourceId::RegistryRecovery => {
@@ -408,6 +463,11 @@ fn source(id: SourceId) -> String {
         }
         SourceId::RegistryRecoveryImpl => include_str!(
             "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+        )
+        .replacen(
+            "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs\");\n",
+            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs"),
+            1,
         )
         .replacen(
             "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
@@ -692,7 +752,7 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 52 {
+    if current.is_some() || cases.len() != 50 {
         return Err(format!(
             "source contract asset must contain exactly 50 closed cases"
         ));
@@ -825,7 +885,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 52, "source contract inventory drifted");
+    assert_eq!(ids.len(), 50, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

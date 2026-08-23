@@ -5071,6 +5071,46 @@ impl FairV2Ingress {
     pub(crate) fn close(&self) {
         self.state.lock().open = false;
     }
+    /// Prove that the closed physical ingress has no queued or in-flight owner.
+    pub(crate) fn ensure_closed_drained_cut(&self) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
+        let _publication_guard = self.producer_publication_lock.lock();
+        let state = self.state.lock();
+        if state.open {
+            return Err("finalized ingress cut remained open".to_owned());
+        }
+        let has_live_leader_wire_owner = state.leader_wire_lifecycles.values().any(|record| {
+            matches!(
+                record.status,
+                FairV2IngressLeaderWireStatus::Ingress | FairV2IngressLeaderWireStatus::Runtime
+            )
+        });
+        let has_lane_physical_ownership = state.lanes.values().any(|lane| {
+            !lane.entries.is_empty()
+                || !lane.pending_wire.is_empty()
+                || lane.progress_len != 0
+                || lane.certified_fence_escape_len != 0
+                || lane.timeout_vote_len != 0
+                || lane.transport_completion_len != 0
+                || lane.bytes != 0
+                || lane.certified_fence_escape_bytes != 0
+                || lane.timeout_vote_bytes != 0
+                || lane.transport_completion_bytes != 0
+        });
+        if state.len != 0
+            || state.bytes != 0
+            || state.nonempty_since.is_some()
+            || state.last_service_attempt_at.is_some()
+            || !state.ready.is_empty()
+            || !state.pending_wire_owners.is_empty()
+            || has_lane_physical_ownership
+            || has_live_leader_wire_owner
+        {
+            return Err("finalized ingress cut retained physical ownership".to_owned());
+        }
+        self.debug_assert_consistent(&state);
+        Ok(())
+    }
     fn mark_leader_wire_runtime_locked(
         state: &mut FairV2IngressState,
         token: &FairV2IngressLeaderWireToken,

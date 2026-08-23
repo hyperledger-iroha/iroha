@@ -1538,6 +1538,297 @@ fn canonical_cleanup_later_carrier_conflict_preserves_every_earlier_live_owner()
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 }
 #[test]
+fn canonical_cleanup_later_replica_conflict_preserves_every_ordinary_owner() {
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let producer = Queue::test(config_factory(), &time_source);
+    let replica = Queue::test(config_factory(), &time_source);
+    let producer_dir = tempdir().expect("producer tempdir");
+    let replica_dir = tempdir().expect("replica tempdir");
+    install_globally_certified_test_reservation_journals(&producer, &producer_dir);
+    install_globally_certified_test_reservation_journals(&replica, &replica_dir);
+
+    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first_hash = first.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&producer, &state, &producer_dir, first.clone());
+    push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, first);
+    time_handle.advance(Duration::from_millis(1));
+    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second_hash = second.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(
+        &producer,
+        &state,
+        &producer_dir,
+        second.clone(),
+    );
+    push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, second);
+
+    let first_key = *producer
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"replica-preflight-owner-a",
+                b"replica-preflight-proposal-a",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve first producer carrier group")[0]
+        .key();
+    let mut second_scope = lane_reservation_scope(
+        &state,
+        b"replica-preflight-owner-b",
+        b"replica-preflight-proposal-b",
+    );
+    second_scope.lane_block_height = 2;
+    let second_key = *producer
+        .reserve_transactions_for_lane(&state, second_scope, nonzero!(1_usize))
+        .expect("reserve second producer carrier group")[0]
+        .key();
+    assert_eq!(first_key.entrypoint_hash, first_hash);
+    assert_eq!(second_key.entrypoint_hash, second_hash);
+
+    let hashes = [first_hash, second_hash];
+    let fifo_before = replica.fifo_snapshot_for_test();
+    let active_before = replica.active_len();
+    let queued_before = replica.queued_len();
+    let replica_plan_path = replica_dir
+        .path()
+        .join("queue-plans-for-reservations.norito");
+    let journal_before = std::fs::read(&replica_plan_path).expect("read replica plan journal");
+    #[cfg(feature = "telemetry")]
+    let teu_before = hashes
+        .iter()
+        .map(|hash| {
+            let info = *replica
+                .tx_teu
+                .get(hash)
+                .expect("replica transaction must have TEU identity")
+                .value();
+            (info.lane_id, info.dataspace_id, info.teu)
+        })
+        .collect::<Vec<_>>();
+    #[cfg(feature = "telemetry")]
+    let teu_aggregate_before = (
+        replica
+            .lane_teu_pending
+            .iter()
+            .map(|entry| entry.value().teu)
+            .sum::<u64>(),
+        replica
+            .lane_teu_pending
+            .iter()
+            .map(|entry| entry.value().tx_count)
+            .sum::<usize>(),
+        replica
+            .dataspace_teu_pending
+            .iter()
+            .map(|entry| entry.value().teu)
+            .sum::<u64>(),
+        replica
+            .dataspace_teu_pending
+            .iter()
+            .map(|entry| entry.value().tx_count)
+            .sum::<usize>(),
+    );
+
+    let mut conflicting_later = second_key;
+    conflicting_later.routing_plan_digest =
+        Hash::new(b"later replica changed its authenticated routing plan");
+    let error = replica
+        .commit_prepared_lane_reservation_carriers(
+            vec![
+                vec![prepared_canonical_cleanup_group(vec![first_key])],
+                vec![prepared_canonical_cleanup_group(vec![conflicting_later])],
+            ],
+            2,
+        )
+        .expect_err("a later replica conflict must reject the complete cleanup set");
+    assert!(matches!(
+        error,
+        LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, .. }
+            if hash == second_hash
+    ));
+    assert_eq!(
+        std::fs::read(&replica_plan_path).expect("reread replica plan journal"),
+        journal_before,
+        "a later replica conflict must precede every durable QueuePlan tombstone",
+    );
+    assert_eq!(replica.fifo_snapshot_for_test(), fifo_before);
+    assert_eq!(replica.active_len(), active_before);
+    assert_eq!(replica.queued_len(), queued_before);
+    for hash in hashes {
+        assert!(replica.txs.contains_key(&hash));
+        assert!(replica.routing_plans.contains_key(&hash));
+        assert!(replica.durable_plan_claims.contains_key(&hash));
+        assert!(replica.fifo_order_by_hash.contains_key(&hash));
+        assert!(replica.tx_encoded_len.contains_key(&hash));
+        assert!(replica.tx_gas_cost.contains_key(&hash));
+        assert!(replica.tx_enqueued_at_ms.contains_key(&hash));
+        assert!(replica.queued_tx_enqueued_at_ms.contains_key(&hash));
+        assert!(replica.expiry_ring_members.contains_key(&hash));
+        assert!(!replica.removed_hashes.contains_key(&hash));
+    }
+    #[cfg(feature = "telemetry")]
+    {
+        let teu_after = hashes
+            .iter()
+            .map(|hash| {
+                let info = *replica
+                    .tx_teu
+                    .get(hash)
+                    .expect("rejected cleanup must retain replica TEU identity")
+                    .value();
+                (info.lane_id, info.dataspace_id, info.teu)
+            })
+            .collect::<Vec<_>>();
+        let teu_aggregate_after = (
+            replica
+                .lane_teu_pending
+                .iter()
+                .map(|entry| entry.value().teu)
+                .sum::<u64>(),
+            replica
+                .lane_teu_pending
+                .iter()
+                .map(|entry| entry.value().tx_count)
+                .sum::<usize>(),
+            replica
+                .dataspace_teu_pending
+                .iter()
+                .map(|entry| entry.value().teu)
+                .sum::<u64>(),
+            replica
+                .dataspace_teu_pending
+                .iter()
+                .map(|entry| entry.value().tx_count)
+                .sum::<usize>(),
+        );
+        assert_eq!(teu_after, teu_before);
+        assert_eq!(teu_aggregate_after, teu_aggregate_before);
+    }
+}
+#[test]
+fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_group() {
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let producer = Queue::test(config_factory(), &time_source);
+    let replica = Arc::new(Queue::test(config_factory(), &time_source));
+    let producer_dir = tempdir().expect("producer tempdir");
+    let replica_dir = tempdir().expect("replica tempdir");
+    install_globally_certified_test_reservation_journals(&producer, &producer_dir);
+    install_globally_certified_test_reservation_journals(&replica, &replica_dir);
+
+    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first_hash = first.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&producer, &state, &producer_dir, first.clone());
+    push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, first);
+    time_handle.advance(Duration::from_millis(1));
+    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second_hash = second.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(
+        &producer,
+        &state,
+        &producer_dir,
+        second.clone(),
+    );
+    push_globally_bound_lane_reservation_candidate(&replica, &state, &replica_dir, second);
+
+    let keys = producer
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(&state, b"atomic-replica-owner", b"atomic-replica-proposal"),
+            nonzero!(2_usize),
+        )
+        .expect("reserve exact producer group")
+        .iter()
+        .map(|reserved| *reserved.key())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys.iter()
+            .map(|key| key.entrypoint_hash)
+            .collect::<Vec<_>>(),
+        vec![first_hash, second_hash],
+    );
+
+    let (selected, global_selection) = replica
+        .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
+        .expect("acquire the replica's process-local global selection fence");
+    assert_eq!(
+        selected
+            .iter()
+            .map(|transaction| transaction.hash_as_entrypoint())
+            .collect::<Vec<_>>(),
+        vec![first_hash, second_hash],
+    );
+
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block(
+            [first_hash, second_hash].into_iter().collect(),
+            nonzero!(1_usize),
+        );
+        transactions
+            .commit()
+            .expect("publish the committed carrier transaction identities");
+    }
+    replica.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    #[cfg(feature = "telemetry")]
+    for hash in [first_hash, second_hash] {
+        assert!(
+            replica.tx_teu.contains_key(&hash),
+            "committed replica TEU must remain until exact canonical Queue cleanup",
+        );
+    }
+
+    let conflict = replica
+        .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(
+            keys.clone(),
+        )])
+        .expect_err("a live global selection lease must fence canonical replica cleanup");
+    assert!(matches!(
+        conflict,
+        LaneQueueReservationError::Conflict { hash } if hash == first_hash
+    ));
+    drop(global_selection);
+
+    let result = replica
+        .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(
+            keys.clone(),
+        )])
+        .expect("consume the exact ordinary replica group");
+    let (finalized, terminal_evidence) = result.into_parts();
+    assert_eq!(
+        finalized, 0,
+        "replica cleanup must not claim a producer reservation finalization"
+    );
+    assert_eq!(terminal_evidence.len(), 1);
+    for hash in [first_hash, second_hash] {
+        assert!(!replica.txs.contains_key(&hash));
+        assert!(!replica.routing_plans.contains_key(&hash));
+        assert!(!replica.durable_plan_claims.contains_key(&hash));
+        assert!(!replica.fifo_order_by_hash.contains_key(&hash));
+        assert!(!replica.tx_encoded_len.contains_key(&hash));
+        assert!(!replica.tx_gas_cost.contains_key(&hash));
+        assert!(!replica.tx_enqueued_at_ms.contains_key(&hash));
+        assert!(!replica.queued_tx_enqueued_at_ms.contains_key(&hash));
+        assert!(!replica.expiry_ring_members.contains_key(&hash));
+        assert!(!replica.removed_hashes.contains_key(&hash));
+        #[cfg(feature = "telemetry")]
+        assert!(!replica.tx_teu.contains_key(&hash));
+    }
+    assert!(replica.fifo_snapshot_for_test().is_empty());
+    assert_eq!(replica.active_len(), 0);
+    assert_eq!(replica.queued_len(), 0);
+
+    let retry = replica
+        .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(keys)])
+        .expect("retry exact already-terminal replica cleanup");
+    let (retry_finalized, retry_evidence) = retry.into_parts();
+    assert_eq!(retry_finalized, 0);
+    assert_eq!(retry_evidence.len(), 1);
+}
+#[test]
 fn finalized_canonical_group_rejects_dangling_queue_owners_and_metadata() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
@@ -2687,6 +2978,310 @@ fn committing_reservation_owned_transaction_does_not_create_fifo_tombstone() {
         queue.removed_hashes.is_empty(),
         "a reservation-owned hash has no stale FIFO cell and must not leave a tombstone"
     );
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn nexus_revalidation_preserves_committed_live_reservation_teu_until_terminal_cleanup() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"committed-revalidation-owner",
+                b"committed-revalidation-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve transaction before committed Nexus revalidation")[0]
+        .key();
+    assert!(queue.tx_teu.contains_key(&hash));
+
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("publish committed transaction identity");
+    }
+    queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    assert_eq!(
+        queue.live_lane_reservations(),
+        vec![key],
+        "post-WSV Nexus revalidation must preserve the exact producer reservation owner",
+    );
+    assert!(
+        !queue.global_selection_owners.lock().contains_key(&hash),
+        "the committed producer candidate must not regain an ordinary selection owner",
+    );
+    assert!(
+        queue.fifo_order_by_hash.contains_key(&hash),
+        "the lane-owned producer candidate must retain its durable FIFO identity",
+    );
+    assert!(
+        queue.fifo_snapshot_for_test().is_empty(),
+        "the committed producer candidate must remain absent from the physical FIFO",
+    );
+    assert!(
+        !queue.removed_hashes.contains_key(&hash),
+        "the reservation-owned producer candidate must not gain a lazy FIFO tombstone",
+    );
+    assert!(
+        !queue.queued_tx_enqueued_at_ms.contains_key(&hash),
+        "the reservation-owned producer candidate must not regain FIFO telemetry ownership",
+    );
+    assert!(
+        queue.tx_teu.contains_key(&hash),
+        "post-WSV Nexus revalidation must retain telemetry ownership until canonical Queue cleanup",
+    );
+    let teu = *queue
+        .tx_teu
+        .get(&hash)
+        .expect("revalidated reservation TEU identity")
+        .value();
+    assert_eq!(
+        queue
+            .lane_teu_pending
+            .get(&teu.lane_id)
+            .map(|pending| (pending.teu, pending.tx_count)),
+        Some((teu.teu, 1)),
+        "TEU revalidation must not double-count the retained reservation owner",
+    );
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation_group(&[key])
+            .expect("complete canonical Queue cleanup after Nexus revalidation"),
+        1,
+    );
+    assert!(queue.live_lane_reservations().is_empty());
+    assert!(!queue.txs.contains_key(&hash));
+    assert!(!queue.routing_plans.contains_key(&hash));
+    assert!(!queue.durable_plan_claims.contains_key(&hash));
+    assert!(!queue.fifo_order_by_hash.contains_key(&hash));
+    assert!(!queue.removed_hashes.contains_key(&hash));
+    assert!(!queue.tx_encoded_len.contains_key(&hash));
+    assert!(!queue.tx_gas_cost.contains_key(&hash));
+    assert!(!queue.tx_enqueued_at_ms.contains_key(&hash));
+    assert!(!queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+    assert!(!queue.expiry_ring_members.contains_key(&hash));
+    assert!(!queue.tx_teu.contains_key(&hash));
+    assert!(queue.fifo_snapshot_for_test().is_empty());
+}
+#[cfg(feature = "telemetry")]
+#[test]
+fn nexus_revalidation_preserves_commit_barrier_teu_until_resumed_cleanup() {
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let first = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let first_hash = first.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, first);
+    time_handle.advance(Duration::from_millis(1));
+    let second = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let second_hash = second.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, second);
+    let keys = queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"commit-barrier-revalidation-owner",
+                b"commit-barrier-revalidation-proposal",
+            ),
+            nonzero!(2_usize),
+        )
+        .expect("reserve two-member revalidation group")
+        .iter()
+        .map(|reserved| *reserved.key())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        queue
+            .commit_lane_reservation_group_prefix_for_test(&keys, 1)
+            .expect("persist one reservation Commit prefix"),
+        1,
+    );
+    assert!(queue.lane_reservation_commit_barriers().contains(&keys[0]));
+    assert_eq!(queue.live_lane_reservations(), vec![keys[1]]);
+
+    {
+        let mut transactions = state.transactions.block();
+        transactions.insert_block(
+            [first_hash, second_hash].into_iter().collect(),
+            nonzero!(1_usize),
+        );
+        transactions
+            .commit()
+            .expect("publish committed group transaction identities");
+    }
+    queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
+    for hash in [first_hash, second_hash] {
+        assert!(
+            queue.tx_teu.contains_key(&hash),
+            "Nexus revalidation must retain TEU for both Commit-barrier and live reservation owners",
+        );
+    }
+    assert!(queue.lane_reservation_commit_barriers().contains(&keys[0]));
+    assert_eq!(queue.live_lane_reservations(), vec![keys[1]]);
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation_group(&keys)
+            .expect("resume exact canonical cleanup from Commit prefix"),
+        1,
+        "only the still-live suffix is newly committed",
+    );
+    assert!(queue.lane_reservation_commit_barriers().is_empty());
+    assert!(queue.live_lane_reservations().is_empty());
+    for hash in [first_hash, second_hash] {
+        assert!(!queue.tx_teu.contains_key(&hash));
+        assert!(!queue.txs.contains_key(&hash));
+    }
+}
+#[cfg(feature = "telemetry")]
+#[test]
+fn nexus_revalidation_preserves_teu_during_reservation_fsync_window() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let reached = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    queue
+        .lane_reservation_journal
+        .lock()
+        .as_mut()
+        .expect("installed reservation journal")
+        .install_append_handoff(Arc::clone(&reached), Arc::clone(&resume));
+
+    thread::scope(|scope| {
+        let reservation_queue = Arc::clone(&queue);
+        let reservation_state = &state;
+        let reservation = scope.spawn(move || {
+            reservation_queue.reserve_transactions_for_lane(
+                reservation_state,
+                lane_reservation_scope(
+                    reservation_state,
+                    b"revalidation-fsync-owner",
+                    b"revalidation-fsync-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+        });
+        reached.wait();
+        assert!(queue.durability_transition_active(&hash));
+        assert!(queue.live_lane_reservations().is_empty());
+
+        let router = queue.router.read().clone();
+        let lane_catalog = queue.lane_catalog.read().clone();
+        let dataspace_catalog = queue.dataspace_catalog.read().clone();
+        queue.revalidate_pending_transactions_with_state(
+            &router,
+            &state,
+            &lane_catalog,
+            &dataspace_catalog,
+            true,
+        );
+        assert!(
+            queue.tx_teu.contains_key(&hash),
+            "Nexus revalidation must not clear TEU while durable reservation publication is in flight",
+        );
+
+        resume.wait();
+        let reserved = reservation
+            .join()
+            .expect("join reservation thread")
+            .expect("publish reservation after revalidation");
+        assert_eq!(reserved.len(), 1);
+        assert_eq!(reserved[0].as_accepted().hash_as_entrypoint(), hash);
+        assert_eq!(queue.live_lane_reservations(), vec![*reserved[0].key()]);
+        assert!(queue.tx_teu.contains_key(&hash));
+    });
+}
+#[cfg(feature = "telemetry")]
+#[test]
+fn nexus_revalidation_observes_reservation_published_after_teu_snapshot() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let reached = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    *queue.nexus_revalidation_snapshot_handoff.lock() = Some(QueueDurabilityObserverLockHandoff {
+        reached: Arc::clone(&reached),
+        resume: Arc::clone(&resume),
+    });
+
+    thread::scope(|scope| {
+        let observer_queue = Arc::clone(&queue);
+        let observer_state = &state;
+        let observer = scope.spawn(move || {
+            let router = observer_queue.router.read().clone();
+            let lane_catalog = observer_queue.lane_catalog.read().clone();
+            let dataspace_catalog = observer_queue.dataspace_catalog.read().clone();
+            observer_queue.revalidate_pending_transactions_with_state(
+                &router,
+                observer_state,
+                &lane_catalog,
+                &dataspace_catalog,
+                true,
+            );
+        });
+        reached.wait();
+
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(&state, b"post-snapshot-owner", b"post-snapshot-proposal"),
+                nonzero!(1_usize),
+            )
+            .expect("publish reservation after the revalidation snapshot");
+        let key = *reserved[0].key();
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("publish committed transaction identity");
+        }
+
+        resume.wait();
+        observer.join().expect("join Nexus revalidation observer");
+        assert_eq!(queue.live_lane_reservations(), vec![key]);
+        assert!(
+            queue.tx_teu.contains_key(&hash),
+            "the current live owner must supersede the stale pre-reservation snapshot",
+        );
+        assert_eq!(
+            queue
+                .commit_lane_reservation_group(&[key])
+                .expect("terminal cleanup after post-snapshot reservation"),
+            1,
+        );
+        assert!(!queue.tx_teu.contains_key(&hash));
+    });
 }
 #[test]
 fn lane_reservation_drains_committed_physical_fifo_tombstone() {

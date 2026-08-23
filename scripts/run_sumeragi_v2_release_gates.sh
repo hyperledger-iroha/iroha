@@ -2470,7 +2470,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
   sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
-  sumeragi::v2_runner::tests::drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle
+  sumeragi::v2_runner::tests::drain_decided_lane_recovery_ingress_authorizes_terminal_current_serve
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner

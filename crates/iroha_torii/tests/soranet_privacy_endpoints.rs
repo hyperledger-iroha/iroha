@@ -59,7 +59,10 @@ async fn privacy_event_endpoint_rejects_when_disabled() {
 #[tokio::test]
 async fn privacy_event_endpoint_accepts_payload() {
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
-    let timestamp = 1_720_000_123;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after UNIX epoch")
+        .as_secs();
     let event = SoranetPrivacyEventV1 {
         timestamp_unix: timestamp,
         mode: SoranetPrivacyModeV1::Entry,
@@ -90,6 +93,38 @@ async fn privacy_event_endpoint_accepts_payload() {
         body.get("bucket_start_unix").and_then(Value::as_u64),
         Some(bucket_start)
     );
+}
+#[tokio::test]
+async fn privacy_event_endpoint_rejects_out_of_window_timestamp() {
+    let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
+    let config = telemetry
+        .telemetry()
+        .expect("test telemetry")
+        .soranet_privacy()
+        .config();
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after UNIX epoch")
+        .as_secs();
+    let future_timestamp = now_unix.saturating_add(config.bucket_secs.saturating_mul(2));
+    let dto = RecordSoranetPrivacyEventDto {
+        event: SoranetPrivacyEventV1 {
+            timestamp_unix: future_timestamp,
+            mode: SoranetPrivacyModeV1::Entry,
+            kind: SoranetPrivacyEventKindV1::HandshakeSuccess(
+                SoranetPrivacyEventHandshakeSuccessV1 {
+                    rtt_ms: None,
+                    active_circuits_after: None,
+                },
+            ),
+        },
+        source: None,
+    };
+    let error = match handle_post_soranet_privacy_event(telemetry, NoritoJson(dto)).await {
+        Ok(_) => panic!("future privacy event must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
 }
 fn make_share(
     collector_id: u16,
@@ -127,6 +162,7 @@ async fn privacy_share_endpoint_combines_shares() {
     let mode = SoranetPrivacyModeV1::Middle;
     let share_a = make_share(1, bucket_start, bucket_secs, mode, handshake_share);
     let share_b = make_share(2, bucket_start, bucket_secs, mode, handshake_share);
+    let replay = share_a.clone();
     for (share, fwd) in [
         (share_a, Some("collector-a".to_string())),
         (share_b, Some("collector-b".to_string())),
@@ -141,6 +177,22 @@ async fn privacy_share_endpoint_combines_shares() {
             .into_response();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
+    let replay_error = match handle_post_soranet_privacy_share(
+        telemetry.clone(),
+        NoritoJson(RecordSoranetPrivacyShareDto {
+            share: replay,
+            forwarded_by: None,
+        }),
+    )
+    .await
+    {
+        Ok(_) => panic!("finalized collector bucket replay must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        replay_error.into_response().status(),
+        StatusCode::BAD_REQUEST
+    );
     let metrics = telemetry.metrics().await;
     let bucket_label = bucket_start.to_string();
     let suppressed = metrics

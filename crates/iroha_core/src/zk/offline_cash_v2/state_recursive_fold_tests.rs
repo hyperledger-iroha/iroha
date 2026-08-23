@@ -141,7 +141,7 @@ fn exact_parity_local_input_order_and_sources_are_frozen() {
             StateRecursiveFoldInputSourceV2::CurrentProofAccumulator,
             StateRecursiveFoldInputSourceV2::PriorLineageAtWord93,
             StateRecursiveFoldInputSourceV2::CurrentProofAccumulator,
-            StateRecursiveFoldInputSourceV2::PriorLineageAtWord93,
+            StateRecursiveFoldInputSourceV2::GuardPriorLineageAtWord192,
         ]
     );
 
@@ -419,10 +419,110 @@ fn source_guards_keep_the_candidate_privately_declared_sealed_and_non_live() {
     assert!(source.contains("enum StateRecursiveCircuitAdapterV2 {}"));
     assert!(source.contains("enum StateRecursiveArtifactAdapterV2 {}"));
     assert!(source.contains("enum StateRecursiveProductionAdapterV2 {}"));
+    assert!(source.contains("GuardBundle ABI word 192"));
+    assert!(source.contains("fn new(\n        role: StateRecursiveFoldInputRoleV2"));
+    assert!(
+        !source.contains("pub(super) const fn new(\n        role: StateRecursiveFoldInputRoleV2")
+    );
     assert!(!source.contains("impl Circuit for"));
     assert!(!source.contains("verify_proof("));
     assert!(!source.contains("VerifierIPA"));
     assert!(!source.contains("STATE_RECURSIVE_FOLD_CIRCUIT_IMPLEMENTED_V2: bool = true"));
     assert!(!source.contains("STATE_RECURSIVE_FOLD_BACKEND_AVAILABLE_V2: bool = true"));
     assert!(!source.contains("STATE_RECURSIVE_FOLD_RELEASE_ELIGIBLE_V2: bool = true"));
+}
+
+#[test]
+fn provenance_bound_input_view_is_borrowed_and_position_tagged() {
+    let eq = accumulator(StateRecursiveFoldParityV2::Eq);
+    let view =
+        StateRecursiveFoldInputRefV2::new(StateRecursiveFoldInputRoleV2::Parent0Current, &eq);
+    assert_eq!(view.role(), StateRecursiveFoldInputRoleV2::Parent0Current);
+    assert_eq!(view.accumulator(), &eq);
+    assert_eq!(view.accumulator().parity(), StateRecursiveFoldParityV2::Eq);
+}
+
+#[test]
+fn six_input_owner_consumes_exact_p0_p1_and_guard_types() {
+    let _assembly_signature: fn(
+        ProvenanceBoundStateParent0InputsV2,
+        ProvenanceBoundStateParent1InputsV2,
+        ProvenanceBoundStateGuardInputsV2,
+    ) -> ProvenanceBoundStateSixInputSetV2 = assemble_provenance_bound_state_six_input_set_v2;
+
+    let source = include_str!("state_recursive_fold.rs");
+    assert!(source.contains("pub(super) struct ProvenanceBoundStateSixInputSetV2"));
+    assert!(source.contains("parent_0: ProvenanceBoundStateParent0InputsV2"));
+    assert!(source.contains("parent_1: ProvenanceBoundStateParent1InputsV2"));
+    assert!(source.contains("guard: ProvenanceBoundStateGuardInputsV2"));
+    assert!(source.contains("remains a cloneable codec-only value"));
+    assert!(source.contains("cloning\n/// it conveys no proof authority"));
+    assert!(source.contains("whose fields and constructors remain private"));
+    assert!(source.contains(
+        ") -> [StateRecursiveFoldInputRefV2<'_>; STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2]"
+    ));
+    assert!(!source.contains("impl Clone for ProvenanceBoundStateSixInputSetV2"));
+    assert!(!source.contains("into_six_input_parts"));
+}
+
+#[test]
+fn provenance_bound_eq_and_ep_views_freeze_the_same_exact_six_role_order() {
+    fn assert_role_order(source: &str) {
+        let mut cursor = 0;
+        for role in [
+            "StateRecursiveFoldInputRoleV2::Parent0Current",
+            "StateRecursiveFoldInputRoleV2::Parent0Prior",
+            "StateRecursiveFoldInputRoleV2::Parent1Current",
+            "StateRecursiveFoldInputRoleV2::Parent1Prior",
+            "StateRecursiveFoldInputRoleV2::GuardCurrent",
+            "StateRecursiveFoldInputRoleV2::GuardPrior",
+        ] {
+            let relative = source[cursor..]
+                .find(role)
+                .unwrap_or_else(|| panic!("missing ordered role {role}"));
+            cursor += relative + role.len();
+        }
+    }
+
+    let source = include_str!("state_recursive_fold.rs");
+    let eq_start = source
+        .find("pub(super) fn eq_inputs(\n        &self,\n    ) -> [StateRecursiveFoldInputRefV2")
+        .expect("borrowed Eq view exists");
+    let ep_start = source[eq_start..]
+        .find("pub(super) fn ep_inputs(\n        &self,\n    ) -> [StateRecursiveFoldInputRefV2")
+        .map(|offset| eq_start + offset)
+        .expect("borrowed Ep view exists");
+    let assembly_start = source[ep_start..]
+        .find("pub(super) fn assemble_provenance_bound_state_six_input_set_v2")
+        .map(|offset| ep_start + offset)
+        .expect("consuming assembly function exists");
+    let eq_body = &source[eq_start..ep_start];
+    let ep_body = &source[ep_start..assembly_start];
+
+    assert_role_order(eq_body);
+    assert_role_order(ep_body);
+    assert_eq!(
+        eq_body
+            .matches("StateRecursiveFoldInputRefV2::new(")
+            .count(),
+        6
+    );
+    assert_eq!(
+        ep_body
+            .matches("StateRecursiveFoldInputRefV2::new(")
+            .count(),
+        6
+    );
+    assert!(eq_body.contains("self.parent_0.eq_current()"));
+    assert!(eq_body.contains("self.parent_0.eq_prior()"));
+    assert!(eq_body.contains("self.parent_1.eq_current()"));
+    assert!(eq_body.contains("self.parent_1.eq_prior()"));
+    assert!(eq_body.contains("self.guard.eq_inputs()[0].accumulator()"));
+    assert!(eq_body.contains("self.guard.eq_inputs()[1].accumulator()"));
+    assert!(ep_body.contains("self.parent_0.ep_current()"));
+    assert!(ep_body.contains("self.parent_0.ep_prior()"));
+    assert!(ep_body.contains("self.parent_1.ep_current()"));
+    assert!(ep_body.contains("self.parent_1.ep_prior()"));
+    assert!(ep_body.contains("self.guard.ep_inputs()[0].accumulator()"));
+    assert!(ep_body.contains("self.guard.ep_inputs()[1].accumulator()"));
 }

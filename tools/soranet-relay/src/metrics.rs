@@ -24,6 +24,11 @@ fn store_f64(atom: &AtomicU64, value: f64) {
 fn load_f64(atom: &AtomicU64) -> f64 {
     f64::from_bits(atom.load(Ordering::Relaxed))
 }
+fn saturating_add(atom: &AtomicU64, value: u64) {
+    let _ = atom.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_add(value))
+    });
+}
 /// Key used for per-issuer token verification outcomes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TokenOutcomeKey {
@@ -435,7 +440,7 @@ impl Metrics {
         *bytes = Some(byte_label.trim().to_owned());
     }
     pub fn record_vpn_session(&self) {
-        self.vpn_sessions.fetch_add(1, Ordering::Relaxed);
+        saturating_add(&self.vpn_sessions, 1);
     }
     pub fn record_vpn_frame_ingress(&self, is_cover: bool) {
         self.record_vpn_frame_ingress_count(1, is_cover);
@@ -447,95 +452,82 @@ impl Metrics {
         if frames == 0 {
             return;
         }
-        self.vpn_frames.fetch_add(frames, Ordering::Relaxed);
-        self.vpn_ingress_frames.fetch_add(frames, Ordering::Relaxed);
+        saturating_add(&self.vpn_frames, frames);
+        saturating_add(&self.vpn_ingress_frames, frames);
         if is_cover {
-            self.vpn_cover_frames.fetch_add(frames, Ordering::Relaxed);
-            self.vpn_cover_ingress_frames
-                .fetch_add(frames, Ordering::Relaxed);
+            saturating_add(&self.vpn_cover_frames, frames);
+            saturating_add(&self.vpn_cover_ingress_frames, frames);
         } else {
-            self.vpn_data_frames.fetch_add(frames, Ordering::Relaxed);
-            self.vpn_data_ingress_frames
-                .fetch_add(frames, Ordering::Relaxed);
+            saturating_add(&self.vpn_data_frames, frames);
+            saturating_add(&self.vpn_data_ingress_frames, frames);
         }
     }
     pub fn record_vpn_frame_egress_count(&self, frames: u64, is_cover: bool) {
         if frames == 0 {
             return;
         }
-        self.vpn_frames.fetch_add(frames, Ordering::Relaxed);
-        self.vpn_egress_frames.fetch_add(frames, Ordering::Relaxed);
+        saturating_add(&self.vpn_frames, frames);
+        saturating_add(&self.vpn_egress_frames, frames);
         if is_cover {
-            self.vpn_cover_frames.fetch_add(frames, Ordering::Relaxed);
-            self.vpn_cover_egress_frames
-                .fetch_add(frames, Ordering::Relaxed);
+            saturating_add(&self.vpn_cover_frames, frames);
+            saturating_add(&self.vpn_cover_egress_frames, frames);
         } else {
-            self.vpn_data_frames.fetch_add(frames, Ordering::Relaxed);
-            self.vpn_data_egress_frames
-                .fetch_add(frames, Ordering::Relaxed);
+            saturating_add(&self.vpn_data_frames, frames);
+            saturating_add(&self.vpn_data_egress_frames, frames);
         }
     }
     pub fn record_vpn_bytes(&self, bytes: u64) {
-        self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
+        saturating_add(&self.vpn_bytes, bytes);
     }
     pub fn record_vpn_ingress(&self, bytes: u64, is_cover: bool) {
-        self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        saturating_add(&self.vpn_bytes, bytes);
+        saturating_add(&self.vpn_ingress_bytes, bytes);
         if is_cover {
-            self.vpn_cover_bytes.fetch_add(bytes, Ordering::Relaxed);
-            self.vpn_cover_ingress_bytes
-                .fetch_add(bytes, Ordering::Relaxed);
+            saturating_add(&self.vpn_cover_bytes, bytes);
+            saturating_add(&self.vpn_cover_ingress_bytes, bytes);
         } else {
-            self.vpn_data_bytes.fetch_add(bytes, Ordering::Relaxed);
-            self.vpn_data_ingress_bytes
-                .fetch_add(bytes, Ordering::Relaxed);
+            saturating_add(&self.vpn_data_bytes, bytes);
+            saturating_add(&self.vpn_data_ingress_bytes, bytes);
         }
     }
     pub fn record_vpn_egress(&self, bytes: u64, is_cover: bool) {
-        self.vpn_bytes.fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_egress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        saturating_add(&self.vpn_bytes, bytes);
+        saturating_add(&self.vpn_egress_bytes, bytes);
         if is_cover {
-            self.vpn_cover_bytes.fetch_add(bytes, Ordering::Relaxed);
-            self.vpn_cover_egress_bytes
-                .fetch_add(bytes, Ordering::Relaxed);
+            saturating_add(&self.vpn_cover_bytes, bytes);
+            saturating_add(&self.vpn_cover_egress_bytes, bytes);
         } else {
-            self.vpn_data_bytes.fetch_add(bytes, Ordering::Relaxed);
-            self.vpn_data_egress_bytes
-                .fetch_add(bytes, Ordering::Relaxed);
+            saturating_add(&self.vpn_data_bytes, bytes);
+            saturating_add(&self.vpn_data_egress_bytes, bytes);
         }
     }
     pub fn record_vpn_control_ingress(&self, bytes: u64) {
         if bytes == 0 {
             return;
         }
-        self.vpn_control_bytes.fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_control_ingress_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_control_frames.fetch_add(1, Ordering::Relaxed);
-        self.vpn_control_ingress_frames
-            .fetch_add(1, Ordering::Relaxed);
+        saturating_add(&self.vpn_control_bytes, bytes);
+        saturating_add(&self.vpn_control_ingress_bytes, bytes);
+        saturating_add(&self.vpn_control_frames, 1);
+        saturating_add(&self.vpn_control_ingress_frames, 1);
     }
     pub fn record_vpn_control_egress(&self, bytes: u64) {
         if bytes == 0 {
             return;
         }
-        self.vpn_control_bytes.fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_control_egress_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
-        self.vpn_control_frames.fetch_add(1, Ordering::Relaxed);
-        self.vpn_control_egress_frames
-            .fetch_add(1, Ordering::Relaxed);
+        saturating_add(&self.vpn_control_bytes, bytes);
+        saturating_add(&self.vpn_control_egress_bytes, bytes);
+        saturating_add(&self.vpn_control_frames, 1);
+        saturating_add(&self.vpn_control_egress_frames, 1);
     }
     pub fn record_vpn_receipt(&self, receipt: &VpnSessionReceiptV1) {
-        self.vpn_session_receipts.fetch_add(1, Ordering::Relaxed);
-        self.vpn_receipt_ingress_bytes
-            .fetch_add(receipt.ingress_bytes, Ordering::Relaxed);
-        self.vpn_receipt_egress_bytes
-            .fetch_add(receipt.egress_bytes, Ordering::Relaxed);
-        self.vpn_receipt_cover_bytes
-            .fetch_add(receipt.cover_bytes, Ordering::Relaxed);
-        self.vpn_receipt_uptime_secs
-            .fetch_add(u64::from(receipt.uptime_secs), Ordering::Relaxed);
+        saturating_add(&self.vpn_session_receipts, 1);
+        saturating_add(&self.vpn_receipt_ingress_bytes, receipt.ingress_bytes);
+        saturating_add(&self.vpn_receipt_egress_bytes, receipt.egress_bytes);
+        saturating_add(&self.vpn_receipt_cover_bytes, receipt.cover_bytes);
+        saturating_add(
+            &self.vpn_receipt_uptime_secs,
+            u64::from(receipt.uptime_secs),
+        );
     }
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -1663,6 +1655,20 @@ mod tests {
         assert_eq!(2, snapshot.vpn_control_frames);
         assert_eq!(1, snapshot.vpn_control_ingress_frames);
         assert_eq!(1, snapshot.vpn_control_egress_frames);
+    }
+    #[test]
+    fn vpn_metrics_saturate_instead_of_wrapping() {
+        let metrics = Metrics::new();
+        metrics.record_vpn_bytes(u64::MAX);
+        metrics.record_vpn_bytes(1);
+        metrics.record_vpn_frame_ingress_count(u64::MAX, false);
+        metrics.record_vpn_frame_ingress(false);
+        let snapshot = metrics.snapshot();
+        assert_eq!(u64::MAX, snapshot.vpn_bytes);
+        assert_eq!(u64::MAX, snapshot.vpn_frames);
+        assert_eq!(u64::MAX, snapshot.vpn_ingress_frames);
+        assert_eq!(u64::MAX, snapshot.vpn_data_frames);
+        assert_eq!(u64::MAX, snapshot.vpn_data_ingress_frames);
     }
     #[test]
     fn render_prometheus_output() {

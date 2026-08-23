@@ -29,6 +29,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
@@ -48,7 +50,7 @@ use iroha_data_model::{
     state_path::StatePath,
     zk::BackendTag,
 };
-use mv::storage::StorageReadOnly as _;
+use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 #[cfg(all(
     unix,
@@ -136,6 +138,7 @@ const PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4: u64 = 512;
 /// Small authenticated objects retained in several catalog/verifier owners.
 const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
     + MAX_ATTESTATION_BYTES
+    + KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
     + 2 * KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
     + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
     as u64;
@@ -143,6 +146,7 @@ const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTE
 const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
     + MAX_POLICY_BYTES
     + MAX_ATTESTATION_BYTES
+    + KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
     + KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4
     + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
     as u64;
@@ -230,6 +234,7 @@ struct KagemushaCatalogSealedReleaseQualificationV1 {
     qualification_receipt_file_name: String,
     qualification_receipt_sha256: [u8; 32],
     qualified_candidate_sha256: [u8; 32],
+    internal_validation_receipt_sha256: [u8; 32],
     source_commit: String,
     source_tree_sha256: [u8; 32],
     reviewed_source_closure_descriptor_sha256: [u8; 32],
@@ -406,10 +411,6 @@ impl KagemushaCachedReleaseV4 {
     }
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleOpaqueVerifierV4 {
         self.resolved.verifier.as_ref()
-    }
-    pub(crate) fn issuance_active_at(&self, block_height: u64) -> bool {
-        let manifest = self.resolved.release().manifest();
-        block_height >= manifest.activation_height && block_height < manifest.withdrawal_height
     }
     fn activation_record(
         &self,
@@ -1656,6 +1657,7 @@ fn build_kagemusha_catalog_qualification_seal_v1(
                 KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.to_owned(),
             qualification_receipt_sha256: cached.qualification_receipt_sha256,
             qualified_candidate_sha256: cached.qualified_candidate_sha256,
+            internal_validation_receipt_sha256: manifest.internal_validation_receipt_sha256,
             source_commit: manifest.source_commit.clone(),
             source_tree_sha256: manifest.source_tree_sha256,
             reviewed_source_closure_descriptor_sha256: manifest
@@ -1771,6 +1773,7 @@ impl KagemushaCatalogQualificationSealV1 {
                     != KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4
                 || release.qualification_receipt_sha256 == [0; 32]
                 || release.qualified_candidate_sha256 == [0; 32]
+                || release.internal_validation_receipt_sha256 == [0; 32]
                 || release.source_commit.is_empty()
                 || release.source_tree_sha256 == [0; 32]
                 || release.reviewed_source_closure_descriptor_sha256 == [0; 32]
@@ -2408,6 +2411,7 @@ fn verify_exact_release_inventory_v4(
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4.to_owned(),
         KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1.to_owned(),
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1.to_owned(),
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1.to_owned(),
         KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4.to_owned(),
         PROMOTION_RECORD_FILE_NAME_V4.to_owned(),
         manifest.topup_finality_roster_artifact.file_name.clone(),
@@ -2419,9 +2423,9 @@ fn verify_exact_release_inventory_v4(
             .flat_map(|profile| profile.artifacts.iter())
             .map(|artifact| artifact.file_name.clone()),
     );
-    if expected.len() != 17 {
+    if expected.len() != 18 {
         return Err(
-            "Kagemusha V4 release inventory does not describe exactly seventeen unique files"
+            "Kagemusha V4 release inventory does not describe exactly eighteen unique files"
                 .to_owned(),
         );
     }
@@ -2598,6 +2602,7 @@ fn validate_sealed_release_qualification_v1(
         || sealed.qualification_receipt_sha256 != qualification_receipt_sha256
         || sealed.qualification_receipt_sha256 != manifest.qualification_receipt_sha256
         || sealed.qualified_candidate_sha256 != manifest.qualified_candidate_sha256
+        || sealed.internal_validation_receipt_sha256 != manifest.internal_validation_receipt_sha256
         || sealed.source_commit != manifest.source_commit
         || sealed.source_tree_sha256 != manifest.source_tree_sha256
         || sealed.reviewed_source_closure_descriptor_sha256
@@ -2867,6 +2872,12 @@ fn load_release_directory(
         "release attestation",
     )?;
     let release_attestation = decode_canonical_attestation(&attestation_bytes)?;
+    let internal_validation_receipt = read_bounded_directory_file(
+        directory,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "internal-validation receipt",
+    )?;
     let physical_device_benchmark_summary = read_bounded_directory_file(
         directory,
         KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
@@ -2890,6 +2901,7 @@ fn load_release_directory(
         &manifest,
         policy,
         &release_attestation,
+        &internal_validation_receipt,
         &physical_device_benchmark_summary,
         &cryptographic_review_summary,
     )
@@ -2969,6 +2981,7 @@ fn load_release_directory(
             release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4 {
                 manifest,
                 release_attestation,
+                internal_validation_receipt,
                 physical_device_benchmark_summary,
                 cryptographic_review_summary,
                 promotion_record,
@@ -3230,6 +3243,9 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_SIGNATURE_DOMAIN_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
@@ -3240,15 +3256,22 @@ mod tests {
             KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
-            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaExactBytesDigestV1,
+            KagemushaInternalValidationCommandOutcomeV1, KagemushaInternalValidationFuzzOutcomeV1,
+            KagemushaInternalValidationFuzzTargetV1, KagemushaInternalValidationToolRoleV1,
+            KagemushaInternalValidationToolV1, KagemushaInternalValidationWorkingDirectoryV1,
             KagemushaRecursiveSpendArtifactManifestV4,
             KagemushaRecursiveSpendCryptographicReviewApprovalV4,
             KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
             KagemushaRecursiveSpendCryptographicReviewPayloadV4,
+            KagemushaRecursiveSpendInternalValidationReceiptBodyV1,
+            KagemushaRecursiveSpendInternalValidationReceiptV1,
             KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseApprovalRoleV1,
             KagemushaRecursiveSpendReleaseApprovalV4, KagemushaRecursiveSpendReleaseAttestationV4,
             KagemushaRecursiveSpendReleaseRolePolicyV1, KagemushaReleaseVerificationError,
-            KagemushaReviewedSourceClosureV1, KagemushaTopUpFinalityRosterArtifactReferenceV4,
+            KagemushaReviewedSourceClosureV1, KagemushaReviewedTrackedCargoLockV2,
+            KagemushaTopUpFinalityRosterArtifactReferenceV4,
+            kagemusha_internal_validation_runner_identity_sha256_v1,
         },
     };
     #[cfg(target_os = "macos")]
@@ -3466,6 +3489,17 @@ mod tests {
         assert!(
             validate_sealed_release_qualification_v1(
                 &tampered_receipt,
+                &authenticated,
+                &promotion_bytes,
+                authenticated.manifest().qualification_receipt_sha256,
+            )
+            .is_err()
+        );
+        let mut tampered_internal_validation_receipt = seal.releases[0].clone();
+        tampered_internal_validation_receipt.internal_validation_receipt_sha256[0] ^= 1;
+        assert!(
+            validate_sealed_release_qualification_v1(
+                &tampered_internal_validation_receipt,
                 &authenticated,
                 &promotion_bytes,
                 authenticated.manifest().qualification_receipt_sha256,
@@ -4293,7 +4327,7 @@ mod tests {
         }
     }
     #[test]
-    fn production_release_inventory_requires_receipt_and_seventeen_unique_files() {
+    fn production_release_inventory_requires_receipts_and_eighteen_unique_files() {
         let module = include_str!("kagemusha_terminal_registry_v4.rs");
         let inventory = module
             .split_once("fn verify_exact_release_inventory_v4(")
@@ -4303,7 +4337,11 @@ mod tests {
             .expect("release inventory verifier boundary")
             .0;
         assert!(inventory.contains("KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4"));
-        assert!(inventory.contains("expected.len() != 17"));
+        assert!(
+            inventory
+                .contains("KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1")
+        );
+        assert!(inventory.contains("expected.len() != 18"));
     }
     #[cfg(all(
         unix,

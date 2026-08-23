@@ -499,6 +499,9 @@ impl_musubi_instruction_box!(
 impl_direct_instruction_box!(crate::isi::offline::TopUpKagemushaRecursiveV4);
 impl_direct_instruction_box!(crate::isi::offline::RedeemKagemushaRecursiveV4);
 impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);
+impl_direct_instruction_box!(crate::isi::offline::EnableKagemushaRecursiveIssuanceV4);
+impl_direct_instruction_box!(crate::isi::offline::CancelKagemushaRecursiveReleaseV4);
+impl_direct_instruction_box!(crate::isi::offline::DeactivateKagemushaRecursiveIssuanceV4);
 impl_direct_instruction_box!(crate::isi::offline::RecordKagemushaTairaCanaryV4);
 impl_direct_instruction_box!(crate::isi::offline::AuthorizeKagemushaTairaCanaryV4);
 impl_direct_instruction_box!(crate::isi::offline::RegisterOfflineDeviceAttestation);

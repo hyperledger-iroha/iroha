@@ -285,8 +285,25 @@ Device free space after staging must also cover one additional complete artifact
 spool plus 1 GiB of working reserve. The Gradle staging tasks open both final
 APKs, reject every one of the eight KRV4 basenames, and enforce a 64 MiB APK cap.
 
-The full phase requires explicit, offline authority material. Paths must be
-canonical absolute regular files and every digest is supplied by the caller:
+The full phase requires explicit, offline authority material. First capture
+Google's fixed Android Key Attestation status endpoint into a new owner-private
+absolute directory:
+
+```sh
+python3 -I scripts/capture_android_attestation_status.py \
+  --output-directory "$ANDROID_STATUS_CAPTURE_DIRECTORY"
+```
+
+The command emits exact `status.json`, derived `snapshot.json`, and
+header-bound `capture-receipt.json` files. It rejects redirects, transformed or
+oversized bodies, malformed/non-valid entries, inconsistent cache headers, and
+responses that are already stale. Keep all three files together; do not rewrite
+the canonical JSON or reuse an expired receipt. Use `status.json` as
+`ANDROID_REVOCATION_STATUS` and `capture-receipt.json` as
+`ANDROID_STATUS_CAPTURE_RECEIPT` below.
+
+All authority paths must be canonical absolute regular files and every digest
+is supplied by the caller:
 
 ```sh
 scripts/run_kagemusha_candidate_android_lab.sh \
@@ -306,7 +323,9 @@ scripts/run_kagemusha_candidate_android_lab.sh \
   --android-attestation-trust-root "$ANDROID_ATTESTATION_ROOT" \
   --android-attestation-trust-root-sha256 "$ANDROID_ATTESTATION_ROOT_SHA256" \
   --android-attestation-revocation-status "$ANDROID_REVOCATION_STATUS" \
-  --android-attestation-revocation-status-sha256 "$ANDROID_REVOCATION_STATUS_SHA256"
+  --android-attestation-revocation-status-sha256 "$ANDROID_REVOCATION_STATUS_SHA256" \
+  --android-attestation-status-capture-receipt "$ANDROID_STATUS_CAPTURE_RECEIPT" \
+  --android-attestation-status-capture-receipt-sha256 "$ANDROID_STATUS_CAPTURE_RECEIPT_SHA256"
 ```
 
 Repeat the aligned trust-root path/digest pair when more than one root is
@@ -315,8 +334,19 @@ the SDK, PATH, or network. Before any `adb` command it invokes the authoritative
 slot validator in isolated Python mode. That validator verifies the signed
 evidence, exact candidate/APK/source bindings, APK signatures, KeyMint
 certificate chain and challenge, attestation application package/signer,
-offline revocation snapshot, and authority pins. The runner consumes only the
-validator's successful one-slot machine summary.
+the exact status response and capture receipt, freshness at validation time,
+every chain serial, and all authority pins. It re-derives the governed snapshot
+from the pinned payload and receipt instead of trusting a copied serial list.
+The runner consumes only the validator's successful one-slot machine summary.
+
+The HTTPS capture receipt is provenance, not self-authenticating governance.
+The signed lab slot binds its receipt and snapshot projection, and the
+promotion controller/governance signature must separately bind the reviewed
+snapshot into the deterministic release policy. Validators consume that
+governed snapshot without performing network I/O. Release activation requires
+the exact two embedded current Google Android roots to be governance-active, so
+a lab-authorized extra or inactive root cannot silently expand or satisfy the
+production trust set.
 
 APK verification invokes the pinned Java executable directly with the pinned
 `apksigner.jar`. The Android SDK's `apksigner` shell launcher is deliberately

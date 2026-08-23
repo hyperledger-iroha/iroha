@@ -757,6 +757,8 @@ on:
       - "specs/sdk/swift/readiness/*kagemusha*.md"
       - "artifacts/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
+      - "scripts/capture_android_attestation_status.py"
+      - "scripts/android_attestation_certificate_profile.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
@@ -778,6 +780,9 @@ on:
       - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "rust-toolchain.toml"
       - "scripts/tests/check_android_device_lab_slot_test.py"
+      - "scripts/tests/capture_android_attestation_status_test.py"
+      - "scripts/tests/android_attestation_certificate_profile_fixtures.py"
+      - "scripts/tests/android_attestation_certificate_profile_test.py"
       - "scripts/tests/kagemusha_production_promotion_workflow_test.py"
       - "tools/kotlin-fixture-gen/**"
   workflow_dispatch:
@@ -840,6 +845,7 @@ jobs:
           scripts/tests/build_kagemusha_v4_candidate_bundle_test.py
           scripts/tests/build_kagemusha_production_ios_policy_test.py
           scripts/tests/check_kagemusha_candidate_ios_evidence_test.py
+          scripts/tests/kagemusha_candidate_ios_lab_source_test.py
           scripts/tests/kagemusha_app_attest_freshness_authority_test.py
           scripts/tests/kagemusha_production_app_attest_lab_source_test.py
           scripts/tests/measure_kagemusha_production_app_attest_bundle_test.py
@@ -850,6 +856,8 @@ jobs:
           scripts/tests/kagemusha_production_promotion_workflow_test.py
           scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py
           scripts/tests/stage_kagemusha_candidate_android_lab_test.py
+          scripts/tests/capture_android_attestation_status_test.py
+          scripts/tests/android_attestation_certificate_profile_test.py
           pytests/scripts/run_kagemusha_v4_generation_test.py
           pytests/scripts/run_kagemusha_v4_generation_benchmark_test.py
       - name: Run Taira devnet orchestration regressions
@@ -864,8 +872,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_data_model --test iroha_data_model_group_02 offline_public_schema_golden -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api canary_ -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api post_canary_liveness_rejects_receipt_and_transaction_wire_anchor_splices -- --nocapture
+      - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core --lib taira_canary -- --nocapture
+      - run: cargo test -p iroha_core --lib autonomous_merge_admission_intent_ -- --nocapture
+      - run: cargo test -p iroha_core --lib attestation_certificate_validation_tests -- --nocapture
       - run: cargo test -p iroha_core offline_device_attestation_policy --lib
       - run: cargo test -p iroha_core device_registration_ --lib
       - run: cargo test -p iroha_core kagemusha_online_registration_ --lib
@@ -889,6 +904,7 @@ jobs:
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
+      - run: cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture
       - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii offline_commands --lib -- --nocapture
@@ -896,6 +912,7 @@ jobs:
       - run: cargo test -p iroha_config torii_kagemusha_commands_tests -- --nocapture
       - run: cargo test -p connect_norito_bridge recursive_spend_v4
       - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
+      - run: cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture
 
   swift:
     name: Swift lifecycle surface

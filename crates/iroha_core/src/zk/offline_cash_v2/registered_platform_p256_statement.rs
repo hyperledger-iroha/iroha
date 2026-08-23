@@ -8,9 +8,11 @@
 //! Certificate signatures remain entirely inside native registration.
 //!
 //! Current-helper authentication, freshness, a circuit/source, compiled protocol, artifacts,
-//! backend, `GuardBundle` integration, wire integration, and every production authority remain
-//! unavailable.  In particular, the historical registration event's `GuardBundle` digest is not
-//! projected or compared with the current transaction helper statement.
+//! backend, verified recursive `GuardBundle` integration, wire integration, and every production
+//! authority remain unavailable.  The private provenance module may retain this source beside a
+//! byte-identical current-helper view, but it grants no recursive or verification authority. In
+//! particular, the historical registration event's `GuardBundle` digest is not projected or
+//! compared with the current transaction helper statement.
 
 use core::{convert::Infallible, fmt};
 
@@ -107,7 +109,7 @@ pub(super) const REGISTERED_PLATFORM_P256_COMPILED_PROTOCOL_AVAILABLE_V2: bool =
 pub(super) const REGISTERED_PLATFORM_P256_ARTIFACTS_AUTHENTICATED_V2: bool = false;
 /// No role-6 verification backend exists.
 pub(super) const REGISTERED_PLATFORM_P256_BACKEND_AVAILABLE_V2: bool = false;
-/// No recursive `GuardBundle` adapter consumes this statement.
+/// No verified recursive `GuardBundle` adapter consumes this statement.
 pub(super) const REGISTERED_PLATFORM_P256_GUARD_BUNDLE_ADAPTER_AVAILABLE_V2: bool = false;
 /// No wire adapter carries a new field for this candidate.
 pub(super) const REGISTERED_PLATFORM_P256_WIRE_ADAPTER_AVAILABLE_V2: bool = false;
@@ -202,6 +204,93 @@ pub(super) struct RegisteredPlatformP256CurrentHelperFieldsV2 {
     platform_message_digest: [u8; 32],
 }
 
+/// Exact common-field view used to join a current helper owner to role 6.
+///
+/// The trait is private to Offline Cash V2 and intentionally exposes no
+/// constructor or owned raw-parts representation. The GuardBundle provenance
+/// module implements it for its one full helper statement, allowing this module
+/// to compare every role-6 input field without reducing the join to a
+/// host-selected digest subset.
+pub(super) trait RegisteredPlatformP256CurrentHelperViewV2 {
+    fn operation_v2(&self) -> u8;
+    fn release_id_v2(&self) -> &[u8; 32];
+    fn context_digest_v2(&self) -> &[u8; 32];
+    fn current_head_v2(&self) -> &[u8; 32];
+    fn current_lineage_digest_v2(&self) -> &[u8; 32];
+    fn transition_digest_v2(&self) -> &[u8; 32];
+    fn wallet_binding_v2(&self) -> &[u8; 32];
+    fn hardware_policy_id_v2(&self) -> &[u8; 32];
+    fn guard_device_id_v2(&self) -> &[u8; 32];
+    fn current_guard_binding_v2(&self) -> &[u8; 32];
+    fn next_guard_binding_v2(&self) -> &[u8; 32];
+    fn from_sequence_v2(&self) -> u64;
+    fn to_sequence_v2(&self) -> u64;
+    fn platform_key_digest_v2(&self) -> &[u8; 32];
+    fn platform_message_digest_v2(&self) -> &[u8; 32];
+}
+
+impl RegisteredPlatformP256CurrentHelperViewV2 for RegisteredPlatformP256CurrentHelperFieldsV2 {
+    fn operation_v2(&self) -> u8 {
+        self.operation
+    }
+
+    fn release_id_v2(&self) -> &[u8; 32] {
+        &self.release_id
+    }
+
+    fn context_digest_v2(&self) -> &[u8; 32] {
+        &self.context_digest
+    }
+
+    fn current_head_v2(&self) -> &[u8; 32] {
+        &self.current_head
+    }
+
+    fn current_lineage_digest_v2(&self) -> &[u8; 32] {
+        &self.current_lineage_digest
+    }
+
+    fn transition_digest_v2(&self) -> &[u8; 32] {
+        &self.transition_digest
+    }
+
+    fn wallet_binding_v2(&self) -> &[u8; 32] {
+        &self.wallet_binding
+    }
+
+    fn hardware_policy_id_v2(&self) -> &[u8; 32] {
+        &self.hardware_policy_id
+    }
+
+    fn guard_device_id_v2(&self) -> &[u8; 32] {
+        &self.guard_device_id
+    }
+
+    fn current_guard_binding_v2(&self) -> &[u8; 32] {
+        &self.current_guard_binding
+    }
+
+    fn next_guard_binding_v2(&self) -> &[u8; 32] {
+        &self.next_guard_binding
+    }
+
+    fn from_sequence_v2(&self) -> u64 {
+        self.from_sequence
+    }
+
+    fn to_sequence_v2(&self) -> u64 {
+        self.to_sequence
+    }
+
+    fn platform_key_digest_v2(&self) -> &[u8; 32] {
+        &self.platform_key_digest
+    }
+
+    fn platform_message_digest_v2(&self) -> &[u8; 32] {
+        &self.platform_message_digest
+    }
+}
+
 /// Uninhabited production authority for current-helper authentication.
 pub(super) enum RegisteredPlatformP256CurrentHelperAuthorityV2 {}
 /// Uninhabited production freshness authority.
@@ -239,6 +328,31 @@ impl AuthenticatedRegisteredPlatformCurrentHelperCandidateV2 {
         &self,
     ) -> &RegisteredPlatformP256CurrentHelperFieldsV2 {
         &self.current
+    }
+
+    /// Compare every role-6 current-helper input with another exact helper view.
+    ///
+    /// This is equality-only provenance plumbing. It authenticates neither view
+    /// and performs no proof verification.
+    pub(super) fn matches_current_helper_view_v2<V>(&self, other: &V) -> bool
+    where
+        V: RegisteredPlatformP256CurrentHelperViewV2,
+    {
+        self.current.operation == other.operation_v2()
+            && &self.current.release_id == other.release_id_v2()
+            && &self.current.context_digest == other.context_digest_v2()
+            && &self.current.current_head == other.current_head_v2()
+            && &self.current.current_lineage_digest == other.current_lineage_digest_v2()
+            && &self.current.transition_digest == other.transition_digest_v2()
+            && &self.current.wallet_binding == other.wallet_binding_v2()
+            && &self.current.hardware_policy_id == other.hardware_policy_id_v2()
+            && &self.current.guard_device_id == other.guard_device_id_v2()
+            && &self.current.current_guard_binding == other.current_guard_binding_v2()
+            && &self.current.next_guard_binding == other.next_guard_binding_v2()
+            && self.current.from_sequence == other.from_sequence_v2()
+            && self.current.to_sequence == other.to_sequence_v2()
+            && &self.current.platform_key_digest == other.platform_key_digest_v2()
+            && &self.current.platform_message_digest == other.platform_message_digest_v2()
     }
 }
 

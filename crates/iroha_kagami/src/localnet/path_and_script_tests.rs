@@ -253,6 +253,7 @@
             temp.path(),
             1,
             false,
+            false,
             &client_account_literal,
             &fee_asset_definition_id,
         )
@@ -285,7 +286,7 @@
             ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
             "generated startup must keep logs, pidfiles, and runtime directories owner-only",
         );
-        let (debug_path, release_path) = default_irohad_bin_paths();
+        let (debug_path, release_path) = default_irohad_bin_paths(false);
         let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
         let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
         assert!(
@@ -405,5 +406,31 @@
         assert!(
             stop_contents.contains("rm -f \"$pidfile\""),
             "stop script should clean pidfiles after shutdown"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_script_skips_zero_faucet_retries_before_seq() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        write_scripts(
+            temp.path(),
+            1,
+            false,
+            false,
+            &localnet_client_account_literal(None),
+            &localnet_fee_asset_literal(),
+        )
+        .expect("write scripts");
+        let start = fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
+        let zero_retry_guard = start
+            .find("[ \"$FAUCET_RESERVE_RETRIES\" != \"0\" ] ||")
+            .expect("explicit zero-retry guard");
+        let reserve_loop = start
+            .find("for _ in $(seq 1 \"$FAUCET_RESERVE_RETRIES\"); do")
+            .expect("faucet reserve retry loop");
+        assert!(
+            zero_retry_guard < reserve_loop,
+            "zero retries must return before invoking platform-dependent seq"
         );
     }

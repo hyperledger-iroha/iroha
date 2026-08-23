@@ -1897,47 +1897,14 @@ where
         "-h" | "--help" => Ok(CommandKind::Help),
         "soracloud-inrou-smoke" => {
             let Some(mode) = args.next() else {
-                return Err(
-                    "soracloud-inrou-smoke requires a mode (portable|firecracker|mixed-host)"
-                        .into(),
-                );
+                return Err("soracloud-inrou-smoke requires mode `portable`".into());
             };
             match mode.as_str() {
                 "portable" => Ok(CommandKind::SoracloudInrouSmoke {
                     mode: soracloud_inrou::CommandMode::Portable,
                 }),
-                "firecracker" => Ok(CommandKind::SoracloudInrouSmoke {
-                    mode: soracloud_inrou::CommandMode::Firecracker,
-                }),
-                "mixed-host" => {
-                    let mut inventory: Option<PathBuf> = None;
-                    let mut pending = args.peekable();
-                    while let Some(arg) = pending.next() {
-                        match arg.as_str() {
-                            "--inventory" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("expected path after --inventory".into());
-                                };
-                                inventory = Some(normalize_path(Path::new(&path))?);
-                            }
-                            flag => {
-                                return Err(
-                                    format!("unknown flag for soracloud-inrou-smoke mixed-host: {flag}")
-                                        .into(),
-                                );
-                            }
-                        }
-                    }
-                    let inventory = inventory.ok_or_else(|| {
-                        "soracloud-inrou-smoke mixed-host requires --inventory <path>"
-                            .to_string()
-                    })?;
-                    Ok(CommandKind::SoracloudInrouSmoke {
-                        mode: soracloud_inrou::CommandMode::MixedHost { inventory },
-                    })
-                }
                 other => Err(format!(
-                    "unknown soracloud-inrou-smoke mode `{other}` (expected portable|firecracker|mixed-host)"
+                    "unknown soracloud-inrou-smoke mode `{other}` (expected `portable`)"
                 )
                 .into()),
             }

@@ -21,6 +21,8 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
     KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
@@ -124,8 +126,8 @@ impl ReleaseInventoryStateV4 {
     }
     const fn exact_file_count(self) -> usize {
         match self {
-            Self::Candidate => 16,
-            Self::Promoted => 17,
+            Self::Candidate => 17,
+            Self::Promoted => 18,
         }
     }
     const fn label(self) -> &'static str {
@@ -186,7 +188,7 @@ enum Command {
 }
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
-    /// Immutable directory containing the exact seventeen-file promoted ABI-21/V4 inventory.
+    /// Immutable directory containing the exact eighteen-file promoted ABI-21/V4 inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -204,7 +206,7 @@ struct VerifyReleaseV4Args {
 }
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
-    /// Directory containing the exact sixteen-file pre-promotion ABI-21/V4 candidate.
+    /// Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -546,16 +548,25 @@ fn validate_device_attestation_policy_for_atomic_activation(
     validate_atomic_activation_revocations(policy)?;
     validate_atomic_activation_ios_apps(policy)?;
     validate_atomic_activation_android_apps(policy)?;
+    validate_atomic_activation_android_status(policy, policy_evaluation_time_ms)?;
     validate_offline_attestation_policy_for_release_activation(policy, policy_evaluation_time_ms)
         .map_err(|error| eyre!("consensus device-attestation policy validation failed: {error}"))?;
     Ok(())
 }
 fn validate_atomic_activation_policy_shape(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     if policy.trusted_roots.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1
-        || policy.revoked_certificate_sha256.len()
+        || policy.revoked_certificate_tbs_sha256.len()
             > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1
         || policy.ios_apps.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1
         || policy.android_apps.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1
+        || policy.android_status_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.non_valid_serials.len()
+                > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1
+                || snapshot.non_valid_serials.iter().any(|serial| {
+                    serial.len()
+                        > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1
+                })
+        })
     {
         bail!("atomic Kagemusha activation device-attestation policy exceeds collection limits");
     }
@@ -632,9 +643,11 @@ fn validate_atomic_activation_trusted_roots(policy: &OfflineDeviceAttestationPol
 }
 fn validate_atomic_activation_revocations(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut revoked = BTreeSet::new();
-    for digest in &policy.revoked_certificate_sha256 {
+    for digest in &policy.revoked_certificate_tbs_sha256 {
         if digest.len() != 32 || !revoked.insert(digest.as_slice()) {
-            bail!("atomic Kagemusha activation contains an invalid duplicate revocation");
+            bail!(
+                "atomic Kagemusha activation contains an invalid duplicate certificate TBS revocation"
+            );
         }
     }
     Ok(())
@@ -708,6 +721,52 @@ fn validate_atomic_activation_android_apps(policy: &OfflineDeviceAttestationPoli
     }
     Ok(())
 }
+fn validate_atomic_activation_android_status(
+    policy: &OfflineDeviceAttestationPolicy,
+    evaluation_time_ms: u64,
+) -> Result<()> {
+    let snapshot = policy
+        .android_status_snapshot
+        .as_ref()
+        .ok_or_else(|| eyre!("atomic Kagemusha activation requires an Android status snapshot"))?;
+    if snapshot.version
+        != iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1
+        || snapshot.payload_sha256 == [0; 32]
+        || snapshot.response_date_ms == 0
+        || !snapshot.response_date_ms.is_multiple_of(1_000)
+        || snapshot.cache_max_age_seconds == 0
+        || snapshot.cache_max_age_seconds
+            > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1
+        || snapshot.last_modified_ms.is_some_and(|last_modified_ms| {
+            last_modified_ms == 0
+                || !last_modified_ms.is_multiple_of(1_000)
+                || last_modified_ms > snapshot.response_date_ms
+        })
+    {
+        bail!("atomic Kagemusha activation Android status metadata is invalid");
+    }
+    let mut previous_serial: Option<&str> = None;
+    for serial in &snapshot.non_valid_serials {
+        if serial.is_empty()
+            || !serial
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || (serial.len() > 1 && serial.starts_with('0'))
+            || previous_serial.is_some_and(|previous| previous >= serial.as_str())
+        {
+            bail!("atomic Kagemusha activation Android status serials are not canonical");
+        }
+        previous_serial = Some(serial);
+    }
+    let fresh_until_ms = snapshot
+        .response_date_ms
+        .checked_add(u64::from(snapshot.cache_max_age_seconds) * 1_000)
+        .ok_or_else(|| eyre!("atomic Kagemusha activation Android status deadline overflows"))?;
+    if evaluation_time_ms < snapshot.response_date_ms || evaluation_time_ms >= fresh_until_ms {
+        bail!("atomic Kagemusha activation Android status snapshot is not fresh");
+    }
+    Ok(())
+}
 struct VerifiedReleaseV4 {
     authenticated: KagemushaAuthenticatedReleaseV4,
     report: VerificationReport,
@@ -750,6 +809,10 @@ impl VerifiedReleaseV4 {
                 .manifest()
                 .qualification_receipt_sha256,
             qualified_candidate_sha256: self.authenticated.manifest().qualified_candidate_sha256,
+            internal_validation_receipt_sha256: self
+                .authenticated
+                .manifest()
+                .internal_validation_receipt_sha256,
             manifest_sha256: self.authenticated.manifest_sha256(),
             release_attestation_sha256: self.authenticated.release_attestation_sha256(),
             release_policy_sha256: self.authenticated.release_policy_sha256(),
@@ -868,10 +931,17 @@ fn verify_release_directory_v4(
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
         "canonical signed cryptographic review",
     )?;
+    let internal_validation_receipt = read_regular_bounded(
+        &root,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "canonical signed Kagemusha V4 internal-validation receipt",
+    )?;
     let authenticated = KagemushaAuthenticatedReleaseV4::verify(
         &manifest,
         &policy,
         &attestation,
+        &internal_validation_receipt,
         &benchmark,
         &review,
     )
@@ -1180,6 +1250,10 @@ fn verify_exact_inventory_v4(
             KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
             "qualification receipt",
         ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            "internal-validation receipt",
+        ),
     ] {
         insert_expected_release_file_v4(&mut expected, file_name, role)?;
     }
@@ -1206,8 +1280,8 @@ fn verify_exact_inventory_v4(
             "authenticated artifact",
         )?;
     }
-    if inventory_state.includes_promotion_record() && expected.len() != 17 {
-        bail!("Kagemusha V4 promoted release contract must name exactly seventeen unique files");
+    if inventory_state.includes_promotion_record() && expected.len() != 18 {
+        bail!("Kagemusha V4 promoted release contract must name exactly eighteen unique files");
     }
     if expected.len() != inventory_state.exact_file_count() {
         bail!(
@@ -1544,6 +1618,13 @@ impl PromotionDirectorySnapshotV1 {
         }
         Ok(())
     }
+    fn matches_except_links(self, other: Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.mode == other.mode
+            && self.uid == other.uid
+            && self.gid == other.gid
+    }
 }
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1696,17 +1777,50 @@ impl PinnedPromotionParentV1 {
         parent.verify_path_identity()?;
         Ok(parent)
     }
+    fn snapshot_after_new_subdirectory(&self) -> Result<PromotionDirectorySnapshotV1> {
+        let current = PromotionDirectorySnapshotV1::from_metadata(
+            &self
+                .file
+                .metadata()
+                .wrap_err("failed to inspect promotion-record parent after staging")?,
+        )
+        .ok_or_else(|| eyre!("promotion-record parent is no longer a directory"))?;
+        // Unix filesystems may increment a parent's link count for the newly
+        // staged subdirectory; some filesystems report a stable count instead.
+        if !self.snapshot.matches_except_links(current)
+            || !current
+                .links
+                .checked_sub(self.snapshot.links)
+                .is_some_and(|delta| delta <= 1)
+        {
+            bail!("promotion-record parent changed unexpectedly while staging a directory");
+        }
+        self.verify_path_identity_against(current)?;
+        Ok(current)
+    }
     fn verify_path_identity(&self) -> Result<()> {
+        self.verify_path_identity_against(self.snapshot)
+    }
+    fn verify_path_identity_against(
+        &self,
+        expected_parent: PromotionDirectorySnapshotV1,
+    ) -> Result<()> {
         let opened = PromotionDirectorySnapshotV1::from_metadata(
             &self
                 .file
                 .metadata()
                 .wrap_err("failed to re-inspect pinned promotion-record parent")?,
         );
-        if opened != Some(self.snapshot) {
+        if opened != Some(expected_parent) {
             bail!("pinned promotion-record parent changed identity");
         }
-        for (path, expected) in &self.path_chain {
+        let final_component = self.path_chain.len().saturating_sub(1);
+        for (index, (path, original_expected)) in self.path_chain.iter().enumerate() {
+            let expected = if index == final_component {
+                expected_parent
+            } else {
+                *original_expected
+            };
             let current = fs::symlink_metadata(path).wrap_err_with(|| {
                 format!(
                     "failed to re-inspect promotion-record ancestor {}",
@@ -1714,7 +1828,7 @@ impl PinnedPromotionParentV1 {
                 )
             })?;
             if current.file_type().is_symlink()
-                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(*expected)
+                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(expected)
             {
                 bail!(
                     "promotion-record ancestor changed after it was pinned: {}",
@@ -1725,7 +1839,7 @@ impl PinnedPromotionParentV1 {
         let named = fs::symlink_metadata(&self.path)
             .wrap_err("failed to re-inspect named promotion-record parent")?;
         if named.file_type().is_symlink()
-            || PromotionDirectorySnapshotV1::from_metadata(&named) != Some(self.snapshot)
+            || PromotionDirectorySnapshotV1::from_metadata(&named) != Some(expected_parent)
         {
             bail!("promotion-record parent pathname changed after it was pinned");
         }
@@ -2055,6 +2169,13 @@ where
             return Err(error);
         }
     };
+    let publication_parent_snapshot = match parent.snapshot_after_new_subdirectory() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+            return Err(error);
+        }
+    };
     let prepare_result = (|| -> Result<()> {
         write_release_circuit_params_staged_file_v1(
             &staging,
@@ -2075,7 +2196,7 @@ where
             bail!("circuit-parameter staging directory changed identity or custody");
         }
         before_publish()?;
-        parent.verify_path_identity()
+        parent.verify_path_identity_against(publication_parent_snapshot)
     })();
     if let Err(error) = prepare_result {
         cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
@@ -2107,7 +2228,7 @@ where
         }
         sync_parent(&parent.file)
             .wrap_err("failed to durably sync circuit-parameter parent directory")?;
-        parent.verify_path_identity()?;
+        parent.verify_path_identity_against(publication_parent_snapshot)?;
         Ok(())
     })();
     Ok(match after_publication {
@@ -2190,6 +2311,7 @@ struct VerificationReport {
     manifest_body_sha256: String,
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
+    internal_validation_receipt_sha256: String,
     release_policy_sha256: String,
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
@@ -2243,6 +2365,9 @@ impl VerificationReport {
             manifest_body_sha256: hex::encode(manifest_body_sha256),
             qualification_receipt_sha256: hex::encode(manifest.qualification_receipt_sha256),
             qualified_candidate_sha256: hex::encode(manifest.qualified_candidate_sha256),
+            internal_validation_receipt_sha256: hex::encode(
+                manifest.internal_validation_receipt_sha256,
+            ),
             release_policy_sha256: hex::encode(release_policy_sha256),
             authenticated_source_seal_projection_sha256: hex::encode(
                 manifest.authenticated_source_seal_projection_sha256,
@@ -2275,6 +2400,7 @@ struct VerificationReportV4 {
     candidate_sha256: String,
     qualification_receipt_sha256: String,
     qualified_candidate_sha256: String,
+    internal_validation_receipt_sha256: String,
     promotion_record_sha256: String,
     release_policy_sha256: String,
     authenticated_source_seal_projection_sha256: String,
@@ -2305,6 +2431,7 @@ impl VerificationReportV4 {
             candidate_sha256: hex::encode(candidate_sha256),
             qualification_receipt_sha256: report.qualification_receipt_sha256.clone(),
             qualified_candidate_sha256: report.qualified_candidate_sha256.clone(),
+            internal_validation_receipt_sha256: report.internal_validation_receipt_sha256.clone(),
             promotion_record_sha256: hex::encode(promotion_record_sha256),
             release_policy_sha256: report.release_policy_sha256.clone(),
             authenticated_source_seal_projection_sha256: report
@@ -2336,12 +2463,13 @@ impl VerificationReportV4 {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTHENTICATED_ARTIFACT_ROLES_V4, PROMOTION_RECORD_FILE_NAME_V4,
-        PrepareReleaseCircuitParamsV4Args, RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
-        RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4, REPORT_ARTIFACT_PURPOSES_V4,
-        REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4, insert_expected_release_file_v4,
-        parse_manifest_sha256, parse_nonzero_canonical_u64, parse_promotion_id,
-        prepare_release_circuit_params_v4, read_regular_bounded,
+        AUTHENTICATED_ARTIFACT_ROLES_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+        PROMOTION_RECORD_FILE_NAME_V4, PrepareReleaseCircuitParamsV4Args,
+        RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4,
+        insert_expected_release_file_v4, parse_manifest_sha256, parse_nonzero_canonical_u64,
+        parse_promotion_id, prepare_release_circuit_params_v4, read_regular_bounded,
         require_new_promotion_record_path_v4, roster_release_generations_match_v4,
         validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
         verify_publish_verify_release_v4,
@@ -2394,6 +2522,14 @@ mod tests {
             vec!["202605050324".to_owned()],
             "com.pk.retailwallet".to_owned(),
             vec![[0x11; 32]],
+            iroha_data_model::offline::OfflineAndroidAttestationStatusSnapshotV1 {
+                version: iroha_data_model::offline::OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x99; 32],
+                response_date_ms: POLICY_EVALUATION_TIME_MS,
+                last_modified_ms: Some(POLICY_EVALUATION_TIME_MS),
+                cache_max_age_seconds: 86_400,
+                non_valid_serials: Vec::new(),
+            },
             POLICY_EVALUATION_TIME_MS,
         )
         .expect("built-in production attestation roots are valid")
@@ -2611,6 +2747,60 @@ mod tests {
                 .contains("refusing to overwrite or alias an existing circuit-parameter directory"),
             "unexpected retry error: {error:#}"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn release_circuit_params_publication_tracks_its_parent_link_change() {
+        use std::{
+            fs,
+            os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+        };
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let links_before = fs::metadata(&parent)
+            .expect("inspect circuit-parameter parent")
+            .nlink();
+        let output_dir = parent.join("circuit-params-v4");
+        let bytes = b"canonical circuit parameters";
+
+        let outcome = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            bytes,
+            || Ok(()),
+            std::fs::File::sync_all,
+        )
+        .expect("the publisher's staging directory is an authorized parent-link transition");
+
+        match outcome {
+            ReleaseCircuitParamsPublicationOutcomeV1::Committed { final_path } => {
+                assert_eq!(final_path, output_dir);
+            }
+            ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain { reason, .. } => {
+                panic!("unchanged parent must commit durably: {reason}");
+            }
+        }
+        let links_after = fs::metadata(&parent)
+            .expect("re-inspect circuit-parameter parent")
+            .nlink();
+        assert!(
+            links_after
+                .checked_sub(links_before)
+                .is_some_and(|delta| delta <= 1)
+        );
+        for file_name in [
+            RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+            RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+        ] {
+            assert_eq!(
+                fs::read(output_dir.join(file_name)).expect("read published circuit parameters"),
+                bytes
+            );
+        }
     }
     #[cfg(unix)]
     #[test]
@@ -2860,22 +3050,22 @@ mod tests {
         let result = verify_publish_verify_release_v4(
             |state| {
                 events.borrow_mut().push(match state {
-                    ReleaseInventoryStateV4::Candidate => "verify-16",
-                    ReleaseInventoryStateV4::Promoted => "verify-17",
+                    ReleaseInventoryStateV4::Candidate => "verify-17",
+                    ReleaseInventoryStateV4::Promoted => "verify-18",
                 });
                 Ok(state.exact_file_count())
             },
             |candidate_count| {
-                assert_eq!(*candidate_count, 16);
+                assert_eq!(*candidate_count, 17);
                 events.borrow_mut().push("publish-no-replace");
                 Ok(())
             },
         )
         .expect("non-circular promotion flow succeeds");
-        assert_eq!(result, 17);
+        assert_eq!(result, 18);
         assert_eq!(
             events.into_inner(),
-            ["verify-16", "publish-no-replace", "verify-17"]
+            ["verify-17", "publish-no-replace", "verify-18"]
         );
     }
     #[test]
@@ -2936,16 +3126,16 @@ mod tests {
         let mut expected = BTreeSet::new();
         insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito",
-            "qualification receipt",
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+            "internal-validation receipt",
         )
         .expect("first role owns its file name");
         let error = insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito",
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
             "substituted artifact",
         )
-        .expect_err("a descriptor cannot alias the fixed qualification receipt");
+        .expect_err("a descriptor cannot alias the fixed internal-validation receipt");
         assert!(error.to_string().contains("aliases another release file"));
         assert_eq!(expected.len(), 1);
     }
@@ -3180,7 +3370,7 @@ mod tests {
         );
 
         let mut exact_revocations = valid_device_attestation_policy();
-        exact_revocations.revoked_certificate_sha256 = (0
+        exact_revocations.revoked_certificate_tbs_sha256 = (0
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1)
             .map(|index| {
                 let mut digest = vec![0; 32];
@@ -3190,7 +3380,7 @@ mod tests {
             .collect();
         assert_atomic_policy_shape_valid(&exact_revocations, "revocation limit");
         exact_revocations
-            .revoked_certificate_sha256
+            .revoked_certificate_tbs_sha256
             .push(vec![0xFF; 32]);
         assert_atomic_policy_cap_rejected(
             &exact_revocations,

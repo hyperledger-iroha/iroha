@@ -320,12 +320,18 @@ fn deployment_bundle_validate_rejects_http_service_with_ivm_runtime() {
     assert_soracloud_invalid_field(error, "container.runtime");
 }
 #[test]
-fn deployment_bundle_validate_accepts_inrou_http_service() {
+fn deployment_bundle_validate_accepts_inrou_http_service_without_ssh_keys() {
     let mut container = sample_container();
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.entrypoint = "/app/bin/service".to_string();
     container.inrou = Some(sample_inrou_manifest());
-    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container
+        .inrou
+        .as_mut()
+        .expect("Inrou manifest")
+        .ssh_authorized_keys
+        .clear();
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     let container_hash = Hash::new(Encode::encode(&container));
     let mut service = sample_service(Vec::new());
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
@@ -342,7 +348,7 @@ fn deployment_bundle_validate_accepts_inrou_http_service() {
     };
     assert!(
         bundle.validate_for_admission().is_ok(),
-        "Inrou http services should pass admission"
+        "Inrou http services must not require an SSH access path"
     );
 }
 #[test]
@@ -374,6 +380,20 @@ fn deployment_bundle_validate_accepts_replicated_inrou_http_service() {
         bundle.validate_for_admission().is_ok(),
         "replicated Inrou http services should pass admission"
     );
+}
+
+#[test]
+fn container_validate_rejects_open_inrou_network_egress() {
+    let mut container = sample_container();
+    container.runtime = SoraContainerRuntimeV1::Inrou;
+    container.entrypoint = "/app/bin/service".to_string();
+    container.inrou = Some(sample_inrou_manifest());
+    container.capabilities.network = SoraNetworkPolicyV1::Open;
+
+    let error = container
+        .validate()
+        .expect_err("Inrou V1 must reject unrestricted network egress");
+    assert_soracloud_invalid_field(error, "capabilities.network");
 }
 #[test]
 fn inrou_manifest_validate_accepts_dual_arch_guest_images() {
@@ -597,15 +617,23 @@ fn artifact_distribution_policy_rejects_empty_geography_target() {
     assert_soracloud_invalid_field(error, "target");
 }
 #[test]
-fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
+fn inrou_manifest_validate_accepts_one_native_guest_isa() {
     let mut manifest = sample_inrou_manifest();
     manifest
         .guest_images
         .remove(&SoraInrouGuestIsaV1::X8664)
         .expect("fixture x86_64 guest image");
+    manifest
+        .validate()
+        .expect("one native guest ISA profile is sufficient");
+}
+#[test]
+fn inrou_manifest_validate_rejects_empty_guest_image_map() {
+    let mut manifest = sample_inrou_manifest();
+    manifest.guest_images.clear();
     let error = manifest
         .validate()
-        .expect_err("both required guest ISA profiles must be present");
+        .expect_err("at least one native guest image must be published");
     assert_soracloud_invalid_field(error, "guest_images");
 }
 #[cfg(feature = "json")]
@@ -613,7 +641,11 @@ fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
 fn inrou_manifest_json_deserialize_rejects_flat_guest_images() {
     let manifest_json = r#"{
           "schema_version": 1,
-          "guest_os": "DebianSlim",
+          "guest_os": {
+            "guest_os": "DebianSlim",
+            "value": null
+          },
+          "bootstrap_user_data_path": null,
           "kernel_image_path": "/inrou/shared/vmlinux",
           "rootfs_image_path": "/inrou/shared/rootfs.ext4",
           "initrd_image_path": null,
@@ -637,29 +669,53 @@ fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
     );
     let json = r#"{
           "schema_version": 1,
-          "guest_os": "DebianSlim",
+          "guest_os": {
+            "guest_os": "DebianSlim",
+            "value": null
+          },
           "guest_images": {
             "x86_64": {
               "kernel_image_path": "/inrou/x86_64/vmlinux",
               "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
               "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
               "published_artifact": {
                 "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "content_cid": "__X86_CONTENT_CID__",
-                "manifest_id_hex": null
+                "manifest_id_hex": null,
+                "distribution": {
+                  "target": {"target": "Global", "value": null},
+                  "prefer_low_latency": true,
+                  "fallback_to_low_latency_when_geography_unknown": true
+                }
               }
             },
             "aarch64": {
               "kernel_image_path": "/inrou/aarch64/vmlinux",
               "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
               "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
               "published_artifact": {
                 "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "content_cid": "__AARCH64_CONTENT_CID__",
-                "manifest_id_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                "manifest_id_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "distribution": {
+                  "target": {"target": "Global", "value": null},
+                  "prefer_low_latency": true,
+                  "fallback_to_low_latency_when_geography_unknown": true
+                }
               }
             }
           },
+          "bootstrap_user_data_path": null,
           "ssh_authorized_keys": ["ssh-ed25519 AAAA real"]
         }"#
         .replace("__X86_CONTENT_CID__", &x86_content_cid)
@@ -682,19 +738,36 @@ fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
 fn inrou_manifest_json_deserialize_rejects_flat_guest_image_overlays() {
     let json = r#"{
           "schema_version": 1,
-          "guest_os": "DebianSlim",
+          "guest_os": {
+            "guest_os": "DebianSlim",
+            "value": null
+          },
           "guest_images": {
             "x86_64": {
               "kernel_image_path": "/inrou/x86_64/vmlinux",
               "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
-              "initrd_image_path": null
+              "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
+              "published_artifact": null
             },
             "aarch64": {
               "kernel_image_path": "/inrou/aarch64/vmlinux",
               "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
-              "initrd_image_path": null
+              "initrd_image_path": null,
+              "distribution": {
+                "target": {"target": "Global", "value": null},
+                "prefer_low_latency": true,
+                "fallback_to_low_latency_when_geography_unknown": true
+              },
+              "published_artifact": null
             }
           },
+          "bootstrap_user_data_path": null,
+          "ssh_authorized_keys": [],
           "kernel_image_path": "/flat/vmlinux",
           "rootfs_image_path": "/flat/rootfs.ext4"
         }"#;
@@ -734,6 +807,155 @@ fn inrou_manifest_json_serialize_emits_valid_string_keyed_guest_images() {
         guest_images.keys().cloned().collect::<Vec<_>>(),
         vec!["aarch64".to_owned(), "x86_64".to_owned()]
     );
+}
+#[cfg(feature = "json")]
+#[test]
+fn inrou_manifest_json_requires_the_exact_v1_shape() {
+    let manifest = sample_inrou_manifest();
+    let canonical = norito::json::to_value(&manifest).expect("serialize canonical Inrou manifest");
+    assert_eq!(
+        norito::json::from_value::<SoraInrouManifestV1>(canonical.clone())
+            .expect("the explicit canonical V1 shape must decode"),
+        manifest
+    );
+    for field in [
+        "schema_version",
+        "guest_os",
+        "guest_images",
+        "bootstrap_user_data_path",
+        "ssh_authorized_keys",
+    ] {
+        let mut value = canonical.clone();
+        assert!(
+            value
+                .as_object_mut()
+                .expect("manifest object")
+                .remove(field)
+                .is_some()
+        );
+        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("first-release Inrou fields must not be omitted");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing `{field}` reported the wrong error: {error:?}"
+        );
+    }
+
+    let mut shorthand = canonical.clone();
+    shorthand.as_object_mut().expect("manifest object").insert(
+        "guest_os".to_owned(),
+        Value::String("DebianSlim".to_owned()),
+    );
+    norito::json::from_value::<SoraInrouManifestV1>(shorthand)
+        .expect_err("the retired guest_os shorthand must not be accepted");
+
+    for field in [
+        "kernel_image_path",
+        "rootfs_image_path",
+        "initrd_image_path",
+        "distribution",
+        "published_artifact",
+    ] {
+        let mut value = canonical.clone();
+        let guest = value
+            .get_mut("guest_images")
+            .and_then(Value::as_object_mut)
+            .and_then(|images| images.get_mut("x86_64"))
+            .and_then(Value::as_object_mut)
+            .expect("x86_64 guest image object");
+        assert!(guest.remove(field).is_some());
+        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("first-release guest-image fields must not be omitted");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing guest-image `{field}` reported the wrong error: {error:?}"
+        );
+    }
+
+    for field in [
+        "target",
+        "prefer_low_latency",
+        "fallback_to_low_latency_when_geography_unknown",
+    ] {
+        let mut value = canonical.clone();
+        let distribution = value
+            .get_mut("guest_images")
+            .and_then(Value::as_object_mut)
+            .and_then(|images| images.get_mut("x86_64"))
+            .and_then(|guest| guest.get_mut("distribution"))
+            .and_then(Value::as_object_mut)
+            .expect("x86_64 distribution object");
+        assert!(distribution.remove(field).is_some());
+        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("first-release distribution fields must not be omitted");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing distribution `{field}` reported the wrong error: {error:?}"
+        );
+    }
+
+    let mut published_manifest = sample_inrou_manifest();
+    published_manifest
+        .guest_images
+        .get_mut(&SoraInrouGuestIsaV1::X8664)
+        .expect("x86_64 guest image")
+        .published_artifact = Some(sample_published_inrou_guest_image_artifact(31));
+    let published = norito::json::to_value(&published_manifest)
+        .expect("serialize published guest-image artifact");
+    for field in [
+        "manifest_digest_hex",
+        "content_cid",
+        "manifest_id_hex",
+        "distribution",
+    ] {
+        let mut value = published.clone();
+        let artifact = value
+            .get_mut("guest_images")
+            .and_then(Value::as_object_mut)
+            .and_then(|images| images.get_mut("x86_64"))
+            .and_then(|guest| guest.get_mut("published_artifact"))
+            .and_then(Value::as_object_mut)
+            .expect("published guest-image artifact object");
+        assert!(artifact.remove(field).is_some());
+        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("first-release published-artifact fields must not be omitted");
+        assert!(
+            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+            "missing published-artifact `{field}` reported the wrong error: {error:?}"
+        );
+    }
+}
+#[cfg(feature = "json")]
+#[test]
+fn inrou_manifest_json_rejects_null_for_non_optional_v1_fields() {
+    let canonical = norito::json::to_value(&sample_inrou_manifest())
+        .expect("serialize canonical Inrou manifest");
+    for field in [
+        "schema_version",
+        "guest_os",
+        "guest_images",
+        "ssh_authorized_keys",
+    ] {
+        let mut value = canonical.clone();
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .insert(field.to_owned(), Value::Null);
+        norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("non-optional first-release Inrou fields must not accept null");
+    }
+    for field in ["kernel_image_path", "rootfs_image_path", "distribution"] {
+        let mut value = canonical.clone();
+        value
+            .get_mut("guest_images")
+            .and_then(Value::as_object_mut)
+            .and_then(|images| images.get_mut("x86_64"))
+            .and_then(Value::as_object_mut)
+            .expect("x86_64 guest image object")
+            .insert(field.to_owned(), Value::Null);
+        norito::json::from_value::<SoraInrouManifestV1>(value)
+            .expect_err("non-optional first-release guest-image fields must not accept null");
+    }
 }
 #[cfg(feature = "json")]
 #[test]
@@ -809,18 +1031,28 @@ fn container_manifest_json_deserialize_accepts_inrou_guest_images() {
               "x86_64": {
                 "kernel_image_path": "/inrou/x86_64/vmlinux",
                 "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
-                "initrd_image_path": null
+                "initrd_image_path": null,
+                "distribution": {
+                  "target": {"target": "Global", "value": null},
+                  "prefer_low_latency": true,
+                  "fallback_to_low_latency_when_geography_unknown": true
+                },
+                "published_artifact": null
               },
               "aarch64": {
                 "kernel_image_path": "/inrou/aarch64/vmlinux",
                 "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
-                "initrd_image_path": null
+                "initrd_image_path": null,
+                "distribution": {
+                  "target": {"target": "Global", "value": null},
+                  "prefer_low_latency": true,
+                  "fallback_to_low_latency_when_geography_unknown": true
+                },
+                "published_artifact": null
               }
             },
             "bootstrap_user_data_path": null,
-            "ssh_authorized_keys": [
-              "ssh-ed25519 CHANGE_ME ton-indexer-taira"
-            ]
+            "ssh_authorized_keys": []
           },
           "required_config_names": [],
           "required_secret_names": [],
@@ -857,12 +1089,10 @@ fn container_manifest_json_deserialize_accepts_inrou_guest_images() {
         norito::json::from_str(json).expect("container JSON should deserialize");
     assert_eq!(manifest.runtime, SoraContainerRuntimeV1::Inrou);
     assert_eq!(manifest.bundle_path, "/bundles/ton-indexer.inrou");
+    let inrou = manifest.inrou.expect("inrou config should be present");
+    assert!(inrou.ssh_authorized_keys.is_empty());
     assert_eq!(
-        manifest
-            .inrou
-            .expect("inrou config should be present")
-            .guest_images[&SoraInrouGuestIsaV1::X8664]
-            .kernel_image_path,
+        inrou.guest_images[&SoraInrouGuestIsaV1::X8664].kernel_image_path,
         "/inrou/x86_64/vmlinux"
     );
 }
@@ -966,7 +1196,7 @@ fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.entrypoint = "/app/bin/service".to_string();
     container.inrou = Some(sample_inrou_manifest());
-    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     let container_hash = Hash::new(Encode::encode(&container));
     let mut service = sample_service(Vec::new());
     service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
@@ -993,7 +1223,7 @@ fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_ca
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.entrypoint = "/app/bin/service".to_string();
     container.inrou = Some(sample_inrou_manifest());
-    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     container.resources.cpu_millis = NonZeroU32::new(5_000).expect("nonzero");
     let container_hash = Hash::new(Encode::encode(&container));
     let mut service = sample_service(Vec::new());
@@ -1118,13 +1348,13 @@ fn inrou_host_capability_record_validate_accepts_hosting_advert() {
         .expect("valid Inrou host capability advert should pass");
 }
 #[test]
-fn inrou_host_capability_record_validate_rejects_proxy_only_nonzero_capacity() {
+fn inrou_host_capability_record_validate_rejects_zero_capacity() {
     let mut capability = sample_inrou_host_capability_record();
-    capability.proxy_only = true;
+    capability.max_hosted_replica_capacity = 0;
     let error = capability
         .validate()
-        .expect_err("proxy-only adverts must not expose hosting capacity");
-    assert_soracloud_invalid_field(error, "proxy_only");
+        .expect_err("zero-capacity adverts must fail");
+    assert_soracloud_invalid_field(error, "max_hosted_replica_capacity");
 }
 #[test]
 fn inrou_service_placement_record_validate_rejects_duplicate_slots() {

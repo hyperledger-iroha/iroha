@@ -389,6 +389,7 @@ pub fn verify_with_limits_and_semantics(
     // Bound attacker-controlled batch/proof scans before inspecting profile semantics or
     // rebuilding transcript commitments.
     enforce_verify_limits(batch, proof, limits)?;
+    validate_canonical_goldilocks_elements(proof)?;
     validate_batch_semantics(batch, semantics)?;
     verify_after_limits(batch, proof)
 }
@@ -413,7 +414,174 @@ fn verify_with_limits_raw(
     limits: VerifyLimits,
 ) -> Result<()> {
     enforce_verify_limits(batch, proof, limits)?;
+    validate_canonical_goldilocks_elements(proof)?;
     verify_after_limits(batch, proof)
+}
+
+fn validate_canonical_goldilocks_elements(proof: &Proof) -> Result<()> {
+    validate_canonical_goldilocks_roots(proof)?;
+    validate_canonical_goldilocks_transcript_scalars(proof)?;
+    validate_canonical_goldilocks_queries(proof)?;
+    validate_canonical_goldilocks_air_openings(proof)?;
+    validate_canonical_goldilocks_fri_openings(proof)
+}
+
+fn validate_canonical_goldilocks_roots(proof: &Proof) -> Result<()> {
+    ensure_canonical_goldilocks_encoding(&proof.trace_root, "trace_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.air_trace_root, "air_trace_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.air_composition_root, "air_composition_root", &[])?;
+    ensure_canonical_goldilocks_encoding(&proof.lookup_root, "lookup_root", &[])?;
+    for (index, root) in proof.fri_layers.iter().enumerate() {
+        ensure_canonical_goldilocks_encoding(root, "fri_layers", &[index])?;
+    }
+    for (index, hash) in proof.public_io.permission_hashes.iter().enumerate() {
+        ensure_canonical_goldilocks_encoding(hash, "public_io.permission_hashes", &[index])?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_transcript_scalars(proof: &Proof) -> Result<()> {
+    ensure_canonical_goldilocks(proof.lookup_grand_product, "lookup_grand_product", &[])?;
+    ensure_canonical_goldilocks(proof.lookup_challenge, "lookup_challenge", &[])?;
+    for (index, &alpha) in proof.alphas.iter().enumerate() {
+        ensure_canonical_goldilocks(alpha, "alphas", &[index])?;
+    }
+    for (index, &beta) in proof.betas.iter().enumerate() {
+        ensure_canonical_goldilocks(beta, "betas", &[index])?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_queries(proof: &Proof) -> Result<()> {
+    for (query_index, query) in proof.queries.iter().enumerate() {
+        ensure_canonical_goldilocks(query.value, "queries.value", &[query_index])?;
+        for (value_index, &value) in query.chunk_values.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "queries.chunk_values",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in query.merkle_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "queries.merkle_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_air_openings(proof: &Proof) -> Result<()> {
+    for (query_index, opening) in proof.air_openings.iter().enumerate() {
+        for (value_index, &value) in opening.current_row.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "air_openings.current_row",
+                &[query_index, value_index],
+            )?;
+        }
+        for (value_index, &value) in opening.next_row.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "air_openings.next_row",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in opening.current_row_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.current_row_path",
+                &[query_index, path_index],
+            )?;
+        }
+        for (path_index, &sibling) in opening.next_row_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.next_row_path",
+                &[query_index, path_index],
+            )?;
+        }
+        ensure_canonical_goldilocks(
+            opening.composition_value,
+            "air_openings.composition_value",
+            &[query_index],
+        )?;
+        for (path_index, &sibling) in opening.composition_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "air_openings.composition_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_goldilocks_fri_openings(proof: &Proof) -> Result<()> {
+    for (query_index, query) in proof.fri_queries.iter().enumerate() {
+        for (round_index, round) in query.rounds.iter().enumerate() {
+            for (value_index, &value) in round.values.iter().enumerate() {
+                ensure_canonical_goldilocks(
+                    value,
+                    "fri_queries.rounds.values",
+                    &[query_index, round_index, value_index],
+                )?;
+            }
+            ensure_canonical_goldilocks(
+                round.folded_value,
+                "fri_queries.rounds.folded_value",
+                &[query_index, round_index],
+            )?;
+            for (path_index, &sibling) in round.merkle_path.iter().enumerate() {
+                ensure_canonical_goldilocks(
+                    sibling,
+                    "fri_queries.rounds.merkle_path",
+                    &[query_index, round_index, path_index],
+                )?;
+            }
+        }
+        for (value_index, &value) in query.final_values.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                value,
+                "fri_queries.final_values",
+                &[query_index, value_index],
+            )?;
+        }
+        for (path_index, &sibling) in query.final_merkle_path.iter().enumerate() {
+            ensure_canonical_goldilocks(
+                sibling,
+                "fri_queries.final_merkle_path",
+                &[query_index, path_index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_canonical_goldilocks(value: u64, context: &'static str, indices: &[usize]) -> Result<()> {
+    if value >= GOLDILOCKS_MODULUS {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context,
+            indices: indices.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_canonical_goldilocks_encoding(
+    bytes: &[u8; 32],
+    context: &'static str,
+    indices: &[usize],
+) -> Result<()> {
+    if field_norito::core::from_bytes(bytes).is_none() {
+        return Err(Error::NonCanonicalGoldilocksElement {
+            context,
+            indices: indices.to_vec(),
+        });
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1326,9 +1494,8 @@ mod field_norito {
             if bytes[8..].iter().any(|byte| *byte != 0) {
                 return None;
             }
-            Some(u64::from_le_bytes(
-                bytes[..8].try_into().expect("slice length is 8"),
-            ))
+            let value = u64::from_le_bytes(bytes[..8].try_into().expect("slice length is 8"));
+            (value < super::super::GOLDILOCKS_MODULUS).then_some(value)
         }
     }
 }
@@ -1481,6 +1648,23 @@ mod tests {
         mutate(&mut tampered);
         let err = verify(batch, &tampered).unwrap_err();
         assert!(matches_err(&err), "unexpected verifier error: {err:?}");
+    }
+    fn assert_noncanonical_goldilocks_rejected(
+        proof: &Proof,
+        expected_context: &'static str,
+        expected_indices: &[usize],
+        mutate: impl FnOnce(&mut Proof),
+    ) {
+        let mut tampered = proof.clone();
+        mutate(&mut tampered);
+        let err = validate_canonical_goldilocks_elements(&tampered).unwrap_err();
+        match err {
+            Error::NonCanonicalGoldilocksElement { context, indices } => {
+                assert_eq!(context, expected_context);
+                assert_eq!(indices, expected_indices);
+            }
+            other => panic!("unexpected verifier error: {other:?}"),
+        }
     }
     fn target_public_io_for(batch: &TransitionBatch) -> PublicIO {
         let ordering = ordering::ordering_hash(batch).unwrap();
@@ -2165,25 +2349,57 @@ mod tests {
             &batch,
             &proof,
             |tampered| tampered.trace_root[8] = 1,
-            |err| matches!(err, Error::TraceRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "trace_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.lookup_root[8] = 1,
-            |err| matches!(err, Error::LookupRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "lookup_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.air_trace_root[8] = 1,
-            |err| matches!(err, Error::AirTraceRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "air_trace_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
         assert_verify_rejects(
             &batch,
             &proof,
             |tampered| tampered.air_composition_root[8] = 1,
-            |err| matches!(err, Error::AirCompositionRootMismatch),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "air_composition_root",
+                        indices,
+                    } if indices.is_empty()
+                )
+            },
         );
     }
     #[test]
@@ -2452,17 +2668,23 @@ mod tests {
         assert!(matches!(err, Error::CommitmentMismatch));
     }
     #[test]
-    fn verify_rejects_trace_root_before_malformed_deep_roots() {
+    fn verify_rejects_noncanonical_deep_root_before_trace_root_binding() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
-        proof.trace_root[0] ^= 0xAA;
+        proof.trace_root = field_norito::core::to_bytes(42);
         proof.lookup_root[8] = 1;
         proof.air_trace_root[8] = 1;
         proof.air_composition_root[8] = 1;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
-            matches!(err, Error::TraceRootMismatch),
+            matches!(
+                err,
+                Error::NonCanonicalGoldilocksElement {
+                    context: "air_trace_root",
+                    indices,
+                } if indices.is_empty()
+            ),
             "unexpected verifier error: {err:?}"
         );
     }
@@ -2731,7 +2953,10 @@ mod tests {
     fn verify_rejects_spoofed_permission_hashes_with_explicit_perm_root() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let mut batch = sample_batch_with_permission();
-        let spoofed_hashes = vec![[0x11; 32], [0x22; 32]];
+        let spoofed_hashes = vec![
+            field_norito::core::to_bytes(0x11),
+            field_norito::core::to_bytes(0x22),
+        ];
         batch.public_inputs.perm_root = perm_root_from_permission_hashes(&spoofed_hashes);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert_eq!(proof.public_io.perm_root, batch.public_inputs.perm_root);
@@ -2837,6 +3062,7 @@ mod tests {
     #[test]
     fn verify_rejects_empty_and_malformed_fri_layer_roots() {
         let (batch, proof) = sample_proof_with_size(32);
+        let terminal_round = proof.fri_layers.len() - 1;
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2861,7 +3087,15 @@ mod tests {
                     .expect("expected terminal FRI root");
                 root[8] = 1;
             },
-            |err| matches!(err, Error::FriLayerMismatch { .. }),
+            |err| {
+                matches!(
+                    err,
+                    Error::NonCanonicalGoldilocksElement {
+                        context: "fri_layers",
+                        indices,
+                    } if indices.as_slice() == [terminal_round]
+                )
+            },
         );
     }
     #[test]
@@ -4302,9 +4536,179 @@ mod tests {
         assert_eq!(field_norito::core::from_bytes(&encoded), Some(value));
     }
     #[test]
-    fn field_norito_from_bytes_rejects_nonzero_tail() {
+    fn field_norito_from_bytes_rejects_noncanonical_encodings() {
         let mut encoded = field_norito::core::to_bytes(7);
         encoded[8] = 1;
         assert_eq!(field_norito::core::from_bytes(&encoded), None);
+        assert_eq!(
+            field_norito::core::from_bytes(&field_norito::core::to_bytes(GOLDILOCKS_MODULUS)),
+            None
+        );
+    }
+    #[test]
+    fn public_verifier_preflight_rejects_noncanonical_merkle_sibling() {
+        let batch = sample_batch();
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.queries[0].merkle_path = vec![GOLDILOCKS_MODULUS];
+        let err = super::verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::NonCanonicalGoldilocksElement {
+                context: "queries.merkle_path",
+                indices,
+            } if indices == [0, 0]
+        ));
+    }
+    fn proof_with_every_goldilocks_container() -> Proof {
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        proof.public_io.permission_hashes = vec![field_norito::core::to_bytes(22)];
+        proof.betas = vec![23];
+        proof.queries[0].merkle_path = vec![24];
+        proof.air_openings[0].current_row = vec![25];
+        proof.air_openings[0].next_row = vec![26];
+        proof.air_openings[0].current_row_path = vec![27];
+        proof.air_openings[0].next_row_path = vec![28];
+        proof.air_openings[0].composition_path = vec![29];
+        proof.fri_queries[0].rounds = vec![FriRoundOpening {
+            round: 0,
+            index: 0,
+            values: vec![30],
+            folded_value: 31,
+            merkle_path: vec![32],
+        }];
+        proof.fri_queries[0].final_merkle_path = vec![33];
+        validate_canonical_goldilocks_elements(&proof).unwrap();
+        proof
+    }
+
+    #[test]
+    fn canonical_preflight_covers_roots_and_transcript_scalars() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "trace_root", &[], |proof| {
+            proof.trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "air_trace_root", &[], |proof| {
+            proof.air_trace_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "air_composition_root", &[], |proof| {
+            proof.air_composition_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_root", &[], |proof| {
+            proof.lookup_root = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "fri_layers", &[0], |proof| {
+            proof.fri_layers[0] = field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+        });
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "public_io.permission_hashes",
+            &[0],
+            |proof| {
+                proof.public_io.permission_hashes[0] =
+                    field_norito::core::to_bytes(GOLDILOCKS_MODULUS);
+            },
+        );
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_grand_product", &[], |proof| {
+            proof.lookup_grand_product = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "lookup_challenge", &[], |proof| {
+            proof.lookup_challenge = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "alphas", &[0], |proof| {
+            proof.alphas[0] = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "betas", &[0], |proof| {
+            proof.betas[0] = GOLDILOCKS_MODULUS;
+        });
+    }
+
+    #[test]
+    fn canonical_preflight_covers_query_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.value", &[0], |proof| {
+            proof.queries[0].value = GOLDILOCKS_MODULUS;
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.chunk_values", &[0, 0], |proof| {
+            proof.queries[0].chunk_values[0] = GOLDILOCKS_MODULUS
+        });
+        assert_noncanonical_goldilocks_rejected(&proof, "queries.merkle_path", &[0, 0], |proof| {
+            proof.queries[0].merkle_path[0] = GOLDILOCKS_MODULUS
+        });
+    }
+
+    #[test]
+    fn canonical_preflight_covers_air_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.current_row",
+            &[0, 0],
+            |proof| proof.air_openings[0].current_row[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.next_row",
+            &[0, 0],
+            |proof| proof.air_openings[0].next_row[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.current_row_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].current_row_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.next_row_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].next_row_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.composition_value",
+            &[0],
+            |proof| proof.air_openings[0].composition_value = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "air_openings.composition_path",
+            &[0, 0],
+            |proof| proof.air_openings[0].composition_path[0] = GOLDILOCKS_MODULUS,
+        );
+    }
+
+    #[test]
+    fn canonical_preflight_covers_fri_values_and_paths() {
+        let proof = proof_with_every_goldilocks_container();
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.values",
+            &[0, 0, 0],
+            |proof| proof.fri_queries[0].rounds[0].values[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.folded_value",
+            &[0, 0],
+            |proof| proof.fri_queries[0].rounds[0].folded_value = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.rounds.merkle_path",
+            &[0, 0, 0],
+            |proof| proof.fri_queries[0].rounds[0].merkle_path[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.final_values",
+            &[0, 0],
+            |proof| proof.fri_queries[0].final_values[0] = GOLDILOCKS_MODULUS,
+        );
+        assert_noncanonical_goldilocks_rejected(
+            &proof,
+            "fri_queries.final_merkle_path",
+            &[0, 0],
+            |proof| proof.fri_queries[0].final_merkle_path[0] = GOLDILOCKS_MODULUS,
+        );
     }
 }

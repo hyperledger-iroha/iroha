@@ -1493,8 +1493,8 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "249fca9ea282526e16ee781413c7d1caba244fb161847af1f7f2c54fd742ff0d",
-    "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
+    "launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
+    "into_serialized_runtime": "e895a7575f49a1f4e5247abda656b4ad6618bf1aefb6cd98f73cd3f6c5245b03",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (

@@ -4,6 +4,10 @@ mod vega_microsoft_cross_conformance;
 const ENGINE_SOURCE: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega/engine.rs"));
 const FACADE_SOURCE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega.rs"));
+const EXACT_BOUNDARY_SOURCE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/vega/canonical_mc_exact.rs"
+));
 #[test]
 fn production_vega_entry_points_delegate_only_to_canonical_mc() {
     let prove = source_between(
@@ -54,6 +58,34 @@ fn retired_custom_transcript_and_wire_are_not_public_facade_exports() {
     assert!(FACADE_SOURCE.contains("pub use engine::{"));
     assert!(FACADE_SOURCE.contains("prove_vega_mdl_figure9_v1"));
     assert!(FACADE_SOURCE.contains("verify_vega_mdl_figure9_v1"));
+}
+#[test]
+fn public_contract_matches_the_reachable_first_party_split_prover() {
+    for stale_claim in [
+        "split-witness adapter remains unavailable",
+        "does not yet have the exact Microsoft split step/core witness adapter",
+    ] {
+        assert!(
+            !ENGINE_SOURCE.contains(stale_claim),
+            "public Vega contract regressed to a stale prover claim: {stale_claim}"
+        );
+    }
+    let prove = source_between(
+        EXACT_BOUNDARY_SOURCE,
+        "pub(super) fn prove_figure9_mc",
+        "/// Parse the fixed envelope",
+    );
+    for required in [
+        "preflight_governed_figure9_prover_artifacts",
+        "synthesize_figure9_mc_material",
+        "prepare_governed_figure9_application",
+        "verify_figure9_mc",
+    ] {
+        assert!(
+            prove.contains(required),
+            "exact Figure 9 prover omitted required stage: {required}"
+        );
+    }
 }
 fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let after_start = source
