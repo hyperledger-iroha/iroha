@@ -3010,6 +3010,10 @@ pub mod account {
         /// Delegates finalization authorisation to the core recovery state machine.
         visit_finalize_account_recovery(FinalizeAccountRecovery);
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive permission match keeps account-association policy auditable"
+    )]
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
         account_id: &AccountId,

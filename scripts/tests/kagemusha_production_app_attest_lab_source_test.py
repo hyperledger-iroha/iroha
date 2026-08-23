@@ -150,6 +150,20 @@ class ProductionAppAttestLabSourceTest(unittest.TestCase):
         self.assertIn("No Accounts", source)
         self.assertIn("-allowProvisioningUpdates", source)
         self.assertIn("-allowProvisioningDeviceRegistration", source)
+        self.assertIn(
+            r"-extract 'com\.apple\.developer\.devicecheck\.appattest-environment' raw",
+            source,
+        )
+        self.assertIn(
+            r"-extract 'com\.apple\.developer\.team-identifier' raw", source
+        )
+        self.assertNotIn(
+            "-extract com.apple.developer.devicecheck.appattest-environment raw",
+            source,
+        )
+        self.assertNotIn(
+            "-extract com.apple.developer.team-identifier raw", source
+        )
         self.assertNotIn("device_udid_sha256", source)
         self.assertNotIn("device_serial_sha256", source)
 

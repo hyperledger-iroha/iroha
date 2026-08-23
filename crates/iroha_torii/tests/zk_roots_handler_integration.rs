@@ -186,7 +186,9 @@ fn seeded_zk_roots_state(
         zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.transactions.insert_block(
-            HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(
+            HashSet::<
+                iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
+            >::new(
             ),
             nonzero!(1_usize),
         );

@@ -1772,7 +1772,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     |runner| {
                         match launched.drive_completion_turn(runner, &mut lane_work) {
                             ProductionLifecycleCompletionTurnV1::Selected(
-                                ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied,
+                                ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied,
                             ) => true,
                             ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                                 assert_eq!(runner.target(), LifecycleRunnerRankTarget::Completion);
@@ -1780,7 +1780,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                                 false
                             }
                             ProductionLifecycleCompletionTurnV1::Selected(
-                                ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred,
+                                ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyCompletionDeferred,
                             ) => panic!("empty recovered block must not need a merge sidecar"),
                             ProductionLifecycleCompletionTurnV1::Selected(_) => {
                                 panic!("recovered Apply completion selected the wrong lifecycle class")

@@ -826,7 +826,7 @@ def _successor_production_recovery_source_fidelity_errors(
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
                         "ProductionCompletionDispatchV1::ApplyQueued",
-                        "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+                        "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched.activate( Instant::now(), activation, local_proposal_state )",
                         "drop(auxiliary_hold)",
@@ -1046,6 +1046,9 @@ def _successor_production_recovery_source_fidelity_errors(
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
         )
+        ledger_store_path, ledger_store_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs"
+        )
         worker_path, worker_source = load(
             "crates/iroha_core/src/sumeragi/v2_worker.rs"
         )
@@ -1224,10 +1227,13 @@ self.io.is_some()
                     "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
-                    "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+                    "super::authority::lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water(),)",
+                    "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
                     "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+                    "lifecycle_ordinals.advance_past(high_watermark)",
                     "leader_wire_launch.open_gate(",
                     "leader_wire_restore.scheduler_ordinal_high_watermark()",
+                    "self.coordinator.bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
                     "ProductionLeaderWireIngressBindingV1::bind(",
                     "self.adapter_startup.take()",
                     "self.body_store.take()",
@@ -2981,6 +2987,87 @@ self.io.is_some()
                     "persist_exact_successor",
                 ),
             )
+            ordinary_body_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_body_stage_transition",
+                errors,
+            )
+            if ordinary_body_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "ordinary adjacent body successor reserves exactly one ordinal",
+                    ordinary_body_transition.source,
+                    (
+                        "BodyStagePayloadRelationV1::OrdinaryBodyFrame, 1",
+                    ),
+                )
+            recovered_decision_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_recovered_decision_fetch_store_transition",
+                errors,
+            )
+            if recovered_decision_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "recovered Decision Fetch-to-Store reserves exactly one ordinal",
+                    recovered_decision_transition.source,
+                    (
+                        "BodyStagePayloadRelationV1::RecoveredDecisionFetch, 1",
+                    ),
+                )
+            recovered_single_broadcast_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "prepare_recovered_lifecycle_sign_broadcast_transition",
+                errors,
+            )
+            if recovered_single_broadcast_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "single recovered Broadcast reserves exactly one ordinal",
+                    recovered_single_broadcast_transition.source,
+                    (
+                        "stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate, 1)",
+                    ),
+                )
+            body_transition_reservation = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_body_stage_transition_with_payload_relation",
+                errors,
+            )
+            if body_transition_reservation is not None:
+                require_order(
+                    body_pipeline_path,
+                    "adjacent body successor retains its actor-global ordinal reservation",
+                    body_transition_reservation.source,
+                    (
+                        "ordinal_count: usize",
+                        "reserve_body_transition_ordinals(coordinator, ordinal_count)",
+                        "ordinal_reservation.first()",
+                        "staged.reduce_admit_with_ordinal_allocator",
+                        "count != 1 || expected_child_ordinal <= high_water",
+                        "Ok(StagedBodyStageTransition { staged, ordinal_reservation",
+                    ),
+                )
+            durable_ordinal_publication = _require_rust_item(
+                ledger_store_path,
+                ledger_store_source,
+                "persist_exact_staged_successor_with_ordinal_reservation",
+                errors,
+            )
+            if durable_ordinal_publication is not None:
+                require_order(
+                    ledger_store_path,
+                    "durable ordinal publication follows exact LedgerV1 fsync",
+                    durable_ordinal_publication.source,
+                    (
+                        "self.persist_exact_staged_successor(staged)?",
+                        "reservation.commit_after_durable_publication()",
+                    ),
+                )
             combined_transition = region(
                 body_pipeline_path,
                 body_pipeline_source,
@@ -2993,9 +3080,12 @@ self.io.is_some()
                 "inert recovered Broadcast-and-next-Sign coordinator staging",
                 combined_transition,
                 (
-                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)",
-                    "first.child_ordinal.checked_add(1)",
-                    "staged.reduce_admit(AdmissionRequest::Candidate(next_sign))",
+                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast, 2)",
+                    "ordinal_reservation.last()",
+                    "broadcast_ordinal.checked_add(1)",
+                    "staged.reduce_admit_with_ordinal_allocator( AdmissionRequest::Candidate(next_sign)",
+                    "count != 1 || expected_next_sign_ordinal <= high_water",
+                    "Ok((expected_next_sign_ordinal, expected_next_sign_ordinal))",
                     "next_sign_owner == broadcast_owner",
                     "staged.high_water != next_sign_ordinal",
                     "capacity_generation_before[&CapacityClass::Effect].saturating_add(1)",
@@ -3025,7 +3115,7 @@ self.io.is_some()
                 "durable recovered Broadcast-and-next-Sign publication",
                 combined_transition_publication,
                 (
-                    "persist_exact_staged_successor(&self.staged)",
+                    "persist_exact_staged_successor_with_ordinal_reservation( &self.staged, &self.ordinal_reservation, )",
                     "successor.commit_after_publication()",
                     "*coordinator = staged",
                     "if publication_is_vote",
@@ -3262,7 +3352,7 @@ self.io.is_some()
                 launch_source,
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-                "pub(in crate::sumeragi) fn drive_recovered_decision_apply_deferred(",
+                "pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(",
             )
             require_order(
                 launch_path,
@@ -3657,7 +3747,7 @@ self.io.is_some()
                 launch_source,
                 "launched unified lifecycle completion Drop order",
                 "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
-                "/// Result of draining one dedicated recovered Apply worker completion.",
+                "/// Sole parked lifecycle completion owner for this height.",
             )
             require_order(
                 launch_path,
@@ -3673,8 +3763,8 @@ self.io.is_some()
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_completion_with_runner_debt(",
-                "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
+                "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+                "pub(super) fn dispatch_ready_validate_successor(",
             )
             require_order(
                 scheduler_path,
@@ -3684,7 +3774,7 @@ self.io.is_some()
                     "attest_ready_recovered_decision_fetch",
                     "authenticate_recovered_decision_fetch_request(",
                     "take_request_authority()",
-                    "capture_recovered_completion_capacity_census(probes)",
+                    "capture_lifecycle_completion_capacity_census(probes)",
                     "self.coordinator.plan_turn(inputs)",
                     "census.select_fetch(ordinal)",
                     "prepare_recovered_decision_fetch_request_registration(owner)",
@@ -3701,7 +3791,7 @@ self.io.is_some()
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "services.matches_lifecycle_executor_output_guard(executor)",
                     "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
-                    "RecoveredCompletionCapacityProbeV1::Fetch",
+                    "LifecycleCompletionCapacityProbeV1::Fetch",
                     "authenticated_capacity(ordinal, &factory)",
                     "prepared.dispatch_key() != registration.dispatch_key()",
                     "installed != dispatch_key",

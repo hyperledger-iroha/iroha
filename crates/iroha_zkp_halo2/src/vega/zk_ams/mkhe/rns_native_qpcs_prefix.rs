@@ -1103,8 +1103,7 @@ fn exact_authentication_count_v1(
     mut length: usize,
 ) -> Result<usize, RnsNativeQpcsPrefixErrorV1> {
     if !length.is_power_of_two()
-        || length < 2
-        || length > DOMAIN_SIZE_V1
+        || !(2..=DOMAIN_SIZE_V1).contains(&length)
         || indices.len == 0
         || indices.values[..indices.len]
             .iter()
@@ -1259,6 +1258,10 @@ pub(super) fn authenticate_tree_v1(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the test helper mirrors each authenticated qPCS proof section explicitly"
+)]
 fn verify_relations_openings_and_batch_v1(
     context: PrefixContextV1,
     initial_indices: &[u32],
@@ -1626,7 +1629,7 @@ pub(super) fn fold_value_with_inverse_x_v1(
     negative: Fq2V1,
     alpha: Fq2V1,
 ) -> Fq2V1 {
-    let inverse_two = (field.modulus + 1) / 2;
+    let inverse_two = field.modulus.div_ceil(2);
     let inverse_two_x = field.scale(inverse_x, inverse_two);
     let even = field.scale(field.add(positive, negative), inverse_two);
     let odd = field.mul(field.sub(positive, negative), inverse_two_x);

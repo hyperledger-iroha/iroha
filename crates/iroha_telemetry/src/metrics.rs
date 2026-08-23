@@ -2301,56 +2301,6 @@ mod tests {
             .parse::<f64>()
             .unwrap_or_else(|err| panic!("invalid metric value `{line}`: {err}"))
     }
-    fn sample_lane_teu_status() -> NexusLaneTeuStatus {
-        NexusLaneTeuStatus {
-            lane_id: 0,
-            capacity: 20,
-            committed: 10,
-            buckets: NexusLaneTeuBuckets::default(),
-            deferrals: NexusLaneTeuDeferrals::default(),
-            must_serve_truncations: 0,
-            trigger_level: 0,
-            starvation_bound_slots: 4,
-            block_height: 1,
-            finality_lag_slots: 0,
-            settlement_backlog_xor_micro: 0,
-            tx_vertices: 1,
-            tx_edges: 0,
-            overlay_count: 0,
-            overlay_instr_total: 0,
-            overlay_bytes_total: 0,
-            rbc_chunks: 0,
-            rbc_bytes_total: 0,
-            peak_layer_width: 0,
-            layer_count: 0,
-            avg_layer_width: 0,
-            median_layer_width: 0,
-            scheduler_utilization_pct: 0,
-            layer_width_buckets: SchedulerLayerWidthBuckets::default(),
-            detached_prepared: 0,
-            detached_merged: 0,
-            detached_fallback: 0,
-            quarantine_executed: 0,
-            manifest_required: false,
-            manifest_ready: false,
-            alias: String::new(),
-            dataspace_id: 0,
-            dataspace_alias: None,
-            visibility: None,
-            storage_profile: String::new(),
-            lane_type: None,
-            governance: None,
-            settlement: None,
-            scheduler_teu_capacity_override: None,
-            scheduler_starvation_bound_override: None,
-            manifest_path: None,
-            manifest_validators: Vec::new(),
-            manifest_validator_bindings: Vec::new(),
-            manifest_quorum: None,
-            manifest_protected_namespaces: Vec::new(),
-            manifest_runtime_upgrade: None,
-        }
-    }
     fn sample_dataspace_teu_status() -> NexusDataspaceTeuStatus {
         NexusDataspaceTeuStatus {
             lane_id: 0,
@@ -6530,7 +6480,7 @@ fields {
     pub sumeragi_epoch_reveal_deadline_offset: gauge();
     /// Tiered state: entries retained in the hot tier after the latest snapshot.
     pub state_tiered_hot_entries: gauge();
-    /// Tiered state: bytes retained in the hot tier after the latest snapshot.
+    /// Tiered state: deterministic key-plus-value hot budget weight after the latest snapshot.
     pub state_tiered_hot_bytes: gauge();
     /// Tiered state: entries spilled to the cold tier after the latest snapshot.
     pub state_tiered_cold_entries: gauge();
@@ -6544,10 +6494,10 @@ fields {
     pub state_tiered_hot_promotions: gauge();
     /// Tiered state: entries demoted into the cold tier in the latest snapshot.
     pub state_tiered_hot_demotions: gauge();
-    /// Tiered state: hot-tier key budget overflow caused by grace retention.
-    pub state_tiered_hot_grace_overflow_keys: gauge();
-    /// Tiered state: hot-tier byte budget overflow caused by grace retention.
-    pub state_tiered_hot_grace_overflow_bytes: gauge();
+    /// Tiered state: hot-tier key budget overflow in the latest snapshot.
+    pub state_tiered_hot_budget_overflow_keys: gauge();
+    /// Tiered state: hot-tier byte budget overflow in the latest snapshot.
+    pub state_tiered_hot_budget_overflow_bytes: gauge();
     /// Tiered state: last recorded snapshot index.
     pub state_tiered_last_snapshot_index: gauge();
     /// Storage budget: bytes used per component.
@@ -8549,7 +8499,7 @@ construct {
         sumeragi_epoch_reveal_deadline_offset state_tiered_hot_entries state_tiered_hot_bytes
         state_tiered_cold_entries state_tiered_cold_bytes state_tiered_cold_reused_entries
         state_tiered_cold_reused_bytes state_tiered_hot_promotions state_tiered_hot_demotions
-        state_tiered_hot_grace_overflow_keys state_tiered_hot_grace_overflow_bytes
+        state_tiered_hot_budget_overflow_keys state_tiered_hot_budget_overflow_bytes
         state_tiered_last_snapshot_index storage_budget_bytes_used storage_budget_bytes_limit
         storage_budget_exceeded_total storage_da_cache_total storage_da_churn_bytes_total
         governance_proposals_status]
@@ -9248,8 +9198,8 @@ initialize (metrics) {
         sumeragi_epoch_commit_deadline_offset sumeragi_epoch_reveal_deadline_offset
         state_tiered_hot_entries state_tiered_hot_bytes state_tiered_cold_entries
         state_tiered_cold_bytes state_tiered_cold_reused_entries state_tiered_cold_reused_bytes
-        state_tiered_hot_promotions state_tiered_hot_demotions state_tiered_hot_grace_overflow_keys
-        state_tiered_hot_grace_overflow_bytes state_tiered_last_snapshot_index
+        state_tiered_hot_promotions state_tiered_hot_demotions state_tiered_hot_budget_overflow_keys
+        state_tiered_hot_budget_overflow_bytes state_tiered_last_snapshot_index
         storage_budget_bytes_used storage_budget_bytes_limit storage_budget_exceeded_total
         storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
         governance_council_members governance_council_alternates governance_council_candidates
@@ -9597,10 +9547,10 @@ const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
 const METRIC_CATALOG_V2_ROWS: usize = 868;
 const METRIC_CATALOG_V2_REGISTERED: usize = 823;
-const METRIC_CATALOG_V2_BYTES: usize = 118_155;
+const METRIC_CATALOG_V2_BYTES: usize = 118_123;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "b50d212eaf4d4f4e955c6bf2f8ae123abf495a84b105ed0f5c0bf34f97a6efc6";
+    "4f986d35fe2a1fa17430d6c2fcd59495fe492fd15592f94b060db5624078791d";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

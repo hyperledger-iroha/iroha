@@ -49,10 +49,10 @@ use super::{
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
-    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ReadyValidateSuccessorV1,
     RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
-    work_registry::RecoveredDecisionApplyTerminalPublicationError,
+    work_registry::LifecycleDecisionApplyTerminalPublicationErrorV1,
 };
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
@@ -65,7 +65,7 @@ use crate::{
         FairV2Ingress, FairV2IngressDequeueDisposition, InboundBlockMessage,
         output_guard::ConsensusOutputGuard,
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
-        v2_apply::RecoveredDecisionApplyWorkerResultV1,
+        v2_apply::LifecycleDecisionApplyWorkerResultV1,
         v2_context::AuthenticatedGenesisBodyV1,
         v2_effects::{
             EffectExecutorError, EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor,
@@ -77,13 +77,13 @@ use crate::{
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
-            LifecycleCompletionTakeV1, PreparedCertifiedFetchBodyPersistenceCompletion,
-            PreparedDeferredLifecycleValidateCompletionV1, PreparedLifecycleValidateCompletionV1,
-            PreparedRecoveredDecisionApplyCompletionV1,
+            LifecycleCompletionTakeV1, LifecycleDecisionApplyDeferredRetryV1,
+            PreparedCertifiedFetchBodyPersistenceCompletion,
+            PreparedDeferredLifecycleValidateCompletionV1,
+            PreparedLifecycleDecisionApplyCompletionV1, PreparedLifecycleValidateCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleProposalExactOutputCaptureV1,
-            V2CleanupSupervisor,
+            RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
         },
     },
 };
@@ -247,8 +247,8 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
 /// Sole parked lifecycle completion owner for this height.
 #[allow(variant_size_differences)]
 enum PendingLifecycleCompletionV1 {
-    /// Recovered Apply awaits its exact missing-sidecar retry.
-    RecoveredDecisionApplyDeferred(RetainedRecoveredDecisionApplyDeferredV1),
+    /// Lifecycle Decision Apply awaits its exact missing-sidecar retry.
+    LifecycleDecisionApplyDeferred(RetainedLifecycleDecisionApplyDeferredV1),
     /// Ordinary certified-Fetch persistence awaits Phase B publication.
     CertifiedFetch(PreparedCertifiedFetchBodyPersistenceCompletion),
     /// Recovered Decision Fetch persistence awaits Store settlement.
@@ -257,6 +257,9 @@ enum PendingLifecycleCompletionV1 {
     RecoveredSign(PreparedRecoveredLifecycleSignCompletionV1),
     /// One executed lifecycle Validate awaits same-address Ready publication.
     Validate(PreparedLifecycleValidateCompletionV1),
+    /// One just-published Validate carrier must resolve at the same Ready
+    /// address before any physical completion or Runtime turn can intervene.
+    ReadyValidateSuccessor(ReadyValidateSuccessorV1),
     /// A missing-sidecar lifecycle Validate remains parked under its exact wait owner.
     DeferredValidate(PreparedDeferredLifecycleValidateCompletionV1),
     /// The exact missing-sidecar registration is fsynced and retains either
@@ -304,10 +307,11 @@ impl PendingLifecycleCompletionV1 {
     fn recovered_sign(&self) -> Option<&PreparedRecoveredLifecycleSignCompletionV1> {
         match self {
             Self::RecoveredSign(completion) => Some(completion),
-            Self::RecoveredDecisionApplyDeferred(_)
+            Self::LifecycleDecisionApplyDeferred(_)
             | Self::CertifiedFetch(_)
             | Self::RecoveredDecisionFetch(_)
             | Self::Validate(_)
+            | Self::ReadyValidateSuccessor(_)
             | Self::DeferredValidate(_)
             | Self::RegisteredDeferredValidate(_) => None,
         }
@@ -340,14 +344,14 @@ enum PendingIngressCapacityKindV1 {
     CertifiedFetch,
     RecoveredDecisionFetch,
 }
-/// Result of draining one dedicated recovered Apply worker completion.
+/// Result of draining one dedicated lifecycle Decision Apply worker completion.
 #[allow(variant_size_differences)]
-#[must_use = "a deferred recovered Apply completion must remain retained"]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionV1 {
+#[must_use = "a deferred lifecycle Decision Apply completion must remain retained"]
+pub(in crate::sumeragi) enum ProductionLifecycleDecisionApplyCompletionV1 {
     /// Kura, LedgerV1, coordinator, registry, adapter, executor, and worker ack advanced.
     Applied,
     /// A guarded missing-sidecar result awaits exact fetch progress or queue re-entry.
-    Deferred(RetainedRecoveredDecisionApplyDeferredV1),
+    Deferred(RetainedLifecycleDecisionApplyDeferredV1),
 }
 /// Result of settling one lifecycle-owned recovered Decision Fetch body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -444,86 +448,86 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementFail
 /// There is intentionally no parts or acknowledgement API. The sole retry
 /// method either republishes the unchanged task under its existing queue key
 /// or returns this complete guarded owner when capacity remains unavailable.
-#[must_use = "deferred recovered Apply remains the sole retry owner"]
-pub(in crate::sumeragi) struct RetainedRecoveredDecisionApplyDeferredV1 {
-    completion: PreparedRecoveredDecisionApplyCompletionV1,
-    sidecar: RecoveredDecisionApplySidecarWaitV1,
+#[must_use = "deferred lifecycle Decision Apply remains the sole retry owner"]
+pub(in crate::sumeragi) struct RetainedLifecycleDecisionApplyDeferredV1 {
+    completion: PreparedLifecycleDecisionApplyCompletionV1,
+    sidecar: LifecycleDecisionApplySidecarWaitV1,
 }
-struct RecoveredDecisionApplySidecarWaitV1 {
+struct LifecycleDecisionApplySidecarWaitV1 {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     reference: CertifiedMergeLedgerReference,
 }
-impl RecoveredDecisionApplySidecarWaitV1 {
+impl LifecycleDecisionApplySidecarWaitV1 {
     fn register(
         &self,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
-        lane_work.defer_missing_recovered_decision_apply_sidecar(
+        lane_work.defer_missing_lifecycle_decision_apply_sidecar(
             self.round,
             self.subject,
             self.reference.clone(),
         )
     }
 }
-/// Result of retrying one exact recovered Apply after its merge sidecar arrives.
+/// Result of retrying one exact lifecycle Decision Apply after its merge sidecar arrives.
 #[allow(variant_size_differences)]
-#[must_use = "an unavailable retry still owns the recovered Apply completion"]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyRetryV1 {
+#[must_use = "an unavailable retry still owns the lifecycle Decision Apply completion"]
+pub(in crate::sumeragi) enum ProductionLifecycleDecisionApplyRetryV1 {
     /// The unchanged task was atomically returned to the dedicated worker FIFO.
     Requeued,
     /// Sidecar fetch progress or Consensus I/O capacity is pending; ownership is unchanged.
-    Unavailable(RetainedRecoveredDecisionApplyDeferredV1),
+    Unavailable(RetainedLifecycleDecisionApplyDeferredV1),
     /// The dedicated worker index changed and consensus was closed for restart.
     RestartRequired,
 }
-impl RetainedRecoveredDecisionApplyDeferredV1 {
+impl RetainedLifecycleDecisionApplyDeferredV1 {
     /// Retry only after the exact authenticated sidecar is locally durable.
     ///
     /// Re-registering the sealed wait is idempotent. `Fetching` and
     /// `RetryLater` retain this complete owner; only `Available`, which
     /// reauthenticates the referenced Kura entry, may republish the task.
-    fn retry_after_available(self) -> ProductionRecoveredDecisionApplyRetryV1 {
+    fn retry_after_available(self) -> ProductionLifecycleDecisionApplyRetryV1 {
         let Self {
             completion,
             sidecar,
         } = self;
         match completion.retry_deferred() {
-            RecoveredDecisionApplyDeferredRetryV1::Requeued => {
-                ProductionRecoveredDecisionApplyRetryV1::Requeued
+            LifecycleDecisionApplyDeferredRetryV1::Requeued => {
+                ProductionLifecycleDecisionApplyRetryV1::Requeued
             }
-            RecoveredDecisionApplyDeferredRetryV1::Unavailable(completion) => {
-                ProductionRecoveredDecisionApplyRetryV1::Unavailable(Self {
+            LifecycleDecisionApplyDeferredRetryV1::Unavailable(completion) => {
+                ProductionLifecycleDecisionApplyRetryV1::Unavailable(Self {
                     completion,
                     sidecar,
                 })
             }
-            RecoveredDecisionApplyDeferredRetryV1::RestartRequired => {
-                ProductionRecoveredDecisionApplyRetryV1::RestartRequired
+            LifecycleDecisionApplyDeferredRetryV1::RestartRequired => {
+                ProductionLifecycleDecisionApplyRetryV1::RestartRequired
             }
         }
     }
 }
-/// Fail-stop class while durably terminalizing a recovered Apply completion.
+/// Fail-stop class while durably terminalizing a lifecycle Decision Apply completion.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
-    /// The owner had no exact active recovered Apply lease and carrier.
-    #[error("recovered Apply completion lost its exact lifecycle owner")]
+pub(in crate::sumeragi) enum ProductionLifecycleDecisionApplyCompletionErrorV1 {
+    /// The owner had no exact active lifecycle Decision Apply lease and carrier.
+    #[error("lifecycle Decision Apply completion lost its exact lifecycle owner")]
     Owner,
-    /// The Kura result did not match the installed recovered Apply authority.
-    #[error("recovered Apply completion changed its durable authority")]
+    /// The Kura result did not match the installed lifecycle Decision Apply authority.
+    #[error("lifecycle Decision Apply completion changed its durable authority")]
     Completion,
     /// The exact decided merge-sidecar dependency could not be registered.
-    #[error("recovered Apply merge-sidecar recovery could not retain its exact owner")]
+    #[error("lifecycle Decision Apply merge-sidecar recovery could not retain its exact owner")]
     Sidecar,
     /// The serialized adapter/executor retained conflicting live work.
-    #[error("recovered Apply completion overtook live reducer work")]
+    #[error("lifecycle Decision Apply completion overtook live reducer work")]
     Executor,
     /// The staged terminal was not the sole exact coordinator/registry successor.
-    #[error("recovered Apply terminal registry successor is not exact")]
+    #[error("lifecycle Decision Apply terminal registry successor is not exact")]
     Registry,
     /// LedgerV1 exact-successor publication failed or became ambiguous.
-    #[error("recovered Apply terminal LedgerV1 publication failed")]
+    #[error("lifecycle Decision Apply terminal LedgerV1 publication failed")]
     Ledger,
 }
 /// Move-only authority reserved for the final one-shot runner activation.
@@ -1346,7 +1350,7 @@ impl LaunchedProductionLifecycleV1 {
         output.commit_after_publication();
         ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
     }
-    /// Drive and retry one exact missing-sidecar recovered Apply owner.
+    /// Drive and retry one exact missing-sidecar lifecycle Decision Apply owner.
     ///
     /// The completion token no longer borrows the whole service owner: its
     /// stable dispatch key retains the exact worker completion accounting.
@@ -1354,54 +1358,54 @@ impl LaunchedProductionLifecycleV1 {
     /// same service/lane instances before reprobing local Kura and queueing the
     /// unchanged task.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(in crate::sumeragi) fn drive_recovered_decision_apply_deferred(
+    pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(
         &mut self,
-        deferred: RetainedRecoveredDecisionApplyDeferredV1,
+        deferred: RetainedLifecycleDecisionApplyDeferredV1,
         lane_work: &mut V2LaneWorkAdapter,
-    ) -> ProductionRecoveredDecisionApplyRetryV1 {
+    ) -> ProductionLifecycleDecisionApplyRetryV1 {
         if !deferred
             .completion
             .authorizes_sidecar_owner(&self.services, lane_work)
         {
             drop(deferred);
-            return ProductionRecoveredDecisionApplyRetryV1::RestartRequired;
+            return ProductionLifecycleDecisionApplyRetryV1::RestartRequired;
         }
         match deferred.sidecar.register(lane_work) {
             Ok(MergeSidecarDeferralDisposition::Available) => deferred.retry_after_available(),
             Ok(MergeSidecarDeferralDisposition::Fetching) => {
                 if lane_work
-                    .dispatch_next_recovered_apply_sidecar_request(
+                    .dispatch_next_lifecycle_decision_apply_sidecar_request(
                         &self.services,
                         &deferred.sidecar.reference,
                     )
                     .is_err()
                 {
                     drop(deferred);
-                    ProductionRecoveredDecisionApplyRetryV1::RestartRequired
+                    ProductionLifecycleDecisionApplyRetryV1::RestartRequired
                 } else {
-                    ProductionRecoveredDecisionApplyRetryV1::Unavailable(deferred)
+                    ProductionLifecycleDecisionApplyRetryV1::Unavailable(deferred)
                 }
             }
             Ok(MergeSidecarDeferralDisposition::RetryLater) => {
-                ProductionRecoveredDecisionApplyRetryV1::Unavailable(deferred)
+                ProductionLifecycleDecisionApplyRetryV1::Unavailable(deferred)
             }
             Ok(MergeSidecarDeferralDisposition::Rejected(_)) | Err(_) => {
                 drop(deferred);
-                ProductionRecoveredDecisionApplyRetryV1::RestartRequired
+                ProductionLifecycleDecisionApplyRetryV1::RestartRequired
             }
         }
     }
-    /// Settle one already-classified recovered Apply completion.
+    /// Settle one already-classified lifecycle Decision Apply completion.
     ///
     /// The unified Completion driver is the only production caller which can
     /// supply this guarded token without probing the physical FIFO again.
-    fn settle_recovered_decision_apply_completion_owner(
+    fn settle_lifecycle_decision_apply_completion_owner(
         &mut self,
-        completion: PreparedRecoveredDecisionApplyCompletionV1,
+        completion: PreparedLifecycleDecisionApplyCompletionV1,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> Result<
-        ProductionRecoveredDecisionApplyCompletionV1,
-        ProductionRecoveredDecisionApplyCompletionErrorV1,
+        ProductionLifecycleDecisionApplyCompletionV1,
+        ProductionLifecycleDecisionApplyCompletionErrorV1,
     > {
         let owner = &mut self.owner;
         let executor = &mut self.executor;
@@ -1412,14 +1416,14 @@ impl LaunchedProductionLifecycleV1 {
                 return Err($failure);
             }};
         }
-        if let RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference } =
+        if let LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference } =
             completion.result()
         {
             if !completion.authorizes_sidecar_owner(services, lane_work) {
                 drop(completion);
-                restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Sidecar);
+                restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Sidecar);
             }
-            let sidecar = RecoveredDecisionApplySidecarWaitV1 {
+            let sidecar = LifecycleDecisionApplySidecarWaitV1 {
                 round: task.validated_receipt().durable().round(),
                 subject: task.subject(),
                 reference: reference.clone(),
@@ -1430,8 +1434,8 @@ impl LaunchedProductionLifecycleV1 {
                     | MergeSidecarDeferralDisposition::Available
                     | MergeSidecarDeferralDisposition::RetryLater,
                 ) => {
-                    return Ok(ProductionRecoveredDecisionApplyCompletionV1::Deferred(
-                        RetainedRecoveredDecisionApplyDeferredV1 {
+                    return Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(
+                        RetainedLifecycleDecisionApplyDeferredV1 {
                             completion,
                             sidecar,
                         },
@@ -1439,41 +1443,41 @@ impl LaunchedProductionLifecycleV1 {
                 }
                 Ok(MergeSidecarDeferralDisposition::Rejected(_)) | Err(_) => {
                     drop(completion);
-                    restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Sidecar);
+                    restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Sidecar);
                 }
             }
         }
-        let RecoveredDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
-            unreachable!("recovered Apply result variants are exhausted above")
+        let LifecycleDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
+            unreachable!("lifecycle Decision Apply result variants are exhausted above")
         };
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
+            restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Owner);
         }
         let Some(lease) = owner.coordinator.active_lease.clone() else {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
+            restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Owner);
         };
         let Some((transition, authority)) = owner
             .registry
-            .prepare_recovered_decision_apply_terminal_transition(
+            .prepare_lifecycle_decision_apply_terminal_transition(
                 &owner.coordinator,
                 &lease,
                 applied,
             )
         else {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Completion);
+            restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Completion);
         };
-        let adapter = match executor.prepare_recovered_decision_apply_completion(authority) {
+        let adapter = match executor.prepare_lifecycle_decision_apply_completion(authority) {
             Ok(adapter) => adapter,
-            Err(_) => restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Executor),
+            Err(_) => restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Executor),
         };
         let mut staged = owner.coordinator.stage_durable_transaction();
         staged.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
         if staged.fault.is_some() {
-            restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Registry);
+            restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Registry);
         }
         let published = owner
             .registry
-            .publish_recovered_decision_apply_terminal_transition(
+            .publish_lifecycle_decision_apply_terminal_transition(
                 transition,
                 &owner.coordinator,
                 &staged,
@@ -1482,30 +1486,35 @@ impl LaunchedProductionLifecycleV1 {
             );
         match published {
             Ok(()) => {}
-            Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(transition)) => {
-                iroha_logger::error!("recovered Apply terminal registry preflight failed closed");
-                drop(transition);
-                restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Registry);
-            }
-            Err(RecoveredDecisionApplyTerminalPublicationError::Publication(error, transition)) => {
+            Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Preflight(transition)) => {
                 iroha_logger::error!(
-                    %error,
-                    "recovered Apply terminal LedgerV1 publication failed closed"
+                    "lifecycle Decision Apply terminal registry preflight failed closed"
                 );
                 drop(transition);
-                restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Ledger);
+                restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Registry);
+            }
+            Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Publication(
+                error,
+                transition,
+            )) => {
+                iroha_logger::error!(
+                    %error,
+                    "lifecycle Decision Apply terminal LedgerV1 publication failed closed"
+                );
+                drop(transition);
+                restart!(ProductionLifecycleDecisionApplyCompletionErrorV1::Ledger);
             }
         }
         owner.coordinator = staged;
         let finality = adapter.commit_after_durable_settlement();
-        let status = executor.commit_recovered_decision_apply_finality(finality);
+        let status = executor.commit_lifecycle_decision_apply_finality(finality);
         let settled = completion.acknowledge_after_owner_settlement();
         assert!(
-            matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
-            "borrowed recovered Apply result cannot change before acknowledgement"
+            matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
+            "borrowed lifecycle Decision Apply result cannot change before acknowledgement"
         );
         super::super::status::set_v2_status(status);
-        Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
+        Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
     }
 }
 /// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
@@ -2524,10 +2533,16 @@ impl ProductionLifecycleOwnerV1 {
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?
             .prepare_leader_wire_launch(launch_storage.wal_path())
             .map_err(|error| ProductionLifecycleLaunchErrorV1::LeaderWire(error.to_owned()))?;
-        // First-release production has no worker-owned scheduler to restore.
-        // The one actor-global source starts empty and is advanced through all
-        // durable leader-wire high-watermarks before ingress opens.
-        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        // One paired authority covers durable coordinator admission, runtime,
+        // and fair ingress. Seed it after the opened LedgerV1 floor, then
+        // advance the shared cursor through every leader-wire recovery cut
+        // before either admission surface opens.
+        let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                self.coordinator.high_water(),
+            );
+        let lifecycle_ordinals =
+            RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority);
         if let Some(high_watermark) = leader_wire_launch.restored_producer_ordinal_high_watermark()
         {
             lifecycle_ordinals
@@ -2545,6 +2560,9 @@ impl ProductionLifecycleOwnerV1 {
                 .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         lifecycle_ordinals
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
+            .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
+        self.coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
             .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
         let leader_wire_ingress_binding = ProductionLeaderWireIngressBindingV1::bind(
             Arc::clone(&inputs.leader_wire_ingress),
@@ -2578,9 +2596,23 @@ impl ProductionLifecycleOwnerV1 {
                     lifecycle_ordinals.clone(),
                 )
                 .map_err(ProductionLifecycleLaunchErrorV1::Runtime)?;
+        let replayed_decision = runtime.replayed_decision_key().map_err(|error| {
+            ProductionLifecycleLaunchErrorV1::Executor(EffectExecutorError::Runtime(
+                error.to_string(),
+            ))
+        })?;
+        let recovered_validate_retry_census = self
+            .registry
+            .project_recovered_durable_validate_retry_census(&self.coordinator, replayed_decision)
+            .map_err(|error| {
+                ProductionLifecycleLaunchErrorV1::Executor(EffectExecutorError::Contract(format!(
+                    "cold Validate retry authority failed closed: {error:?}"
+                )))
+            })?;
         let (mut executor, body_store) = V2EffectExecutor::open_with_body_store(
             runtime,
             body_store,
+            recovered_validate_retry_census,
             context.clone(),
             inputs.local_peer.clone(),
             inputs.local_validator,

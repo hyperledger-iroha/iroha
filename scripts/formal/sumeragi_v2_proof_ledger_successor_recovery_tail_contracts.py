@@ -1892,12 +1892,20 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         ),
         (
+            "registry",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        ),
+        (
             "schema",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
         ),
         (
             "coordinator",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+        ),
+        (
+            "open_output",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open_output_recovery.rs",
         ),
         (
             "coordinator_support",
@@ -1935,6 +1943,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         (
             "wal_test",
             "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
+        ),
+        (
+            "ledger_recovery_test",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs",
         ),
     ):
         path, source = load(relative, f"queue-owned ordinary ingress {name}")
@@ -2054,6 +2066,31 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 errors.append(
                     f"{paths[source_name]}:{rust_item.line}: {label} must "
                     f"preserve exact order {markers!r}"
+                )
+                return
+            cursor = position + len(needle)
+
+    def require_source_order(
+        source_name: str,
+        label: str,
+        markers: tuple[str, ...],
+    ) -> None:
+        body = rust_code_tokens(sources[source_name])
+        cursor = 0
+        for marker in markers:
+            needle = rust_code_tokens(marker)
+            position = next(
+                (
+                    index
+                    for index in range(cursor, len(body) - len(needle) + 1)
+                    if body[index : index + len(needle)] == needle
+                ),
+                -1,
+            )
+            if position < 0:
+                errors.append(
+                    f"{paths[source_name]}: {label} must preserve exact order "
+                    f"{markers!r}"
                 )
                 return
             cursor = position + len(needle)
@@ -2208,7 +2245,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1"
     )
     launched_end = launched_fields.find(
-        "/// Result of draining one dedicated recovered Apply worker completion.",
+        "/// Sole parked lifecycle completion owner for this height.",
         launched_start,
     )
     launched_region = (
@@ -2637,7 +2674,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "lifecycle Completion parked/physical pre-gate",
     )
     ready_completion = launched_completion_item(
-        "drive_ready_completion_turn",
+        "drive_ready_completion_turn_with_required_ordinal",
         "lifecycle Completion fresh Ready dispatcher",
     )
     completion = launched_completion_item(
@@ -2883,6 +2920,170 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "LifecycleWorkClass::Apply",
             "LifecycleWorkClass::Fetch",
             "ProductionCompletionReadyWorkV1::CompletionIo",
+        ),
+    )
+    schedulable_broadcast_match = _require_qualified_rust_item(
+        paths["registry"],
+        sources["registry"],
+        "SchedulableRetainedDirectBroadcastAttestationV1",
+        "matches_schedulable_record",
+        errors,
+        "fence-schedulable direct Broadcast row rejoin",
+    )
+    require_order(
+        "registry",
+        schedulable_broadcast_match,
+        "fence-schedulable direct Broadcast row rejoin",
+        (
+            "record.state == self.state",
+            "record.work_class == LifecycleWorkClass::Broadcast",
+            "record.owner == self.address.owner",
+            "record.ordinal == self.address.ordinal",
+            "exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())",
+            "Some((self.address.slot, self.digest))",
+        ),
+    )
+    schedulable_broadcast_carrier = item(
+        "registry", "attest_schedulable_lifecycle_broadcast_carrier"
+    )
+    require_order(
+        "registry",
+        schedulable_broadcast_carrier,
+        "fence-schedulable direct Broadcast carrier authentication",
+        (
+            "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+            "coordinator.records.get(&ordinal)",
+            "record.work_class != LifecycleWorkClass::Broadcast",
+            "super::LifecycleState::Ready",
+            "coordinator.ready_index.contains(&ordinal)",
+            "attest_ready_lifecycle_broadcast_carrier(coordinator, ordinal)",
+            "ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout",
+            "SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout",
+            "super::LifecycleState::Waiting(wait)",
+            "!coordinator.ready_index.contains(&ordinal)",
+            "fence.source()",
+            "super::projection::reducer_fence_wait_source(",
+            "coordinator.active_context",
+            "wait.source() == fence.source()",
+            "wait.observed_generation() < fence.generation()",
+            "coordinator.observed_generation.get(&wait.source())",
+            "Some(&wait.observed_generation())",
+            "exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())",
+            "ConcreteWorkAddress::new(record.owner, ordinal, slot)",
+            "self.entries.get(&address)",
+            "work.digest != digest",
+            "ConcreteLifecycleWorkKind::PendingAdapter",
+            "lifecycle_output_row_matches(coordinator, address, work, effect, pending)",
+            "SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput",
+            "ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)",
+        ),
+    )
+    recovered_broadcast_match = _require_qualified_rust_item(
+        paths["open_output"],
+        sources["open_output"],
+        "ReadyRecoveredLifecycleBroadcastAttestationV1",
+        "matches_ready_record",
+        errors,
+        "cold-owner Ready Broadcast row rejoin",
+    )
+    require_order(
+        "open_output",
+        recovered_broadcast_match,
+        "cold-owner Ready Broadcast row rejoin",
+        (
+            "record.owner == self.owner",
+            "record.ordinal == self.ordinal",
+            "record.key == self.key",
+            "record.work_class == super::LifecycleWorkClass::Broadcast",
+            "record.stage == self.stage",
+            "record.state == super::LifecycleState::Ready",
+            "record.physical_slots.len() == 1",
+            "record.physical_slots.get(&self.slot) == Some(&self.digest)",
+            "record.episode.slot_universe.len() == 1",
+            "record.episode.slot_universe.contains(&self.slot)",
+            "record.episode.consumed_slots == record.episode.slot_universe",
+            "record.episode.frozen_predecessors.is_empty()",
+        ),
+    )
+    recovered_broadcast_attestor = item(
+        "open_output", "attest_ready_recovered_lifecycle_broadcast"
+    )
+    require_order(
+        "open_output",
+        recovered_broadcast_attestor,
+        "cold-owner Ready Broadcast authentication",
+        (
+            "self.recovered_lifecycle_outputs.as_ref()?.entries.get(&ordinal)?",
+            "let candidate = output.candidate()",
+            "candidate.work_class != super::LifecycleWorkClass::Broadcast",
+            "!self.coordinator.ready_index.contains(&ordinal)",
+            "!recovered_output_matches_ready_coordinator( &self.verified, &self.coordinator, output, )",
+            "candidate.physical_geometry.normalized().ok()?",
+            "physical.first_key_value()?",
+            "physical.len() != 1",
+            "universe.len() != 1",
+            "!universe.contains(&slot)",
+            "consumed != universe",
+            "ReadyRecoveredLifecycleBroadcastAttestationV1",
+            "owner: output.owner()",
+            "ordinal",
+            "key: candidate.key",
+            "stage: candidate.stage",
+            "slot",
+            "digest",
+        ),
+    )
+    completion_broadcast_attestor = item(
+        "scheduler", "attest_schedulable_completion_broadcast_carrier"
+    )
+    require_order(
+        "scheduler",
+        completion_broadcast_attestor,
+        "exclusive registry-or-cold-owner Broadcast authentication",
+        (
+            "self.attest_ready_recovered_lifecycle_broadcast(ordinal)",
+            "attest_schedulable_lifecycle_broadcast_carrier(&self.coordinator, ordinal, fence)",
+            "(Some(attestation), Err(RegistryError::Missing))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(attestation)",
+            "None, Ok(SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(attestation)",
+            "(None, Ok(SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout))",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "(None, Err(error)) => Err(error)",
+            "(Some(_), Ok(_) | Err(_)) => Err(RegistryError::CorruptWork)",
+        ),
+    )
+    schedulable_completion = item("scheduler", "classify_schedulable_completion_work")
+    require_order(
+        "scheduler",
+        schedulable_completion,
+        "fence-schedulable Completion Broadcast classification",
+        (
+            "for ordinal in schedulable",
+            "record.work_class != LifecycleWorkClass::Broadcast",
+            "self.attest_schedulable_completion_broadcast_carrier(*ordinal, fence)",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(_) | SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput(_)",
+            "retained_direct_outputs.insert(*ordinal)",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "classes.push(record.work_class)",
+            "oldest_is_retained_direct_output",
+            "classify_completion_ready_classes(",
+        ),
+    )
+    ready_work = item("scheduler", "classify_completion_ready_work")
+    require_order(
+        "scheduler",
+        ready_work,
+        "fence-schedulable Completion census construction",
+        (
+            "let exact_ready = self.coordinator.records.iter()",
+            "matches!(record.state, LifecycleState::Ready)",
+            "if exact_ready != self.coordinator.ready_index",
+            "let mut schedulable = exact_ready",
+            "matches!( record.state, LifecycleState::Waiting(wait)",
+            "wait.source() == fence.source()",
+            "wait.observed_generation() < fence.generation()",
+            "self.classify_schedulable_completion_work(&schedulable, Some(fence))",
         ),
     )
 
@@ -3203,11 +3404,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "planner_io.detach(&mut services)",
         ),
     )
-    composite_capture = item("worker", "capture_recovered_completion_capacity_census")
+    composite_capture = item("worker", "capture_lifecycle_completion_capacity_census")
     require_order(
         "worker",
         composite_capture,
-        "joint recovered Completion physical-corridor census",
+        "joint lifecycle Completion physical-corridor census",
         (
             "for probe in probes",
             "let fanout = self.recovered_decision_fetch_fanout(&owner)?",
@@ -3220,17 +3421,17 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_tokens(
         "worker",
         composite_capture,
-        "joint recovered Completion physical-corridor census",
+        "joint lifecycle Completion physical-corridor census",
         (
-            "RecoveredCompletionCapacityProbeV1::Validate",
-            "RecoveredCompletionCapacityProbeV1::Apply",
-            "RecoveredCompletionCapacityProbeV1::Sign",
-            "RecoveredCompletionCapacityProbeV1::Fetch",
+            "LifecycleCompletionCapacityProbeV1::Validate",
+            "LifecycleCompletionCapacityProbeV1::Apply",
+            "LifecycleCompletionCapacityProbeV1::Sign",
+            "LifecycleCompletionCapacityProbeV1::Fetch",
             "pending.can_enqueue(fanout)",
         ),
     )
     composite_dispatch = item(
-        "scheduler", "dispatch_completion_with_runner_debt"
+        "scheduler", "dispatch_completion_with_runner_debt_and_required_ordinal"
     )
     require_order(
         "scheduler",
@@ -3240,7 +3441,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let current_ready = self.coordinator.ready_index.clone()",
             "let mut exact_ready = current_ready",
             "for ordinal in &exact_ready",
-            "capture_recovered_completion_capacity_census(probes)",
+            "capture_lifecycle_completion_capacity_census(probes)",
             "authenticated_ready_row_with_physical_capacity(",
             "let inputs = authenticated_scheduler_inputs(",
             "self.coordinator.plan_turn(inputs)",
@@ -3259,6 +3460,31 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "census.select_fetch(ordinal)",
             "registration.commit(prepared, wait_source)",
             "output.commit()",
+        ),
+    )
+    require_order(
+        "scheduler",
+        composite_dispatch,
+        "fence-schedulable direct and cold-owner Broadcast dispatch authentication",
+        (
+            "LifecycleWorkClass::Broadcast",
+            "self.attest_schedulable_completion_broadcast_carrier(*ordinal, Some(fence))",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "SchedulableCompletionBroadcastCarrierV1::RetainedRecoveredOutput",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout",
+            "let retained_direct_output = matches!",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "if retained_direct_output",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast",
+            "authenticated_schedulable_retained_direct_broadcast_row( &factory, record, attestation, live_debts, )",
+            "AuthenticatedLifecycleCompletionReadyV1::RetainedRecoveredBroadcast",
+            "authenticated_ready_recovered_lifecycle_broadcast_row( &factory, record, attestation, live_debts, )",
+            "let generations = if reducer_fence_wakes.is_empty()",
+            "BTreeMap::from([(fence.source(), fence.generation())])",
+            "let inputs = authenticated_scheduler_inputs(factory, generations, ready_rows)",
         ),
     )
     if composite_dispatch is not None:
@@ -3318,7 +3544,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     for source_name, test_name in (
         (
             "worker",
-            "recovered_completion_capacity_census_selects_once_and_drops_fail_stop",
+            "lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop",
         ),
         (
             "scheduler",
@@ -3352,6 +3578,91 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "!output_guard.restart_required()",
         ),
     )
+    require_source_order(
+        "scheduler",
+        "fence-schedulable direct Broadcast coexistence behavior",
+        (
+            "prospectively_woken_direct_broadcast_is_authenticated_and_sign_is_selected",
+            "defer_direct_timeout_broadcast_for_test(0x71)",
+            "park_direct_broadcast_before_fence_for_test(direct, fence)",
+            "owner.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "dispatch_completion_with_runner_debt(&services, &mut executor, 0)",
+            "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
+            "state.records[&direct].state",
+            "LifecycleState::Ready",
+            "state.ready_index.contains(&direct)",
+            "state.fault.is_none()",
+            "!output_guard.restart_required()",
+        ),
+    )
+    require_source_order(
+        "scheduler",
+        "fence-schedulable direct Broadcast tamper rejection",
+        (
+            "prospectively_woken_direct_broadcast_rejects_a_mismatched_carrier",
+            "defer_direct_timeout_broadcast_for_test(0x73)",
+            "park_direct_broadcast_before_fence_for_test(direct, fence)",
+            "corrupt_ready_digest_for_test(direct)",
+            "owner.classify_completion_ready_work(fence)",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "!output_guard.restart_required()",
+        ),
+    )
+    cold_broadcast_retention = item(
+        "ledger_recovery_test",
+        "cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance",
+    )
+    require_order(
+        "ledger_recovery_test",
+        cold_broadcast_retention,
+        "cold-owner Broadcast absence, retention, and terminal progress",
+        (
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "owner.recovered_lifecycle_outputs.take()",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::Invalid",
+            "owner.recovered_lifecycle_outputs = Some(recovered_outputs)",
+            "LifecycleOutputServiceDispositionV1::SourceRetained",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "LifecycleOutputServiceDispositionV1::Accepted",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "!owner.has_recovered_lifecycle_outputs()",
+            "LifecycleState::Terminal(TerminalOutcome::Advanced)",
+        ),
+    )
+    cold_broadcast_ordering = item(
+        "ledger_recovery_test",
+        "later_cold_broadcast_stays_passive_until_an_older_fetch_retires",
+    )
+    require_order(
+        "ledger_recovery_test",
+        cold_broadcast_ordering,
+        "older Fetch progress with a passive later cold-owner Broadcast",
+        (
+            "let fetch_ordinal = 1",
+            "let broadcast_ordinal = 2",
+            "owner.settle_next_recovered_lifecycle_output",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "calls.get()",
+            "owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None)",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "staged.finish_terminal(fetch_ordinal, TerminalOutcome::Cancelled)",
+            "owner.coordinator.persist_exact_staged_successor(&staged)",
+            "owner.registry.registry_mut().rollback_exact(fetch_address, fetch_digest)",
+            "owner.coordinator = staged",
+            "owner.settle_next_recovered_lifecycle_output",
+            "LifecycleOutputServiceDispositionV1::Accepted",
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "calls.get()",
+            "!owner.has_recovered_lifecycle_outputs()",
+            "owner.coordinator.records[&broadcast_ordinal].state",
+            "LifecycleState::Terminal(TerminalOutcome::Advanced)",
+        ),
+    )
     require_order(
         "scheduler",
         behavior_items[
@@ -3373,11 +3684,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     require_order(
         "worker",
         behavior_items[
-            "recovered_completion_capacity_census_selects_once_and_drops_fail_stop"
+            "lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop"
         ],
-        "composite recovered Completion worker Fetch ownership behavior",
+        "lifecycle Completion worker Fetch ownership behavior",
         (
-            "RecoveredCompletionCapacityProbeV1::Fetch",
+            "LifecycleCompletionCapacityProbeV1::Fetch",
             "fetch_census.select_fetch(13)",
             "returned_owner.dispatch_key()",
             "output.abort_before_claim()",
@@ -3646,6 +3957,61 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "activated.consume_prepared_ordinary_ingress_turn(",
         ),
     )
+    executor_advance = item("runner", "advance_executor")
+    require_order(
+        "runner",
+        executor_advance,
+        "bounded runtime cold-output retry before and after every executor step",
+        (
+            "for _ in 0..limit.max(1)",
+            "settle_one_recovered_lifecycle_output",
+            "executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)",
+            "executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())",
+            "executor.step(Instant::now(), services)",
+            "settle_one_recovered_lifecycle_output",
+            "executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)",
+        ),
+    )
+    recovered_output_yield = item("runner", "recovered_lifecycle_output_requires_yield")
+    require_order(
+        "runner",
+        recovered_output_yield,
+        "cold-output settlement yield and retry classification",
+        (
+            "RecoveredLifecycleOutputSettlementV1::Completed",
+            "RecoveredLifecycleOutputSettlementV1::SourceRetained",
+            "true",
+            "RecoveredLifecycleOutputSettlementV1::Empty",
+            "RecoveredLifecycleOutputSettlementV1::Deferred",
+            "false",
+        ),
+    )
+    for source_name, target, token, expected, label in (
+        (
+            "height_driver",
+            lifecycle_height_driver,
+            "settle_one_recovered_lifecycle_output(",
+            1,
+            "bounded outer-turn cold-output retry",
+        ),
+        (
+            "runner",
+            executor_advance,
+            "settle_one_recovered_lifecycle_output(",
+            2,
+            "pre/post executor-step cold-output retry",
+        ),
+    ):
+        if target is None:
+            continue
+        observed = _token_sequence_count(
+            rust_code_tokens(target.source), rust_code_tokens(token)
+        )
+        if observed != expected:
+            errors.append(
+                f"{paths[source_name]}:{target.line}: {label} must call "
+                f"{token!r} exactly {expected} time(s); found {observed}"
+            )
     require_tokens(
         "height_driver",
         lifecycle_height_driver,

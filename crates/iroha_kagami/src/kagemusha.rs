@@ -34,7 +34,7 @@ use iroha_data_model::offline::{
     KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
     KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
     KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactV2,
-    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
+    KagemushaV4PromotionBindingV1, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
@@ -225,6 +225,12 @@ struct PromoteReleaseV4Args {
 }
 #[derive(Debug, ClapArgs)]
 struct PrepareActivationV4Args {
+    /// Unique nonzero promotion-run identity reserved before validator qualification.
+    #[arg(long, value_parser = parse_promotion_id)]
+    promotion_id: [u8; 32],
+    /// Exact canonical controller-signed promotion binding committed by activation.
+    #[arg(long)]
+    promotion_binding: PathBuf,
     /// Root containing lowercase manifest-digest release directories.
     #[arg(long)]
     artifact_root: PathBuf,
@@ -256,6 +262,10 @@ struct PrepareReleaseCircuitParamsV4Args {
     output_dir: PathBuf,
 }
 impl<T: Write> RunArgs<T> for Args {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the command dispatcher keeps each authenticated release operation and its publication boundary visibly ordered"
+    )]
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::VerifyReleaseV4(args) => {
@@ -297,7 +307,11 @@ impl<T: Write> RunArgs<T> for Args {
                         record.validate().map_err(|error| eyre!(error))?;
                         let record_bytes = norito::to_bytes(&record)
                             .wrap_err("failed to encode Kagemusha V4 promotion record")?;
-                        publish_new_durable_file(writer, &args.promotion_record, &record_bytes)
+                        publish_new_durable_file(
+                            &mut std::io::sink(),
+                            &args.promotion_record,
+                            &record_bytes,
+                        )
                     },
                 )?;
                 writeln!(
@@ -326,7 +340,25 @@ impl<T: Write> RunArgs<T> for Args {
                     .wrap_err("failed to encode governed device-attestation policy state")?;
                 let policy_state_sha256 =
                     hex::encode(kagemusha_recursive_spend_release_sha256(&state_bytes));
-                let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation, policy);
+                let promotion_binding_bytes = fs::read(&args.promotion_binding)
+                    .wrap_err("failed to read the canonical Kagemusha V4 promotion binding")?;
+                if promotion_binding_bytes.is_empty() || promotion_binding_bytes.len() > 64 * 1024 {
+                    bail!("canonical Kagemusha V4 promotion binding must be 1..=65536 bytes");
+                }
+                let promotion_binding: KagemushaV4PromotionBindingV1 =
+                    norito::decode_canonical_with_limits(
+                        &promotion_binding_bytes,
+                        norito::canonical_decode_limits(promotion_binding_bytes.len()),
+                    )
+                    .wrap_err("failed to decode the canonical Kagemusha V4 promotion binding")?;
+                promotion_binding.validate().map_err(|error| eyre!(error))?;
+                if norito::encode_canonical(&promotion_binding)? != promotion_binding_bytes
+                    || promotion_binding.promotion_id != args.promotion_id
+                {
+                    bail!("promotion binding is non-canonical or differs from --promotion-id");
+                }
+                let instruction =
+                    ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy);
                 let instructions = vec![InstructionBox::from(instruction)];
                 let instructions_hash = HashOf::new(&instructions);
                 let mut instruction_json = norito::json::to_string(&instructions)
@@ -339,7 +371,8 @@ impl<T: Write> RunArgs<T> for Args {
                 publish_new_durable_file(writer, &args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
-                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
+                    "{{\"status\":\"prepared\",\"promotion_id\":\"{}\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
+                    hex::encode(args.promotion_id),
                     hex::encode(args.manifest_sha256),
                     args.verifier_version,
                     instructions_hash,
@@ -437,6 +470,13 @@ fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
         .map_err(|_| "manifest SHA-256 is malformed".to_owned())?
         .try_into()
         .map_err(|_| "manifest SHA-256 has the wrong length".to_owned())
+}
+fn parse_promotion_id(value: &str) -> std::result::Result<[u8; 32], String> {
+    let digest = parse_manifest_sha256(value)?;
+    if digest == [0; 32] {
+        return Err("promotion id must be nonzero".to_owned());
+    }
+    Ok(digest)
 }
 fn parse_nonzero_canonical_u64(value: &str) -> std::result::Result<u64, String> {
     if value.is_empty()
@@ -1166,12 +1206,8 @@ fn verify_exact_inventory_v4(
             "authenticated artifact",
         )?;
     }
-    if inventory_state.includes_promotion_record() {
-        if expected.len() != 17 {
-            bail!(
-                "Kagemusha V4 promoted release contract must name exactly seventeen unique files"
-            );
-        }
+    if inventory_state.includes_promotion_record() && expected.len() != 17 {
+        bail!("Kagemusha V4 promoted release contract must name exactly seventeen unique files");
     }
     if expected.len() != inventory_state.exact_file_count() {
         bail!(
@@ -2304,10 +2340,11 @@ mod tests {
         PrepareReleaseCircuitParamsV4Args, RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
         RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4, REPORT_ARTIFACT_PURPOSES_V4,
         REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4, insert_expected_release_file_v4,
-        parse_manifest_sha256, parse_nonzero_canonical_u64, prepare_release_circuit_params_v4,
-        read_regular_bounded, require_new_promotion_record_path_v4,
-        roster_release_generations_match_v4, validate_artifacts_sequentially,
-        validate_device_attestation_policy_for_atomic_activation, verify_publish_verify_release_v4,
+        parse_manifest_sha256, parse_nonzero_canonical_u64, parse_promotion_id,
+        prepare_release_circuit_params_v4, read_regular_bounded,
+        require_new_promotion_record_path_v4, roster_release_generations_match_v4,
+        validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
+        verify_publish_verify_release_v4,
     };
     #[cfg(unix)]
     use super::{
@@ -2448,6 +2485,12 @@ mod tests {
         assert!(parse_manifest_sha256(&"AB".repeat(32)).is_err());
         assert!(parse_manifest_sha256(&"a".repeat(63)).is_err());
         assert!(parse_manifest_sha256(&format!("{}g", "a".repeat(63))).is_err());
+    }
+    #[test]
+    fn activation_promotion_id_parser_is_nonzero_lowercase_and_exact() {
+        assert_eq!(parse_promotion_id(&"ab".repeat(32)), Ok([0xab; 32]));
+        assert!(parse_promotion_id(&"00".repeat(32)).is_err());
+        assert!(parse_promotion_id(&"AB".repeat(32)).is_err());
     }
     #[test]
     fn operator_memory_lowering_parser_is_nonzero_and_canonical() {
@@ -2737,11 +2780,17 @@ mod tests {
         let source = include_str!("kagemusha.rs");
         let taira_source = include_str!("kagemusha/taira.rs");
         assert_eq!(
-            source
-                .matches("publish_new_durable_file(writer, &args.")
-                .count(),
-            2,
+            source.matches("publish_new_durable_file(").count(),
+            3,
             "promotion and activation must share the explicit outcome boundary"
+        );
+        assert!(
+            source.contains("&mut std::io::sink()") && source.contains("&args.promotion_record"),
+            "promotion must suppress the preliminary committed record so authenticated stdout remains one exact JSON line"
+        );
+        assert!(
+            source.contains("publish_new_durable_file(writer, &args.output"),
+            "activation must retain its committed operator record"
         );
         assert!(
             !source.contains("write_new_durable_file(&args."),
@@ -2840,7 +2889,7 @@ mod tests {
                 }
                 Ok(())
             },
-            |_| {
+            |()| {
                 events.borrow_mut().push("publish");
                 Ok(())
             },

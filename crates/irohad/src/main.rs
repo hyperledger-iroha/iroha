@@ -3,10 +3,22 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Fail-closed local seam for one Kagemusha validator qualification seal.
+#[path = "main/kagemusha_validator_qualification.rs"]
+mod kagemusha_validator_qualification;
+/// Secret-free protocol-effective configuration capture for validator seals.
+#[path = "main/kagemusha_runtime_effective_config_projection.rs"]
+mod kagemusha_runtime_effective_config_projection;
+/// Root-custodied inputs and no-replace output for validator qualification.
+#[path = "main/kagemusha_validator_qualification_command.rs"]
+mod kagemusha_validator_qualification_command;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
+/// Root-custodied immutable no-replace artifact publication.
+#[path = "main/root_owned_artifact_publication.rs"]
+mod root_owned_artifact_publication;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -121,6 +133,9 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
+use root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
+#[cfg(all(test, target_os = "macos"))]
+use root_owned_artifact_publication::require_no_macos_extended_acl;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
@@ -139,9 +154,11 @@ pub use runtime_provider_registry::{
     IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
     RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
 };
+#[cfg(test)]
+use startup_artifact::read_genesis_unlocked;
 use startup_artifact::{
     INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1, read_bounded_startup_artifact, read_genesis_manifest,
-    read_genesis_unlocked,
+    read_genesis_unlocked_with_bytes,
 };
 #[cfg(target_os = "windows")]
 use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
@@ -186,8 +203,7 @@ fn torii_receipt_signer_or_derived(
     }
     // A receipt key must survive process restarts because the durable DA log verifies historical
     // receipts during startup. Derive a separate key from the node identity instead of generating
-    // an ephemeral key; the BLAKE3 KDF context prevents the derived key from being reused as the
-    // node key or by another protocol.
+    // an ephemeral key; the BLAKE3 KDF context prevents reuse as the node key or by another protocol.
     let (node_algorithm, mut node_secret) = node_key_pair.private_key().try_to_bytes()?;
     let mut key_deriver = blake3::Hasher::new_derive_key("iroha:torii:receipt-signer:secp256k1:v1");
     key_deriver.update(node_algorithm.as_static_str().as_bytes());
@@ -749,12 +765,10 @@ fn startup_beep(enable_beep: bool) -> bool {
 /// Iroha server CLI
 #[derive(clap::Args, Clone, Debug)]
 pub struct StartupArgs {
-    /// Validate configuration and any locally available genesis, then exit
-    /// without binding network or Torii sockets.
+    /// Validate configuration and available genesis, then exit without binding network sockets.
     #[arg(long)]
     pub check_config: bool,
-    /// Fully qualify the configured Kagemusha catalog and publish its canonical
-    /// cold-start seal at this root-owned path.
+    /// Fully qualify Kagemusha catalog and publish its canonical cold-start seal at this path.
     #[arg(
         long,
         value_name = "PATH",
@@ -762,6 +776,16 @@ pub struct StartupArgs {
         requires = "check_config"
     )]
     pub write_kagemusha_catalog_qualification_seal: Option<PathBuf>,
+    /// Fully qualify this validator against the configured signed promotion
+    /// reservation and publish its canonical seal at this root-owned path.
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_hint(clap::ValueHint::FilePath),
+        requires = "check_config",
+        conflicts_with = "write_kagemusha_catalog_qualification_seal"
+    )]
+    pub write_kagemusha_validator_qualification_seal: Option<PathBuf>,
     /// Enables trace logs of configuration reading & parsing.
     ///
     /// Might be useful for configuration troubleshooting.
@@ -6833,9 +6857,11 @@ mod snapshot_read_error_tests {
             vec![governed_lane],
         )
         .expect("single governed lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.lane_catalog = catalog.clone();
-        nexus.configured_lane_catalog = catalog;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            lane_catalog: catalog.clone(),
+            configured_lane_catalog: catalog,
+            ..Default::default()
+        };
         let error = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect_err("governed replay lane without a frozen manifest must reject startup");
         assert_eq!(error.reason(), GovernanceGuardReason::MissingManifest);
@@ -7902,10 +7928,6 @@ impl Iroha {
             lane_compliance.clone(),
         ));
         state.install_lane_compliance_engine(lane_compliance.clone());
-        #[cfg(feature = "telemetry")]
-        let mut lane_manifest_task = None;
-        #[cfg(not(feature = "telemetry"))]
-        let mut lane_manifest_task = None;
         // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
         // snapshot used by replay to the effective catalog, rather than rescanning mutable files
         // at a second startup boundary.
@@ -7928,25 +7950,25 @@ impl Iroha {
             );
         }
         #[cfg(feature = "telemetry")]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let telemetry_task = state.telemetry.clone();
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((
+            Some((
                 queue_task,
                 telemetry_task,
                 governance_task,
                 registry_cfg_task,
-            ));
-        }
+            ))
+        };
         #[cfg(not(feature = "telemetry"))]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
-        }
+            Some((queue_task, governance_task, registry_cfg_task))
+        };
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
         // journal before the mandatory ordinary queue-plan journal can reinsert pending transactions.
@@ -10794,7 +10816,6 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         );
     }
 }
-#[allow(clippy::too_many_lines)]
 /// Read the configuration and then a genesis block if specified.
 ///
 /// The returned configuration is **not** validated; call [`validate_config`] after
@@ -10806,6 +10827,21 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
 pub fn read_config_and_genesis(
     args: &Args,
 ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
+    read_config_and_genesis_with_kagemusha_sources(args)
+        .map(|(config, genesis, _sources)| (config, genesis))
+}
+#[allow(clippy::too_many_lines)]
+fn read_config_and_genesis_with_kagemusha_sources(
+    args: &Args,
+) -> ReportResult<
+    (
+        Config,
+        Option<GenesisBlock>,
+        kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1,
+    ),
+    ConfigError,
+> {
+    let mut flattened_toml_config_source = None;
     let mut config = ConfigReader::new();
     if let Some(path) = &args.config {
         config = if let Some(expected) = args.startup.config_blake3.as_deref() {
@@ -10832,13 +10868,13 @@ pub fn read_config_and_genesis(
                     path.display()
                 )));
             }
-            let raw = std::str::from_utf8(&raw).map_err(|error| {
+            let raw_utf8 = std::str::from_utf8(&raw).map_err(|error| {
                 Report::new(ConfigError::ReadConfig).attach(format!(
                     "integrity-bound configuration {} is not UTF-8: {error}",
                     path.display()
                 ))
             })?;
-            let table = raw.parse::<toml::Table>().map_err(|error| {
+            let table = raw_utf8.parse::<toml::Table>().map_err(|error| {
                 Report::new(ConfigError::ReadConfig).attach(format!(
                     "failed to parse integrity-bound configuration {}: {error}",
                     path.display()
@@ -10850,6 +10886,7 @@ pub fn read_config_and_genesis(
                     path.display()
                 )));
             }
+            flattened_toml_config_source = Some(raw);
             config.with_toml_source(TomlSource::new(path.clone(), table))
         } else {
             config
@@ -10960,27 +10997,42 @@ pub fn read_config_and_genesis(
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
-    let genesis =
-        read_genesis_for_snapshot_policy(&config.snapshot.bootstrap, config.genesis.file.as_ref())?;
+    let (genesis, signed_genesis_source) = read_genesis_for_snapshot_policy_with_bytes(
+        &config.snapshot.bootstrap,
+        config.genesis.file.as_ref(),
+    )?;
     config.logger.terminal_colors = args.terminal_colors;
-    Ok((config, genesis))
+    let sources = kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1::new(
+        config.snapshot.bootstrap.enabled,
+        flattened_toml_config_source,
+        signed_genesis_source,
+    );
+    Ok((config, genesis, sources))
 }
+#[cfg(test)]
 fn read_genesis_for_snapshot_policy(
     policy: &iroha_config::parameters::actual::SnapshotBootstrapPolicy,
     signed_file: Option<&WithOrigin<PathBuf>>,
 ) -> ReportResult<Option<GenesisBlock>, ConfigError> {
+    read_genesis_for_snapshot_policy_with_bytes(policy, signed_file)
+        .map(|(genesis, _bytes)| genesis)
+}
+fn read_genesis_for_snapshot_policy_with_bytes(
+    policy: &iroha_config::parameters::actual::SnapshotBootstrapPolicy,
+    signed_file: Option<&WithOrigin<PathBuf>>,
+) -> ReportResult<(Option<GenesisBlock>, Option<Vec<u8>>), ConfigError> {
     policy
         .validate()
         .map_err(|error| Report::new(ConfigError::ParseConfig).attach(error))?;
     if policy.enabled {
-        return Ok(None);
+        return Ok((None, None));
     }
     let Some(signed_file) = signed_file else {
-        return Ok(None);
+        return Ok((None, None));
     };
-    let genesis = read_genesis(&signed_file.resolve_relative_path())
+    let (genesis, bytes) = read_genesis_with_bytes(&signed_file.resolve_relative_path())
         .attach(signed_file.clone().into_attachment().display_path())?;
-    Ok(Some(genesis))
+    Ok((Some(genesis), Some(bytes)))
 }
 #[cfg(test)]
 mod snapshot_bootstrap_genesis_tests {
@@ -11832,14 +11884,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("minimal config")
     }
     pub fn multilane_config_table() -> Table {
-        toml::from_str(&format!(
+        toml::from_str(
             r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
 soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
 soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
-  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -11857,13 +11909,13 @@ lane_count = 2
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
-metadata = {{}}
+metadata = {}
 [[nexus.lane_catalog]]
 index = 1
 alias = "zk"
-metadata = {{}}
+metadata = {}
 "#
-        ))
+        )
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
@@ -12355,9 +12407,12 @@ fn instruction_registry_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
+    read_genesis_with_bytes(path).map(|(genesis, _bytes)| genesis)
+}
+fn read_genesis_with_bytes(path: &Path) -> ReportResult<(GenesisBlock, Vec<u8>), ConfigError> {
     #[cfg(test)]
     let _registry_guard = instruction_registry_test_guard();
-    read_genesis_unlocked(path)
+    read_genesis_unlocked_with_bytes(path)
 }
 fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
     let requested = cfg.norito.max_archive_len;
@@ -12904,15 +12959,34 @@ fn run_main(
     // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
     init_query_registry();
-    let (config, genesis) =
-        read_config_and_genesis(&args).change_context(MainError::Config).attach_with(|| {
+    let (config, genesis, kagemusha_startup_sources) =
+        read_config_and_genesis_with_kagemusha_sources(&args)
+            .change_context(MainError::Config)
+            .attach_with(|| {
             args.config.as_ref().map_or_else(
                 || "`--config` arg was not set, therefore configuration relies fully on environment variables".to_owned(),
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    if args
+        .startup
+        .write_kagemusha_validator_qualification_seal
+        .is_none()
+    {
+        kagemusha_validator_qualification::evaluate_stock_launcher_unavailable_v1(
+            &kagemusha_startup_sources,
+            genesis.as_ref(),
+            &config.common.peer.id,
+            &config.common.key_pair,
+        )
+        .map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "failed to evaluate local Kagemusha validator qualification: {error}"
+            ))
+        })?;
+    }
     if args.startup.check_config {
-        let qualification_seal_target = args
+        let catalog_seal_target = args
             .startup
             .write_kagemusha_catalog_qualification_seal
             .as_deref()
@@ -12923,13 +12997,66 @@ fn run_main(
                     "invalid Kagemusha catalog qualification seal output: {error}"
                 ))
             })?;
-        let qualification_seal = validate_config_for_check(
-            &config,
-            genesis.as_ref(),
-            qualification_seal_target.is_some(),
-        )?;
-        if let Some(target) = qualification_seal_target {
-            let seal = qualification_seal.ok_or_else(|| {
+        let validator_seal_target = args
+            .startup
+            .write_kagemusha_validator_qualification_seal
+            .as_deref()
+            .map(|path| {
+                kagemusha_validator_qualification_command::KagemushaValidatorSealPublicationTarget::prepare(
+                    &config, path,
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "invalid Kagemusha validator qualification seal output: {error}"
+                ))
+            })?;
+        let trusted_promotion = validator_seal_target
+            .as_ref()
+            .map(|_| {
+                kagemusha_validator_qualification_command::read_configured_kagemusha_promotion_reservation(
+                    &config,
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to read the trusted Kagemusha promotion reservation: {error}"
+                ))
+            })?;
+        let existing_catalog_seal = validator_seal_target
+            .as_ref()
+            .map(|_| {
+                kagemusha_validator_qualification_command::read_configured_kagemusha_catalog_qualification_seal(
+                    &config,
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to read the existing Kagemusha catalog qualification seal: {error}"
+                ))
+            })?;
+        let mode = if catalog_seal_target.is_some() {
+            KagemushaCheckQualificationMode::CatalogSeal
+        } else if let (Some(trusted_promotion), Some(catalog_seal_bytes)) =
+            (trusted_promotion.as_ref(), existing_catalog_seal.as_deref())
+        {
+            KagemushaCheckQualificationMode::ValidatorSeal {
+                trusted_promotion,
+                catalog_seal_bytes,
+                sources: &kagemusha_startup_sources,
+            }
+        } else {
+            KagemushaCheckQualificationMode::None
+        };
+        let KagemushaCheckQualificationArtifacts {
+            catalog_seal,
+            validator_seal,
+        } = validate_config_for_check_mode(&config, genesis.as_ref(), mode)?;
+        if let Some(target) = catalog_seal_target {
+            let seal = catalog_seal.ok_or_else(|| {
                 Report::new(MainError::Config)
                     .attach("Kagemusha catalog qualification completed without producing a seal")
             })?;
@@ -12941,6 +13068,22 @@ fn run_main(
             })?;
             println!(
                 "Published: canonical Kagemusha catalog qualification seal at {}",
+                output_path.display()
+            );
+        }
+        if let Some(target) = validator_seal_target {
+            let seal = validator_seal.ok_or_else(|| {
+                Report::new(MainError::Config)
+                    .attach("Kagemusha validator qualification completed without producing a seal")
+            })?;
+            let output_path = target.path().to_owned();
+            target.publish_and_verify(&seal).map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to publish Kagemusha validator qualification seal: {error}"
+                ))
+            })?;
+            println!(
+                "Published: canonical Kagemusha validator qualification seal at {}",
                 output_path.display()
             );
         }
@@ -13037,130 +13180,11 @@ fn run_main(
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
-/// Pinned, validated destination for one root-owned catalog qualification seal.
-///
-/// Preparation happens before the expensive qualification pass and keeps the
-/// destination directory open until publication. The final name must not
-/// exist: qualification seals are immutable release artifacts and are never replaced in place.
+/// Catalog-seal adapter around the generic root-owned publisher.
 struct QualificationSealPublicationTarget {
-    path: PathBuf,
-    #[cfg(unix)]
-    parent: fs::File,
-    #[cfg(unix)]
-    file_name: OsString,
-    #[cfg(unix)]
-    expected_uid: u32,
+    inner: RootOwnedNoReplaceArtifactPublicationTarget,
 }
-#[cfg(target_os = "macos")]
-const QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES: usize = 64 * 1024;
-#[cfg(target_os = "macos")]
-fn run_bounded_macos_acl_command(
-    program: &str,
-    option: &str,
-    path: &Path,
-    label: &str,
-) -> Result<std::process::Output, String> {
-    let output = std::process::Command::new(program)
-        .arg(option)
-        .arg(path)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run macOS ACL command for {label} `{}`: {error}",
-                path.display()
-            )
-        })?;
-    if output.stdout.len() > QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
-        || output.stderr.len() > QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
-    {
-        return Err(format!(
-            "macOS ACL command output exceeded its bound for {label} `{}`",
-            path.display()
-        ));
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "macOS ACL command failed for {label} `{}`: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(output)
-}
-#[cfg(target_os = "macos")]
-fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
-    let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
-    let suffix = output.stdout.strip_suffix(b"\n");
-    let invalid_stdout = suffix.is_none_or(|body| body.contains(&b'\n'));
-    if !output.stderr.is_empty() || invalid_stdout {
-        return Err(format!(
-            "{label} `{}` must not have an extended ACL",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-#[cfg(target_os = "macos")]
-fn clear_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
-    let output = run_bounded_macos_acl_command("/bin/chmod", "-N", path, label)?;
-    if !output.stdout.is_empty() || !output.stderr.is_empty() {
-        return Err(format!(
-            "macOS ACL removal produced unexpected output for {label} `{}`",
-            path.display()
-        ));
-    }
-    Ok(())
-}
-#[cfg(target_os = "macos")]
-fn same_qualification_seal_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-#[cfg(target_os = "macos")]
-fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
-    let opened_before = opened
-        .metadata()
-        .map_err(|error| format!("failed to inspect pinned {label}: {error}"))?;
-    let path_before = fs::symlink_metadata(path)
-        .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
-    if !same_qualification_seal_metadata(&opened_before, &path_before) {
-        return Err(format!(
-            "{label} `{}` no longer identifies the pinned inode",
-            path.display()
-        ));
-    }
-    require_no_macos_extended_acl(path, label)?;
-    let opened_after = opened
-        .metadata()
-        .map_err(|error| format!("failed to re-inspect pinned {label}: {error}"))?;
-    let path_after = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to re-inspect {label} `{}` after ACL validation: {error}",
-            path.display()
-        )
-    })?;
-    if !same_qualification_seal_metadata(&opened_before, &opened_after)
-        || !same_qualification_seal_metadata(&opened_after, &path_after)
-    {
-        return Err(format!(
-            "{label} `{}` changed during ACL validation",
-            path.display()
-        ));
-    }
-    Ok(())
-}
+
 impl QualificationSealPublicationTarget {
     fn prepare(config: &Config, requested_path: &Path) -> Result<Self, String> {
         let configured_path = config
@@ -13182,477 +13206,61 @@ impl QualificationSealPublicationTarget {
             ));
         }
         validate_qualification_seal_directory_separation(config, requested_path)?;
-        #[cfg(unix)]
-        {
-            let effective_uid = rustix::process::geteuid().as_raw();
-            if effective_uid != 0 {
-                return Err(format!(
-                    "qualification seal publication requires effective uid 0, got {effective_uid}"
-                ));
-            }
-            Self::prepare_for_owner(requested_path, 0)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = requested_path;
-            Err(
-                "root-owned atomic qualification seal publication is unsupported on this platform"
-                    .to_owned(),
-            )
-        }
+        RootOwnedNoReplaceArtifactPublicationTarget::prepare_root_owned(
+            requested_path,
+            "qualification seal",
+        )
+        .map(|inner| Self { inner })
+        .map_err(|error| error.to_string())
     }
+
+    #[cfg(all(test, unix))]
+    fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
+        RootOwnedNoReplaceArtifactPublicationTarget::prepare_for_owner(
+            path,
+            expected_uid,
+            "qualification seal",
+        )
+        .map(|inner| Self { inner })
+        .map_err(|error| error.to_string())
+    }
+
     #[must_use]
     fn path(&self) -> &Path {
-        &self.path
+        self.inner.path()
     }
+
     fn publish_and_verify(
         self,
         config: &Config,
         seal: &iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
     ) -> Result<(), String> {
-        #[cfg(unix)]
-        {
-            let canonical_bytes = seal.canonical_bytes()?;
-            self.publish_bytes_and_verify(&canonical_bytes, |final_path| {
-                if final_path
-                    != config
-                        .settlement
-                        .offline
-                        .kagemusha_catalog_qualification_seal_path
-                        .as_deref()
-                        .expect("publication target requires a configured seal path")
-                {
-                    return Err(
-                        "published qualification seal path no longer matches configuration"
-                            .to_owned(),
-                    );
-                }
-                load_configured_kagemusha_release_catalog(config).map(|_| ())
-            })
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (config, seal);
-            Err(
-                "root-owned atomic qualification seal publication is unsupported on this platform"
-                    .to_owned(),
-            )
-        }
-    }
-    #[cfg(unix)]
-    #[expect(clippy::too_many_lines, reason = "ordered credential ownership audit")]
-    fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
-        use std::os::unix::fs::MetadataExt as _;
-        validate_canonical_absolute_path(path, "qualification seal path")?;
-        let file_name = path
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| "qualification seal path must end in a file name".to_owned())?
-            .to_owned();
-        let parent_path = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| "qualification seal path must have an absolute parent".to_owned())?;
-        let mut ancestors = parent_path.ancestors().collect::<Vec<_>>();
-        ancestors.reverse();
-        for ancestor in ancestors {
-            let metadata = fs::symlink_metadata(ancestor).map_err(|error| {
-                format!(
-                    "failed to inspect qualification seal parent `{}`: {error}",
-                    ancestor.display()
-                )
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(format!(
-                    "qualification seal parent chain contains a symlink or non-directory `{}`",
-                    ancestor.display()
-                ));
-            }
-            if metadata.uid() != 0 && metadata.uid() != expected_uid {
-                return Err(format!(
-                    "qualification seal parent `{}` is owned by untrusted uid {}",
-                    ancestor.display(),
-                    metadata.uid()
-                ));
-            }
-            if metadata.mode() & 0o022 != 0 {
-                return Err(format!(
-                    "qualification seal parent `{}` is group- or world-writable",
-                    ancestor.display()
-                ));
-            }
-            #[cfg(target_os = "macos")]
+        let canonical_bytes = seal.canonical_bytes()?;
+        self.publish_bytes_and_verify(&canonical_bytes, |final_path| {
+            if final_path
+                != config
+                    .settlement
+                    .offline
+                    .kagemusha_catalog_qualification_seal_path
+                    .as_deref()
+                    .expect("publication target requires a configured seal path")
             {
-                require_no_macos_extended_acl(ancestor, "qualification seal parent")?;
-                let after = fs::symlink_metadata(ancestor).map_err(|error| {
-                    format!(
-                        "failed to re-inspect qualification seal parent `{}` after ACL validation: {error}",
-                        ancestor.display()
-                    )
-                })?;
-                if !same_qualification_seal_metadata(&metadata, &after) {
-                    return Err(format!(
-                        "qualification seal parent `{}` changed during ACL validation",
-                        ancestor.display()
-                    ));
-                }
+                return Err(
+                    "published qualification seal path no longer matches configuration".to_owned(),
+                );
             }
-        }
-        let direct_parent = fs::symlink_metadata(parent_path).map_err(|error| {
-            format!(
-                "failed to inspect qualification seal destination directory `{}`: {error}",
-                parent_path.display()
-            )
-        })?;
-        if direct_parent.uid() != expected_uid {
-            return Err(format!(
-                "qualification seal destination directory `{}` must be owned by uid {expected_uid}",
-                parent_path.display()
-            ));
-        }
-        let parent = fs::File::from(
-            rustix::fs::open(
-                parent_path,
-                rustix::fs::OFlags::RDONLY
-                    | rustix::fs::OFlags::DIRECTORY
-                    | rustix::fs::OFlags::NOFOLLOW
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::empty(),
-            )
-            .map_err(|error| {
-                format!(
-                    "failed to pin qualification seal destination directory `{}`: {error}",
-                    parent_path.display()
-                )
-            })?,
-        );
-        let opened = parent.metadata().map_err(|error| {
-            format!("failed to inspect pinned qualification seal destination directory: {error}")
-        })?;
-        let current = fs::symlink_metadata(parent_path).map_err(|error| {
-            format!("failed to re-inspect qualification seal destination directory: {error}")
-        })?;
-        if !opened.is_dir()
-            || opened.dev() != current.dev()
-            || opened.ino() != current.ino()
-            || opened.uid() != expected_uid
-            || opened.mode() & 0o022 != 0
-        {
-            return Err(
-                "qualification seal destination directory changed or became untrusted while opening"
-                    .to_owned(),
-            );
-        }
-        #[cfg(target_os = "macos")]
-        require_acl_free_pinned_path(
-            &parent,
-            parent_path,
-            "qualification seal destination directory",
-        )?;
-        match rustix::fs::statat(&parent, &file_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(_) => {
-                return Err(format!(
-                    "qualification seal destination already exists and will not be replaced: {}",
-                    path.display()
-                ));
-            }
-            Err(error) if error == rustix::io::Errno::NOENT => {}
-            Err(error) => {
-                return Err(format!(
-                    "failed to inspect qualification seal destination `{}`: {error}",
-                    path.display()
-                ));
-            }
-        }
-        Ok(Self {
-            path: path.to_owned(),
-            parent,
-            file_name,
-            expected_uid,
+            load_configured_kagemusha_release_catalog(config).map(|_| ())
         })
     }
-    #[cfg(unix)]
-    #[allow(clippy::too_many_lines)]
+
     fn publish_bytes_and_verify(
         self,
         canonical_bytes: &[u8],
         verify_final: impl FnOnce(&Path) -> Result<(), String>,
     ) -> Result<(), String> {
-        use std::{
-            io::{Read as _, Seek as _, SeekFrom, Write as _},
-            os::unix::fs::MetadataExt as _,
-        };
-        if canonical_bytes.is_empty() {
-            return Err("canonical qualification seal bytes must not be empty".to_owned());
-        }
-        self.verify_parent_identity()?;
-        let mut nonce = [0_u8; 16];
-        rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce).map_err(|error| {
-            format!(
-                "operating-system randomness unavailable for qualification seal staging: {error}"
-            )
-        })?;
-        let staging_name =
-            OsString::from(format!(".irohad-kagemusha-seal-{}.tmp", hex::encode(nonce)));
-        #[cfg(target_os = "macos")]
-        let staging_path = self
-            .path
-            .parent()
-            .expect("prepared qualification seal path has a parent")
-            .join(&staging_name);
-        let mut staging = fs::File::from(
-            rustix::fs::openat(
-                &self.parent,
-                &staging_name,
-                rustix::fs::OFlags::RDWR
-                    | rustix::fs::OFlags::CREATE
-                    | rustix::fs::OFlags::EXCL
-                    | rustix::fs::OFlags::NOFOLLOW
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::from_raw_mode(0o600),
-            )
-            .map_err(|error| {
-                format!("failed to create exclusive qualification seal staging file: {error}")
-            })?,
-        );
-        let staged_result = (|| -> Result<(u64, u64), String> {
-            staging.write_all(canonical_bytes).map_err(|error| {
-                format!("failed to write qualification seal staging file: {error}")
-            })?;
-            staging.flush().map_err(|error| {
-                format!("failed to flush qualification seal staging file: {error}")
-            })?;
-            staging.sync_all().map_err(|error| {
-                format!("failed to sync qualification seal staging file: {error}")
-            })?;
-            rustix::fs::fchmod(&staging, rustix::fs::Mode::from_raw_mode(0o444)).map_err(
-                |error| {
-                    format!("failed to make qualification seal staging file immutable: {error}")
-                },
-            )?;
-            staging.sync_all().map_err(|error| {
-                format!("failed to sync immutable qualification seal staging file: {error}")
-            })?;
-            let before_acl_clear = staging.metadata().map_err(|error| {
-                format!("failed to inspect qualification seal staging file: {error}")
-            })?;
-            let named_before_acl_clear = rustix::fs::statat(
-                &self.parent,
-                &staging_name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(|error| {
-                format!(
-                    "failed to bind qualification seal staging name before ACL removal: {error}"
-                )
-            })?;
-            if u64::try_from(named_before_acl_clear.st_dev).ok() != Some(before_acl_clear.dev())
-                || named_before_acl_clear.st_ino != before_acl_clear.ino()
-                || u64::from(named_before_acl_clear.st_nlink) != 1
-            {
-                return Err("qualification seal staging name changed before ACL removal".to_owned());
-            }
-            #[cfg(target_os = "macos")]
-            {
-                clear_macos_extended_acl(&staging_path, "qualification seal staging file")?;
-                require_acl_free_pinned_path(
-                    &staging,
-                    &staging_path,
-                    "qualification seal staging file",
-                )?;
-            }
-            let metadata = staging.metadata().map_err(|error| {
-                format!("failed to inspect ACL-free qualification seal staging file: {error}")
-            })?;
-            if !metadata.is_file()
-                || metadata.nlink() != 1
-                || metadata.uid() != self.expected_uid
-                || metadata.mode() & 0o7777 != 0o444
-                || metadata.len()
-                    != u64::try_from(canonical_bytes.len())
-                        .map_err(|_| "qualification seal length does not fit u64".to_owned())?
-            {
-                return Err(
-                    "qualification seal staging file ownership, mode, links, or length is invalid"
-                        .to_owned(),
-                );
-            }
-            let named = rustix::fs::statat(
-                &self.parent,
-                &staging_name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(|error| format!("failed to bind qualification seal staging name: {error}"))?;
-            if u64::try_from(named.st_dev).ok() != Some(metadata.dev())
-                || named.st_ino != metadata.ino()
-                || u64::from(named.st_nlink) != 1
-            {
-                return Err(
-                    "qualification seal staging name no longer identifies the opened file"
-                        .to_owned(),
-                );
-            }
-            staging.seek(SeekFrom::Start(0)).map_err(|error| {
-                format!("failed to rewind qualification seal staging file: {error}")
-            })?;
-            let mut readback = Vec::with_capacity(canonical_bytes.len());
-            staging.read_to_end(&mut readback).map_err(|error| {
-                format!("failed to read back qualification seal staging file: {error}")
-            })?;
-            if readback != canonical_bytes {
-                return Err(
-                    "qualification seal staging file did not round-trip canonical bytes".to_owned(),
-                );
-            }
-            self.verify_parent_identity()?;
-            self.parent.sync_all().map_err(|error| {
-                format!("failed to sync qualification seal destination before publication: {error}")
-            })?;
-            match rustix::fs::statat(
-                &self.parent,
-                &self.file_name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            ) {
-                Err(error) if error == rustix::io::Errno::NOENT => {}
-                Ok(_) => {
-                    return Err(format!(
-                        "qualification seal destination appeared during qualification and will not be replaced: {}",
-                        self.path.display()
-                    ));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "failed to recheck qualification seal destination: {error}"
-                    ));
-                }
-            }
-            Ok((metadata.dev(), metadata.ino()))
-        })();
-        let (staged_device, staged_inode) = match staged_result {
-            Ok(identity) => identity,
-            Err(error) => {
-                drop(staging);
-                let _ =
-                    rustix::fs::unlinkat(&self.parent, &staging_name, rustix::fs::AtFlags::empty());
-                let _ = self.parent.sync_all();
-                return Err(error);
-            }
-        };
-        if let Err(error) = rustix::fs::renameat_with(
-            &self.parent,
-            &staging_name,
-            &self.parent,
-            &self.file_name,
-            rustix::fs::RenameFlags::NOREPLACE,
-        ) {
-            drop(staging);
-            let _ = rustix::fs::unlinkat(&self.parent, &staging_name, rustix::fs::AtFlags::empty());
-            let _ = self.parent.sync_all();
-            return Err(format!(
-                "failed to publish qualification seal without replacement: {error}"
-            ));
-        }
-        let final_result = (|| -> Result<(), String> {
-            let published = rustix::fs::statat(
-                &self.parent,
-                &self.file_name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(|error| format!("failed to inspect published qualification seal: {error}"))?;
-            if u64::try_from(published.st_dev).ok() != Some(staged_device)
-                || published.st_ino != staged_inode
-                || u64::from(published.st_nlink) != 1
-                || published.st_uid != self.expected_uid
-                || u32::from(published.st_mode) & 0o7777 != 0o444
-            {
-                return Err(
-                    "published qualification seal does not match the staged immutable inode"
-                        .to_owned(),
-                );
-            }
-            #[cfg(target_os = "macos")]
-            require_acl_free_pinned_path(&staging, &self.path, "published qualification seal")?;
-            self.parent.sync_all().map_err(|error| {
-                format!("failed to sync qualification seal destination after publication: {error}")
-            })?;
-            verify_final(&self.path)?;
-            self.verify_parent_identity()
-        })();
-        if let Err(error) = final_result {
-            let cleanup = match rustix::fs::statat(
-                &self.parent,
-                &self.file_name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            ) {
-                Ok(current)
-                    if u64::try_from(current.st_dev).ok() == Some(staged_device)
-                        && current.st_ino == staged_inode =>
-                {
-                    rustix::fs::unlinkat(
-                        &self.parent,
-                        &self.file_name,
-                        rustix::fs::AtFlags::empty(),
-                    )
-                    .map(|()| true)
-                    .map_err(|cleanup_error| cleanup_error.to_string())
-                }
-                Ok(_) => Err(
-                    "refused to remove a final path that no longer identifies the published inode"
-                        .to_owned(),
-                ),
-                Err(cleanup_error) if cleanup_error == rustix::io::Errno::NOENT => Ok(false),
-                Err(cleanup_error) => Err(cleanup_error.to_string()),
-            };
-            let sync = self
-                .parent
-                .sync_all()
-                .map_err(|sync_error| sync_error.to_string());
-            return match (cleanup, sync) {
-                (Ok(true), Ok(())) => Err(format!(
-                    "{error}; removed the newly published seal because final verification failed"
-                )),
-                (Ok(false), Ok(())) => Err(format!(
-                    "{error}; the newly published seal was already absent after final verification failed"
-                )),
-                (cleanup, sync) => Err(format!(
-                    "{error}; failed to durably remove the newly published seal after verification failure (unlink={cleanup:?}, sync={sync:?})"
-                )),
-            };
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    fn verify_parent_identity(&self) -> Result<(), String> {
-        use std::os::unix::fs::MetadataExt as _;
-        let parent_path = self
-            .path
-            .parent()
-            .expect("prepared qualification seal path has a parent");
-        let opened = self.parent.metadata().map_err(|error| {
-            format!("failed to inspect pinned qualification seal destination: {error}")
-        })?;
-        let current = fs::symlink_metadata(parent_path).map_err(|error| {
-            format!("failed to re-inspect qualification seal destination path: {error}")
-        })?;
-        if current.file_type().is_symlink()
-            || !current.is_dir()
-            || opened.dev() != current.dev()
-            || opened.ino() != current.ino()
-            || opened.uid() != self.expected_uid
-            || opened.mode() & 0o022 != 0
-        {
-            return Err(
-                "qualification seal destination directory changed identity or trust attributes"
-                    .to_owned(),
-            );
-        }
-        #[cfg(target_os = "macos")]
-        require_acl_free_pinned_path(
-            &self.parent,
-            parent_path,
-            "qualification seal destination directory",
-        )?;
-        Ok(())
+        self.inner
+            .publish_bytes_and_verify(canonical_bytes, verify_final)
+            .map_err(|error| error.to_string())
     }
 }
 fn validate_canonical_absolute_path(path: &Path, label: &str) -> Result<(), String> {
@@ -13712,6 +13320,26 @@ fn validate_qualification_seal_directory_separation(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum KagemushaCheckQualificationMode<'a> {
+    None,
+    CatalogSeal,
+    ValidatorSeal {
+        trusted_promotion:
+            &'a kagemusha_validator_qualification_command::TrustedKagemushaPromotionReservationV1,
+        catalog_seal_bytes: &'a [u8],
+        sources: &'a kagemusha_validator_qualification::KagemushaStartupQualificationSourcesV1,
+    },
+}
+
+#[derive(Default)]
+struct KagemushaCheckQualificationArtifacts {
+    catalog_seal:
+        Option<iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1>,
+    validator_seal: Option<iroha_data_model::offline::KagemushaV4ValidatorQualificationSealV1>,
+}
+
+#[cfg(test)]
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
@@ -13720,41 +13348,187 @@ fn validate_config_for_check(
     Option<iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1>,
     MainError,
 > {
+    let mode = if build_kagemusha_qualification_seal {
+        KagemushaCheckQualificationMode::CatalogSeal
+    } else {
+        KagemushaCheckQualificationMode::None
+    };
+    validate_config_for_check_mode(config, genesis, mode).map(|artifacts| artifacts.catalog_seal)
+}
+
+#[expect(clippy::too_many_lines, reason = "prepare, validate, then sign")]
+fn validate_config_for_check_mode(
+    config: &Config,
+    genesis: Option<&GenesisBlock>,
+    mode: KagemushaCheckQualificationMode<'_>,
+) -> ReportResult<KagemushaCheckQualificationArtifacts, MainError> {
     validate_config_offline(config).change_context(MainError::Config)?;
     IrohaRuntimeProviderBindingsV1::try_from_config(config)
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
-    if build_kagemusha_qualification_seal && genesis.is_none() {
+    if !matches!(&mode, KagemushaCheckQualificationMode::None) && genesis.is_none() {
+        let flag = match &mode {
+            KagemushaCheckQualificationMode::CatalogSeal => {
+                "--write-kagemusha-catalog-qualification-seal"
+            }
+            KagemushaCheckQualificationMode::ValidatorSeal { .. } => {
+                "--write-kagemusha-validator-qualification-seal"
+            }
+            KagemushaCheckQualificationMode::None => unreachable!(),
+        };
         return Err(Report::new(MainError::Config).attach(
-            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation",
+            format!("`{flag}` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation"),
         ));
     }
-    let (catalog, qualification_seal) = if build_kagemusha_qualification_seal {
-        let (catalog, seal) = load_and_build_configured_kagemusha_catalog_qualification_seal(
-            config,
-        )
-        .map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "failed to fully qualify the Kagemusha V4 release catalog: {error}"
-            ))
-        })?;
-        (catalog, Some(seal))
-    } else {
-        let catalog = load_configured_kagemusha_release_catalog(config).map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "failed to load the configured Kagemusha V4 release catalog: {error}"
-            ))
-        })?;
-        (catalog, None)
+    let mut artifacts = KagemushaCheckQualificationArtifacts::default();
+    let mut pending_validator_qualification = None;
+    let catalog = match mode {
+        KagemushaCheckQualificationMode::None => load_configured_kagemusha_release_catalog(config)
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to load the configured Kagemusha V4 release catalog: {error}"
+                ))
+            })?,
+        KagemushaCheckQualificationMode::CatalogSeal => {
+            let capture =
+                load_and_build_configured_kagemusha_validator_qualification_capture(config)
+                    .map_err(|error| {
+                        Report::new(MainError::Config).attach(format!(
+                            "failed to fully qualify the Kagemusha V4 release catalog: {error}"
+                        ))
+                    })?;
+            artifacts.catalog_seal = Some(capture.catalog_qualification_seal().clone());
+            capture.into_catalog()
+        }
+        KagemushaCheckQualificationMode::ValidatorSeal {
+            trusted_promotion,
+            catalog_seal_bytes,
+            sources,
+        } => {
+            let capture =
+                load_and_build_configured_kagemusha_validator_qualification_capture(config)
+                    .map_err(|error| {
+                        Report::new(MainError::Config).attach(format!(
+                            "failed to fully qualify the Kagemusha V4 release catalog: {error}"
+                        ))
+                    })?;
+            capture
+                .catalog_qualification_seal()
+                .verify_exact_canonical_bytes(catalog_seal_bytes)
+                .map_err(|error| {
+                    Report::new(MainError::Config).attach(format!(
+                        "configured Kagemusha catalog qualification seal is not the exact same-load seal: {error}"
+                    ))
+                })?;
+            let catalog = capture.catalog_for_validation();
+            pending_validator_qualification = Some((capture, trusted_promotion, sources));
+            catalog
+        }
     };
     let Some(genesis) = genesis else {
         // Runtime startup can use an exact configured genesis hash with the
-        // canonical body already persisted in Kura, or an authenticated
-        // provisional snapshot. Static validation and catalog authentication
-        // are complete even though body-level validation is pending.
-        return Ok(None);
+        // canonical body in Kura or a snapshot; body validation remains pending.
+        return Ok(artifacts);
     };
+    let full_validation = validate_available_genesis_for_check(config, genesis, catalog);
+    artifacts.validator_seal = continue_after_full_kagemusha_check(
+        full_validation,
+        |(validated_genesis, _block_cadence_ms)| {
+            let Some((capture, trusted_promotion, sources)) = pending_validator_qualification
+            else {
+                return Ok(None);
+            };
+            let runtime_effective_config = kagemusha_runtime_effective_config_projection::build_kagemusha_runtime_effective_config_projection_v1(
+                config,
+                genesis,
+                &validated_genesis,
+            )
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to derive Kagemusha runtime-effective config: {error}"
+                ))
+            })?;
+            let controller = config
+                .settlement
+                .offline
+                .kagemusha_promotion_controller_public_key
+                .as_ref()
+                .ok_or_else(|| {
+                    Report::new(MainError::Config).attach(
+                        "validator qualification requires a configured promotion controller",
+                    )
+                })?;
+            let catalog_revalidation_authority_key_id = config
+            .settlement
+            .offline
+            .kagemusha_catalog_revalidation_authority_key_id
+            .as_deref()
+            .ok_or_else(|| {
+                Report::new(MainError::Config).attach(
+                    "validator qualification requires a configured catalog-revalidation authority key id",
+                )
+            })?;
+            let catalog_revalidation_authority_public_key = config
+            .settlement
+            .offline
+            .kagemusha_catalog_revalidation_authority_public_key
+            .as_ref()
+            .ok_or_else(|| {
+                Report::new(MainError::Config).attach(
+                    "validator qualification requires a configured catalog-revalidation authority public key",
+                )
+            })?;
+            let promotion =
+                kagemusha_validator_qualification::KagemushaTrustedPromotionInputsV1::new(
+                    controller,
+                    trusted_promotion.exact_reservation_bytes(),
+                    trusted_promotion.catalog_revalidation_receipt_json(),
+                    catalog_revalidation_authority_key_id,
+                    catalog_revalidation_authority_public_key,
+                );
+            let outcome =
+                kagemusha_validator_qualification::try_build_kagemusha_validator_qualification_v1(
+                    sources,
+                    Some(promotion),
+                    Some(&capture),
+                    Some(genesis),
+                    Some(&runtime_effective_config),
+                    &config.common.peer.id,
+                    Some(&config.common.key_pair),
+                )
+                .map_err(|error| {
+                    Report::new(MainError::Config).attach(format!(
+                        "failed to build the local Kagemusha validator qualification seal: {error}"
+                    ))
+                })?;
+            match outcome {
+                kagemusha_validator_qualification::KagemushaValidatorQualificationOutcomeV1::Signed(
+                    seal,
+                ) => Ok(Some(*seal)),
+                kagemusha_validator_qualification::KagemushaValidatorQualificationOutcomeV1::Unavailable(
+                    reason,
+                ) => Err(Report::new(MainError::Config).attach(format!(
+                    "Kagemusha validator qualification was explicitly unavailable: {reason:?}"
+                ))),
+            }
+        },
+    )?;
+    Ok(artifacts)
+}
+
+fn continue_after_full_kagemusha_check<T, V>(
+    full_validation: ReportResult<V, MainError>,
+    action: impl FnOnce(V) -> ReportResult<T, MainError>,
+) -> ReportResult<T, MainError> {
+    action(full_validation?)
+}
+
+fn validate_available_genesis_for_check(
+    config: &Config,
+    genesis: &GenesisBlock,
+    catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+) -> ReportResult<(iroha_core::sumeragi::GenesisV2Bootstrap, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
         genesis_public_key_from_genesis_block(genesis).change_context(MainError::Config)?;
@@ -13799,8 +13573,8 @@ fn validate_config_for_check(
         signed_parameters,
         block_cadence_ms,
         catalog,
-    )?;
-    Ok(qualification_seal)
+    )
+    .map(|validated_genesis| (validated_genesis, block_cadence_ms))
 }
 fn load_configured_kagemusha_release_catalog(
     config: &Config,
@@ -13811,13 +13585,10 @@ fn load_configured_kagemusha_release_catalog(
     )
     .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
 }
-fn load_and_build_configured_kagemusha_catalog_qualification_seal(
+fn load_and_build_configured_kagemusha_validator_qualification_capture(
     config: &Config,
 ) -> Result<
-    (
-        iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-        iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
-    ),
+    iroha_core::smartcontracts::isi::offline::KagemushaValidatorQualificationCatalogCaptureV1,
     String,
 > {
     match (
@@ -13826,14 +13597,10 @@ fn load_and_build_configured_kagemusha_catalog_qualification_seal(
             .offline
             .kagemusha_release_policy_path
             .as_deref(),
-        config
-            .settlement
-            .offline
-            .kagemusha_artifact_dir
-            .as_deref(),
+        config.settlement.offline.kagemusha_artifact_dir.as_deref(),
     ) {
         (Some(policy_path), Some(artifact_dir)) => {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_and_build_qualification_seal(
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_and_build_validator_qualification_capture(
                 policy_path,
                 artifact_dir,
                 config.settlement.offline.kagemusha_max_decoded_bytes,
@@ -13952,7 +13719,7 @@ fn validate_genesis_execution_offline(
     signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
     kagemusha_release_catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-) -> ReportResult<(), MainError> {
+) -> ReportResult<iroha_core::sumeragi::GenesisV2Bootstrap, MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
             "failed to create disposable storage for genesis validation: {error}"
@@ -14029,7 +13796,7 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
-    iroha_core::sumeragi::freeze_staged_genesis_v2(
+    let validated_genesis = iroha_core::sumeragi::freeze_staged_genesis_v2(
         genesis,
         &staged,
         signed_mode,
@@ -14040,7 +13807,7 @@ fn validate_genesis_execution_offline(
             "failed to freeze staged Sumeragi v2 genesis: {error}"
         ))
     })?;
-    Ok(())
+    Ok(validated_genesis)
 }
 fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 32]>, MainError> {
     let meta = decode_confidential_registry_meta(payload).map_err(|err| {
@@ -18432,7 +18199,8 @@ mod tests {
                 load_configured_kagemusha_release_catalog(&fixture.config)
                     .expect("an omitted release cache uses an empty catalog"),
             )
-            .expect_err("duplicate genesis registration must fail semantic execution");
+            .err()
+            .expect("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("genesis instruction execution failed"),
@@ -18668,6 +18436,7 @@ mod tests {
                 startup: StartupArgs {
                     check_config: false,
                     write_kagemusha_catalog_qualification_seal: None,
+                    write_kagemusha_validator_qualification_seal: None,
                     trace_config: false,
                     config_blake3: None,
                 },
@@ -18687,6 +18456,7 @@ mod tests {
             assert_eq!(config.crypto.sm2_distid_default, "CN1234567812345678");
             Ok(())
         }
+        include!("main/kagemusha_runtime_effective_config_projection_tests.rs");
     }
     mod config_integration {
         #[allow(unused_imports)]
@@ -18751,70 +18521,7 @@ mod tests {
             );
             table
         }
-        fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
-            Args {
-                config: Some(config_path),
-                genesis_manifest_json,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                    config_blake3: None,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            }
-        }
-        #[test]
-        fn integrity_bound_config_is_hashed_and_parsed_from_one_buffer() -> eyre::Result<()> {
-            let genesis_key_pair = KeyPair::random();
-            let config = config_factory(genesis_key_pair.public_key());
-            let raw = toml::to_string(&config)?;
-            let dir = tempfile::tempdir()?;
-            let config_path = dir.path().join("config.toml");
-            std::fs::write(&config_path, raw.as_bytes())?;
-            let expected = blake3::hash(raw.as_bytes()).to_hex().to_string();
-            let mut args = config_test_args(config_path.clone(), None);
-            args.startup.config_blake3 = Some(expected);
-            read_config_and_genesis(&args)
-                .map_err(|report| eyre::eyre!("valid integrity-bound config failed: {report:?}"))?;
-            std::fs::write(&config_path, format!("{raw}\n# changed after admission\n"))?;
-            let error = read_config_and_genesis(&args)
-                .expect_err("changed integrity-bound config must fail closed");
-            assert!(
-                format!("{error:?}").contains("has BLAKE3"),
-                "unexpected integrity error: {error:?}"
-            );
-            Ok(())
-        }
-        #[test]
-        fn integrity_bound_config_rejects_extends() -> eyre::Result<()> {
-            let genesis_key_pair = KeyPair::random();
-            let mut config = config_factory(genesis_key_pair.public_key());
-            config.insert(
-                "extends".to_owned(),
-                toml::Value::String("base.toml".to_owned()),
-            );
-            let raw = toml::to_string(&config)?;
-            let dir = tempfile::tempdir()?;
-            let config_path = dir.path().join("config.toml");
-            std::fs::write(&config_path, raw.as_bytes())?;
-            let mut args = config_test_args(config_path, None);
-            args.startup.config_blake3 = Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
-            let error = read_config_and_genesis(&args)
-                .expect_err("integrity-bound config must not resolve external extends");
-            assert!(
-                format!("{error:?}").contains("must be flattened"),
-                "unexpected extends error: {error:?}"
-            );
-            Ok(())
-        }
+        include!("main/kagemusha_startup_source_tests.rs");
         fn load_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
@@ -18903,84 +18610,6 @@ mod tests {
                 .map_err(|report| eyre::eyre!("{report:?}"))?;
             Ok((config, dir, config_path))
         }
-        #[test]
-        fn relative_file_paths_resolution() -> eyre::Result<()> {
-            // Given
-            let genesis_key_pair = KeyPair::random();
-            let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
-            iroha_genesis::init_instruction_registry();
-            let proposal = raw
-                .build_and_sign(&genesis_key_pair)
-                .expect("build prepared genesis proposal");
-            assert!(proposal.0.is_resultless_proposal());
-            let mut config = config_factory(genesis_key_pair.public_key());
-            iroha_config::base::toml::Writer::new(&mut config)
-                .write(["genesis", "file"], "./genesis/genesis.proposal.nrt")
-                .write(["kura", "store_dir"], "../storage")
-                .write(["snapshot", "store_dir"], "../snapshots")
-                .write(["dev_telemetry", "out_file"], "../logs/telemetry");
-            let dir = tempfile::tempdir()?;
-            let genesis_path = dir.path().join("config/genesis/genesis.proposal.nrt");
-            let executor_path = dir.path().join("config/genesis/executor.to");
-            let config_path = dir.path().join("config/config.toml");
-            std::fs::create_dir(dir.path().join("config"))?;
-            std::fs::create_dir(dir.path().join("config/genesis"))?;
-            std::fs::write(config_path, toml::to_string(&config)?)?;
-            std::fs::write(genesis_path, proposal.0.encode_wire()?)?;
-            std::fs::write(executor_path, "")?;
-            let config_path = dir.path().join("config/config.toml");
-            // When
-            let (config, genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                    config_blake3: None,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: false,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
-            validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
-            // Then
-            // No need to check whether genesis.file is resolved - if not, genesis wouldn't be read
-            assert!(genesis.is_some());
-            assert!(
-                genesis
-                    .as_ref()
-                    .is_some_and(|block| block.0.is_resultless_proposal())
-            );
-            assert_eq!(
-                config.kura.store_dir.resolve_relative_path().absolutize()?,
-                dir.path().join("storage")
-            );
-            assert_eq!(
-                config
-                    .snapshot
-                    .store_dir
-                    .resolve_relative_path()
-                    .absolutize()?,
-                dir.path().join("snapshots")
-            );
-            assert_eq!(
-                config
-                    .dev_telemetry
-                    .out_file
-                    .expect("dev telemetry should be set")
-                    .resolve_relative_path()
-                    .absolutize()?,
-                dir.path().join("logs/telemetry")
-            );
-            Ok(())
-        }
         fn storage_budget_probe(
             total_bytes: u64,
             available_bytes: u64,
@@ -19022,45 +18651,6 @@ mod tests {
             );
             assert_eq!(config.kura.max_disk_usage_bytes.get(), 800);
             assert_eq!(std::fs::read_to_string(config_path)?, original_config);
-            Ok(())
-        }
-        #[cfg(unix)]
-        #[test]
-        fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode()
-        -> eyre::Result<()> {
-            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-            let (_parsed, _dir, config_path) = parse_config_with_overrides(|_, _| {})?;
-            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o400))?;
-            let original_bytes = std::fs::read(&config_path)?;
-            let original_metadata = std::fs::metadata(&config_path)?;
-            assert_eq!(original_metadata.mode() & 0o777, 0o400);
-            let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path.clone()),
-                genesis_manifest_json: None,
-                startup: StartupArgs {
-                    check_config: false,
-                    write_kagemusha_catalog_qualification_seal: None,
-                    trace_config: false,
-                    config_blake3: None,
-                },
-                terminal_colors: false,
-                language: None,
-                sora: true,
-                fastpq_execution_mode: None,
-                fastpq_poseidon_mode: None,
-                fastpq_device_class: None,
-                fastpq_chip_family: None,
-                fastpq_gpu_kind: None,
-            })
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
-            assert!(
-                config.nexus.storage.effective_local_budget_bytes.is_some(),
-                "startup must complete runtime reconciliation"
-            );
-            let final_metadata = std::fs::metadata(&config_path)?;
-            assert_eq!(std::fs::read(&config_path)?, original_bytes);
-            assert_eq!(final_metadata.mode(), original_metadata.mode());
-            assert_eq!(final_metadata.ino(), original_metadata.ino());
             Ok(())
         }
         #[test]

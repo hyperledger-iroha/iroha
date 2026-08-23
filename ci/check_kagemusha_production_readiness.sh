@@ -586,28 +586,16 @@ READINESS = "ci/check_kagemusha_production_readiness.sh"
 READINESS_SOURCE_CONTRACT = (
     "ci/check_kagemusha_production_readiness_source_contract.py"
 )
+READINESS_SOURCE_SUPPORT = (
+    "ci/check_kagemusha_production_readiness_source_support.py"
+)
+READINESS_RECURSION_SOURCE_CONTRACT = "ci/check_kagemusha_recursion_source_contract.py"
+READINESS_SOURCE_PROVIDERS = (
+    READINESS_SOURCE_SUPPORT,
+    READINESS_RECURSION_SOURCE_CONTRACT,
+    READINESS_SOURCE_CONTRACT,
+)
 READINESS_SELF_TEST = "ci/check_kagemusha_production_readiness_self_test.py"
-MODEL = "crates/iroha_data_model/src/offline/mod.rs"
-MODEL_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_model.rs"
-MODEL_INCLUDE = 'include!("kagemusha_model.rs");'
-MODEL_VERIFIER_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_release_verifier.rs"
-MODEL_VERIFIER_MODULE = "mod kagemusha_release_verifier;"
-PRIVACY = "crates/iroha_data_model/src/privacy.rs"
-PRIVACY_PROTOCOL = "crates/iroha_data_model/src/privacy/protocol.rs"
-BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
-HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
-CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
-CATALOG_COMPONENT = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4_release_catalog_impl.rs"
-CATALOG_INCLUDE = 'include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");\n'
-CORE = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
-STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
-RECURSIVE_BACKEND = "crates/iroha_core/src/zk/kagemusha_v2.rs"
-RECURSION_ADAPTER = "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs"
-VALUE_CONTRACT = "crates/iroha_data_model/tests/kagemusha_value_contract.rs"
-SCHEMA_GOLDEN = "crates/iroha_data_model/tests/offline_public_schema_golden.rs"
-CONFIG = "crates/iroha_config/src/parameters/user.rs"
-NODE = "crates/irohad/src/main.rs"
-KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
 BUNDLE = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 BUNDLE_SOURCE_SEAL_INPUTS = (
     "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle/"
@@ -764,7 +752,7 @@ SANITIZED_VERIFIER_ENV = {
     "TMPDIR": str(PROMOTION_STAGING_PARENT),
 }
 READ_CHUNK_BYTES = 1024 * 1024
-authenticated_readiness_source_contract_bytes: bytes | None = None
+authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}
 authenticated_readiness_self_test_bytes: bytes | None = None
 # Promotion trust boundary: the controller-authenticated, root-installed gate,
 # its digest-pinned Python interpreter, and the independently reviewed source
@@ -941,55 +929,6 @@ def read(relative: str, errors: list[str]) -> str:
         errors.append(f"missing corridor file: {relative}")
         return ""
     return path.read_text(encoding="utf-8")
-def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
-    """Read the parent and both authenticated model components as one source."""
-    # Preserve the existing negative-test API: a MODEL override is already a
-    # complete logical source, while MODEL_COMPONENT can exercise the split.
-    if MODEL in overrides:
-        return overrides[MODEL]
-    parent = read(MODEL, errors)
-    component = (
-        overrides[MODEL_COMPONENT]
-        if MODEL_COMPONENT in overrides
-        else read(MODEL_COMPONENT, errors)
-    )
-    verifier = (
-        overrides[MODEL_VERIFIER_COMPONENT]
-        if MODEL_VERIFIER_COMPONENT in overrides
-        else read(MODEL_VERIFIER_COMPONENT, errors)
-    )
-    if parent.count(MODEL_INCLUDE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_COMPONENT).name} include")
-        return parent
-    parent = parent.replace(MODEL_INCLUDE, component, 1)
-    if parent.count(MODEL_VERIFIER_MODULE) != 1:
-        errors.append(f"{MODEL}: expected exactly one reviewed {Path(MODEL_VERIFIER_COMPONENT).name} module")
-        return parent
-    for marker in (
-        "const VERIFIER_IDENTITY_SCHEMA_V4",
-        "pub fn kagemusha_recursive_spend_verifier_key_id_v4",
-    ):
-        if verifier.count(marker) != 1:
-            errors.append(f"{MODEL_VERIFIER_COMPONENT}: expected exactly one {marker!r}")
-    return parent.replace(
-        MODEL_VERIFIER_MODULE,
-        "mod kagemusha_release_verifier {\n" + verifier + "\n}",
-        1,
-    )
-def read_reviewed_catalog(errors: list[str], overrides: dict[str, str]) -> str:
-    """Read the terminal registry and release-catalog implementation as one source."""
-    if CATALOG in overrides:
-        return overrides[CATALOG]
-    parent = read(CATALOG, errors)
-    component = (
-        overrides[CATALOG_COMPONENT]
-        if CATALOG_COMPONENT in overrides
-        else read(CATALOG_COMPONENT, errors)
-    )
-    if parent.count(CATALOG_INCLUDE) != 1:
-        errors.append(f"{CATALOG}: expected exactly one reviewed {Path(CATALOG_COMPONENT).name} include")
-        return parent
-    return parent.replace(CATALOG_INCLUDE, component, 1)
 def pin_regular_metadata(
     path: Path,
     label: str,
@@ -2250,6 +2189,25 @@ def authenticate_reviewed_source_file(
         raise ValueError(f"could not authenticate reviewed helper {relative}")
     if authenticated.stdout != observed_bytes:
         raise ValueError(f"reviewed helper {relative} differs from the source closure")
+def pin_authenticated_reviewed_source_file(
+    relative: str,
+    source_commit: str,
+    maximum_bytes: int,
+    label: str,
+    retained_pins: list[tuple[Path, int, tuple[int, ...], str]],
+) -> bytes:
+    """Pin one root-custodied worktree file to its reviewed-commit blob."""
+    path = root / relative
+    descriptor, fingerprint = pin_regular_metadata(path, label)
+    try:
+        require_production_root_custody(descriptor, label)
+        payload = read_pinned_descriptor(descriptor, fingerprint, maximum_bytes, label)
+        authenticate_reviewed_source_file(relative, payload, source_commit, maximum_bytes)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    retained_pins.append((path, descriptor, fingerprint, label))
+    return payload
 def authenticated_verifier_exited_without_reaping(
     process: subprocess.Popen[bytes],
 ) -> bool:
@@ -3102,7 +3060,7 @@ def verify_ios_evidence(
 def promotion_errors() -> list[str]:
     global authenticated_readiness_source_contract_bytes
     global authenticated_readiness_self_test_bytes
-    authenticated_readiness_source_contract_bytes = None
+    authenticated_readiness_source_contract_bytes = {}
     authenticated_readiness_self_test_bytes = None
     errors: list[str] = []
     if os.geteuid() != PRODUCTION_TRUSTED_UID:
@@ -3341,7 +3299,6 @@ def promotion_errors() -> list[str]:
     ios_validator_path = root / IOS_EVIDENCE_MODULE
     production_ios_validator_path = root / PRODUCTION_IOS_EVIDENCE_MODULE
     source_helper_path = root / SOURCE_TREE_SEAL
-    source_contract_path = root / READINESS_SOURCE_CONTRACT
     readiness_self_test_path = root / READINESS_SELF_TEST
     verifier_snapshot: tempfile.TemporaryDirectory[str] | None = None
     tool_controller_snapshot: tempfile.TemporaryDirectory[str] | None = None
@@ -3945,65 +3902,34 @@ def promotion_errors() -> list[str]:
             )
         )
         trusted_source_trust_home = trusted_source_trust_config.parent
-        label = f"reviewed source-tree seal helper {source_helper_path}"
-        descriptor, fingerprint = pin_regular_metadata(source_helper_path, label)
-        try:
-            require_production_root_custody(descriptor, label)
-        except BaseException:
-            os.close(descriptor)
-            raise
-        source_helper_bytes = read_pinned_descriptor(
-            descriptor, fingerprint, MAX_REVIEWED_HELPER_BYTES, label
-        )
-        trusted_file_pins.append((source_helper_path, descriptor, fingerprint, label))
         if reviewed_source_commit is None:
             raise ValueError("reviewed source closure cannot authenticate its helper")
-        authenticate_reviewed_source_file(
+        source_helper_bytes = pin_authenticated_reviewed_source_file(
             SOURCE_TREE_SEAL,
-            source_helper_bytes,
             reviewed_source_commit,
             MAX_REVIEWED_HELPER_BYTES,
+            f"reviewed source-tree seal helper {source_helper_path}",
+            trusted_file_pins,
         )
-        label = f"reviewed readiness source-contract provider {source_contract_path}"
-        descriptor, fingerprint = pin_regular_metadata(source_contract_path, label)
-        try:
-            require_production_root_custody(descriptor, label)
-        except BaseException:
-            os.close(descriptor)
-            raise
-        source_contract_bytes = read_pinned_descriptor(
-            descriptor,
-            fingerprint,
-            MAX_READINESS_SOURCE_CONTRACT_BYTES,
-            label,
-        )
-        trusted_file_pins.append(
-            (source_contract_path, descriptor, fingerprint, label)
-        )
-        authenticate_reviewed_source_file(
-            READINESS_SOURCE_CONTRACT,
-            source_contract_bytes,
-            reviewed_source_commit,
-            MAX_READINESS_SOURCE_CONTRACT_BYTES,
-        )
-        authenticated_readiness_source_contract_bytes = source_contract_bytes
+        for relative in READINESS_SOURCE_PROVIDERS:
+            path = root / relative
+            authenticated_readiness_source_contract_bytes[relative] = (
+                pin_authenticated_reviewed_source_file(
+                    relative,
+                    reviewed_source_commit,
+                    MAX_READINESS_SOURCE_CONTRACT_BYTES,
+                    f"reviewed readiness source provider {path}",
+                    trusted_file_pins,
+                )
+            )
         if self_test:
-            label = f"reviewed readiness self-test helper {readiness_self_test_path}"
-            descriptor, fingerprint = pin_regular_metadata(readiness_self_test_path, label)
-            try:
-                require_production_root_custody(descriptor, label)
-            except BaseException:
-                os.close(descriptor)
-                raise
-            readiness_self_test_bytes = read_pinned_descriptor(
-                descriptor, fingerprint, MAX_READINESS_SELF_TEST_BYTES, label,
+            authenticated_readiness_self_test_bytes = pin_authenticated_reviewed_source_file(
+                READINESS_SELF_TEST,
+                reviewed_source_commit,
+                MAX_READINESS_SELF_TEST_BYTES,
+                f"reviewed readiness self-test helper {readiness_self_test_path}",
+                trusted_file_pins,
             )
-            trusted_file_pins.append((readiness_self_test_path, descriptor, fingerprint, label))
-            authenticate_reviewed_source_file(
-                READINESS_SELF_TEST, readiness_self_test_bytes,
-                reviewed_source_commit, MAX_READINESS_SELF_TEST_BYTES,
-            )
-            authenticated_readiness_self_test_bytes = readiness_self_test_bytes
         source_helper_snapshot, trusted_source_helper_snapshot = snapshot_private_bytes(
             source_helper_bytes,
             "kagemusha_source_tree_seal.py",
@@ -4886,34 +4812,85 @@ def promotion_errors() -> list[str]:
     cleanup_private_snapshots()
     return errors
 source_contract_errors: list[str] = []
-source_contract_bytes: bytes | None = None
+source_contract_bytes: dict[str, bytes] = {}
 if mode == "promotion":
     source_contract_errors.extend(promotion_errors())
     source_contract_bytes = authenticated_readiness_source_contract_bytes
-    if source_contract_bytes is None:
-        source_contract_errors.append(
-            "promotion readiness source-contract provider was not "
-            "source-closure authenticated"
-        )
+    for relative in READINESS_SOURCE_PROVIDERS:
+        if relative not in source_contract_bytes:
+            source_contract_errors.append(
+                f"promotion readiness source provider {relative} was not "
+                "source-closure authenticated"
+            )
+else:
+    for relative in READINESS_SOURCE_PROVIDERS:
+        try:
+            payload = (root / relative).read_bytes()
+            if not payload or len(payload) > MAX_READINESS_SOURCE_CONTRACT_BYTES:
+                raise ValueError("provider violates its byte bound")
+            source_contract_bytes[relative] = payload
+        except (OSError, ValueError) as error:
+            source_contract_errors.append(
+                f"could not load readiness source provider {relative}: {error}"
+            )
+support_bytes = source_contract_bytes.get(READINESS_SOURCE_SUPPORT)
+source_provider_base_names = frozenset(globals()) | {
+    "errors",
+    "readiness_self_test_bytes",
+    "self_test_context",
+}
+support_context = dict(globals())
+if support_bytes is None:
+    source_contract_errors.append("readiness source-support provider bytes are unavailable")
 else:
     try:
-        source_contract_bytes = (root / READINESS_SOURCE_CONTRACT).read_bytes()
-        if (
-            not source_contract_bytes
-            or len(source_contract_bytes) > MAX_READINESS_SOURCE_CONTRACT_BYTES
-        ):
-            raise ValueError(
-                "candidate readiness source-contract provider violates its byte bound"
-            )
-    except (OSError, ValueError) as error:
+        support_source = support_bytes.decode("utf-8")
+        support_context["_KAGEMUSHA_READINESS_SOURCE_SUPPORT_CONTEXT_V1"] = True
+        support_context["_KAGEMUSHA_READINESS_SOURCE_SUPPORT_SOURCE_V1"] = support_source
+        exec(compile(support_bytes, READINESS_SOURCE_SUPPORT, "exec"), support_context)
+    except Exception as error:
         source_contract_errors.append(
-            f"could not load readiness source-contract provider: {error}"
+            f"readiness source-support provider failed unexpectedly: {error}"
         )
-        source_contract_bytes = None
-if source_contract_bytes is not None:
+if not callable(support_context.get("source_provider_pipeline_errors")):
+    source_contract_errors.append("readiness source-support provider evaluator is unavailable")
+recursion_source_contract_evaluator: Callable[..., list[str]] | None = None
+recursion_bytes = source_contract_bytes.get(READINESS_RECURSION_SOURCE_CONTRACT)
+if recursion_bytes is None:
+    source_contract_errors.append("recursion source-contract provider bytes are unavailable")
+else:
     try:
-        source_contract_source = source_contract_bytes.decode("utf-8")
-        source_contract_context = globals()
+        recursion_source = recursion_bytes.decode("utf-8")
+        recursion_context = {
+            "__name__": "kagemusha_recursion_source_contract",
+            "_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_CONTEXT_V1": True,
+            "_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_SOURCE_V1": recursion_source,
+        }
+        exec(
+            compile(recursion_bytes, READINESS_RECURSION_SOURCE_CONTRACT, "exec"),
+            recursion_context,
+        )
+        candidate_evaluator = recursion_context.get("recursion_source_contract_errors")
+        if not callable(candidate_evaluator):
+            raise ValueError("recursion source provider did not define its evaluator")
+        recursion_source_contract_evaluator = candidate_evaluator
+    except Exception as error:
+        source_contract_errors.append(
+            f"recursion source-contract provider failed unexpectedly: {error}"
+        )
+if not callable(recursion_source_contract_evaluator):
+    source_contract_errors.append("recursion source-contract provider evaluator is unavailable")
+primary_bytes = source_contract_bytes.get(READINESS_SOURCE_CONTRACT)
+source_contract_context = dict(support_context)
+source_contract_context["_KAGEMUSHA_RECURSION_SOURCE_CONTRACT_EVALUATOR_V1"] = (
+    recursion_source_contract_evaluator
+)
+source_contract_evaluator: Callable[..., list[str]] | None = None
+if primary_bytes is None:
+    source_contract_errors.append("readiness source-contract provider bytes are unavailable")
+else:
+    try:
+        source_contract_source = primary_bytes.decode("utf-8")
         source_contract_context[
             "_KAGEMUSHA_READINESS_SOURCE_CONTRACT_CONTEXT_V1"
         ] = True
@@ -4921,7 +4898,7 @@ if source_contract_bytes is not None:
             "_KAGEMUSHA_READINESS_SOURCE_CONTRACT_SOURCE_V1"
         ] = source_contract_source
         code = compile(
-            source_contract_bytes,
+            primary_bytes,
             READINESS_SOURCE_CONTRACT,
             "exec",
         )
@@ -4936,8 +4913,13 @@ if source_contract_bytes is not None:
         source_contract_errors.append(
             f"readiness source-contract provider failed unexpectedly: {error}"
         )
+if not callable(source_contract_evaluator):
+    source_contract_errors.append("readiness source-contract provider evaluator is unavailable")
 errors = source_contract_errors
 if self_test:
+    for provider_name, provider_value in source_contract_context.items():
+        if provider_name not in source_provider_base_names:
+            globals()[provider_name] = provider_value
     if mode == "promotion":
         readiness_self_test_bytes = authenticated_readiness_self_test_bytes
         if readiness_self_test_bytes is None:
@@ -4954,6 +4936,7 @@ if self_test:
         try:
             self_test_context = globals()
             self_test_context["_KAGEMUSHA_READINESS_SELF_TEST_CONTEXT_V1"] = True
+            self_test_context["errors"] = errors
             code = compile(readiness_self_test_bytes, READINESS_SELF_TEST, "exec")
             exec(code, self_test_context, self_test_context)
         except Exception as error:

@@ -4737,10 +4737,7 @@ fn lower_pointer_constructor_call(
             ctx.current_instr(Instr::PointerFromString { dest, kind, src });
             dest
         }
-        (_, ty) if semantic::is_blob_like(&ty) => {
-            let dest = emit_pointer_from_norito(ctx, src, kind);
-            dest
-        }
+        (_, ty) if semantic::is_blob_like(&ty) => emit_pointer_from_norito(ctx, src, kind),
         _ => src,
     }
 }
@@ -4770,9 +4767,9 @@ fn lower_transfer_batch_call(
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MapFallback {
-    EagerDefault,
-    LazyDefault,
-    InsertDefault,
+    Eager,
+    Lazy,
+    Insert,
 }
 
 fn lower_map_fallback(
@@ -4813,7 +4810,7 @@ fn lower_map_fallback(
 
         ctx.start_block(default_block);
         let default = lower_expr(ctx, default_expr, vars);
-        if fallback == MapFallback::InsertDefault {
+        if fallback == MapFallback::Insert {
             let _ = lower_state_map_set_value(ctx, &base, key, &spec.key, &spec.value, default);
         }
         copy_runtime_value_words(ctx, default, &spec.value, &result_words);
@@ -4825,8 +4822,8 @@ fn lower_map_fallback(
 
     let map = lower_expr(ctx, map_expr, vars);
     let eager_default = match fallback {
-        MapFallback::EagerDefault => Some(lower_expr(ctx, default_expr, vars)),
-        MapFallback::LazyDefault | MapFallback::InsertDefault => None,
+        MapFallback::Eager => Some(lower_expr(ctx, default_expr, vars)),
+        MapFallback::Lazy | MapFallback::Insert => None,
     };
     let stored_key = ctx.new_temp();
     let stored_value = ctx.new_temp();
@@ -4862,7 +4859,7 @@ fn lower_map_fallback(
         Some(default) => default,
         None => lower_expr(ctx, default_expr, vars),
     };
-    if fallback == MapFallback::InsertDefault {
+    if fallback == MapFallback::Insert {
         ctx.current_instr(Instr::MapSet {
             map,
             key,
@@ -5220,8 +5217,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::PointerToNorito => {
             let value = lower_expr(ctx, &args[0], vars);
-            let dest = emit_pointer_to_norito(ctx, value);
-            dest
+            emit_pointer_to_norito(ctx, value)
         }
         Builtin::NumericToInt => {
             let value = lower_expr(ctx, &args[0], vars);
@@ -6190,30 +6186,15 @@ fn lower_surface_builtin_call(
             });
             lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
         }
-        Builtin::GetOrDefault => lower_map_fallback(
-            ctx,
-            &args[0],
-            &args[1],
-            &args[2],
-            MapFallback::EagerDefault,
-            vars,
-        ),
-        Builtin::GetOr => lower_map_fallback(
-            ctx,
-            &args[0],
-            &args[1],
-            &args[2],
-            MapFallback::LazyDefault,
-            vars,
-        ),
-        Builtin::Ensure => lower_map_fallback(
-            ctx,
-            &args[0],
-            &args[1],
-            &args[2],
-            MapFallback::InsertDefault,
-            vars,
-        ),
+        Builtin::GetOrDefault => {
+            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Eager, vars)
+        }
+        Builtin::GetOr => {
+            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Lazy, vars)
+        }
+        Builtin::Ensure => {
+            lower_map_fallback(ctx, &args[0], &args[1], &args[2], MapFallback::Insert, vars)
+        }
         Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let (key, value) = lower_take2_pair(ctx, args, vars);
@@ -6470,8 +6451,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 });
                 t
             } else {
-                let t = emit_unary(ctx, *op, v);
-                t
+                emit_unary(ctx, *op, v)
             }
         }
         semantic::ExprKind::NumericCast { expr: inner } => {
@@ -7097,8 +7077,7 @@ fn lower_sum_type_call(
         "is_none" | "is_err" => {
             let tagged_value = lower_expr(ctx, &args[0], vars);
             let tag = load_sum_tag(ctx, tagged_value);
-            let inverted = emit_unary(ctx, UnaryOp::Not, tag);
-            inverted
+            emit_unary(ctx, UnaryOp::Not, tag)
         }
         "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], true, vars),
         "unwrap_err_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], false, vars),

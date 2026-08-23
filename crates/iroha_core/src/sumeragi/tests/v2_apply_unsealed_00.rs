@@ -75,7 +75,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
 };
-use mv::storage::StorageReadOnly;
 use sorafs_manifest::XorQuantity;
 use std::{
     borrow::Cow,

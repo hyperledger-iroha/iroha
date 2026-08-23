@@ -13,6 +13,46 @@ fn runtime_budget_rejects_zero_underflow_and_overflow() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> eyre::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let (_parsed, _dir, config_path) = parse_config_with_overrides(|_, _| {})?;
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o400))?;
+    let original_bytes = std::fs::read(&config_path)?;
+    let original_metadata = std::fs::metadata(&config_path)?;
+    assert_eq!(original_metadata.mode() & 0o777, 0o400);
+    let (config, _genesis) = read_config_and_genesis(&Args {
+        config: Some(config_path.clone()),
+        genesis_manifest_json: None,
+        startup: StartupArgs {
+            check_config: false,
+            write_kagemusha_catalog_qualification_seal: None,
+            write_kagemusha_validator_qualification_seal: None,
+            trace_config: false,
+            config_blake3: None,
+        },
+        terminal_colors: false,
+        language: None,
+        sora: true,
+        fastpq_execution_mode: None,
+        fastpq_poseidon_mode: None,
+        fastpq_device_class: None,
+        fastpq_chip_family: None,
+        fastpq_gpu_kind: None,
+    })
+    .map_err(|report| eyre::eyre!("{report:?}"))?;
+    assert!(
+        config.nexus.storage.effective_local_budget_bytes.is_some(),
+        "startup must complete runtime reconciliation"
+    );
+    let final_metadata = std::fs::metadata(&config_path)?;
+    assert_eq!(std::fs::read(&config_path)?, original_bytes);
+    assert_eq!(final_metadata.mode(), original_metadata.mode());
+    assert_eq!(final_metadata.ino(), original_metadata.ino());
+    Ok(())
+}
+
 #[test]
 fn statvfs_capacity_uses_the_fundamental_fragment_size() {
     assert_eq!(statvfs_fragment_size(4_096, 1_048_576), Some(4_096));

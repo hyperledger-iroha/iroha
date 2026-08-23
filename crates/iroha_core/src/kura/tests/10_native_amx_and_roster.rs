@@ -84,7 +84,7 @@ fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
 include!("10c_native_amx_latest_index_support_and_bounds.rs");
 #[test]
 fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -127,7 +127,7 @@ fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
 #[test]
 fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt() {
     for drift_kind in ["executed wire", "finality", "manifest"] {
-        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -195,7 +195,7 @@ fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receip
 }
 #[test]
 fn native_amx_latest_index_startup_rejects_present_invalid_manifest_proof() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -309,7 +309,7 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
 }
 #[test]
 fn native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1071,7 +1071,7 @@ fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest
 }
 #[test]
 fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1146,7 +1146,7 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
 #[test]
 fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
     for pending_shape in ["metadata absent", "unbound checkpoint"] {
-        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1216,7 +1216,7 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
         "missing published commit manifest",
         "below-tip metadata gap",
     ] {
-        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1264,7 +1264,7 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
 }
 #[test]
 fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1395,7 +1395,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
 }
 #[test]
 fn native_amx_latest_index_rebuild_rejects_conflicting_pointer() {
-    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
+    let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");

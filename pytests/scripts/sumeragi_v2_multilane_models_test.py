@@ -19,10 +19,7 @@ CHECKER = (
     ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_multilane_models.py"
 )
 BINDINGS = (
-    ROOT_DIR
-    / "formal"
-    / "sumeragi_v2"
-    / "multilane_source_bindings.json"
+    ROOT_DIR / "formal" / "sumeragi_v2" / "multilane_source_bindings.json"
 )
 
 
@@ -415,7 +412,7 @@ def test_kura_replica_retention_contract_rejects_rollover_wakeup_order_drift(
 ) -> None:
     module = load_checker()
     contract = copy_kura_retention_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"
     swap_ordered_once(
         path,
         "let retired = pending.handoff_applied_height_to_durable_reconstruction(",
@@ -599,8 +596,11 @@ def copy_reviewed_source_fixture_with_includes(
         if relative.suffix != ".rs":
             continue
         errors: list[str] = []
-        invocations = reviewed_source._rust_include_invocations(
-            source.read_text(encoding="utf-8"), source, errors
+        manifest = reviewed_source._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+            relative.as_posix()
+        )
+        invocations = reviewed_source._rust_provider_invocations(
+            source.read_text(encoding="utf-8"), source, manifest, errors
         )
         assert errors == []
         for invocation in invocations:

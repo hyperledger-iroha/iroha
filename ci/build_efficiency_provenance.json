@@ -57,15 +57,15 @@
       "tree": "f7c0a5b889dffc76f5aec821bc35cd20472178d4"
     },
     "signed_lock_anchor": {
-      "commit": "233586bbed47228c0de87709d5d95d2f50be1837",
+      "commit": "93fa4c1848d7ed5c282bbc78ad0db2205c308d8b",
       "parents": [
-        "5ae8aaee16d8f7a1a2d8796c56a69c9ff494d2a3"
+        "b1efd577cf8bdf30db803fd8a79be962a61ddc09"
       ],
       "rust": {
-        "lines": 5021673,
-        "paths": 4398
+        "lines": 5007610,
+        "paths": 4653
       },
-      "tree": "d7855ccab157918401c6dc3e9e634602220db054"
+      "tree": "413b068a9f5d51a4d730db8e735a24c83598a458"
     },
     "source_budget_baseline": {
       "commit": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",
@@ -278,11 +278,11 @@
   ],
   "signed_lock_anchor": {
     "cargo_lock": {
-      "blob": "bf7633694c3f2fdca07de4d99743a09bad2daa12",
-      "bytes": 315333,
+      "blob": "5d04cef722cb695dd636110be01ff8de52ae7b45",
+      "bytes": 311172,
       "mode": "100644",
       "path": "Cargo.lock",
-      "sha256": "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+      "sha256": "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
     },
     "commit_role": "signed_lock_anchor",
     "signature": {

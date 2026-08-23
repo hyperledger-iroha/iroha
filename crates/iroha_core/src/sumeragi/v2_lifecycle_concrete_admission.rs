@@ -15,16 +15,17 @@ use super::{
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError,
         DurableValidateRegistryPublicationErrorV1, ExecutedDurableValidateDispatch,
-        LifecycleOutputRegistryJoinV1, LiveWalRegistryPublicationErrorV1,
+        LifecycleDecisionApplyDispatchProjectionErrorV1, LifecycleOutputRegistryJoinV1,
+        LiveLifecycleDecisionApplyReconciliationAuthorityV1, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
         PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
         PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
-        PreparedLifecycleAdmissionV1, PreparedLifecycleOutputExecutionV1,
-        PreparedLifecycleOutputRegistryRetirementV1, PreparedRecoveredDecisionApplyDispatch,
-        PublishedDurableValidateCompletion, ReadyRecoveredDecisionApplyAttestation,
-        ReadyRecoveredDecisionApplyAttestationError, ReadyValidateCarrierError,
-        RecoveredDecisionApplyDispatchProjectionError, RecoveredWalParentFactoryError,
-        RegistryError, reconstruct_recovered_wal_validate_parent,
+        PreparedLifecycleAdmissionV1, PreparedLifecycleDecisionApplyDispatchV1,
+        PreparedLifecycleOutputExecutionV1, PreparedLifecycleOutputRegistryRetirementV1,
+        PublishedDurableValidateCompletion, ReadyLifecycleDecisionApplyAttestationErrorV1,
+        ReadyLifecycleDecisionApplyAttestationV1, ReadyValidateCarrierError,
+        RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1,
+        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -53,6 +54,21 @@ impl LifecycleWorkRegistryHolder {
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
+    }
+    /// Project the complete recovered Ready Validate retry-owner census.
+    pub(super) fn project_recovered_durable_validate_retry_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        decision: Option<(
+            iroha_data_model::block::consensus_v2::ConsensusRound,
+            iroha_data_model::block::consensus_v2::ConsensusRound,
+            iroha_data_model::block::consensus_v2::BlockSubject,
+            iroha_data_model::block::consensus_v2::ExecutionCommitment,
+        )>,
+    ) -> Result<RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1>
+    {
+        self.registry
+            .project_recovered_durable_validate_retry_census(coordinator, decision)
     }
     /// Join one runtime output to its exact next lifecycle row.
     fn join_lifecycle_output(
@@ -85,29 +101,43 @@ impl LifecycleWorkRegistryHolder {
     ///
     /// The holder exposes neither its registry nor the carrier. The returned
     /// attestation contains only the registry-authenticated service demand.
-    pub(super) fn attest_ready_recovered_decision_apply(
+    pub(super) fn attest_ready_lifecycle_decision_apply(
         &self,
         coordinator: &LifecycleCoordinator,
         ordinal: u128,
-    ) -> Result<ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError>
-    {
+    ) -> Result<
+        ReadyLifecycleDecisionApplyAttestationV1,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
         self.registry
-            .attest_ready_recovered_decision_apply(coordinator, ordinal)
+            .attest_ready_lifecycle_decision_apply(coordinator, ordinal)
     }
-    /// Project the exact claimed recovered Decision Apply into its dedicated worker task.
+    /// Project a Ready live Apply into its queue-inert executor cleanup authority.
+    pub(super) fn prepare_ready_live_decision_apply_reconciliation(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        Option<LiveLifecycleDecisionApplyReconciliationAuthorityV1>,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
+        self.registry
+            .prepare_ready_live_decision_apply_reconciliation(coordinator, ordinal)
+    }
+    /// Project the exact claimed lifecycle Decision Apply into its dedicated worker task.
     ///
     /// The holder keeps the concrete registry private and returns only the
     /// move-only task emitted by the registry's fixed carrier projection.
-    pub(super) fn prepare_recovered_decision_apply_dispatch(
+    pub(super) fn prepare_lifecycle_decision_apply_dispatch(
         &mut self,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> Result<
-        PreparedRecoveredDecisionApplyDispatch<'_>,
-        RecoveredDecisionApplyDispatchProjectionError,
+        PreparedLifecycleDecisionApplyDispatchV1<'_>,
+        LifecycleDecisionApplyDispatchProjectionErrorV1,
     > {
         self.registry
-            .prepare_recovered_decision_apply_dispatch(coordinator, lease)
+            .prepare_lifecycle_decision_apply_dispatch(coordinator, lease)
     }
     /// Return whether one recovered Broadcast declares a paired next Vote.
     pub(super) fn recovered_lifecycle_signed_broadcast_declares_next_vote(
@@ -202,29 +232,29 @@ impl LifecycleWorkRegistryHolder {
             .attest_ready_recovered_decision_fetch(coordinator, ordinal)
     }
     /// Bind one guarded worker completion to the exact claimed Apply carrier.
-    pub(super) fn prepare_recovered_decision_apply_terminal_transition(
+    pub(super) fn prepare_lifecycle_decision_apply_terminal_transition(
         &self,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
-        completion: &crate::sumeragi::v2_apply::RecoveredDecisionApplyCompletionV1,
+        completion: &crate::sumeragi::v2_apply::LifecycleDecisionApplyCompletionV1,
     ) -> Option<(
-        super::work_registry::PreparedRecoveredDecisionApplyTerminalTransitionV1,
-        crate::sumeragi::v2::RecoveredDecisionApplyAdapterCompletionAuthorityV1,
+        super::work_registry::PreparedLifecycleDecisionApplyTerminalTransitionV1,
+        crate::sumeragi::v2::LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     )> {
         self.registry
-            .prepare_recovered_decision_apply_terminal_transition(coordinator, lease, completion)
+            .prepare_lifecycle_decision_apply_terminal_transition(coordinator, lease, completion)
     }
-    /// Publish one recovered Apply terminal and remove its carrier after fsync.
-    pub(super) fn publish_recovered_decision_apply_terminal_transition<T, E>(
+    /// Publish one lifecycle Decision Apply terminal and remove its carrier after fsync.
+    pub(super) fn publish_lifecycle_decision_apply_terminal_transition<T, E>(
         &mut self,
-        prepared: super::work_registry::PreparedRecoveredDecisionApplyTerminalTransitionV1,
+        prepared: super::work_registry::PreparedLifecycleDecisionApplyTerminalTransitionV1,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
         lease: &TurnLease,
         publish: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, super::work_registry::RecoveredDecisionApplyTerminalPublicationError<E>> {
+    ) -> Result<T, super::work_registry::LifecycleDecisionApplyTerminalPublicationErrorV1<E>> {
         self.registry
-            .publish_recovered_decision_apply_terminal_transition(
+            .publish_lifecycle_decision_apply_terminal_transition(
                 prepared, current, staged, lease, publish,
             )
     }
@@ -405,12 +435,28 @@ pub(in crate::sumeragi) enum ProductionLiveWalSignAdmissionSettlementV1 {
     },
 }
 /// Closed failure from lifecycle-owned output admission, service I/O, or terminal fsync.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LifecycleOutputRegistryFailureV1 {
+    /// The pending output could not classify against the existing concrete census.
+    InitialJoin,
+    /// Fresh direct-output admission returned an impossible decision class.
+    DirectAdmissionDecision,
+    /// Fresh direct-output admission returned an impossible retained-owner decision.
+    DirectAdmissionReturned,
+    /// Fresh direct-output registration rejected the exact prepared owner.
+    DirectAdmissionRegistry,
+    /// The newly admitted or pre-existing Ready row did not rejoin exactly.
+    ReadyRejoin,
+    /// The staged terminal successor did not match the exact output row.
+    TerminalProjection,
+}
+/// Closed failure from lifecycle-owned output admission, service I/O, or terminal fsync.
 #[derive(Debug)]
 pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionFailureV1<E> {
     /// A genuinely direct output did not project in the active verified context.
     Projection(AdapterEffectAdmissionError),
     /// The exact concrete row or its staged terminal successor was invalid.
-    Registry,
+    Registry(LifecycleOutputRegistryFailureV1),
     /// The output service rejected or failed the exact effect.
     Service(E),
     /// LedgerV1 publication was attempted and the lifecycle owner is fail-closed.
@@ -1106,7 +1152,9 @@ impl ProductionLifecycleOwnerV1 {
             Ok(join) => join,
             Err(_) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        LifecycleOutputRegistryFailureV1::InitialJoin,
+                    ),
                     pending: execution.into_pending(),
                 };
             }
@@ -1151,7 +1199,9 @@ impl ProductionLifecycleOwnerV1 {
                     AdapterEffectAdmissionTransaction::Admitted(_)
                     | AdapterEffectAdmissionTransaction::Rebound(_) => {
                         return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                            failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                            failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                LifecycleOutputRegistryFailureV1::DirectAdmissionDecision,
+                            ),
                             pending: execution.into_pending(),
                         };
                     }
@@ -1173,7 +1223,9 @@ impl ProductionLifecycleOwnerV1 {
                             | AdmissionDecision::Rejected(_)
                             | AdmissionDecision::FailClosed(_) => {
                                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                        LifecycleOutputRegistryFailureV1::DirectAdmissionReturned,
+                                    ),
                                     pending,
                                 }
                             }
@@ -1185,7 +1237,9 @@ impl ProductionLifecycleOwnerV1 {
                         );
                         let failure = match failure {
                             AdapterEffectAdmissionFailure::Registry(_) => {
-                                ProductionLifecycleOutputAdmissionFailureV1::Registry
+                                ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                    LifecycleOutputRegistryFailureV1::DirectAdmissionRegistry,
+                                )
                             }
                             AdapterEffectAdmissionFailure::Durability => {
                                 ProductionLifecycleOutputAdmissionFailureV1::Durability
@@ -1216,7 +1270,9 @@ impl ProductionLifecycleOwnerV1 {
             )
             | Err(_) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        LifecycleOutputRegistryFailureV1::ReadyRejoin,
+                    ),
                     pending: execution.into_pending(),
                 };
             }
@@ -1247,7 +1303,9 @@ impl ProductionLifecycleOwnerV1 {
             )
         {
             return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                    LifecycleOutputRegistryFailureV1::TerminalProjection,
+                ),
                 pending: execution.into_pending(),
             };
         }
@@ -2229,7 +2287,7 @@ mod tests {
                     },
                 ),
                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(_),
                     ..
                 }
             ));

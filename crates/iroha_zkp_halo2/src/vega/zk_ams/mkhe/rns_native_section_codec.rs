@@ -27,14 +27,9 @@ use super::{
     rns_native_transcript::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
     },
-    rns_native_wire::{
-        ZkAmsMkheRnsNativeProofEnvelopeV1, ZkAmsMkheRnsNativeProofSectionKindV1,
-    },
+    rns_native_wire::ZkAmsMkheRnsNativeProofSectionKindV1,
 };
 use crate::vega::sponge::Keccak256;
-
-#[cfg(test)]
-use std::cell::Cell;
 
 const TERMINAL_TAG_V1: [u8; 4] = *b"ZATB";
 const RNS_QPCS_TAG_V1: [u8; 4] = *b"ZARQ";
@@ -82,10 +77,6 @@ pub(super) const CROSS_LOOKUP_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + SUMCHECK_COUNT_V1 * (1 + 32)
     + PROOF_FRAME_BYTES_V1
     + CODEC_DIGEST_BYTES_V1;
-const CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1: usize =
-    CROSS_LOOKUP_FIXED_BYTES_V1 - PROOF_FRAME_BYTES_V1 - CODEC_DIGEST_BYTES_V1;
-const CROSS_LOOKUP_PROOF_OFFSET_V1: usize =
-    CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 + PROOF_FRAME_BYTES_V1;
 const ZERO_PADDING_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 1
     + 2 * 32
@@ -106,46 +97,7 @@ const _: () = {
     assert!(FRI_COUNT_V1 == 18);
     assert!(SUMCHECK_COUNT_V1 == 29);
     assert!(MAX_SECTION_DIGESTS_V1 >= 482);
-    assert!(CROSS_LOOKUP_FIXED_BYTES_V1 == 2_811);
-    assert!(CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 == 2_743);
-    assert!(CROSS_LOOKUP_PROOF_OFFSET_V1 == 2_779);
 };
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct CrossLookupUnboundAuditCountersV1 {
-    parse_passes: usize,
-    proof_hash_passes: usize,
-    codec_hash_passes: usize,
-    final_context_binds: usize,
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1: Cell<CrossLookupUnboundAuditCountersV1> =
-        const { Cell::new(CrossLookupUnboundAuditCountersV1 {
-            parse_passes: 0,
-            proof_hash_passes: 0,
-            codec_hash_passes: 0,
-            final_context_binds: 0,
-        }) };
-}
-
-#[cfg(test)]
-fn update_cross_lookup_unbound_audit_counters_v1(
-    update: impl FnOnce(&mut CrossLookupUnboundAuditCountersV1),
-) {
-    CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1.with(|cell| {
-        let mut counters = cell.get();
-        update(&mut counters);
-        cell.set(counters);
-    });
-}
-
-#[cfg(test)]
-fn cross_lookup_unbound_audit_counters_v1() -> CrossLookupUnboundAuditCountersV1 {
-    CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1.with(Cell::get)
-}
 
 /// Failure while constructing, encoding, or decoding a typed proof section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -476,10 +428,11 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
-fn read_unbound_header_v1(
+fn read_header_v1(
     decoder: &mut DecoderV1<'_>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     total_bytes: usize,
+    expected: SectionHeaderV1,
 ) -> Result<SectionHeaderV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
     if decoder.array::<4>()? != tag_v1(kind)
         || decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1
@@ -488,22 +441,13 @@ fn read_unbound_header_v1(
     {
         return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding);
     }
-    Ok(SectionHeaderV1 {
+    let actual = SectionHeaderV1 {
         profile_manifest_digest: decoder.array()?,
         profile_digest: decoder.array()?,
         topology_digest: decoder.array()?,
         release_candidate_digest: decoder.array()?,
         transcript_digest: decoder.array()?,
-    })
-}
-
-fn read_header_v1(
-    decoder: &mut DecoderV1<'_>,
-    kind: ZkAmsMkheRnsNativeProofSectionKindV1,
-    total_bytes: usize,
-    expected: SectionHeaderV1,
-) -> Result<SectionHeaderV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-    let actual = read_unbound_header_v1(decoder, kind, total_bytes)?;
+    };
     if actual != expected {
         return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
     }
@@ -732,6 +676,10 @@ impl<'a> ZkAmsMkheRnsNativeTerminalBridgeSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid context, proof length, aliases, or failed bounded allocation.
+    #[allow(
+        clippy::wrong_self_convention,
+        reason = "all canonical section encoders share a borrowed receiver API"
+    )]
     pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge;
@@ -975,6 +923,10 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
+    #[allow(
+        clippy::wrong_self_convention,
+        reason = "all canonical section encoders share a borrowed receiver API"
+    )]
     pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs;
@@ -1203,6 +1155,10 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
+    #[allow(
+        clippy::wrong_self_convention,
+        reason = "all canonical section encoders share a borrowed receiver API"
+    )]
     pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
@@ -1386,6 +1342,10 @@ impl<'a> ZkAmsMkheRnsNativeZeroPaddingSectionV1<'a> {
     /// # Errors
     ///
     /// Rejects invalid metadata, proof length, aliases, or bounded allocation failure.
+    #[allow(
+        clippy::wrong_self_convention,
+        reason = "all canonical section encoders share a borrowed receiver API"
+    )]
     pub fn to_canonical_bytes_v1(&self) -> Result<Vec<u8>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
         self.validate_v1()?;
         let kind = ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding;

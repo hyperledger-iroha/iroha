@@ -693,6 +693,9 @@ pub struct CoreHostImpl<QS> {
     // families. This survives AXT_BEGIN/COMMIT cycles and is drained with the
     // completed envelope artifacts.
     axt_handle_budget_ledger: Arc<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>>,
+    // Immutable durable spend totals used only when the transaction overlay
+    // has not touched a handle family yet.
+    axt_handle_budget_base: AxtBudgetBase,
     // Snapshots of streaming session capabilities advertised by the VM.
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
@@ -712,8 +715,11 @@ pub struct CoreHostImpl<QS> {
     chain_id_bytes: Vec<u8>,
     // Exact genesis-derived security domain for AXT issuer authentication.
     network_id: Option<NetworkId>,
-    // Policy hook for AXT validation (deny-wins).
+    // Mandatory snapshot-derived policy for AXT validation.
     axt_policy: Arc<dyn ivm::axt::AxtPolicy>,
+    // Optional supplemental policy hook. This can only restrict the mandatory
+    // authenticated snapshot policy; either denial wins.
+    axt_policy_hook: Option<Arc<dyn ivm::axt::AxtPolicy>>,
     // AXT timing configuration sourced from `iroha_config`.
     axt_timing: iroha_config::parameters::actual::NexusAxt,
     // Current manifest id for namespace binding (None -> core/built-in).
@@ -768,6 +774,11 @@ const MAX_NESTED_CONTRACT_CALL_DEPTH: usize = 32;
 /// Slot storing a live queryable state reference for a host run.
 pub struct QueryStateSlot<QRef> {
     state: Option<QRef>,
+}
+enum AxtBudgetBase {
+    FreshEmpty,
+    Owned(Arc<BTreeMap<axt::HandleBudgetKey, AxtHandleBudgetRecord>>),
+    QueryRequired,
 }
 impl<QRef> Default for QueryStateSlot<QRef> {
     fn default() -> Self {
@@ -946,6 +957,8 @@ impl QueryStateExecute for QueryStateRef<'_, '_, '_> {
 }
 /// Query-state access shim for host types that may or may not carry a state reference.
 pub trait QueryStateAccess {
+    /// Whether this slot can resolve an AXT budget family from live state.
+    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool;
     /// Query-state reference type for a given borrow lifetime.
     type Ref<'a>: QueryStateExecute + QueryStateRefOps
     where
@@ -954,6 +967,7 @@ pub trait QueryStateAccess {
     fn get(&self) -> Option<Self::Ref<'_>>;
 }
 impl QueryStateAccess for NoQueryState {
+    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool = false;
     type Ref<'a>
         = QueryStateRef<'a, 'a, 'a>
     where
@@ -966,6 +980,7 @@ impl<QRef> QueryStateAccess for QueryStateSlot<QRef>
 where
     QRef: Copy + QueryStateExecute + QueryStateRefOps,
 {
+    const SUPPORTS_LIVE_AXT_BUDGET_LOOKUP: bool = true;
     type Ref<'a>
         = QRef
     where
@@ -1231,6 +1246,8 @@ pub struct SubscriptionContext {
 }
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Clone one cumulative AXT handle-family budget record from live state.
+    fn axt_handle_budget_record(&self, key: &AxtHandleBudgetKey) -> Option<AxtHandleBudgetRecord>;
     /// Return the governed smart-contract heap ceiling in bytes.
     fn smart_contract_heap_limit(&self) -> u64;
     /// Parse and canonicalize an account alias literal using the current dataspace catalog.
@@ -1711,6 +1728,22 @@ fn visit_storage_keys_with_text_prefix(
     Ok(())
 }
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn axt_handle_budget_record(&self, key: &AxtHandleBudgetKey) -> Option<AxtHandleBudgetRecord> {
+        match *self {
+            QueryStateRef::View(view) => view.world().axt_handle_budget_ledger().get(key).cloned(),
+            QueryStateRef::QueryView(view) => {
+                view.world().axt_handle_budget_ledger().get(key).cloned()
+            }
+            QueryStateRef::Block(block) => {
+                block.world().axt_handle_budget_ledger().get(key).cloned()
+            }
+            QueryStateRef::Transaction(transaction) => transaction
+                .world()
+                .axt_handle_budget_ledger()
+                .get(key)
+                .cloned(),
+        }
+    }
     fn smart_contract_heap_limit(&self) -> u64 {
         match *self {
             QueryStateRef::View(view) => view.world().parameters().smart_contract().memory().get(),
@@ -2782,6 +2815,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_state: None,
             completed_axt: Vec::new(),
             axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
+            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -2795,6 +2829,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             chain_id_bytes: Vec::new(),
             network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
@@ -2910,6 +2945,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_state: None,
             completed_axt: Vec::new(),
             axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
+            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -2923,6 +2959,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             chain_id_bytes: Vec::new(),
             network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
@@ -2995,6 +3032,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_state: None,
             completed_axt: Vec::new(),
             axt_handle_budget_ledger: Arc::new(BTreeMap::new()),
+            axt_handle_budget_base: AxtBudgetBase::FreshEmpty,
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
             zk_verified_ballot: Arc::new(VecDeque::new()),
@@ -3008,6 +3046,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             chain_id_bytes: Vec::new(),
             network_id: None,
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
+            axt_policy_hook: None,
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
             zk_tree_roots_history_len:
@@ -3439,21 +3478,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.set_axt_timing(timing)?;
         Ok(self)
     }
-    /// Override the default allow-all AXT policy (e.g., in tests or when wiring UAID manifests).
+    /// Install a supplemental restrictive AXT policy hook.
     ///
-    /// Replacing the policy aborts any active AXT envelope.
+    /// The mandatory snapshot-derived policy, issuer authentication, and replay
+    /// checks remain authoritative. The hook can only add denials; it cannot
+    /// authorize an operation rejected by the mandatory policy. Installing a
+    /// hook aborts any active AXT envelope.
     #[must_use]
-    pub fn with_axt_policy(mut self, policy: Arc<dyn ivm::axt::AxtPolicy>) -> Self {
+    pub fn with_axt_policy(mut self, policy_hook: Arc<dyn ivm::axt::AxtPolicy>) -> Self {
         self.abort_active_axt_envelope_for_policy_change();
-        self.axt_policy = policy;
-        self.axt_policy_snapshot = None;
-        self.axt_issuer_keys = Arc::new(BTreeMap::new());
+        self.axt_policy_hook = Some(policy_hook);
         self.clear_axt_proof_cache();
         self
     }
-    /// Override the default AXT policy using a Space Directory snapshot.
+    /// Install the mandatory AXT policy from a Space Directory snapshot.
     ///
-    /// A successful snapshot replacement aborts any active AXT envelope.
+    /// A successful snapshot replacement aborts any active AXT envelope and
+    /// retains an installed supplemental restrictive policy hook.
     ///
     /// # Errors
     ///
@@ -3563,8 +3604,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     /// Refresh the active AXT policy snapshot without rebuilding the host.
     ///
-    /// A successful refresh clears proof caches and aborts any active AXT
-    /// envelope. The guest must issue `AXT_BEGIN` again before recording proofs
+    /// A successful refresh clears proof caches, aborts any active AXT
+    /// envelope, and retains an installed supplemental restrictive policy
+    /// hook. The guest must issue `AXT_BEGIN` again before recording proofs
     /// under the refreshed policy.
     ///
     /// # Errors
@@ -6221,6 +6263,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 );
             }
         }
+        let handle_budget_base = if QS::SUPPORTS_LIVE_AXT_BUDGET_LOOKUP {
+            AxtBudgetBase::QueryRequired
+        } else {
+            AxtBudgetBase::Owned(Arc::new(
+                state
+                    .world()
+                    .axt_handle_budget_ledger()
+                    .iter()
+                    .map(|(key, record)| (key.clone(), record.clone()))
+                    .collect(),
+            ))
+        };
         self.axt_timing = timing;
         self.set_network_id(*state.network_id());
         self.axt_replay_ledger = Arc::new(replay_ledger);
@@ -6228,6 +6282,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.axt_issuer_keys = Arc::new(issuer_keys);
         self.axt_asset_policies = Arc::new(asset_policies);
         self.axt_asset_incarnations = Arc::new(asset_incarnations);
+        self.axt_handle_budget_base = handle_budget_base;
         self.note_axt_proof_cache_event(AXT_PROOF_CACHE_CLEARED);
         Ok(())
     }
@@ -9071,6 +9126,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             return Err(err);
         }
+        let hook_result = self.axt_policy_hook.as_ref().map_or(Ok(()), |policy_hook| {
+            policy_hook.allow_touch(dsid, &manifest)
+        });
+        if let Err(err) = hook_result {
+            let lane = self.policy_entry_for(dsid).map(|policy| policy.target_lane);
+            self.record_axt_reject_detail(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                lane,
+                "policy hook denied touch manifest",
+                None,
+                None,
+            );
+            return Err(err);
+        }
         if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(128)) {
             return Err(ivm::VMError::PermissionDenied);
         }
@@ -9440,16 +9510,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         // The explicit checks above own snapshot-backed sequence validation,
         // including the per-envelope base+prior-handle offset. Calling the
-        // snapshot policy hook again would recheck every handle against the
+        // snapshot policy again would recheck every handle against the
         // unadvanced base counter and reject the second valid same-dataspace
-        // handle. Custom policies remain authoritative when no snapshot was
-        // installed.
-        let result = if self.axt_policy_snapshot.is_some() {
+        // handle.
+        let mandatory_result = if self.axt_policy_snapshot.is_some() {
             Ok(())
         } else {
             self.axt_policy.allow_handle(usage)
         };
-        if result.is_err() {
+        if mandatory_result.is_err() {
+            let (next_handle_era, next_sub_nonce) =
+                policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
+            let lane = policy_lane.or(Some(usage.handle.target_lane));
+            self.record_axt_reject_detail(
+                AxtRejectReason::PolicyDenied,
+                Some(dsid),
+                lane,
+                "mandatory policy denied handle usage",
+                next_handle_era,
+                next_sub_nonce,
+            );
+            return mandatory_result;
+        }
+        let hook_result = self
+            .axt_policy_hook
+            .as_ref()
+            .map_or(Ok(()), |policy_hook| policy_hook.allow_handle(usage));
+        if hook_result.is_err() {
             let (next_handle_era, next_sub_nonce) =
                 policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
             let lane = policy_lane.or(Some(usage.handle.target_lane));
@@ -9461,20 +9548,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 next_handle_era,
                 next_sub_nonce,
             );
+            return hook_result;
         }
-        if result.is_ok() {
-            let retain_until_slot = self.replay_retain_until_slot(&usage.handle, record_slot);
-            Arc::make_mut(&mut self.axt_replay_ledger).insert(
-                key,
-                AxtReplayRecord {
-                    dataspace: dsid,
-                    budget_key,
-                    used_slot: record_slot,
-                    retain_until_slot,
-                },
-            );
-        }
-        result
+        let retain_until_slot = self.replay_retain_until_slot(&usage.handle, record_slot);
+        Arc::make_mut(&mut self.axt_replay_ledger).insert(
+            key,
+            AxtReplayRecord {
+                dataspace: dsid,
+                budget_key,
+                used_slot: record_slot,
+                retain_until_slot,
+            },
+        );
+        Ok(())
     }
     fn validate_axt_remote_spend_commitment(
         &mut self,
@@ -9778,6 +9864,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(())
     }
+    fn axt_handle_budget_record(
+        &self,
+        key: &axt::HandleBudgetKey,
+    ) -> Result<Option<AxtHandleBudgetRecord>, ivm::VMError> {
+        if let Some(record) = self.axt_handle_budget_ledger.get(key) {
+            return Ok(Some(record.clone()));
+        }
+        match &self.axt_handle_budget_base {
+            AxtBudgetBase::FreshEmpty => Ok(None),
+            AxtBudgetBase::Owned(records) => Ok(records.get(key).cloned()),
+            AxtBudgetBase::QueryRequired => self
+                .query_state
+                .get()
+                .ok_or(ivm::VMError::PermissionDenied)
+                .map(|state| state.axt_handle_budget_record(key)),
+        }
+    }
     fn stage_axt_handle_budget_updates(
         &mut self,
         state: &axt::HostAxtState,
@@ -9797,11 +9900,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             let record = match updates.entry(key.clone()) {
                 std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    let record = self
-                        .axt_handle_budget_ledger
-                        .get(entry.key())
-                        .cloned()
-                        .unwrap_or_else(AxtHandleBudgetRecord::empty);
+                    let record = match self.axt_handle_budget_record(entry.key()) {
+                        Ok(record) => record.unwrap_or_else(AxtHandleBudgetRecord::empty),
+                        Err(error) => {
+                            self.record_axt_reject(
+                                AxtRejectReason::PolicyDenied,
+                                Some(dsid),
+                                Some(usage.handle.target_lane),
+                                "hydrated handle-budget state requires an attached live query snapshot",
+                            );
+                            return Err(error);
+                        }
+                    };
                     entry.insert(record)
                 }
             };
@@ -14373,26 +14483,6 @@ seiyaku PrivilegedBinding {
             })
             .expect("canonical policy snapshot");
         host.set_telemetry(telemetry.clone());
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        // Touch the dataspace so handle validation can proceed to policy checks.
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest = TouchManifest {
-            read: Vec::new(),
-            write: Vec::new(),
-        };
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            )),
-            "touch should succeed before handle use"
-        );
         let handle = AssetHandle {
             asset_definition_id: fixture_axt_asset_definition_id(),
             scope: vec!["transfer".into()],
@@ -14431,13 +14521,15 @@ seiyaku PrivilegedBinding {
                 amount: Some(Quantity::from(5_u64)),
             },
         };
-        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
+        let usage = axt::HandleUsage {
+            handle,
+            intent,
+            proof: None,
+            amount: Quantity::from(5_u64),
+            amount_commitment: None,
+        };
         let err = host
-            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
+            .enforce_axt_policy(&usage)
             .expect_err("handle with stale era must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
         let hints = telemetry.axt_reject_hints_snapshot();
@@ -14462,7 +14554,6 @@ seiyaku PrivilegedBinding {
         assert_eq!(ctx.next_handle_counter, Some(3));
     }
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn axt_reject_context_refreshes_minima_after_policy_update() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(37);
@@ -14483,10 +14574,6 @@ seiyaku PrivilegedBinding {
                 host.with_axt_timing(iroha_config::parameters::actual::NexusAxt::default())
             })
             .expect("canonical policy snapshot");
-        let manifest = TouchManifest {
-            read: Vec::new(),
-            write: Vec::new(),
-        };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
@@ -14525,32 +14612,18 @@ seiyaku PrivilegedBinding {
             issuer_context: Default::default(),
             issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
+        let usage = axt::HandleUsage {
+            handle: failing_handle,
+            intent,
+            proof: None,
+            amount: Quantity::from(5_u64),
+            amount_commitment: None,
+        };
         assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            )),
-            "touch should succeed before handle use"
+            host.enforce_axt_policy(&usage),
+            Err(VMError::PermissionDenied),
+            "stale handle must be rejected by the installed policy"
         );
-        let handle_ptr = store_tlv(
-            &mut vm,
-            PointerType::AssetHandle,
-            &norito_blob(&failing_handle),
-        );
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        host.syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect_err("stale handle must be rejected");
         let ctx = host
             .take_axt_reject_for_tests()
             .expect("reject context captured");
@@ -14563,32 +14636,11 @@ seiyaku PrivilegedBinding {
         refreshed.version = AxtPolicySnapshot::compute_version(&refreshed.entries);
         host.refresh_axt_policy_snapshot(&refreshed)
             .expect("canonical refreshed snapshot");
-        let mut vm = IVM::new(10_000);
-        begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_bytes = norito_blob(&dsid);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
-        let manifest_bytes = norito_blob(&manifest);
-        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, manifest_ptr);
         assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(CoreHost::axt_gas(
-                ds_bytes.len().saturating_add(manifest_bytes.len())
-            )),
-            "touch should succeed after policy refresh"
+            host.enforce_axt_policy(&usage),
+            Err(VMError::PermissionDenied),
+            "stale handle must remain rejected after policy refresh"
         );
-        let handle_ptr = store_tlv(
-            &mut vm,
-            PointerType::AssetHandle,
-            &norito_blob(&failing_handle),
-        );
-        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
-        vm.set_register(10, handle_ptr);
-        vm.set_register(11, intent_ptr);
-        vm.set_register(12, 0);
-        host.syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
-            .expect_err("stale handle must still be rejected");
         let refreshed_ctx = host
             .take_axt_reject_for_tests()
             .expect("refreshed reject context captured");
@@ -14857,245 +14909,7 @@ seiyaku PrivilegedBinding {
             "cache should expire once the TTL window elapses"
         );
     }
-    #[test]
-    fn hydrate_axt_state_installs_one_consistent_state_snapshot() {
-        crate::test_alias::ensure();
-        let dsid = DataSpaceId::UNIVERSAL;
-        let lane = LaneId::new(0);
-        let manifest_root = [0x6A; 32];
-        let timing = iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: NonZeroU64::new(7).expect("slot length"),
-            max_clock_skew_ms: 3,
-            proof_cache_ttl_slots: NonZeroU64::new(2).expect("proof cache ttl"),
-            replay_retention_slots: NonZeroU64::new(4).expect("replay retention"),
-        };
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.axt = timing;
-        let state =
-            State::new_with_nexus_for_testing(World::new(), nexus, LiveQueryStore::start_test());
-        let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let committed =
-            crate::block::ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(1_u64));
-                header.set_prev_block_hash(None);
-                header.creation_time_ms = 7;
-            })
-            .commit_unchecked()
-            .unpack(|_| {});
-        {
-            let mut state_block = state.block(committed.as_ref().header());
-            let _events = state_block.apply_without_execution(&committed, Vec::new());
-            state_block
-                .commit()
-                .expect("commit one block to establish AXT slot one");
-        }
-        state
-            .kura()
-            .store_block(committed)
-            .expect("store AXT slot fixture block");
-        let live_key = AxtHandleReplayKey::from_parts(
-            dsid,
-            fixture_axt_asset_incarnation(0x11),
-            [0x11; 32],
-            1,
-            1,
-            lane,
-        );
-        let expired_key = AxtHandleReplayKey::from_parts(
-            dsid,
-            fixture_axt_asset_incarnation(0x22),
-            [0x22; 32],
-            1,
-            2,
-            lane,
-        );
-        let live_record = AxtReplayRecord {
-            dataspace: dsid,
-            budget_key: fixture_axt_budget_key_for_replay_key(&live_key),
-            used_slot: 1,
-            retain_until_slot: 9,
-        };
-        let expired_record = AxtReplayRecord {
-            dataspace: dsid,
-            budget_key: fixture_axt_budget_key_for_replay_key(&expired_key),
-            used_slot: 0,
-            retain_until_slot: 0,
-        };
-        {
-            let mut world = state.world.block();
-            world.axt_policies.insert(
-                dsid,
-                AxtPolicyEntry {
-                    manifest_root,
-                    target_lane: lane,
-                    active_handle_era: 3,
-                    next_handle_counter: 5,
-                    current_slot: u64::MAX,
-                },
-            );
-            world
-                .axt_replay_ledger
-                .insert(live_key, live_record.clone());
-            world
-                .axt_replay_ledger
-                .insert(expired_key, expired_record.clone());
-            world.commit();
-        }
-        let view = state.view();
-        assert_eq!(
-            view.world().axt_replay_ledger().get(&expired_key),
-            Some(&expired_record),
-            "the source view must retain the expired control so host-side filtering is tested"
-        );
-        let expected_snapshot = view.axt_policy_snapshot();
-        assert_eq!(expected_snapshot.entries.len(), 1);
-        assert_eq!(expected_snapshot.entries[0].policy.current_slot, 1);
-        let authority: AccountId = fixture_account("alice");
-        let (descriptor, binding) = axt::AxtDescriptor::builder()
-            .dataspace(dsid)
-            .build_with_binding()
-            .expect("active AXT descriptor");
-        let mut host = CoreHost::new(authority);
-        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
-        host.cache_proof_entry(
-            dsid,
-            Hash::new(b"stale proof cache").into(),
-            Some(20),
-            Some(1),
-            Some(manifest_root),
-            true,
-            AXT_PROOF_CACHE_HIT,
-        );
-        assert!(!host.axt_proof_cache.is_empty());
-        host.hydrate_axt_state(&view)
-            .expect("hydrate canonical AXT state");
-        assert_eq!(host.axt_timing, timing);
-        assert_eq!(host.axt_policy_snapshot.as_ref(), Some(&expected_snapshot));
-        assert_eq!(
-            host.current_axt_policy_version(),
-            Some(expected_snapshot.version)
-        );
-        assert_eq!(host.axt_replay_ledger.get(&live_key), Some(&live_record));
-        assert!(!host.axt_replay_ledger.contains_key(&expired_key));
-        assert!(
-            host.axt_state.is_none(),
-            "hydration must abort an active envelope"
-        );
-        assert!(
-            host.axt_proof_cache.is_empty(),
-            "hydration must clear proofs admitted under the prior snapshot"
-        );
-        assert_eq!(
-            host.axt_proof_cache_slot,
-            Some(1),
-            "the cleared cache must be rebound to the installed policy slot"
-        );
-    }
-    #[test]
-    fn snapshot_policy_accepts_base_plus_one_across_envelopes_but_rejects_gap() {
-        crate::test_alias::ensure();
-        let dsid = DataSpaceId::new(20);
-        let lane = LaneId::new(2);
-        let manifest_root = [0x90; 32];
-        let base_counter = 5;
-        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 10);
-        snapshot.entries[0].policy.target_lane = lane;
-        snapshot.entries[0].policy.active_handle_era = 3;
-        snapshot.entries[0].policy.next_handle_counter = base_counter;
-        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
-
-        let authority: AccountId = fixture_account("alice");
-        let descriptor = axt::AxtDescriptor {
-            dsids: vec![dsid],
-            touches: Vec::new(),
-        };
-        let binding = axt::compute_binding(&descriptor).expect("AXT binding");
-        let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_snapshot(&snapshot)
-            .expect("canonical policy snapshot");
-        host.axt_state = Some(Arc::new(axt::HostAxtState::new(
-            descriptor.clone(),
-            binding,
-        )));
-
-        let base_handle = AssetHandle {
-            asset_definition_id: fixture_axt_asset_definition_id(),
-            scope: vec!["transfer".into()],
-            subject: HandleSubject {
-                account: authority.to_string(),
-                origin_dsid: Some(dsid),
-            },
-            budget: HandleBudget {
-                remaining: Quantity::from(20_u64),
-                per_use: Some(Quantity::from(10_u64)),
-            },
-            handle_era: 3,
-            sub_nonce: base_counter,
-            group_binding: GroupBinding {
-                composability_group_id: vec![0; 32],
-                epoch_id: 1,
-            },
-            target_lane: lane,
-            axt_binding: binding.to_vec(),
-            manifest_view_root: manifest_root.to_vec(),
-            expiry_slot: 20,
-            max_clock_skew_ms: Some(0),
-            issuer_context: Default::default(),
-            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
-        };
-        let usage_for = |sub_nonce| {
-            let mut handle = base_handle.clone();
-            handle.sub_nonce = sub_nonce;
-            axt::HandleUsage {
-                handle,
-                intent: RemoteSpendIntent {
-                    asset_dsid: dsid,
-                    op: SpendOp {
-                        asset_definition_id:
-                            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                            ])
-                            .expect("valid AXT fixture asset id"),
-                        kind: "transfer".into(),
-                        from: authority.to_string(),
-                        to: fixture_account_literal("bob"),
-                        amount: Some(Quantity::from(5_u64)),
-                    },
-                },
-                proof: None,
-                amount: Quantity::from(5_u64),
-                amount_commitment: None,
-            }
-        };
-
-        let base_usage = usage_for(base_counter);
-        host.enforce_axt_policy(&base_usage)
-            .expect("snapshot base counter must be accepted");
-        Arc::make_mut(host.axt_state.as_mut().expect("active AXT state"))
-            .record_handle(base_usage)
-            .expect("record accepted base handle");
-
-        let gap_usage = usage_for(base_counter + 2);
-        assert_eq!(
-            host.enforce_axt_policy(&gap_usage),
-            Err(VMError::PermissionDenied),
-            "snapshot counter gaps must remain rejected"
-        );
-        assert_eq!(
-            host.take_axt_reject_for_tests()
-                .expect("gap reject context")
-                .reason,
-            AxtRejectReason::SubNonce
-        );
-
-        let completed = host.axt_state.take().expect("completed AXT state");
-        host.completed_axt
-            .push(Arc::try_unwrap(completed).unwrap_or_else(|state| state.as_ref().clone()));
-        host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
-        let next_usage = usage_for(base_counter + 1);
-        host.enforce_axt_policy(&next_usage)
-            .expect("snapshot base+1 counter must include a prior completed envelope");
-    }
+    include!("host/axt_persistent_budget_tests.rs");
     #[test]
     fn axt_replay_ledger_from_state_rejects_reuse() {
         crate::test_alias::ensure();
@@ -15108,7 +14922,7 @@ seiyaku PrivilegedBinding {
             manifest_root,
             target_lane: lane,
             active_handle_era: 2,
-            next_handle_counter: 3,
+            next_handle_counter: 5,
             current_slot: 10,
         };
         let replay_key = AxtHandleReplayKey {
@@ -15136,6 +14950,7 @@ seiyaku PrivilegedBinding {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
+        establish_authenticated_axt_ledger_time(&state, 10);
         let authority: AccountId = fixture_account("alice");
         let snapshot = test_policy_snapshot(dsid, policy);
         let host =
@@ -15524,6 +15339,7 @@ seiyaku PrivilegedBinding {
                 NonZeroU64::new(1).expect("non-zero retention window");
             state.nexus.get_mut().axt.replay_retention_slots.get()
         };
+        establish_authenticated_axt_ledger_time(&state, 2);
         state.prune_axt_replay_ledger_for_tests(retention_slots, retention_slots);
         let authority: AccountId = fixture_account("alice");
         let snapshot = test_policy_snapshot(dsid, policy);

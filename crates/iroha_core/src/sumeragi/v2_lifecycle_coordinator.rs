@@ -14,8 +14,8 @@ mod coordinator_support;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test, run_source_contract,
-    source_contract_test,
+    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test,
+    reviewed_v2_worker_source_for_test, run_source_contract, source_contract_test,
 };
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
@@ -102,18 +102,17 @@ pub(in crate::sumeragi) use launch::{
     PendingKuraProductionLifecycleV1, PreparedPendingKuraLaneRecoveryV1,
     ProductionLifecycleActivationErrorV1, ProductionLifecycleCleanupReadyV1,
     ProductionLifecycleCompletionPreGateV1, ProductionLifecycleCompletionSelectionV1,
-    ProductionLifecycleCompletionTurnV1, ProductionLifecycleFinalizationErrorV1,
-    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleIngressSelectionV1,
-    ProductionLifecycleIngressTurnV1, ProductionLifecycleLaunchErrorV1,
-    ProductionLifecycleLaunchInputsV1, ProductionLifecycleLiveClockActivationPermitV1,
-    ProductionLifecycleOutputRolloverPermitV1, ProductionLifecyclePostOutputHandoffV1,
-    ProductionLifecyclePreActivationErrorV1, ProductionLifecyclePreparedLocalProposalStateV1,
-    ProductionLifecycleReadyCompletionTurnV1,
+    ProductionLifecycleCompletionTurnV1, ProductionLifecycleDecisionApplyCompletionErrorV1,
+    ProductionLifecycleDecisionApplyCompletionV1, ProductionLifecycleDecisionApplyRetryV1,
+    ProductionLifecycleFinalizationErrorV1, ProductionLifecycleFinalizationOutcomeV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionLifecycleLaunchErrorV1, ProductionLifecycleLaunchInputsV1,
+    ProductionLifecycleLiveClockActivationPermitV1, ProductionLifecycleOutputRolloverPermitV1,
+    ProductionLifecyclePostOutputHandoffV1, ProductionLifecyclePreActivationErrorV1,
+    ProductionLifecyclePreparedLocalProposalStateV1, ProductionLifecycleReadyCompletionTurnV1,
     ProductionLifecycleServeRetirementAuthenticationPermitV1, ProductionLifecycleShutdownErrorV1,
     ProductionPendingKuraApplyInstallErrorV1, ProductionPendingKuraApplyRecoveryErrorV1,
     ProductionPendingKuraApplyRecoveryProgressV1, ProductionPreparedOrdinaryIngressTurnV1,
-    ProductionRecoveredDecisionApplyCompletionErrorV1,
-    ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
     ProductionRecoveredDecisionFetchStoreSettlementV1,
     ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1,
@@ -121,7 +120,7 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredLifecycleSignBroadcastSettlementV1,
     ProductionRecoveredLifecycleSignCompletionSelectionV1,
     ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
-    ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
+    ProductionV2CompletionObserverActivationPermitV1, RetainedLifecycleDecisionApplyDeferredV1,
     settle_one_recovered_lifecycle_output,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
@@ -234,7 +233,7 @@ pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
-    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+    ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ReadyValidateSuccessorDispatchV1,
 };
 #[cfg_attr(
     not(test),
@@ -300,13 +299,15 @@ pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProject
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
 pub(in crate::sumeragi) use work_registry::{
-    AttemptedProducerTurnV1, ClaimedProducerTurnV1, PreparedRecoveredDecisionApplyDispatch,
+    AttemptedProducerTurnV1, ClaimedProducerTurnV1, ConcreteWorkAddress,
+    LifecycleDecisionApplyCompletionProjectionPermitV1, LifecycleDecisionApplyDispatchIdentityV1,
+    LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
+    LiveLifecycleDecisionApplyReconciliationAuthorityV1, PreparedLifecycleDecisionApplyDispatchV1,
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
-    RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
-    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
+    RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerV1,
+    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
@@ -330,7 +331,7 @@ pub(in crate::sumeragi) use work_registry::{
     LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
     PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
     PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
-    ReadyValidatedExecutorCatalogAuthorityV1,
+    ReadyValidateSuccessorV1, ReadyValidatedExecutorCatalogAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::{
     LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
@@ -480,8 +481,7 @@ impl LifecycleCoordinator {
         self.active_context
     }
     /// Return the durable ordinal high-water mark.
-    #[cfg(test)]
-    pub(crate) const fn high_water(&self) -> u128 {
+    const fn high_water(&self) -> u128 {
         self.high_water
     }
     /// Return the latched fail-closed condition, when present.
@@ -1029,6 +1029,25 @@ impl LifecycleCoordinator {
     }
     /// Select one ready unit for execution outside the coordinator lock.
     fn plan_turn(&mut self, inputs: SchedulerInputs) -> TurnPlan {
+        self.plan_turn_with_required_ordinal(inputs, None)
+    }
+
+    /// Select only when the same authenticated census naturally chooses the
+    /// exact retained successor. A foreign/lower winner fails before observed
+    /// generations, lease state, or any Ready row are mutated.
+    fn plan_turn_requiring_ordinal(
+        &mut self,
+        inputs: SchedulerInputs,
+        required_ordinal: u128,
+    ) -> TurnPlan {
+        self.plan_turn_with_required_ordinal(inputs, Some(required_ordinal))
+    }
+
+    fn plan_turn_with_required_ordinal(
+        &mut self,
+        inputs: SchedulerInputs,
+        required_ordinal: Option<u128>,
+    ) -> TurnPlan {
         if let Some(fault) = self.fault {
             return TurnPlan::FailClosed(fault);
         }
@@ -1139,18 +1158,49 @@ impl LifecycleCoordinator {
             self.fault = Some(CoordinatorFault::InvalidSchedulerInputs);
             return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
         }
-        for (source, generation) in generations {
-            self.advance_observed_generation(source, generation);
-        }
-        debug_assert_eq!(self.ready_index, prospective_ready);
-        let selected = self
-            .ready_index
+        let selected = prospective_ready
             .iter()
             .copied()
             .filter(|ordinal| selectable_ready.contains(ordinal))
             .filter(|ordinal| self.ready_entry_is_eligible(*ordinal, &selectable_ready))
             .map(|ordinal| (ranks[&ordinal], ordinal))
             .min();
+        if required_ordinal.is_some_and(|required| {
+            !prospective_ready.contains(&required)
+                || selected.is_some_and(|(_, selected)| selected != required)
+        }) {
+            return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
+        }
+        if required_ordinal.is_some() && selected.is_none() {
+            // Exact-successor retry is drop-inert. In particular, do not
+            // publish unrelated prospective fence generations merely because
+            // the retained target's physical corridor is full.
+            let mut waits: BTreeSet<_> = self
+                .records
+                .values()
+                .filter_map(|record| match record.state {
+                    LifecycleState::Waiting(wait) => Some(wait),
+                    LifecycleState::Ready
+                    | LifecycleState::Claimed(_)
+                    | LifecycleState::Terminal(_) => None,
+                })
+                .collect();
+            waits.extend(
+                self.admission_waits
+                    .values()
+                    .map(|waiting| waiting.wait_token),
+            );
+            waits.extend(capacity_waits.values().copied());
+            return if waits.is_empty() {
+                TurnPlan::Idle
+            } else {
+                TurnPlan::Waiting(waits)
+            };
+        }
+        for (source, generation) in generations {
+            self.advance_observed_generation(source, generation);
+        }
+        debug_assert_eq!(self.ready_index, prospective_ready);
         if let Some((rank, selected_ordinal)) = selected {
             let Some(id_value) = self.next_lease else {
                 self.fault = Some(CoordinatorFault::LeaseExhausted);
@@ -1953,6 +2003,74 @@ mod tests {
                 .all(|record| record.state == LifecycleState::Ready)
         );
         assert_eq!(coordinator.ready_index, BTreeSet::from([1, 2]));
+    }
+
+    #[test]
+    fn required_successor_capacity_retry_does_not_publish_a_foreign_fence_wake() {
+        let source = WaitSource::External(digest(0x33));
+        let wait = WaitToken::new(source, 0);
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        admit_waiting_fetch(&mut coordinator, 0x33, wait, PredecessorScope::Independent);
+        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            0x34,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        assert_eq!(coordinator.records[&1].state, LifecycleState::Waiting(wait));
+        assert_eq!(coordinator.records[&2].state, LifecycleState::Ready);
+        let inputs = SchedulerInputs::new(
+            [(source, 1)],
+            [1, 2].map(|ordinal| {
+                (
+                    ordinal,
+                    SchedulerReadyInputs::new(&coordinator.records[&ordinal], None, [0; 6])
+                        .with_physical_capacity_for_test(false),
+                )
+            }),
+        )
+        .expect("the exact target and prospective fence wake form one closed census");
+        let before = format!("{coordinator:?}");
+        assert!(matches!(
+            coordinator.plan_turn_requiring_ordinal(inputs, 2),
+            TurnPlan::Waiting(_)
+        ));
+        assert_eq!(format!("{coordinator:?}"), before);
+        assert_eq!(coordinator.observed_generation.get(&source), Some(&0));
+        assert_eq!(coordinator.ready_index, BTreeSet::from([2]));
+        assert!(coordinator.active_lease.is_none());
+    }
+
+    #[test]
+    fn required_successor_rejects_a_lower_fence_winner_before_mutation() {
+        let source = WaitSource::External(digest(0x35));
+        let wait = WaitToken::new(source, 0);
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        admit_waiting_fetch(&mut coordinator, 0x35, wait, PredecessorScope::Independent);
+        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            0x36,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        let inputs = SchedulerInputs::new(
+            [(source, 1)],
+            [1, 2].map(|ordinal| {
+                (
+                    ordinal,
+                    SchedulerReadyInputs::new(&coordinator.records[&ordinal], None, [0; 6]),
+                )
+            }),
+        )
+        .expect("the lower fence wake and retained target form one closed census");
+        let before = format!("{coordinator:?}");
+        assert_eq!(
+            coordinator.plan_turn_requiring_ordinal(inputs, 2),
+            TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs)
+        );
+        assert_eq!(format!("{coordinator:?}"), before);
     }
 
     #[test]
@@ -3799,6 +3917,109 @@ mod tests {
             }) if response == digest(235)
         ));
         assert_eq!(terminal.producer_debts().len(), 1);
+    }
+    #[test]
+    fn paired_launch_ordinal_authority_admits_after_all_recovered_cuts() {
+        let root = tempfile::tempdir().expect("temporary paired-authority ledger directory");
+        let mut coordinator = LifecycleCoordinator::new(context(), 7, capacities(8));
+        coordinator
+            .attach_empty_test_ledger(root.path())
+            .expect("attach retained lifecycle ledger floor");
+        let (runtime_authority, coordinator_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        let runtime_ordinals =
+            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+                runtime_authority,
+            );
+        runtime_ordinals
+            .advance_past(11)
+            .expect("advance through recovered producer ordinals");
+        runtime_ordinals
+            .advance_past(13)
+            .expect("advance through recovered scheduler ordinals");
+        coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_authority)
+            .expect("bind the paired coordinator authority before admission");
+
+        let (decision, reservation) =
+            coordinator.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate(
+                0xC1,
+                LifecycleWorkClass::Fetch,
+                LifecyclePhase::Fetch,
+                InitialLifecycleState::Ready,
+                PredecessorScope::Independent,
+            )));
+        assert!(matches!(
+            decision,
+            AdmissionDecision::Admitted { ordinal: 14, .. }
+        ));
+        coordinator
+            .persist_durable_projection_with_ordinal_reservation(reservation.as_ref())
+            .expect("publish the first post-recovery durable admission");
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the paired runtime cursor"),
+            Some(15)
+        );
+        assert_eq!(coordinator.fault(), None);
+        let (_, persisted) = ledger::LifecycleLedgerStoreV1::open(root.path(), context())
+            .expect("reopen the paired-authority ledger");
+        assert_eq!(persisted.high_water(), 14);
+    }
+    #[test]
+    fn paired_launch_ordinal_authority_reserves_one_certified_serve_pair() {
+        let root = tempfile::tempdir().expect("temporary paired-Serve ledger directory");
+        let mut coordinator = LifecycleCoordinator::new(context(), 7, capacities(8));
+        coordinator
+            .attach_empty_test_ledger(root.path())
+            .expect("attach retained lifecycle ledger floor");
+        let (runtime_authority, coordinator_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        let runtime_ordinals =
+            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+                runtime_authority,
+            );
+        runtime_ordinals
+            .advance_past(13)
+            .expect("advance through recovered runtime ordinals");
+        coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_authority)
+            .expect("bind the paired coordinator authority before Serve admission");
+
+        let (decision, reservation) = coordinator.reduce_admit_with_durable_ordinals(
+            AdmissionRequest::Candidate(serve_candidate(0xC2, InitialLifecycleState::Ready)),
+        );
+        assert!(matches!(
+            decision,
+            AdmissionDecision::Admitted {
+                ordinal: 14,
+                producer_turn_ordinal: Some(15),
+                ..
+            }
+        ));
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the fenced runtime cursor"),
+            Some(14)
+        );
+        coordinator
+            .persist_durable_projection_with_ordinal_reservation(reservation.as_ref())
+            .expect("publish the exact Serve/Producer durable pair");
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the paired runtime cursor"),
+            Some(16)
+        );
+        let (_, persisted) = ledger::LifecycleLedgerStoreV1::open(root.path(), context())
+            .expect("reopen the paired-Serve ledger");
+        assert_eq!(persisted.high_water(), 15);
     }
     #[test]
     fn durable_admission_and_terminal_settlement_publish_one_atomic_ledger() {

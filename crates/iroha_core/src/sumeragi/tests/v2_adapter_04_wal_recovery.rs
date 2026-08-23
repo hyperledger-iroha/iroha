@@ -1,6 +1,3 @@
-use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-};
 #[test]
 fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     let directory = TempDir::new().expect("temporary directory");
@@ -1775,7 +1772,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         .0;
         let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
         let (mut services, _) = super::super::v2_worker::tests::fixture();
-        let (mut executor, planner_io) = first.bind_body_store_to_recovered_completion_io_for_test(
+        let (mut executor, planner_io) = first.bind_body_store_to_lifecycle_completion_io_for_test(
             &mut services,
             runtime,
             Arc::clone(&output_guard),
@@ -1784,14 +1781,14 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
             first
-                .dispatch_completion_for_test(&services, &mut executor, 0)
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .expect("rank the genuine WAL-backed Sign beside recovered Fetch"),
             super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::SignQueued {
                 ordinal: mixed_sign_ordinal,
             }
         );
         assert!(
-            first.recovered_completion_selection_is_exact_for_test(
+            first.lifecycle_completion_selection_is_exact_for_test(
                 mixed_sign_ordinal,
                 first_summary.0,
             ),
@@ -1897,7 +1894,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
         let (mut services, _) = super::super::v2_worker::tests::fixture();
         let (mut executor, planner_io) = reopened
-            .bind_body_store_to_recovered_completion_io_for_test(
+            .bind_body_store_to_lifecycle_completion_io_for_test(
                 &mut services,
                 runtime,
                 Arc::clone(&output_guard),
@@ -1906,7 +1903,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
             reopened
-                .dispatch_completion_for_test(&services, &mut executor, 0)
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .expect("dispatch the genuine WAL-backed recovered Fetch"),
             super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::FetchDispatched {
                 ordinal: first_summary.0,
@@ -2052,7 +2049,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         .0;
         let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
         let (mut services, _) = super::super::v2_worker::tests::fixture();
-        let (mut executor, planner_io) = cold.bind_body_store_to_recovered_completion_io_for_test(
+        let (mut executor, planner_io) = cold.bind_body_store_to_lifecycle_completion_io_for_test(
             &mut services,
             runtime,
             Arc::clone(&output_guard),
@@ -2060,7 +2057,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         );
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
-            cold.dispatch_completion_for_test(&services, &mut executor, 0)
+            cold.dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .expect("redispatch the cold-opened recovered Fetch"),
             super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::FetchDispatched {
                 ordinal: first_summary.0,

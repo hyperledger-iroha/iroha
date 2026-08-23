@@ -110,11 +110,11 @@ impl GuardedCertifiedFetchBodyPersistenceCompletion {
         completion
     }
 }
-struct RecoveredDecisionApplyCompletionDropGuardV1 {
+struct LifecycleDecisionApplyCompletionDropGuardV1 {
     output_guard: Arc<ConsensusOutputGuard>,
     armed: bool,
 }
-impl RecoveredDecisionApplyCompletionDropGuardV1 {
+impl LifecycleDecisionApplyCompletionDropGuardV1 {
     fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
         Self {
             output_guard,
@@ -125,16 +125,16 @@ impl RecoveredDecisionApplyCompletionDropGuardV1 {
         self.armed = false;
     }
 }
-impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
+impl Drop for LifecycleDecisionApplyCompletionDropGuardV1 {
     fn drop(&mut self) {
         if self.armed {
             self.output_guard.close_admission_for_restart();
         }
     }
 }
-struct GuardedRecoveredDecisionApplyWorkerResultV1 {
-    result: Option<RecoveredDecisionApplyWorkerResultV1>,
-    drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+struct GuardedLifecycleDecisionApplyWorkerResultV1 {
+    result: Option<LifecycleDecisionApplyWorkerResultV1>,
+    drop_guard: LifecycleDecisionApplyCompletionDropGuardV1,
 }
 struct RecoveredLifecycleSignCompletionDropGuardV1 {
     output_guard: Arc<ConsensusOutputGuard>,
@@ -179,44 +179,44 @@ impl GuardedRecoveredLifecycleSignWorkerResultV1 {
         self.drop_guard.disarm();
     }
 }
-impl GuardedRecoveredDecisionApplyWorkerResultV1 {
+impl GuardedLifecycleDecisionApplyWorkerResultV1 {
     fn new(
-        result: RecoveredDecisionApplyWorkerResultV1,
+        result: LifecycleDecisionApplyWorkerResultV1,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Self {
         Self {
             result: Some(result),
-            drop_guard: RecoveredDecisionApplyCompletionDropGuardV1::new(output_guard),
+            drop_guard: LifecycleDecisionApplyCompletionDropGuardV1::new(output_guard),
         }
     }
-    fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
+    fn result(&self) -> &LifecycleDecisionApplyWorkerResultV1 {
         self.result
             .as_ref()
-            .expect("armed recovered Decision Apply completion retains its result")
+            .expect("armed lifecycle Decision Apply completion retains its result")
     }
-    fn into_result(mut self) -> RecoveredDecisionApplyWorkerResultV1 {
+    fn into_result(mut self) -> LifecycleDecisionApplyWorkerResultV1 {
         let result = self
             .result
             .take()
-            .expect("settled recovered Decision Apply consumes its result once");
+            .expect("settled lifecycle Decision Apply consumes its result once");
         self.drop_guard.disarm();
         result
     }
     fn into_retry_parts(
         self,
     ) -> (
-        RecoveredDecisionApplyWorkerResultV1,
-        RecoveredDecisionApplyCompletionDropGuardV1,
+        LifecycleDecisionApplyWorkerResultV1,
+        LifecycleDecisionApplyCompletionDropGuardV1,
     ) {
         let Self { result, drop_guard } = self;
         (
-            result.expect("armed recovered Decision Apply completion retains its result"),
+            result.expect("armed lifecycle Decision Apply completion retains its result"),
             drop_guard,
         )
     }
     fn from_retry_parts(
-        result: RecoveredDecisionApplyWorkerResultV1,
-        drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+        result: LifecycleDecisionApplyWorkerResultV1,
+        drop_guard: LifecycleDecisionApplyCompletionDropGuardV1,
     ) -> Self {
         Self {
             result: Some(result),
@@ -224,28 +224,28 @@ impl GuardedRecoveredDecisionApplyWorkerResultV1 {
         }
     }
 }
-/// Move-only recovered-Apply acknowledgement consumed after durable settlement;
+/// Move-only lifecycle Decision Apply acknowledgement consumed after durable settlement;
 /// Drop closes output without releasing its queue index.
-#[must_use = "recovered Decision Apply work remains indexed until owner settlement"]
-struct RecoveredDecisionApplyWorkAckV1 {
+#[must_use = "lifecycle Decision Apply work remains indexed until owner settlement"]
+struct LifecycleDecisionApplyWorkAckV1 {
     queue: Arc<V2IoCommandQueue>,
     output_guard: Arc<ConsensusOutputGuard>,
-    key: RecoveredDecisionApplyDispatchKeyV1,
+    key: LifecycleDecisionApplyDispatchKeyV1,
     armed: bool,
 }
-impl RecoveredDecisionApplyWorkAckV1 {
+impl LifecycleDecisionApplyWorkAckV1 {
     fn acknowledge(mut self) {
-        self.queue.acknowledge_recovered_decision_apply(self.key);
+        self.queue.acknowledge_lifecycle_decision_apply(self.key);
         self.queue
             .admission
-            .acknowledge_recovered_decision_apply_completion(self.key);
+            .acknowledge_lifecycle_decision_apply_completion(self.key);
         self.armed = false;
     }
     fn acknowledge_retry_publication(mut self) {
         self.armed = false;
     }
 }
-impl Drop for RecoveredDecisionApplyWorkAckV1 {
+impl Drop for LifecycleDecisionApplyWorkAckV1 {
     fn drop(&mut self) {
         if self.armed {
             self.output_guard.close_admission_for_restart();
@@ -253,10 +253,10 @@ impl Drop for RecoveredDecisionApplyWorkAckV1 {
     }
 }
 /// Guarded worker result which can be consumed only after lifecycle settlement.
-#[must_use = "the recovered Decision Apply result still requires owner settlement"]
-pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
-    guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
-    work_ack: RecoveredDecisionApplyWorkAckV1,
+#[must_use = "the lifecycle Decision Apply result still requires owner settlement"]
+pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyCompletionV1 {
+    guarded: Box<GuardedLifecycleDecisionApplyWorkerResultV1>,
+    work_ack: LifecycleDecisionApplyWorkAckV1,
 }
 /// Guarded recovered-Sign completion with only a fixed adapter-private preview;
 /// abandonment closes output while its command owner remains recoverable.
@@ -313,24 +313,6 @@ impl PreparedLifecycleValidateCompletionV1 {
                 drop_guard,
             },
         )
-    }
-
-    /// Restore an unchanged executed dispatch after a prepublication failure.
-    pub(in crate::sumeragi) fn from_publication_parts(
-        dispatch: ExecutedDurableValidateDispatch,
-        ack: LifecycleValidateCompletionAckV1,
-    ) -> Option<Self> {
-        let LifecycleValidateCompletionAckV1 {
-            key,
-            queue,
-            drop_guard,
-        } = ack;
-        dispatch.matches_dispatch_key(key).then_some(Self {
-            guarded: Box::new(GuardedLifecycleValidateWorkerResultV1::from_parts(
-                key, dispatch, drop_guard,
-            )),
-            queue,
-        })
     }
 }
 /// Armed owner of one completion-pending lifecycle Validate queue index.
@@ -556,16 +538,16 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
     }
 }
 /// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
-#[must_use = "an unavailable recovered Apply retry still owns its guarded completion"]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyDeferredRetryV1 {
+#[must_use = "an unavailable lifecycle Decision Apply retry still owns its guarded completion"]
+pub(in crate::sumeragi) enum LifecycleDecisionApplyDeferredRetryV1 {
     /// The same dispatch key and task were republished to the dedicated worker queue.
     Requeued,
     /// Consensus queue capacity is unavailable; the complete guarded result remains owned.
-    Unavailable(PreparedRecoveredDecisionApplyCompletionV1),
+    Unavailable(PreparedLifecycleDecisionApplyCompletionV1),
     /// The dedicated queue index no longer matched the retained completion.
     RestartRequired,
 }
-impl PreparedRecoveredDecisionApplyCompletionV1 {
+impl PreparedLifecycleDecisionApplyCompletionV1 {
     /// Compare service queue, output guard, and recovery owner without releasing
     /// guarded completion or process-local dependencies.
     pub(in crate::sumeragi) fn authorizes_sidecar_owner(
@@ -573,21 +555,21 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
         services: &ProductionV2Services,
         lane_work: &V2LaneWorkAdapter,
     ) -> bool {
-        services.owns_recovered_decision_apply_queue(&self.work_ack.queue)
+        services.owns_lifecycle_decision_apply_queue(&self.work_ack.queue)
             && Arc::ptr_eq(&services.output_guard, &self.work_ack.output_guard)
             && services.matches_lifecycle_lane_work(lane_work)
     }
     /// Borrow the exact Applied/Deferred result while the command remains indexed.
-    pub(in crate::sumeragi) fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
+    pub(in crate::sumeragi) fn result(&self) -> &LifecycleDecisionApplyWorkerResultV1 {
         self.guarded.result()
     }
     /// Release the dedicated queue index after the owner durably settled this result.
     ///
     /// This is intentionally not a generic worker acknowledgement: its only
-    /// caller is the recovered Decision Apply owner settlement transaction.
+    /// caller is the lifecycle Decision Apply owner settlement transaction.
     pub(in crate::sumeragi) fn acknowledge_after_owner_settlement(
         self,
-    ) -> RecoveredDecisionApplyWorkerResultV1 {
+    ) -> LifecycleDecisionApplyWorkerResultV1 {
         let Self { guarded, work_ack } = self;
         work_ack.acknowledge();
         (*guarded).into_result()
@@ -595,35 +577,35 @@ impl PreparedRecoveredDecisionApplyCompletionV1 {
     /// Republish a `CompletionPending` sidecar task under its existing owner,
     /// reserving/enqueueing before disarming guards; mismatch requires restart.
     #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn retry_deferred(self) -> RecoveredDecisionApplyDeferredRetryV1 {
+    pub(in crate::sumeragi) fn retry_deferred(self) -> LifecycleDecisionApplyDeferredRetryV1 {
         let Self { guarded, work_ack } = self;
         let (result, mut completion_guard) = (*guarded).into_retry_parts();
-        let RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference } = result else {
+        let LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference } = result else {
             drop(work_ack);
             drop(completion_guard);
-            return RecoveredDecisionApplyDeferredRetryV1::RestartRequired;
+            return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
         };
-        match work_ack.queue.retry_recovered_decision_apply(task) {
+        match work_ack.queue.retry_lifecycle_decision_apply(task) {
             Ok(()) => {
                 work_ack.acknowledge_retry_publication();
                 completion_guard.disarm();
-                RecoveredDecisionApplyDeferredRetryV1::Requeued
+                LifecycleDecisionApplyDeferredRetryV1::Requeued
             }
-            Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(task)) => {
-                RecoveredDecisionApplyDeferredRetryV1::Unavailable(Self {
+            Err(LifecycleDecisionApplyRetryQueueErrorV1::Unavailable(task)) => {
+                LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
                     guarded: Box::new(
-                        GuardedRecoveredDecisionApplyWorkerResultV1::from_retry_parts(
-                            RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference },
+                        GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
+                            LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference },
                             completion_guard,
                         ),
                     ),
                     work_ack,
                 })
             }
-            Err(RecoveredDecisionApplyRetryQueueErrorV1::InvalidOwner(_task)) => {
+            Err(LifecycleDecisionApplyRetryQueueErrorV1::InvalidOwner(_task)) => {
                 drop(work_ack);
                 drop(completion_guard);
-                RecoveredDecisionApplyDeferredRetryV1::RestartRequired
+                LifecycleDecisionApplyDeferredRetryV1::RestartRequired
             }
         }
     }
@@ -665,17 +647,6 @@ impl GuardedLifecycleValidateWorkerResultV1 {
             key,
             result: Some(result),
             drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
-        }
-    }
-    fn from_parts(
-        key: LifecycleValidateDispatchKeyV1,
-        result: ExecutedDurableValidateDispatch,
-        drop_guard: LifecycleValidateCompletionDropGuardV1,
-    ) -> Self {
-        Self {
-            key,
-            result: Some(result),
-            drop_guard,
         }
     }
     const fn key(&self) -> LifecycleValidateDispatchKeyV1 {
@@ -762,7 +733,7 @@ enum V2IoCompletion {
         Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
     ),
     Applied(Box<DurableApplyCompletion>),
-    RecoveredDecisionApply(Box<GuardedRecoveredDecisionApplyWorkerResultV1>),
+    LifecycleDecisionApply(Box<GuardedLifecycleDecisionApplyWorkerResultV1>),
     RecoveredLifecycleSign(Box<GuardedRecoveredLifecycleSignWorkerResultV1>),
     LifecycleValidate(Box<GuardedLifecycleValidateWorkerResultV1>),
     LifecycleCertifiedServe(Box<GuardedLifecycleCertifiedServeWorkerResultV1>),
@@ -788,9 +759,9 @@ enum V2IoCompletion {
     Failed(String),
 }
 impl V2IoCompletion {
-    fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+    fn lifecycle_decision_apply_key(&self) -> Option<LifecycleDecisionApplyDispatchKeyV1> {
         match self {
-            Self::RecoveredDecisionApply(guarded) => Some(guarded.result().dispatch_key()),
+            Self::LifecycleDecisionApply(guarded) => Some(guarded.result().dispatch_key()),
             _ => None,
         }
     }
@@ -830,7 +801,7 @@ impl V2IoCompletion {
             Self::Signature { .. }
                 | Self::Stored(_)
                 | Self::Applied(_)
-                | Self::RecoveredDecisionApply(_)
+                | Self::LifecycleDecisionApply(_)
                 | Self::RecoveredLifecycleSign(_)
         )
     }
@@ -847,8 +818,8 @@ impl V2IoCompletion {
                 V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained
             }
             Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
-            Self::RecoveredDecisionApply(_) => {
-                V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+            Self::LifecycleDecisionApply(_) => {
+                V2IoCompletionAcknowledgement::LifecycleDecisionApplyRetained
             }
             Self::RecoveredLifecycleSign(_) => {
                 V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained
@@ -872,7 +843,7 @@ impl V2IoCompletion {
 enum V2IoCompletionAcknowledgement {
     Work(EffectWorkId),
     LifecycleWorkRetained,
-    RecoveredDecisionApplyRetained,
+    LifecycleDecisionApplyRetained,
     RecoveredLifecycleSignRetained,
     RecoveredDecisionFetchRetained,
     LifecycleValidateRetained,
@@ -981,8 +952,8 @@ pub(in crate::sumeragi) enum LifecycleCompletionTakeV1 {
     PassThrough,
     /// The exact persisted ordinary certified-Fetch body left the FIFO owner.
     CertifiedFetch(PreparedCertifiedFetchBodyPersistenceCompletion),
-    /// The exact recovered Decision Apply completion left the FIFO owner.
-    Apply(PreparedRecoveredDecisionApplyCompletionV1),
+    /// The exact lifecycle Decision Apply completion left the FIFO owner.
+    Apply(PreparedLifecycleDecisionApplyCompletionV1),
     /// The exact recovered Sign completion left the FIFO owner.
     Sign(PreparedRecoveredLifecycleSignCompletionV1),
     /// The exact persisted recovered Decision Fetch body left the FIFO owner.
@@ -1252,7 +1223,7 @@ impl V2IoHandle {
                 let mut body_store = Some(body_store);
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
-                    let recovered_decision_apply_key = command.recovered_decision_apply_key();
+                    let lifecycle_decision_apply_key = command.lifecycle_decision_apply_key();
                     let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();
                     let recovered_decision_fetch_key = command.recovered_decision_fetch_key();
                     let lifecycle_validate_key = command.lifecycle_validate_key();
@@ -1413,8 +1384,8 @@ impl V2IoHandle {
                                         }
                                         Err(error) => Err(error.to_string()),
                                     },
-                                    V2IoCommand::RecoveredDecisionApply(task) => apply_service
-                                        .execute_recovered_decision_apply(
+                                    V2IoCommand::LifecycleDecisionApply(task) => apply_service
+                                        .execute_lifecycle_decision_apply(
                                             &context,
                                             body_store
                                                 .as_mut()
@@ -1422,8 +1393,8 @@ impl V2IoHandle {
                                             task,
                                         )
                                         .map(|result| {
-                                            V2IoCompletion::RecoveredDecisionApply(
-                                                Box::new(GuardedRecoveredDecisionApplyWorkerResultV1::new(
+                                            V2IoCompletion::LifecycleDecisionApply(
+                                                Box::new(GuardedLifecycleDecisionApplyWorkerResultV1::new(
                                                     result,
                                                     Arc::clone(&output_guard),
                                                 )),
@@ -1482,9 +1453,9 @@ impl V2IoHandle {
                                         )
                                     }
                                     #[cfg(test)]
-                                    V2IoCommand::RecoveredDecisionApplyFixture(_) => {
+                                    V2IoCommand::LifecycleDecisionApplyFixture(_) => {
                                         unreachable!(
-                                            "recovered Apply queue fixtures never enter a worker"
+                                            "lifecycle Decision Apply queue fixtures never enter a worker"
                                         )
                                     }
                                 }
@@ -1509,15 +1480,15 @@ impl V2IoHandle {
                                         command_rx.complete_work(work_id);
                                     }
                                     let seal_result = match &completion {
-                                        V2IoCompletion::RecoveredDecisionApply(guarded) => {
-                                            recovered_decision_apply_key.map_or_else(
+                                        V2IoCompletion::LifecycleDecisionApply(guarded) => {
+                                            lifecycle_decision_apply_key.map_or_else(
                                                 || {
-                                                    Err("recovered Decision Apply completion lost its command key"
+                                                    Err("lifecycle Decision Apply completion lost its command key"
                                                         .to_owned())
                                                 },
                                                 |key| {
                                                     command_rx
-                                                        .complete_recovered_decision_apply(
+                                                        .complete_lifecycle_decision_apply(
                                                             key,
                                                             guarded.result(),
                                                         )
@@ -1645,8 +1616,8 @@ impl V2IoHandle {
                 "Sumeragi v2 I/O work {} was reused by a conflicting command",
                 work_id.get()
             ),
-            V2IoTrySendError::UnreservedRecoveredDecisionApply { .. } => {
-                "recovered Decision Apply dispatch was reused by conflicting material".to_owned()
+            V2IoTrySendError::UnreservedLifecycleDecisionApply { .. } => {
+                "lifecycle Decision Apply dispatch was reused by conflicting material".to_owned()
             }
         })
     }
@@ -1678,7 +1649,7 @@ impl V2IoHandle {
                 self.command_tx.acknowledge_completion(work_id);
             }
             V2IoCompletionAcknowledgement::LifecycleWorkRetained => {}
-            V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained => {}
+            V2IoCompletionAcknowledgement::LifecycleDecisionApplyRetained => {}
             V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained => {
                 // Generic acknowledgement cannot perform the typed owner
                 // settlement, so neither the command index nor its completion
@@ -1704,14 +1675,14 @@ impl V2IoHandle {
             .queue
             .prepare_certified_fetch_body_persistence_ack(completion, output_guard)
     }
-    fn prepare_recovered_decision_apply_ack(
+    fn prepare_lifecycle_decision_apply_ack(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
         output_guard: Arc<ConsensusOutputGuard>,
-    ) -> Result<RecoveredDecisionApplyWorkAckV1, String> {
+    ) -> Result<LifecycleDecisionApplyWorkAckV1, String> {
         self.command_tx
             .queue
-            .prepare_recovered_decision_apply_ack(key, output_guard)
+            .prepare_lifecycle_decision_apply_ack(key, output_guard)
     }
     fn prepare_recovered_lifecycle_sign_completion(
         &self,
@@ -1812,7 +1783,7 @@ impl V2IoHandle {
                 Err(V2IoTrySendError::Disconnected(_)) => break,
                 Err(
                     V2IoTrySendError::ConflictingWorkId { .. }
-                    | V2IoTrySendError::UnreservedRecoveredDecisionApply { .. },
+                    | V2IoTrySendError::UnreservedLifecycleDecisionApply { .. },
                 ) => {
                     unreachable!("shutdown commands do not carry work identifiers");
                 }

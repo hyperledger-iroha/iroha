@@ -55,10 +55,10 @@ use super::{
         AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
         DecisionLocalProposalDisposition, DeferredAdmissionOrdinalSource, DeferredEventKind,
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
-        LiveProposalIntentWalSignHandoffV1, LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
-        PreparedRecoveredDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
-        ReadyDurableValidateAdapterPublicationKind,
-        RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
+        LifecycleDecisionApplyAdapterCompletionAuthorityV1, LiveProposalIntentWalSignHandoffV1,
+        LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
+        PreparedLifecycleDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
+        ReadyDurableValidateAdapterPublicationKind, RecoveredWalControlSign,
         RecoveredWalDecisionFetch, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
         RegisteredPrepareInvalidBodyReportCapability, RegisteredPrepareValidateSignCapability,
         SignRequest, SumeragiV2Adapter, VerifiedHeightContext, classify_decided_local_proposal,
@@ -75,8 +75,8 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
-        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
-        ReadyDurableValidateAdapterPreviewError,
+        LifecycleDecisionApplyLineageV1, PreparedReadyDurableValidateAdapterPreview,
+        PreparedReadyDurableValidateExecution, ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
         runtime_lifecycle_ordinal_authority_after_high_watermark,
@@ -110,12 +110,18 @@ pub(crate) struct RuntimeLifecycleOrdinalSource {
 }
 impl RuntimeLifecycleOrdinalSource {
     /// Construct a source strictly after a durable high-watermark.
+    ///
+    /// The runtime surface intentionally constructs only its restricted view;
+    /// coordinator handles cannot be injected through this type. The first
+    /// reservable ordinal is exactly one greater than `high_watermark`, unless
+    /// the watermark exhausts the `u128` namespace.
+    /// This keeps runtime callers within the runtime-restricted authority API.
     pub(crate) fn after_high_watermark(high_watermark: u128) -> Self {
         Self {
             authority: runtime_lifecycle_ordinal_authority_after_high_watermark(high_watermark),
         }
     }
-    /// Wrap the runtime-restricted view of a shared launch authority.
+    /// Wrap the runtime-restricted half of the paired production launch authority.
     pub(in crate::sumeragi) const fn from_authority(
         authority: RuntimeLifecycleOrdinalAuthority,
     ) -> Self {
@@ -10585,6 +10591,8 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     /// Exact current-view Set-B Proposal origin waiting for periodic fallback.
     dormant_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
     pending_effect_ownership: Option<Vec<RuntimeEffectOwnership>>,
+    #[cfg(test)]
+    recovered_validated_body_bindings: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: usize,
     schedule: ScheduleState,
@@ -10674,6 +10682,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             pending_remote_proposal_replay: None,
             dormant_remote_proposal_replay: None,
             pending_effect_ownership: None,
+            #[cfg(test)]
+            recovered_validated_body_bindings: BTreeSet::new(),
             external_lifecycle_owners: Vec::new(),
             // Before the effect executor installs its configured pending-work
             // bound, only the one bounded startup batch can exist externally.
@@ -14938,20 +14948,22 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .prepare_recovered_decision_fetch_store(authority)
     }
     /// Freeze the serialized shell around one registry-owned Apply completion.
-    pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
+    pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(
         &mut self,
-        authority: RecoveredDecisionApplyAdapterCompletionAuthorityV1,
-    ) -> Result<PreparedRecoveredDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
+        authority: LifecycleDecisionApplyAdapterCompletionAuthorityV1,
+    ) -> Result<PreparedLifecycleDecisionApplyAdapterCompletionV1<'_>, AdapterError> {
+        let recovered_requires_empty_ingress =
+            authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
         if self.fail_closed
-            || self.ingress.len() != 0
+            || (recovered_requires_empty_ingress && self.ingress.len() != 0)
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()
         {
-            return Err(AdapterError::RecoveredDecisionApplyCompletionMismatch);
+            return Err(AdapterError::LifecycleDecisionApplyCompletionMismatch);
         }
         self.driver
-            .prepare_recovered_decision_apply_completion(authority)
+            .prepare_lifecycle_decision_apply_completion(authority)
     }
     fn timeout_vote_recovery_candidate_from_fair(
         &self,
@@ -15862,7 +15874,20 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err(AdapterError::FailClosed);
         }
         self.driver
-            .recover_validated_body(manifest, validated_receipt)
+            .recover_validated_body(manifest, validated_receipt)?;
+        #[cfg(test)]
+        self.recovered_validated_body_bindings
+            .insert((manifest.round, manifest.subject));
+        Ok(())
+    }
+
+    /// Whether startup routed one exact durable validation marker into the driver.
+    #[cfg(test)]
+    pub(crate) fn recovered_validated_body_was_bound_for_test(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+    ) -> bool {
+        self.recovered_validated_body_bindings.contains(&key)
     }
     /// Authenticate and enqueue one reducer-directed network message.
     ///

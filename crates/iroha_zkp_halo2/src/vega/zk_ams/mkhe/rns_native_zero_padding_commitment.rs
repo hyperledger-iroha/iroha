@@ -141,39 +141,6 @@ pub(super) struct RnsNativeZeroPaddingCommitmentPrerequisiteV1 {
     limb_padding_digests: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
 }
 
-/// Opaque evidence that the retained zero-padding prerequisite was validated
-/// against one exact final transcript.
-///
-/// The recomputed root and final-transcript tag are deliberately private.  The
-/// transcript module can consume this value only through the equality check
-/// below; no raw root, tag, constructor, or aggregate proof owner is exposed.
-#[allow(
-    dead_code,
-    missing_copy_implementations,
-    reason = "verified zero-root evidence is consumed exactly once by its transcript obligation"
-)]
-#[must_use = "verified zero-root evidence must be consumed by the exact terminal chronology"]
-pub(super) struct RnsNativeVerifiedZeroPaddingRootV1 {
-    root: [u8; DIGEST_BYTES_V1],
-    final_transcript_tag: [u8; DIGEST_BYTES_V1],
-}
-
-impl RnsNativeVerifiedZeroPaddingRootV1 {
-    /// Compare against private transcript-owned values without exposing either
-    /// digest carried by this evidence.
-    pub(super) fn matches_claimed_zero_padding_root_v1(
-        self,
-        claimed_root: [u8; DIGEST_BYTES_V1],
-        expected_final_transcript_tag: [u8; DIGEST_BYTES_V1],
-    ) -> bool {
-        self.root != [0; DIGEST_BYTES_V1]
-            && self.final_transcript_tag != [0; DIGEST_BYTES_V1]
-            && self.root != self.final_transcript_tag
-            && self.root == claimed_root
-            && self.final_transcript_tag == expected_final_transcript_tag
-    }
-}
-
 impl RnsNativeZeroPaddingCommitmentPrerequisiteV1 {
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self.binding_digest
@@ -213,47 +180,6 @@ impl RnsNativeZeroPaddingCommitmentPrerequisiteV1 {
         }
         Ok(())
     }
-
-    /// Mint opaque equality evidence only after revalidating this exact
-    /// prerequisite against the supplied final transcript.
-    pub(super) fn verified_zero_padding_root_v1(
-        &self,
-        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    ) -> Result<RnsNativeVerifiedZeroPaddingRootV1, RnsNativeZeroPaddingCommitmentErrorV1> {
-        self.validate_context_v1(transcript)?;
-        let final_transcript_tag = transcript.transcript_digest();
-        if self.root == [0; DIGEST_BYTES_V1]
-            || final_transcript_tag == [0; DIGEST_BYTES_V1]
-            || self.root == final_transcript_tag
-        {
-            return Err(RnsNativeZeroPaddingCommitmentErrorV1::ContextMismatch);
-        }
-        Ok(RnsNativeVerifiedZeroPaddingRootV1 {
-            root: self.root,
-            final_transcript_tag,
-        })
-    }
-}
-
-#[cfg(test)]
-pub(super) fn verified_zero_padding_root_fixture_v1(
-    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-) -> Result<RnsNativeVerifiedZeroPaddingRootV1, RnsNativeZeroPaddingCommitmentErrorV1> {
-    let limb_padding_digests =
-        core::array::from_fn(|limb| [(limb as u8).wrapping_add(1); DIGEST_BYTES_V1]);
-    let point_set_digest = [0xe1; DIGEST_BYTES_V1];
-    let prerequisite = RnsNativeZeroPaddingCommitmentPrerequisiteV1 {
-        binding_digest: context_binding_digest_v1(
-            transcript,
-            point_set_digest,
-            &limb_padding_digests,
-        )?,
-        point_set_digest,
-        root: transcript.zero_padding_root(),
-        proof_digest: [0xe2; DIGEST_BYTES_V1],
-        limb_padding_digests,
-    };
-    prerequisite.verified_zero_padding_root_v1(transcript)
 }
 
 #[derive(Clone, Copy)]

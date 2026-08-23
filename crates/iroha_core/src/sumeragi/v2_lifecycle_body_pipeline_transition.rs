@@ -1,16 +1,18 @@
 //! Sealed coordinator staging and publication for adjacent body-pipeline successors.
 use super::{
     AdapterEffectAdmissionError, AdmissionDecision, AdmissionRequest, CandidateAdmission,
-    CapacityClass, CoordinatorFault, InitialLifecycleState, LifecycleCoordinator, LifecyclePhase,
-    LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalSlotId,
-    PredecessorScope, TerminalOutcome, TurnLease, WaitSource, WaitToken,
+    CapacityClass, CoordinatorFault, DurableLifecycleOrdinalReservation,
+    DurableLifecycleOrdinalReservationError, InitialLifecycleState, LifecycleCoordinator,
+    LifecyclePhase, LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId,
+    PhysicalSlotId, PredecessorScope, TerminalOutcome, TurnLease, WaitSource, WaitToken,
     schema::{DurableContinuation, DurableContinuationEdge, DurablePayloadReference},
     work_registry::{
+        BoundRecoveredDecisionFetchStoreSuccessor,
         BoundRecoveredLifecycleSignBroadcastAndSignSuccessor,
-        LiveValidateApplyRegistryPublicationError, LiveValidateReportRegistryPublicationError,
-        LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
-        PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
-        PreparedLiveValidateApplyRegistryPublication,
+        BoundRecoveredLifecycleSignBroadcastSuccessor, LiveValidateApplyRegistryPublicationError,
+        LiveValidateReportRegistryPublicationError, LiveValidateSignRegistryPublicationError,
+        PreparedCertifiedFetchStoreSuccessor, PreparedDurableStoreValidateSuccessor,
+        PreparedInvalidBodyReportReplayPreAdmission, PreparedLiveValidateApplyRegistryPublication,
         PreparedLiveValidateReportRegistryPublication, PreparedLiveValidateSignRegistryPublication,
         PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateApplyPreAdmission,
         PreparedReadyDurableValidatePersistedSignPreAdmission,
@@ -271,6 +273,8 @@ pub(super) enum BodyStageTransitionError {
     ForeignSuccessorLineage,
     /// No strictly new lifecycle ordinal remains available.
     OrdinalExhausted,
+    /// The live actor-global ordinal authority is absent or already fenced.
+    OrdinalAuthorityInvariant,
     /// Pure parent settlement failed on the staged coordinator copy.
     ParentSettlement(CoordinatorFault),
     /// Child admission did not produce one new admitted record.
@@ -289,6 +293,7 @@ pub(super) enum BodyStageTransitionError {
 /// Fully checked staged state shared by adjacent body-stage wrappers.
 struct StagedBodyStageTransition {
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     parent_ordinal: u128,
     child_ordinal: u128,
     owner: OwnerId,
@@ -303,6 +308,7 @@ struct StagedBodyStageTransition {
 #[cfg_attr(not(test), allow(dead_code))]
 struct StagedRecoveredLifecycleSignBroadcastAndSignTransition {
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     parent_ordinal: u128,
     broadcast_ordinal: u128,
     next_sign_ordinal: u128,
@@ -318,6 +324,26 @@ struct StagedBodyNoSuccessorTransition {
     staged: LifecycleCoordinator,
     parent_ordinal: u128,
     released_consensus_reservation: bool,
+}
+/// Fence the exact actor-global range owned by one unpublished body transition.
+fn reserve_body_transition_ordinals(
+    coordinator: &LifecycleCoordinator,
+    count: usize,
+) -> Result<DurableLifecycleOrdinalReservation, BodyStageTransitionError> {
+    let authority = coordinator
+        .lifecycle_ordinal_authority
+        .as_ref()
+        .ok_or(BodyStageTransitionError::OrdinalAuthorityInvariant)?;
+    authority
+        .begin_durable_range(coordinator.high_water, count)
+        .map_err(|error| match error {
+            DurableLifecycleOrdinalReservationError::Exhausted => {
+                BodyStageTransitionError::OrdinalExhausted
+            }
+            DurableLifecycleOrdinalReservationError::Invariant => {
+                BodyStageTransitionError::OrdinalAuthorityInvariant
+            }
+        })
 }
 /// One-shot authority minted only by the sealed no-successor entrypoint.
 ///
@@ -742,6 +768,7 @@ fn stage_body_stage_transition(
         parent_payload,
         edge,
         BodyStagePayloadRelationV1::OrdinaryBodyFrame,
+        1,
     )
 }
 fn stage_recovered_decision_fetch_store_transition(
@@ -756,12 +783,14 @@ fn stage_recovered_decision_fetch_store_transition(
         DurablePayloadReference::None,
         DurableContinuationEdge::FetchToStore,
         BodyStagePayloadRelationV1::RecoveredDecisionFetch,
+        1,
     )
 }
 fn stage_recovered_lifecycle_sign_broadcast_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
     candidate: CandidateAdmission,
+    ordinal_count: usize,
 ) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
     let edge = match (
         lease.work_class(),
@@ -797,7 +826,34 @@ fn stage_recovered_lifecycle_sign_broadcast_transition(
         DurablePayloadReference::None,
         edge,
         BodyStagePayloadRelationV1::RecoveredLifecycleSign,
+        ordinal_count,
     )
+}
+/// Stage one recovered Sign successor for the actor-global address-binding regression.
+#[cfg(test)]
+pub(super) fn stage_recovered_lifecycle_sign_broadcast_for_test(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+) -> Result<
+    (
+        LifecycleCoordinator,
+        DurableLifecycleOrdinalReservation,
+        u128,
+        PhysicalSlotId,
+        super::LifecycleDigest,
+    ),
+    BodyStageTransitionError,
+> {
+    let staged =
+        stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, candidate, 1)?;
+    Ok((
+        staged.staged,
+        staged.ordinal_reservation,
+        staged.child_ordinal,
+        staged.child_slot,
+        staged.child_digest,
+    ))
 }
 #[cfg_attr(not(test), allow(dead_code))]
 fn recovered_broadcast_and_next_sign_are_exact(
@@ -883,20 +939,36 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
     let capacity_generation_before = coordinator.capacity_generation.clone();
     let records_before = coordinator.records.len();
     let durable_records_before = coordinator.durable_records.len();
-    let first = stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)?;
-    let expected_next_sign_ordinal = first
-        .child_ordinal
-        .checked_add(1)
-        .ok_or(BodyStageTransitionError::OrdinalExhausted)?;
+    let first =
+        stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast, 2)?;
     let StagedBodyStageTransition {
         mut staged,
+        ordinal_reservation,
         parent_ordinal,
         child_ordinal: broadcast_ordinal,
         owner: broadcast_owner,
         child_slot: broadcast_slot,
         child_digest: broadcast_digest,
     } = first;
-    let decision = staged.reduce_admit(AdmissionRequest::Candidate(next_sign));
+    let expected_next_sign_ordinal = ordinal_reservation.last();
+    if expected_next_sign_ordinal
+        != broadcast_ordinal
+            .checked_add(1)
+            .ok_or(BodyStageTransitionError::OrdinalExhausted)?
+    {
+        return Err(BodyStageTransitionError::OrdinalAuthorityInvariant);
+    }
+    let decision = staged.reduce_admit_with_ordinal_allocator(
+        AdmissionRequest::Candidate(next_sign),
+        |high_water, count| {
+            if count != 1 || expected_next_sign_ordinal <= high_water {
+                return Err(AdmissionDecision::FailClosed(
+                    CoordinatorFault::DurabilityFailure,
+                ));
+            }
+            Ok((expected_next_sign_ordinal, expected_next_sign_ordinal))
+        },
+    );
     let AdmissionDecision::Admitted {
         owner: next_sign_owner,
         ordinal: next_sign_ordinal,
@@ -961,6 +1033,7 @@ fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(
     }
     Ok(StagedRecoveredLifecycleSignBroadcastAndSignTransition {
         staged,
+        ordinal_reservation,
         parent_ordinal,
         broadcast_ordinal,
         next_sign_ordinal,
@@ -980,6 +1053,7 @@ fn stage_body_stage_transition_with_payload_relation(
     parent_payload: DurablePayloadReference,
     edge: DurableContinuationEdge,
     payload_relation: BodyStagePayloadRelationV1,
+    ordinal_count: usize,
 ) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
     let (parent_work_class, parent_phase, parent_stage) = edge.parent();
     let (child_work_class, child_phase, child_stage) = edge.child();
@@ -1137,10 +1211,8 @@ fn stage_body_stage_transition_with_payload_relation(
     ) {
         return Err(BodyStageTransitionError::ForeignSuccessorLineage);
     }
-    let expected_child_ordinal = coordinator
-        .high_water
-        .checked_add(1)
-        .ok_or(BodyStageTransitionError::OrdinalExhausted)?;
+    let ordinal_reservation = reserve_body_transition_ordinals(coordinator, ordinal_count)?;
+    let expected_child_ordinal = ordinal_reservation.first();
     let capacity_used_before = coordinator.capacity_used.clone();
     let capacity_generation_before = coordinator.capacity_generation.clone();
     let expected_consensus_used = if child_capacity == CapacityClass::Consensus {
@@ -1163,7 +1235,14 @@ fn stage_body_stage_transition_with_payload_relation(
         if let Some(fault) = staged.fault {
             return Err(BodyStageTransitionError::ParentSettlement(fault));
         }
-        staged.reduce_admit(request)
+        staged.reduce_admit_with_ordinal_allocator(request, |high_water, count| {
+            if count != 1 || expected_child_ordinal <= high_water {
+                return Err(AdmissionDecision::FailClosed(
+                    CoordinatorFault::DurabilityFailure,
+                ));
+            }
+            Ok((expected_child_ordinal, expected_child_ordinal))
+        })
     } else {
         // Convert the pre-claim Consensus reservation into the exact child row
         // before releasing the parent Effect. This is one invisible staged
@@ -1172,7 +1251,14 @@ fn stage_body_stage_transition_with_payload_relation(
         let mut settlement_lease = lease.clone();
         settlement_lease.output_reservation = None;
         staged.active_lease = Some(settlement_lease.clone());
-        let decision = staged.reduce_admit(request);
+        let decision = staged.reduce_admit_with_ordinal_allocator(request, |high_water, count| {
+            if count != 1 || expected_child_ordinal <= high_water {
+                return Err(AdmissionDecision::FailClosed(
+                    CoordinatorFault::DurabilityFailure,
+                ));
+            }
+            Ok((expected_child_ordinal, expected_child_ordinal))
+        });
         if matches!(decision, AdmissionDecision::Admitted { .. }) {
             staged.reduce_settle_body_parent_for_continuation(settlement_lease);
             if let Some(fault) = staged.fault {
@@ -1294,6 +1380,7 @@ fn stage_body_stage_transition_with_payload_relation(
     }
     Ok(StagedBodyStageTransition {
         staged,
+        ordinal_reservation,
         parent_ordinal: lease.ordinal(),
         child_ordinal,
         owner,
@@ -1316,6 +1403,7 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry, 'ad
     coordinator: &'coordinator mut LifecycleCoordinator,
     successor: SealedBodyStageSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     edge: DurableContinuationEdge,
     parent_ordinal: u128,
     child_ordinal: u128,
@@ -1324,12 +1412,20 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry, 'ad
     child_digest: super::LifecycleDigest,
 }
 impl PreparedSealedBodyStageTransition<'_, '_, '_> {
+    /// Return the actor-global ordinal reserved for the exact staged child.
+    pub(super) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
+
     /// Fsync the exact parent-to-child LedgerV1 successor.
     pub(super) fn persist_exact_successor(
         &self,
     ) -> Result<(), super::ledger::LifecycleLedgerError> {
         self.coordinator
-            .persist_exact_staged_successor(&self.staged)
+            .persist_exact_staged_successor_with_ordinal_reservation(
+                &self.staged,
+                &self.ordinal_reservation,
+            )
     }
     /// Publish registry, coordinator, and adapter state after successful fsync.
     pub(super) fn commit_after_publication(self) {
@@ -1337,6 +1433,7 @@ impl PreparedSealedBodyStageTransition<'_, '_, '_> {
             coordinator,
             successor,
             staged,
+            ordinal_reservation: _,
             edge,
             parent_ordinal,
             child_ordinal,
@@ -1379,8 +1476,9 @@ impl PreparedSealedBodyStageTransition<'_, '_, '_> {
 #[must_use = "recovered Decision Fetch-to-Store transition has not been published"]
 pub(super) struct PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'registry, 'adapter> {
     coordinator: &'coordinator mut LifecycleCoordinator,
-    successor: PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+    successor: BoundRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     parent_ordinal: u128,
     child_ordinal: u128,
     child_slot: PhysicalSlotId,
@@ -1392,7 +1490,10 @@ impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
         &self,
     ) -> Result<(), super::ledger::LifecycleLedgerError> {
         self.coordinator
-            .persist_exact_staged_successor(&self.staged)
+            .persist_exact_staged_successor_with_ordinal_reservation(
+                &self.staged,
+                &self.ordinal_reservation,
+            )
     }
     /// Publish the already-fsynced coordinator, registry, and adapter tail.
     pub(super) fn commit_after_publication(self) {
@@ -1400,6 +1501,7 @@ impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
             coordinator,
             successor,
             staged,
+            ordinal_reservation: _,
             parent_ordinal,
             child_ordinal,
             child_slot,
@@ -1429,8 +1531,9 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastTransition<
     'adapter,
 > {
     coordinator: &'coordinator mut LifecycleCoordinator,
-    successor: PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+    successor: BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     parent_ordinal: u128,
     child_ordinal: u128,
     child_slot: PhysicalSlotId,
@@ -1453,6 +1556,7 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignTransition<
     coordinator: &'coordinator mut LifecycleCoordinator,
     successor: BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     parent_ordinal: u128,
     broadcast_ordinal: u128,
     next_sign_ordinal: u128,
@@ -1471,7 +1575,10 @@ impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
         &self,
     ) -> Result<(), super::ledger::LifecycleLedgerError> {
         self.coordinator
-            .persist_exact_staged_successor(&self.staged)
+            .persist_exact_staged_successor_with_ordinal_reservation(
+                &self.staged,
+                &self.ordinal_reservation,
+            )
     }
     /// Publish the already-fsynced coordinator, registry, and adapter tail.
     pub(super) fn commit_after_publication(self) {
@@ -1479,6 +1586,7 @@ impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
             coordinator,
             successor,
             staged,
+            ordinal_reservation: _,
             parent_ordinal,
             child_ordinal,
             child_slot,
@@ -1502,7 +1610,10 @@ impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
         &self,
     ) -> Result<(), super::ledger::LifecycleLedgerError> {
         self.coordinator
-            .persist_exact_staged_successor(&self.staged)
+            .persist_exact_staged_successor_with_ordinal_reservation(
+                &self.staged,
+                &self.ordinal_reservation,
+            )
     }
     /// Publish both children under the preauthenticated output mode.
     pub(super) fn commit_after_publication(self) {
@@ -1510,6 +1621,7 @@ impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {
             coordinator,
             successor,
             staged,
+            ordinal_reservation: _,
             parent_ordinal,
             broadcast_ordinal,
             next_sign_ordinal,
@@ -1637,12 +1749,54 @@ pub(super) struct PreparedSealedValidateApplyTransition<'coordinator, 'registry,
     coordinator: &'coordinator mut LifecycleCoordinator,
     publication: PreparedReadyDurableValidateApplyPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     admission_candidate: CandidateAdmission,
     lease: TurnLease,
     parent_ordinal: u128,
     child_ordinal: u128,
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
+}
+impl PreparedSealedValidateApplyTransition<'_, '_, '_> {
+    /// Return the actor-global ordinal reserved for the exact live Apply child.
+    pub(super) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
+}
+
+#[cfg(test)]
+impl PreparedSealedValidateApplyTransition<'_, '_, '_> {
+    /// Substitute only the staged Apply candidate's body-frame digest.
+    ///
+    /// The retained validated receipt and staged LedgerV1 row remain unchanged,
+    /// so the Apply-only registry constructor must reject this split authority.
+    pub(super) fn tamper_apply_body_frame_for_test(&mut self) -> bool {
+        let DurablePayloadReference::BodyFrame(mut frame) = self.admission_candidate.payload else {
+            return false;
+        };
+        let first = super::LifecycleDigest::new([0xA5; 32]);
+        frame.frame = if frame.frame == first {
+            super::LifecycleDigest::new([0x5A; 32])
+        } else {
+            first
+        };
+        self.admission_candidate.payload = DurablePayloadReference::BodyFrame(frame);
+        true
+    }
+}
+
+impl PreparedSealedValidateReportTransition<'_, '_, '_> {
+    /// Return the actor-global ordinal reserved for the exact report child.
+    pub(super) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
+}
+
+impl PreparedSealedValidateSignTransition<'_, '_, '_> {
+    /// Return the actor-global ordinal reserved for the exact Sign child.
+    pub(super) const fn child_ordinal(&self) -> u128 {
+        self.child_ordinal
+    }
 }
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateApplyTransitionFailure {
@@ -1670,7 +1824,20 @@ enum LiveValidateApplyPublicationFailure<'registry, 'adapter> {
 pub(super) struct LiveValidateApplyPublicationError<'coordinator, 'registry, 'adapter> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _staged: LifecycleCoordinator,
+    _ordinal_reservation: DurableLifecycleOrdinalReservation,
     _failure: LiveValidateApplyPublicationFailure<'registry, 'adapter>,
+}
+#[cfg(test)]
+impl LiveValidateApplyPublicationError<'_, '_, '_> {
+    /// Return the closed registry failure class without exposing retained authority.
+    pub(super) fn registry_failure_reason(
+        &self,
+    ) -> Option<super::work_registry::LiveValidateApplyRegistryPublicationFailureReason> {
+        match &self._failure {
+            LiveValidateApplyPublicationFailure::Registry(error) => Some(error.reason()),
+            LiveValidateApplyPublicationFailure::Ledger { .. } => None,
+        }
+    }
 }
 /// Fully reduced Validate-to-report copy retaining every sealed authority cut.
 ///
@@ -1684,6 +1851,7 @@ pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry
     coordinator: &'coordinator mut LifecycleCoordinator,
     report: PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     admission_candidate: CandidateAdmission,
     lease: TurnLease,
     edge: DurableContinuationEdge,
@@ -1705,6 +1873,7 @@ pub(super) struct PreparedSealedValidateSignTransition<'coordinator, 'registry, 
     coordinator: &'coordinator mut LifecycleCoordinator,
     publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
     staged: LifecycleCoordinator,
+    ordinal_reservation: DurableLifecycleOrdinalReservation,
     admission_candidate: CandidateAdmission,
     lease: TurnLease,
     parent_ordinal: u128,
@@ -1744,6 +1913,7 @@ enum LiveValidateSignPublicationFailure<'registry, 'adapter> {
 pub(super) struct LiveValidateSignPublicationError<'coordinator, 'registry, 'adapter> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _staged: LifecycleCoordinator,
+    _ordinal_reservation: DurableLifecycleOrdinalReservation,
     _failure: LiveValidateSignPublicationFailure<'registry, 'adapter>,
 }
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
@@ -1774,6 +1944,7 @@ enum LiveValidateReportPublicationFailure<'registry, 'adapter> {
 pub(super) struct LiveValidateReportPublicationError<'coordinator, 'registry, 'adapter> {
     _coordinator: &'coordinator mut LifecycleCoordinator,
     _staged: LifecycleCoordinator,
+    _ordinal_reservation: DurableLifecycleOrdinalReservation,
     _failure: LiveValidateReportPublicationFailure<'registry, 'adapter>,
 }
 impl LifecycleCoordinator {
@@ -1798,10 +1969,19 @@ impl LifecycleCoordinator {
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
         let transition = stage_recovered_decision_fetch_store_transition(self, lease, candidate)?;
+        let successor = successor
+            .bind_staged_child(
+                &transition.staged,
+                transition.child_ordinal,
+                transition.child_slot,
+                transition.child_digest,
+            )
+            .map_err(|_| BodyStageTransitionError::InvalidChildProjection)?;
         Ok(PreparedRecoveredDecisionFetchStoreTransition {
             coordinator: self,
             successor,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
             child_slot: transition.child_slot,
@@ -1829,11 +2009,20 @@ impl LifecycleCoordinator {
             .project_for_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
         let transition =
-            stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate)?;
+            stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate, 1)?;
+        let successor = successor
+            .bind_staged_child(
+                &transition.staged,
+                transition.child_ordinal,
+                transition.child_slot,
+                transition.child_digest,
+            )
+            .map_err(|_| BodyStageTransitionError::InvalidChildProjection)?;
         Ok(PreparedRecoveredLifecycleSignBroadcastTransition {
             coordinator: self,
             successor,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
             child_slot: transition.child_slot,
@@ -1890,6 +2079,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             successor,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             parent_ordinal: transition.parent_ordinal,
             broadcast_ordinal: transition.broadcast_ordinal,
             next_sign_ordinal: transition.next_sign_ordinal,
@@ -1976,6 +2166,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             publication,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             admission_candidate,
             lease: projected_lease,
             parent_ordinal: transition.parent_ordinal,
@@ -2077,6 +2268,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             successor: SealedBodyStageSuccessor::CertifiedFetchStore(successor),
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             edge: DurableContinuationEdge::FetchToStore,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -2114,6 +2306,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             successor: SealedBodyStageSuccessor::DurableStoreValidate(successor),
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             edge: DurableContinuationEdge::StoreToValidate,
             parent_ordinal: transition.parent_ordinal,
             child_ordinal: transition.child_ordinal,
@@ -2172,6 +2365,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             publication,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             admission_candidate,
             lease: lease.clone(),
             parent_ordinal: transition.parent_ordinal,
@@ -2236,6 +2430,7 @@ impl LifecycleCoordinator {
             coordinator: self,
             report,
             staged: transition.staged,
+            ordinal_reservation: transition.ordinal_reservation,
             admission_candidate,
             lease: lease.clone(),
             edge: DurableContinuationEdge::ValidateToInvalidBodyReport,
@@ -2260,6 +2455,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             publication,
             staged,
+            ordinal_reservation,
             admission_candidate,
             lease,
             parent_ordinal,
@@ -2281,15 +2477,19 @@ impl<'coordinator, 'registry, 'adapter>
                 return Err(LiveValidateApplyPublicationError {
                     _coordinator: coordinator,
                     _staged: staged,
+                    _ordinal_reservation: ordinal_reservation,
                     _failure: LiveValidateApplyPublicationFailure::Registry(error),
                 });
             }
         };
-        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+        if let Err(error) = coordinator
+            .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+        {
             coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
             return Err(LiveValidateApplyPublicationError {
                 _coordinator: coordinator,
                 _staged: staged,
+                _ordinal_reservation: ordinal_reservation,
                 _failure: LiveValidateApplyPublicationFailure::Ledger {
                     _error: error,
                     _publication: registry,
@@ -2314,6 +2514,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             report,
             staged,
+            ordinal_reservation,
             admission_candidate,
             lease,
             edge,
@@ -2339,15 +2540,19 @@ impl<'coordinator, 'registry, 'adapter>
                 return Err(LiveValidateReportPublicationError {
                     _coordinator: coordinator,
                     _staged: staged,
+                    _ordinal_reservation: ordinal_reservation,
                     _failure: LiveValidateReportPublicationFailure::Registry(error),
                 });
             }
         };
-        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+        if let Err(error) = coordinator
+            .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+        {
             coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
             return Err(LiveValidateReportPublicationError {
                 _coordinator: coordinator,
                 _staged: staged,
+                _ordinal_reservation: ordinal_reservation,
                 _failure: LiveValidateReportPublicationFailure::Ledger {
                     _error: error,
                     _publication: publication,
@@ -2430,6 +2635,7 @@ impl<'coordinator, 'registry, 'adapter>
             coordinator,
             publication,
             staged,
+            ordinal_reservation,
             admission_candidate,
             lease,
             parent_ordinal,
@@ -2450,16 +2656,20 @@ impl<'coordinator, 'registry, 'adapter>
                 return Err(LiveValidateSignPublicationError {
                     _coordinator: coordinator,
                     _staged: staged,
+                    _ordinal_reservation: ordinal_reservation,
                     _failure: LiveValidateSignPublicationFailure::Registry(error),
                 });
             }
         };
         debug_assert_eq!(lease.ordinal(), parent_ordinal);
-        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+        if let Err(error) = coordinator
+            .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+        {
             coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
             return Err(LiveValidateSignPublicationError {
                 _coordinator: coordinator,
                 _staged: staged,
+                _ordinal_reservation: ordinal_reservation,
                 _failure: LiveValidateSignPublicationFailure::Ledger {
                     _error: error,
                     _publication: registry,

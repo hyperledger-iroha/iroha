@@ -480,6 +480,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let adjacent_store_source = include_str!("serviced_candidate_store.rs");
     let worker_source = concat!(
         include_str!("v2_worker.rs"),
+        include_str!("v2_worker_services_impl.rs"),
         include_str!("v2_worker/effect_services_impl.rs")
     );
     let effects_source = include_str!("v2_effects.rs");
@@ -610,17 +611,21 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert!(!launch.contains("reply_route_source_capacity()"));
+    assert!(!launch.contains("RuntimeLifecycleOrdinalSource::after_high_watermark(0)"));
     assert_source_tokens_in_order(
         launch,
         &[
             "service.matches_lifecycle_launch(",
             "binding.storage_paths_for_launch(inputs.kura.as_ref())",
             ".prepare_leader_wire_launch(launch_storage.wal_path())",
-            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+            "super::authority::lifecycle_ordinal_authorities_after_high_watermark(",
+            "self.coordinator.high_water()",
+            "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".open_gate(",
             "self.body_store\n                        .as_ref()",
             "leader_wire_restore.scheduler_ordinal_high_watermark()",
+            ".bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
             "ProductionLeaderWireIngressBindingV1::bind(",
             ".body_store\n            .take()",
             ".into_serialized_runtime(",
@@ -637,8 +642,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     let take_apply = source_token_position(launch, ".apply_service\n            .take()");
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
-        2,
-        "lifecycle restore and service startup must share the exact auxiliary capacity"
+        1,
+        "launch must pass the retained auxiliary capacity exactly once into service startup"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -830,7 +835,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "services: ProductionV2Services",
             "pending_kura_apply_replay:",
             "recovered_local_proposal_attempt:",
-            "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+            "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
             "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
         ],
     );
@@ -1352,7 +1357,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "executor.ready_to_finish()",
             "if !ready_to_finish || producer_turn.is_some()",
             "schedule_local_proposal(",
-            "let finalization_ready = ready_to_finish",
+            "let finalization_ready =",
             "activated.ready_for_finalized_rollover(&mut active_runner)",
             "let rollover_ready = if finalization_ready",
             "preflight_finalized_lane_rollover(",
@@ -1534,7 +1539,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let mut launched = owner",
             "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
             "ProductionCompletionDispatchV1::ApplyQueued",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+            "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
             ".retain_merge_sidecars_for_global_view(",
@@ -2211,7 +2216,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     let settlement = source_region(
         source,
         "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "/// Drive and retry one exact missing-sidecar recovered Apply owner.",
+        "/// Drive and retry one exact missing-sidecar lifecycle Decision Apply owner.",
     );
     assert_source_tokens_in_order(
         settlement,
@@ -2248,7 +2253,7 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
         .split_once("fn dispatch_completion_with_runner_debt(")
-        .expect("recovered Completion has one composite dispatch transaction")
+        .expect("lifecycle Completion has one composite dispatch transaction")
         .1
         .split_once(
             "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
@@ -2256,7 +2261,7 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
         .expect("composite dispatch stays a bounded source region")
         .0;
     let census = dispatch
-        .find("capture_recovered_completion_capacity_census(probes)")
+        .find("capture_lifecycle_completion_capacity_census(probes)")
         .expect("the joint physical census is captured");
     let claim = dispatch
         .find("self.coordinator.plan_turn(inputs)")

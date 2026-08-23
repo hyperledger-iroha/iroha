@@ -1396,7 +1396,7 @@ fn purge_retired_segments_removes_retired_dir() {
 }
 #[test]
 fn total_disk_usage_scan_retries_across_replacement_and_unfinished_mutation() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let merge_dir = temp_dir.path().join("merge_ledger");
     std::fs::create_dir_all(&merge_dir).expect("create accounted merge directory");
     let path = merge_dir.join("accounting-race.log");
@@ -1534,7 +1534,7 @@ fn total_disk_usage_scan_retries_across_replacement_and_unfinished_mutation() {
 }
 #[test]
 fn cached_total_usage_read_waits_for_in_flight_mutation_publication() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     kura.refresh_disk_usage_bytes()
         .expect("establish exact disk-usage baseline");
     let baseline_total = kura
@@ -1576,7 +1576,7 @@ fn cached_total_usage_read_waits_for_in_flight_mutation_publication() {
 }
 #[test]
 fn total_only_refresh_invalidates_cached_total_on_scan_error() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     kura.refresh_disk_usage_bytes()
         .expect("establish exact disk-usage baseline");
     let cached_total = kura.disk_usage_total.load(Ordering::Relaxed);
@@ -1607,7 +1607,7 @@ fn total_only_refresh_invalidates_cached_total_on_scan_error() {
 }
 #[test]
 fn partial_retired_tree_deletion_invalidates_caches_before_returning() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let retired_merge = temp_dir.path().join("retired/merge_ledger");
     std::fs::create_dir_all(&retired_merge).expect("create retired merge tree");
     std::fs::write(retired_merge.join("a.merge"), [0x11_u8; 5])
@@ -1652,7 +1652,7 @@ fn partial_retired_tree_deletion_invalidates_caches_before_returning() {
 }
 #[test]
 fn combined_disk_usage_refresh_invalidates_both_caches_on_total_scan_error() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let enforced_before = kura
         .refresh_disk_usage_bytes()
         .expect("establish enforced baseline");
@@ -1812,7 +1812,7 @@ fn store_block_reclaims_retired_storage_when_budget_exceeded() {
 }
 #[test]
 fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retry() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let (kura, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("open persistent Kura");
     let mut blocks = DummyBlocks::new();
@@ -1890,7 +1890,7 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
     ];
     for retry_before_reopen in [false, true] {
         for failure_point in failure_points {
-            let (temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
+            let (_temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
             let (kura, _) =
                 Kura::new(&config, &RuntimeLaneConfig::default()).expect("open persistent Kura");
             let mut blocks = DummyBlocks::new();
@@ -1962,7 +1962,7 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
 #[test]
 fn startup_repairs_each_block_first_merge_publication_crash_window() {
     for published_merge_parts in 0_u8..=2 {
-        let (temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let mut blocks = DummyBlocks::new();
         let parent = blocks.next();
@@ -2321,7 +2321,7 @@ fn store_block_treats_readable_new_marker_after_ack_failure_as_committed() {
 }
 #[test]
 fn pre_marker_rewrite_failure_preserves_exact_retry_without_poison() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let original = DummyBlocks::new().next();
     let original_hash = original.hash();
     kura.store_block(Arc::clone(&original))
@@ -2364,7 +2364,7 @@ fn pre_marker_rewrite_failure_preserves_exact_retry_without_poison() {
 }
 #[test]
 fn pre_marker_association_recovery_failure_remains_exactly_retryable() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let stage_path = kura.canonical_association_stage_path();
     fs::create_dir(&stage_path).expect("plant invalid pre-marker association stage");
     let block = DummyBlocks::new().next();
@@ -2387,7 +2387,7 @@ fn pre_marker_association_recovery_failure_remains_exactly_retryable() {
 }
 #[test]
 fn post_marker_rewrite_recovery_failure_poison_gates_until_restart() {
-    let (temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
         let original = DummyBlocks::new().next();

@@ -2693,7 +2693,7 @@ pub struct NexusStorage {
     pub effective_local_budget_bytes: Option<Bytes<u64>>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     pub budget_enforce_interval_blocks: u64,
-    /// WSV hot-tier deterministic payload size budget (bytes).
+    /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
@@ -4401,7 +4401,7 @@ impl LaneConfigEntry {
             key_prefix,
             manifest_policy,
             confidential_compute: meta.confidential_compute.clone(),
-            scheduler: meta.scheduler.clone(),
+            scheduler: meta.scheduler,
             settlement_buffer: meta.settlement_buffer.clone(),
         }
     }
@@ -5308,8 +5308,8 @@ pub struct TieredState {
     pub enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     pub hot_retained_keys: usize,
-    /// Hot-tier byte budget based on deterministic in-memory WSV sizing (0 = unlimited).
-    /// Grace retention may temporarily exceed this budget.
+    /// Hot-tier byte budget using canonical encoded-key bytes plus measured value bytes
+    /// (0 = unlimited). Grace or unspillable retention may temporarily exceed this budget.
     pub hot_retained_bytes: Bytes<u64>,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     pub hot_retained_grace_snapshots: u64,
@@ -11471,34 +11471,7 @@ pub struct Settlement {
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
-/// Universal Kagemusha execution state and optional proof-release cache parameters.
-#[derive(Debug, Clone)]
-pub struct Offline {
-    /// Lazily derived escrow accounts keyed by asset definition.
-    ///
-    /// This map is runtime state, not operator configuration and not an
-    /// enablement catalog. Every asset can use the offline instructions.
-    pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Canonical Norito policy authenticating promoted Kagemusha releases.
-    pub kagemusha_release_policy_path: Option<PathBuf>,
-    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
-    pub kagemusha_artifact_dir: Option<PathBuf>,
-    /// Root-trusted canonical seal for a fully qualified Kagemusha catalog.
-    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
-    /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
-    pub kagemusha_max_decoded_bytes: u64,
-}
-impl_default!(Offline => {
-        Self {
-            escrow_accounts: BTreeMap::new(),
-            kagemusha_release_policy_path:
-                defaults::settlement::offline::kagemusha_release_policy_path(),
-            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
-            kagemusha_catalog_qualification_seal_path:
-                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
-            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
-        }
-});
+include!("actual/offline.rs");
 /// Router configuration controlling shadow-price and buffer guard rails.
 #[derive(Debug, Clone, Copy)]
 pub struct Router {

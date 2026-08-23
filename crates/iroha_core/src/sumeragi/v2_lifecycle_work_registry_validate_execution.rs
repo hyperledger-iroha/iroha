@@ -306,6 +306,8 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
             address: authority.address,
             incumbent_digest: authority.incumbent_digest,
             replacement_digest,
+            round: request.round,
+            subject: request.subject,
         };
         let publication = match authority.outcome_kind {
             DurableValidateOutcomeKind::Validated => {
@@ -381,7 +383,7 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
             address: authority.address,
             request: Some(request),
             wake: Some(wake),
-            publication,
+            publication: Some(publication),
             armed: true,
         };
         debug_assert!(displaced.is_none());
@@ -445,11 +447,13 @@ impl StagedDurableValidateCompletion<'_> {
             wake,
         })
     }
-    /// Permanently retain the already-installed carrier and return only its
-    /// precomputed Copy publication metadata.
+    /// Permanently retain the already-installed carrier and return its
+    /// precomputed move-only publication metadata.
     pub(super) fn commit(mut self) -> PublishedDurableValidateCompletion {
         self.armed = false;
         self.publication
+            .take()
+            .expect("armed Validate publication retains move-only metadata")
     }
 }
 impl Drop for StagedDurableValidateCompletion<'_> {
@@ -501,14 +505,14 @@ impl DeferredDurableValidateDispatch {
 }
 #[cfg(test)]
 impl PublishedValidated {
-    const fn location_for_test(&self) -> DurableValidatePublishedLocation {
-        self.location
+    const fn location_for_test(&self) -> &DurableValidatePublishedLocation {
+        &self.location
     }
 }
 #[cfg(test)]
 impl PublishedRejected {
-    const fn location_for_test(&self) -> DurableValidatePublishedLocation {
-        self.location
+    const fn location_for_test(&self) -> &DurableValidatePublishedLocation {
+        &self.location
     }
 }
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_END

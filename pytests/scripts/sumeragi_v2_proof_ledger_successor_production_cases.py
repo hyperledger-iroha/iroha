@@ -81,6 +81,356 @@ assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
 ) == 74
 
 
+LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+    "crates/iroha_core/src/sumeragi/v2.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker.rs",
+    "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+)
+assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES) == len(
+    set(LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES)
+) == 9
+
+
+LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "pub(in crate::sumeragi) enum LifecycleDecisionApplyLineageV1 {",
+        "    Live,\n    /// Apply reconstructed",
+        "    Recovered,\n    /// Apply reconstructed",
+        "closed live/recovered lineage",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn attest_ready_lifecycle_decision_apply(",
+        "LifecycleDecisionApplyLineageV1::Live,",
+        "LifecycleDecisionApplyLineageV1::Recovered,",
+        "classifier must distinguish both exact undispatched carriers",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn prepare_ready_live_decision_apply_reconciliation(",
+        "dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered",
+        "dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Live",
+        "reject recovered substitution",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn prepare_lifecycle_decision_apply_dispatch(",
+        "LifecycleDecisionApplyLineageV1::Recovered,",
+        "LifecycleDecisionApplyLineageV1::Live,",
+        "lineage-aware Apply dispatch",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn prepare_lifecycle_decision_apply_terminal_transition(",
+        "LifecycleDecisionApplyLineageV1::Live,",
+        "LifecycleDecisionApplyLineageV1::Recovered,",
+        "exact live carrier and lineage",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "pub(in crate::sumeragi) fn project_live_decision_apply_completion(",
+        "LifecycleDecisionApplyLineageV1::Live,",
+        "LifecycleDecisionApplyLineageV1::Recovered,",
+        "shared worker corridor with live lineage",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn project_lifecycle_decision_apply_completion(",
+        "key.matches_carrier(context, address, installed_digest, lineage)",
+        "key.matches_height_context(&artifact.height_context)",
+        "exact lineage-tagged carrier",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+        "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
+        "false",
+        "live cleanup, complete Apply census, and neutral worker publication",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "pub(crate) enum ProductionSchedulerInputsError {",
+        "InvalidLifecycleDecisionApplyCarrier",
+        "InvalidRecoveredDecisionApplyCarrier",
+        "scheduler Apply carrier failure must use the lifecycle-neutral class",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+        "pub(super) fn from_authenticated(",
+        "lifecycle_decision_apply_attestation",
+        "recovered_apply_attestation",
+        "scheduler schema must bind Apply through the lifecycle-neutral attestation local",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "pub(in crate::sumeragi) fn select_apply(",
+        "LifecycleCompletionPreparedCapacityV1::Apply {",
+        "LifecycleCompletionPreparedCapacityV1::Sign {",
+        "consume only the frozen exact row",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn settle_lifecycle_decision_apply_completion_owner(",
+        "persist_exact_staged_successor(&staged)",
+        "persist_inexact_staged_successor(&staged)",
+        "neutral lifecycle Apply terminal settlement",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(",
+        "dispatch_next_lifecycle_decision_apply_sidecar_request",
+        "dispatch_next_recovered_apply_sidecar_request",
+        "deferred lifecycle Apply must use the lifecycle-neutral sidecar dispatcher",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "fn new_with_output_guard_and_transport_inner(",
+        "lifecycle_decision_apply_sidecar_waits",
+        "recovered_apply_sidecar_waits",
+        "distinct neutral lifecycle Apply wait and rejection owners",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "pub(crate) struct V2LaneWorkAdapter {",
+        "rejected_lifecycle_decision_apply_sidecars",
+        "rejected_recovered_apply_sidecars",
+        "lifecycle-neutral Apply sidecar rejection owner",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "pub(in crate::sumeragi) fn dispatch_next_lifecycle_decision_apply_sidecar_request(",
+        "dispatch_next_lifecycle_decision_apply_sidecar_request",
+        "dispatch_next_recovered_apply_sidecar_request",
+        "lifecycle-neutral Apply sidecar dispatcher",
+    ),
+)
+assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
+    set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
+) == 16
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "region_marker", "old", "new", "error_fragment"),
+    LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS,
+)
+def test_lifecycle_decision_apply_lineage_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    region_marker: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    for source_name in LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES:
+        destination = tmp_path / source_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / source_name, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+    baseline_errors = module._lifecycle_decision_apply_lineage_source_fidelity_errors(
+        tmp_path
+    )
+    assert baseline_errors == [], baseline_errors
+
+    path = tmp_path / relative_path
+    source = path.read_text(encoding="utf-8")
+    region_start = source.find(region_marker)
+    assert region_start >= 0
+    mutation = source.find(old, region_start)
+    assert mutation >= 0
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+    errors = module._lifecycle_decision_apply_lineage_source_fidelity_errors(tmp_path)
+    assert any(error_fragment in error for error in errors), errors
+
+
+COLD_READY_VALIDATE_RETRY_MUTATIONS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "impl RecoveredDurableValidateRetryOwnerV1",
+        "fn bind_validated_marker(",
+        "fn inspect_validated_marker(",
+        "move-only cold Ready Validate retry owner",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "impl RecoveredDurableValidateRetryCensusV1",
+        "self.owners.get_mut(&key)",
+        "self.owners.get(&key)",
+        "opaque complete cold Ready Validate retry census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "impl RecoveredDurableValidateRetryCensusV1",
+        "for owner in self.owners.into_values()",
+        "for owner in self.owners.values()",
+        "opaque complete cold Ready Validate retry census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn bind_validated_marker_commitment(",
+        "self.authority_ceiling_commitment = Some(commitment)",
+        "self.authority_ceiling_commitment = None",
+        "closed cold Ready Validate retry binding and frontier",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_retry(",
+        "incoming_tag != frontier_tag",
+        "incoming_tag != recovered_tag",
+        "exact cold Ready Validate retry binding",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_retry(",
+        ".zip(incoming_commitment)",
+        ".zip(None)",
+        "exact cold Ready Validate retry binding",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_retry(",
+        ".or(incoming_commitment)",
+        ".or(None)",
+        "exact cold Ready Validate retry binding",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_retry(",
+        "let recovered_statement = self.pending.candidate_statement.ok_or_else(|| {",
+        "let _ = incoming.exact_pending_adapter_effect_binding(effect);\n"
+        "        let recovered_statement = self.pending.candidate_statement.ok_or_else(|| {",
+        "origin-neutral cold Ready Validate retry binding",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_retry(",
+        "effect: effect.clone()",
+        "effect: recovered_effect.clone()",
+        "exact cold Ready Validate retry binding",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn project_retry(",
+        "owner: Arc::clone(owner)",
+        "owner: Arc::new((**owner).clone())",
+        "non-substitutable live and recovered Validate retry projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "pub(in crate::sumeragi) fn absorb(",
+        "frontier: owner.initial_retry_frontier()",
+        "frontier: None",
+        "atomic cold Ready Validate retry installation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn open_with_body_store(",
+        "mut recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1",
+        "recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1",
+        "owner-exact cold Ready Validate marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn open_with_body_store(",
+        ".classify_and_bind_validated_marker(*key, validated_receipt)",
+        ".exactly_defers_validated_marker(*key, validated_receipt)",
+        "owner-exact cold Ready Validate marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn retain_effect_batch_at_frontier(",
+        "retained_validate_retry_seals.insert((*round, *subject), projected.seal)",
+        "retained_validate_retry_seals.remove(&(*round, *subject))",
+        "exact cold Ready Validate retry stutter",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(",
+        "recovered_validate_retry_census,",
+        "&recovered_validate_retry_census,",
+        "cold Ready Validate census launch installation",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+        "fn project_commitment_ceiling(",
+        "expected != commitment",
+        "expected == commitment",
+        "pure recovered Validate durable commitment projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn project_recovered_commitment_ceiling(",
+        "Self::Live { .. } => Ok(None)",
+        "Self::Live { .. } => unreachable!()",
+        "lineage-preserving recovered Validate durable commitment join",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn record_lifecycle_validated_body(",
+        "seal.project_recovered_commitment_ceiling(validated.execution_commitment())",
+        "Ok(None)",
+        "pre-mutation recovered Validate marker commitment join",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn reconcile_decision_work<S: V2EffectServices>(",
+        "seal.project_recovered_commitment_ceiling(decision_commitment)",
+        "Ok(None)",
+        "Decision-scoped cold Validate retry cleanup",
+    ),
+)
+assert len(COLD_READY_VALIDATE_RETRY_MUTATIONS) == len(
+    set(COLD_READY_VALIDATE_RETRY_MUTATIONS)
+) == 19
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "region_marker", "old", "new", "error_fragment"),
+    COLD_READY_VALIDATE_RETRY_MUTATIONS,
+)
+def test_cold_ready_validate_retry_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    region_marker: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    for source_name in SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES:
+        destination = tmp_path / source_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / source_name, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+    baseline_errors = module._successor_recovery_source_fidelity_errors(tmp_path)
+    assert baseline_errors == [], baseline_errors
+
+    path = tmp_path / relative_path
+    source = path.read_text(encoding="utf-8")
+    region_start = source.find(region_marker)
+    assert region_start >= 0
+    mutation = source.find(old, region_start)
+    assert mutation >= 0
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+    errors = module._successor_recovery_source_fidelity_errors(tmp_path)
+    assert any(error_fragment in error for error in errors), errors
+
+
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     tmp_path: Path,
 ) -> None:
@@ -607,58 +957,58 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
-        "fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop()",
+        "fn lifecycle_completion_capacity_census_selects_once_and_drops_fail_stop()",
         "output.abort_before_claim();",
         "drop(output);",
-        "composite recovered Completion worker Fetch ownership behavior",
+        "lifecycle Completion worker Fetch ownership behavior",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
-        "fn capture_recovered_completion_capacity_census(",
+        "fn capture_lifecycle_completion_capacity_census(",
         "let fanout = self.recovered_decision_fetch_fanout(&owner)?;",
         "let fanout = None;",
         "joint recovered Completion physical-corridor census",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
-        "fn capture_recovered_completion_capacity_census(",
+        "fn capture_lifecycle_completion_capacity_census(",
         "let pending = self.lock_pending_exact_output()?;",
         "let pending = self.lock_pending_exact_output_removed()?;",
         "joint recovered Completion physical-corridor census",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         "for ordinal in &exact_ready {",
         "for ordinal in exact_ready.iter().take(1) {",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt(",
-        "capture_recovered_completion_capacity_census(probes)",
-        "capture_recovered_completion_capacity_census_removed(probes)",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+        "capture_lifecycle_completion_capacity_census(probes)",
+        "capture_lifecycle_completion_capacity_census_removed(probes)",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         "authenticated_ready_row_with_physical_capacity(",
         "authenticated_ready_row(",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         ".select_fetch(ordinal)",
         ".select_sign(ordinal)",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(",
+        "fn drive_ready_completion_turn_with_required_ordinal<'cursor>(",
         "owner.dispatch_completion_with_runner_debt(",
-        "owner.dispatch_recovered_decision_apply_with_runner_debt(",
+        "owner.dispatch_lifecycle_decision_apply_with_runner_debt(",
         "fresh lifecycle Completion Ready-work dispatch",
     ),
     (
@@ -1788,7 +2138,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         "registration.commit(prepared, wait_source)",
         "registration.abort(prepared)",
         "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
@@ -1962,6 +2312,27 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "pub(in crate::sumeragi) fn launch(\n        mut self,",
         "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
         "true",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        "super::authority::lifecycle_ordinal_authorities_after_high_watermark",
+        "RuntimeLifecycleOrdinalSource::after_high_watermark",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
+        "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+        "Kura-bound production lifecycle launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "pub(in crate::sumeragi) fn launch(\n        mut self,",
+        ".bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
+        ".discard_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
         "Kura-bound production lifecycle launch must preserve exact production order",
     ),
     (
@@ -2536,10 +2907,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "fn settle_recovered_decision_apply_completion_owner(",
+        "fn settle_lifecycle_decision_apply_completion_owner(",
         "super::super::status::set_v2_status(status);",
         "if false { super::super::status::set_v2_status(status); }",
-        "recovered Decision Apply settlement must preserve its intentional unguarded final publication",
+        "lifecycle Decision Apply settlement must preserve its intentional unguarded final publication",
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -2553,7 +2924,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 336
+) == 339
 
 
 @pytest.mark.parametrize(

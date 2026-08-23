@@ -302,7 +302,7 @@ impl<'registry, 'body> AuthenticatedRecoveredWalValidateParent<'registry, 'body>
     }
 }
 #[cfg(test)]
-fn recovered_next_vote_projection_for_scheduler_fixture(
+pub(super) fn recovered_next_vote_projection_for_scheduler_fixture(
     verified: &VerifiedHeightContext,
     marker: u8,
 ) -> (

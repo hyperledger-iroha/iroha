@@ -154,10 +154,14 @@ path = "tests/kagemusha_artifact_v4_streaming.rs"
 """,
 )
 
-LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
-LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
-LOCK_BYTES = 315_333
-LOCK_LINES = 13_758
+OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
+OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+OPENING_LOCK_BYTES = 315_333
+OPENING_LOCK_LINES = 13_758
+LOCK_BLOB = "5d04cef722cb695dd636110be01ff8de52ae7b45"
+LOCK_SHA256 = "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+LOCK_BYTES = 311_172
+LOCK_LINES = 13_613
 
 RETIRED_TABLES = (
     """[[bin]]
@@ -368,11 +372,14 @@ def _authenticate_openings() -> bytes:
     )
     _expected_core_manifest(core_manifest)
     tree_lock = _git("rev-parse", f"{OPENING_COMMIT}:{LOCKFILE}").stdout.decode().strip()
-    _require(tree_lock == LOCK_BLOB, "opening Cargo.lock tree blob changed")
-    lock = _git_blob(LOCK_BLOB)
-    _require(len(lock) == LOCK_BYTES, "opening Cargo.lock byte count changed")
-    _require(lock.count(b"\n") == LOCK_LINES, "opening Cargo.lock line count changed")
-    _require(_sha256(lock) == LOCK_SHA256, "opening Cargo.lock hash changed")
+    _require(tree_lock == OPENING_LOCK_BLOB, "opening Cargo.lock tree blob changed")
+    lock = _git_blob(OPENING_LOCK_BLOB)
+    _require(len(lock) == OPENING_LOCK_BYTES, "opening Cargo.lock byte count changed")
+    _require(
+        lock.count(b"\n") == OPENING_LOCK_LINES,
+        "opening Cargo.lock line count changed",
+    )
+    _require(_sha256(lock) == OPENING_LOCK_SHA256, "opening Cargo.lock hash changed")
     return manifest
 
 
@@ -500,7 +507,7 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
     _require(len(lock) == LOCK_BYTES, "Cargo.lock byte count changed")
     _require(lock.count(b"\n") == LOCK_LINES, "Cargo.lock line count changed")
     _require(_sha256(lock) == LOCK_SHA256, "Cargo.lock hash changed")
-    _require(lock == _git_blob(LOCK_BLOB), "Cargo.lock differs from authenticated opening")
+    _require(lock == _git_blob(LOCK_BLOB), "Cargo.lock differs from current authority")
 
     for path, markers in REPLACEMENT_MARKERS.items():
         data = snapshot.files[path]

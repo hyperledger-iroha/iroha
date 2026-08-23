@@ -3090,8 +3090,8 @@ pub(crate) struct V2LaneWorkAdapter {
     merge_qc_preflight_checks: usize,
     completed_merge_sidecars: BTreeSet<HashOf<MergeLedgerEntry>>,
     rejected_merge_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
-    recovered_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>,
-    rejected_recovered_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
+    lifecycle_decision_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>,
+    rejected_lifecycle_decision_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
     closed_sidecar_prefixes: BTreeMap<PeerId, CertifiedMergeSidecarClosedPrefix>,
     sidecar_effects: VecDeque<V2LaneWorkEffect>,
     sidecar_effect_keys: BTreeSet<Hash>,
@@ -3112,8 +3112,8 @@ pub(crate) struct V2LaneWorkAdapter {
 impl V2LaneWorkAdapter {
     /// Compare the exact process-local dependencies used by lifecycle-owned work.
     ///
-    /// This fixed oracle exposes no dependency parts. It prevents a recovered
-    /// Apply deferral from registering or waking through a foreign height,
+    /// This fixed oracle exposes no dependency parts. It prevents a lifecycle
+    /// Decision Apply deferral from registering or waking through a foreign height,
     /// State, Kura instance, or consensus output corridor.
     pub(in crate::sumeragi) fn matches_lifecycle_dependencies(
         &self,
@@ -3137,14 +3137,15 @@ impl V2LaneWorkAdapter {
     /// advance it first. The method never scans past fair FIFO order, and an
     /// exact request is returned to the same sidecar lane if the service
     /// corridor retains source ownership under backpressure.
-    pub(in crate::sumeragi) fn dispatch_next_recovered_apply_sidecar_request(
+    pub(in crate::sumeragi) fn dispatch_next_lifecycle_decision_apply_sidecar_request(
         &mut self,
         services: &ProductionV2Services,
         reference: &CertifiedMergeLedgerReference,
     ) -> Result<(), V2LaneWorkError> {
         if !services.matches_lifecycle_lane_work(self) {
             return Err(V2LaneWorkError::InvalidContext(
-                "recovered Apply sidecar request belongs to another service/lane owner".to_owned(),
+                "lifecycle Decision Apply sidecar request belongs to another service/lane owner"
+                    .to_owned(),
             ));
         }
         let Some(next) = self.next_effect() else {
@@ -3805,8 +3806,8 @@ impl V2LaneWorkAdapter {
             merge_qc_preflight_checks: 0,
             completed_merge_sidecars: BTreeSet::new(),
             rejected_merge_sidecars: BTreeMap::new(),
-            recovered_apply_sidecar_waits: BTreeSet::new(),
-            rejected_recovered_apply_sidecars: BTreeMap::new(),
+            lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),
+            rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
             closed_sidecar_prefixes: BTreeMap::new(),
             sidecar_effects: VecDeque::new(),
             sidecar_effect_keys: BTreeSet::new(),
@@ -9958,18 +9959,18 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         self.defer_missing_merge_sidecar_with_priority(round, subject, reference, true, false)
     }
-    /// Register the exact decided sidecar owned by one recovered Apply carrier.
+    /// Register the exact decided sidecar owned by one lifecycle Decision Apply carrier.
     ///
     /// A terminal full-entry rejection is retained in a dedicated owner class
     /// so the ordinary executor recovery drain cannot consume it first.
-    pub(in crate::sumeragi) fn defer_missing_recovered_decision_apply_sidecar(
+    pub(in crate::sumeragi) fn defer_missing_lifecycle_decision_apply_sidecar(
         &mut self,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         if let Some(reason) = self
-            .rejected_recovered_apply_sidecars
+            .rejected_lifecycle_decision_apply_sidecars
             .get(&reference.entry_hash)
         {
             return Ok(MergeSidecarDeferralDisposition::Rejected(reason.clone()));
@@ -9980,11 +9981,13 @@ impl V2LaneWorkAdapter {
         match disposition {
             MergeSidecarDeferralDisposition::Fetching
             | MergeSidecarDeferralDisposition::RetryLater => {
-                self.recovered_apply_sidecar_waits.insert(entry_hash);
+                self.lifecycle_decision_apply_sidecar_waits
+                    .insert(entry_hash);
             }
             MergeSidecarDeferralDisposition::Available
             | MergeSidecarDeferralDisposition::Rejected(_) => {
-                self.recovered_apply_sidecar_waits.remove(&entry_hash);
+                self.lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash);
             }
         }
         Ok(disposition)
@@ -11909,8 +11912,11 @@ impl V2LaneWorkAdapter {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
                     .or_insert(error.clone());
-                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-                    self.rejected_recovered_apply_sidecars
+                if self
+                    .lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash)
+                {
+                    self.rejected_lifecycle_decision_apply_sidecars
                         .entry(entry_hash)
                         .or_insert(error);
                 }
@@ -11932,8 +11938,11 @@ impl V2LaneWorkAdapter {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
                     .or_insert_with(|| reason.clone());
-                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
-                    self.rejected_recovered_apply_sidecars
+                if self
+                    .lifecycle_decision_apply_sidecar_waits
+                    .remove(&entry_hash)
+                {
+                    self.rejected_lifecycle_decision_apply_sidecars
                         .entry(entry_hash)
                         .or_insert(reason);
                 }
@@ -17209,7 +17218,7 @@ pub(super) mod tests {
         },
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Level, Registrable,
         account::{AccountDetails, AccountId, AccountValue},
@@ -17728,7 +17737,7 @@ pub(super) mod tests {
         };
         let mut parent = None;
         for block_height in 1..height {
-            let block = ValidBlock::new_dummy_and_modify_header(
+            let valid = ValidBlock::new_dummy_and_modify_header(
                 keys[0].private_key(),
                 |header: &mut BlockHeader| {
                     header.set_height(
@@ -17737,9 +17746,9 @@ pub(super) mod tests {
                     header.set_prev_block_hash(parent);
                     header.merkle_root = None;
                 },
-            )
-            .commit_unchecked()
-            .unpack(|_| {});
+            );
+            let block =
+                commit_result_bearing_lane_parent(valid, state.as_ref(), keys[0].private_key());
             parent = Some(block.as_ref().hash());
             if persist_parent_chain {
                 kura.store_block(block.clone())
@@ -25632,383 +25641,7 @@ pub(super) mod tests {
         );
         assert_eq!(bytes, canonical_wire[..bytes.len()]);
     }
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_exact_body() {
-        let (adapter, keys, canonical_block, finality) =
-            canonical_executed_block_recovery_fixture();
-        let height = NonZeroUsize::new(
-            usize::try_from(canonical_block.header().height().get())
-                .expect("canonical fixture height fits usize"),
-        )
-        .expect("non-zero canonical fixture height");
-        let need = canonical_executed_block_need(&canonical_block, &finality);
-        let requester = keys
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
-            .find(|peer| peer != &adapter.local_peer)
-            .expect("fixture has a remote finality signer");
-        let responder = finality
-            .commit_qc
-            .signers
-            .iter()
-            .filter_map(|index| {
-                usize::try_from(*index)
-                    .ok()
-                    .and_then(|index| finality.height_context.roster.get(index))
-                    .map(|entry| entry.validator.clone())
-            })
-            .find(|peer| peer != &requester)
-            .expect("fixture has a first deterministic remote responder");
-        let request = canonical_executed_block_request(requester.clone(), need, 0);
-        let response = build_canonical_executed_block_response(
-            &adapter.context,
-            adapter.state.as_ref(),
-            adapter.kura.as_ref(),
-            adapter.limits,
-            &responder,
-            &request,
-            &requester,
-        )
-        .expect("exact CommitQC signer serves canonical body before pruning");
-        evict_canonical_executed_block_fixture(&adapter, &keys, &canonical_block);
-        let context = adapter.context.clone();
-        let state = Arc::clone(&adapter.state);
-        let kura = Arc::clone(&adapter.kura);
-        let limits = adapter.limits;
-        drop(adapter);
-        assert!(kura.get_block_without_merge_sidecar(height).is_none());
-        let output_guard = ConsensusOutputGuard::isolated();
-        let mut recovery = CanonicalExecutedBlockRecovery::new(
-            context,
-            requester,
-            Arc::clone(&state),
-            Arc::clone(&kura),
-            Arc::clone(&output_guard),
-            limits,
-            vec![need],
-        )
-        .expect("install exact canonical executed-block recovery need");
-        let attempt_limit = limits
-            .historical_recovery_stuck_attempts
-            .get()
-            .saturating_mul(limits.historical_recovery_max_retry_tier.get());
-        for _ in 0..attempt_limit {
-            recovery
-                .record_front_attempt()
-                .expect("attempt remains inside the configured recovery bound");
-        }
-        assert!(
-            recovery.record_front_attempt().is_err(),
-            "an unresponsive signer set must not permit unbounded startup recovery attempts"
-        );
-        assert!(recovery.has_pending());
-        assert!(!output_guard.restart_required());
-        recovery.front_attempts = 0;
-        assert!(
-            recovery.service_next().expect("emit first signer request"),
-            "a missing body queues its first exact request"
-        );
-        let retained_request_hash = recovery
-            .outstanding
-            .as_ref()
-            .expect("the first queued request is outstanding")
-            .request_hash;
-        let retained_responder = recovery
-            .assembly_responder
-            .as_ref()
-            .expect("the first queued request pins one responder")
-            .clone();
-        for _ in 0..attempt_limit.saturating_add(1) {
-            let retained = recovery
-                .drain_effects(1)
-                .pop()
-                .expect("source-retained request remains queued");
-            assert!(recovery.requeue_effect(retained));
-            assert!(
-                !recovery
-                    .service_next()
-                    .expect("local backpressure does not consume a retry"),
-                "an undispatched request must not mint a retry"
-            );
-            assert_eq!(recovery.effect_count(), 1);
-            assert_eq!(recovery.front_attempts, 1);
-            assert_eq!(recovery.whole_wire_restarts, 0);
-        }
-        let outstanding = recovery
-            .outstanding
-            .as_ref()
-            .expect("source retention preserves the outstanding request");
-        assert_eq!(outstanding.request_hash, retained_request_hash);
-        let pinned_responder = recovery
-            .assembly_responder
-            .as_ref()
-            .expect("source retention preserves the pinned responder");
-        assert_eq!(pinned_responder.peer, retained_responder.peer);
-        assert_eq!(pinned_responder.index, retained_responder.index);
-        assert_eq!(pinned_responder.count, retained_responder.count);
-        let first = recovery
-            .drain_effects(1)
-            .pop()
-            .expect("first CommitQC signer request");
-        recovery
-            .service_next()
-            .expect("retry the pinned signer request");
-        let second = recovery
-            .drain_effects(1)
-            .pop()
-            .expect("second CommitQC signer request");
-        let (
-            V2LaneWorkEffect::PostLaneBlock {
-                peer: first_peer,
-                message: first_message,
-            },
-            V2LaneWorkEffect::PostLaneBlock {
-                peer: second_peer,
-                message: second_message,
-            },
-        ) = (first, second)
-        else {
-            panic!("recovery retries must use lane transport");
-        };
-        assert_eq!(
-            first_peer, second_peer,
-            "the first retry remains pinned to one exact remote QC signer"
-        );
-        assert_eq!(
-            first_message.encode(),
-            second_message.encode(),
-            "a pinned-signer retry preserves exact request bytes"
-        );
-        assert_eq!(
-            first_message.encode(),
-            BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone())).encode()
-        );
-        let admit = |response: LaneHistoricalRecoveryResponseV1, sender: PeerId| {
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response)),
-                sender,
-            ))
-        };
-        let outsider = PeerId::new(
-            KeyPair::try_from_seed(vec![0xE2; 32], Algorithm::BlsNormal)
-                .expect("derive recovery outsider")
-                .public_key()
-                .clone(),
-        );
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(response.clone(), outsider))
-                .expect("reject non-QC response without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut wrong_request_hash = response.clone();
-        wrong_request_hash.request_hash =
-            HashOf::from_untyped_unchecked(Hash::new(b"wrong canonical executed-block request"));
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(wrong_request_hash, responder.clone()))
-                .expect("reject wrong request hash without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut wrong_finality = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk {
-            finality_artifact, ..
-        } = &mut wrong_finality.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        finality_artifact.block_hash =
-            HashOf::from_untyped_unchecked(Hash::new(b"wrong canonical finality block"));
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(wrong_finality, responder.clone()))
-                .expect("reject finality drift without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut reordered = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { chunk_index, .. } =
-            &mut reordered.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        *chunk_index = 1;
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(reordered, responder.clone()))
-                .expect("reject reordered chunk without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut wrong_len = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { wire_len, .. } =
-            &mut wrong_len.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        *wire_len = wire_len.saturating_add(1);
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(wrong_len, responder.clone()))
-                .expect("reject wire-length drift without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut wrong_count = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { chunk_count, .. } =
-            &mut wrong_count.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        *chunk_count = chunk_count.saturating_add(1);
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(wrong_count, responder.clone()))
-                .expect("reject chunk-count drift without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut oversized = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { wire_len, .. } =
-            &mut oversized.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        *wire_len = STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1);
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(oversized, responder.clone()))
-                .expect("reject oversized wire without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut oversized_chunk = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { bytes, .. } =
-            &mut oversized_chunk.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        bytes.push(0);
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(oversized_chunk, responder.clone()))
-                .expect("reject oversized chunk without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let mut wrong_body = response.clone();
-        let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { bytes, .. } =
-            &mut wrong_body.payload
-        else {
-            panic!("fixture response is a canonical chunk");
-        };
-        bytes[0] ^= 1;
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(wrong_body, responder.clone()))
-                .expect("reject body-hash drift without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        assert!(recovery.has_pending());
-        assert!(!output_guard.restart_required());
-        assert!(kura.get_block_without_merge_sidecar(height).is_none());
-        recovery
-            .service_next()
-            .expect("restart at chunk zero after a poisoned complete assembly");
-        let retry = recovery
-            .drain_effects(1)
-            .pop()
-            .expect("emit a fresh exact request after body-hash drift");
-        let V2LaneWorkEffect::PostLaneBlock {
-            peer: retry_peer,
-            message,
-        } = retry
-        else {
-            panic!("restarted recovery must use lane transport");
-        };
-        assert_ne!(
-            retry_peer, responder,
-            "a malformed pinned-signer response advances to the next exact signer"
-        );
-        assert_eq!(
-            message.encode(),
-            BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone())).encode(),
-            "a poisoned assembly restarts from the exact first chunk"
-        );
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(response.clone(), retry_peer.clone()))
-                .expect("accept exact canonical executed block"),
-            V2LaneIngressOutcome::Inserted
-        );
-        assert!(!recovery.has_pending());
-        assert!(
-            !recovery
-                .service_next()
-                .expect("completed recovery has no successor request"),
-            "completed recovery cannot consume a retry deadline"
-        );
-        assert!(!output_guard.restart_required());
-        let cached = kura
-            .get_block_without_merge_sidecar(height)
-            .expect("exact canonical body is restored to the Kura cache");
-        assert_eq!(cached.hash(), canonical_block.hash());
-        assert_eq!(
-            cached
-                .encode_wire()
-                .expect("encode restored canonical body"),
-            canonical_block
-                .encode_wire()
-                .expect("encode original canonical body")
-        );
-        assert_eq!(
-            kura.v2_finality_artifact(canonical_block.header().height().get())
-                .expect("read finality after body cache"),
-            Some(finality),
-            "body recovery must not rewrite finality"
-        );
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(admit(response, retry_peer))
-                .expect("reject duplicate after recovery without local failure"),
-            V2LaneIngressOutcome::Rejected
-        );
-        let effect_capacity = recovery.limits.effect_capacity.get();
-        for _ in 0..effect_capacity {
-            recovery.effects.push_back(V2LaneWorkEffect::PostLaneBlock {
-                peer: request.requester.clone(),
-                message: BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone())),
-            });
-        }
-        let mut invalid_saturated_request = request.clone();
-        invalid_saturated_request.version = 0;
-        let invalid_sender = invalid_saturated_request.requester.clone();
-        let invalid_saturated_request =
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneHistoricalRecoveryRequest(Box::new(invalid_saturated_request)),
-                invalid_sender,
-            ));
-        assert_eq!(
-            recovery
-                .accept_with_ingress_ownership(invalid_saturated_request)
-                .expect("a saturated response queue rejects work before rebuilding a body"),
-            V2LaneIngressOutcome::Duplicate
-        );
-        assert_eq!(recovery.effect_count(), effect_capacity);
-        recovery.effects.clear();
-        let guarded_request_sender = request.requester.clone();
-        let guarded_request =
-            fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
-                guarded_request_sender,
-            ));
-        output_guard.close_admission_for_restart();
-        let effects_before = recovery.effect_count();
-        assert!(matches!(
-            recovery.accept_with_ingress_ownership(guarded_request),
-            Err(V2LaneWorkError::RestartRequired)
-        ));
-        assert_eq!(
-            recovery.effect_count(),
-            effects_before,
-            "a closed fail-stop guard cannot enqueue canonical recovery output"
-        );
-    }
+    include!("v2_lane_work/canonical_executed_block_recovery_drift_test.rs");
     #[test]
     #[allow(clippy::too_many_lines)]
     fn canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer() {

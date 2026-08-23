@@ -1433,7 +1433,7 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header);
-    let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+    let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
@@ -1460,8 +1460,9 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
     store_block(&app, block);
-    let bogus_hash =
-        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x76; Hash::LENGTH]));
+    let bogus_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
+        [0x76; Hash::LENGTH],
+    ));
     let height = NonZeroUsize::new(
         usize::try_from(header.height().get()).expect("committed height fits usize"),
     )
@@ -1503,7 +1504,7 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let block_hash = store_block(&app, sample.block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
-    let tx_hashes: HashSet<_> = [sample.tx_hash].into_iter().collect();
+    let tx_hashes: HashSet<_> = [sample.entrypoint_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
     let resp = pipeline_status_response(app.clone(), sample.tx_hash.to_string(), None, "ok").await;
@@ -1806,6 +1807,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let header = block.header();
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
+    let tx_entry_hash = tx.hash_as_entrypoint();
     store_block(&app, block);
     app.pipeline_status_cache.record_entry(
         tx_hash,
@@ -1815,7 +1817,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header);
-    let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+    let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
@@ -1842,6 +1844,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let header = block.header();
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
+    let tx_entry_hash = tx.hash_as_entrypoint();
     store_block(&app, block);
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
@@ -1856,7 +1859,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header);
-    let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+    let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
     let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;

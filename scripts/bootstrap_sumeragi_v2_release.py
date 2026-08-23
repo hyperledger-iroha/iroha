@@ -47,6 +47,9 @@ from typing import Any, Iterable
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
+_FORMAL_REPLAY_PRINCIPAL_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.@+-]{0,127}"
+)
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SAFE_PATH_RE = re.compile(r"/[A-Za-z0-9_./+:-]+")
 _RUNNER_ENV_RE = re.compile(r"[A-Z][A-Z0-9_]*")
@@ -157,16 +160,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "a149f3b8b376d8e75052c520b081b48069ba2338e13642bdae1192524a8cc2a8"
+        "3fcd0a6dabf5a9aa5380225bdaf66db4678f9144ec349a024d573e307a1571b2"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
-        "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
+        "9411977ab12ce893cb747d2f1be149972e601924a46a5f9e8c0e3ddaab6469c4"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "0654dc5ac1f8235bc66df852947003054d4d17658703ffe72a38be3be352441b"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "06ab9c0a97432134b102b8533032afd8915d4ee300d8102352d955c622fc5658"
+        "0f8c776e7ba182a8abe9aeb8c630d9946736389b7279d31939a20a7b7f8b7f16"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -174,7 +177,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "5bed5c9b26be1c3ccd74142be5516e62c2185a5a96b9c636d4cb322e1b35971c"
+        "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -206,6 +209,10 @@ _RUNNER_ENV_ALLOWLIST = {
     "CARGO_NET_OFFLINE",
     "IROHA_RELEASE_APALACHE_BIN",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+    "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
@@ -293,6 +300,7 @@ _TERMINAL_EVIDENCE_KEYS = {
     "formal_toolchain",
     "formal_tlaps_resource_jsonl",
     "formal_tlaps_resource_summary",
+    "formal_replay_release",
     "seed_matrix_completion",
     "seed_matrix_summary",
     "seed_matrix_run_logs",
@@ -417,6 +425,10 @@ _VALIDATOR_OPTION_ORDER = (
     "--expected-signer-fingerprint",
     "--corridor-completion",
     "--formal-completion",
+    "--formal-replay-source-receipt",
+    "--formal-replay-release-root",
+    "--expected-formal-replay-signature-sha256",
+    "--formal-replay-principal",
     "--seed-completion",
     "--chaos-completion",
     "--g4p-completion",
@@ -460,6 +472,8 @@ _VALIDATOR_PATH_OPTIONS = frozenset(
         "--signature-ssh-keygen",
         "--corridor-completion",
         "--formal-completion",
+        "--formal-replay-source-receipt",
+        "--formal-replay-release-root",
         "--seed-completion",
         "--chaos-completion",
         "--g4p-completion",
@@ -763,6 +777,14 @@ def _terminal_validator_invocation_values(
         scaling_manifest_path, str
     ):
         raise BootstrapError("terminal receipt scaling manifest path is not exact")
+    formal_replay = receipt_evidence.get("formal_replay_release")
+    if (
+        not isinstance(formal_replay, dict)
+        or not isinstance(formal_replay.get("principal"), str)
+        or not isinstance(formal_replay.get("signature"), dict)
+        or not isinstance(formal_replay["signature"].get("sha256"), str)
+    ):
+        raise BootstrapError("terminal receipt formal replay release is malformed")
     source = release_runner / "source"
     return {
         "--candidate-identity": (
@@ -829,6 +851,17 @@ def _terminal_validator_invocation_values(
         "--expected-signer-fingerprint": ("text", trust["signer_fingerprint"]),
         "--corridor-completion": ("path", artifact_path("corridor_completion")),
         "--formal-completion": ("path", artifact_path("formal_completion")),
+        "--formal-replay-source-receipt": (
+            "path", artifact_path("formal_replay_release", "source_receipt")
+        ),
+        "--formal-replay-release-root": (
+            "path",
+            str(Path(artifact_path("formal_replay_release", "receipt")).parent),
+        ),
+        "--expected-formal-replay-signature-sha256": (
+            "text", formal_replay["signature"]["sha256"]
+        ),
+        "--formal-replay-principal": ("text", formal_replay["principal"]),
         "--seed-completion": ("path", artifact_path("seed_matrix_completion")),
         "--chaos-completion": ("path", artifact_path("chaos_completion")),
         "--g4p-completion": (
@@ -3097,6 +3130,54 @@ def bootstrap(args: argparse.Namespace) -> int:
         protected["runner_tool_manifest"], candidate
     )
     runner_extra_environment = _parse_runner_environment(args.runner_environment)
+    formal_replay_environment_names = {
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
+    }
+    if not formal_replay_environment_names.issubset(runner_extra_environment):
+        raise BootstrapError(
+            "production bootstrap requires one externally signed formal replay bundle"
+        )
+    formal_replay_source = _absolute_resolved_existing(
+        Path(
+            runner_extra_environment[
+                "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"
+            ]
+        ),
+        "formal replay source receipt",
+    )
+    formal_replay_release_root = _absolute_resolved_existing(
+        Path(
+            runner_extra_environment[
+                "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"
+            ]
+        ),
+        "formal replay release root",
+    )
+    if (
+        formal_replay_source.name != "receipt.json"
+        or not formal_replay_source.is_file()
+        or formal_replay_source.is_symlink()
+        or not formal_replay_release_root.is_dir()
+        or formal_replay_release_root.is_symlink()
+        or _DIGEST_RE.fullmatch(
+            runner_extra_environment[
+                "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256"
+            ]
+        )
+        is None
+        or _FORMAL_REPLAY_PRINCIPAL_RE.fullmatch(
+            runner_extra_environment[
+                "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL"
+            ]
+        )
+        is None
+    ):
+        raise BootstrapError(
+            "formal replay signing inputs are not canonical V1 release inputs"
+        )
     cancellation_request_path = _cancellation_control_path(
         runner_extra_environment, candidate
     )

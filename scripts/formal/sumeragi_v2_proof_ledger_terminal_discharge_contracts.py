@@ -2,10 +2,10 @@
 
 REPLAY_TRACE_SOURCE_SHA256 = {
     "Cargo.lock": (
-        "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+        "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
     ),
     "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
-        "c8d716f4dfdfd92618fc68967348b04260904d2afd581682a5a1be48386c3328"
+        "74c07afb81ce6e5552df12d856ee4d73940bca909e12eff869b959af64f2368d"
     ),
     "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.cfg": (
         "7b6456cd6f91dd399babf2414d637e730c94e02e218734057ffd1be88bda5546"
@@ -14,31 +14,40 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748"
     ),
     "scripts/normalize_sumeragi_v2_tlc_trace.py": (
-        "1297889b3c732e85610f640eb0c960ab3910d3c7060e105fc3610cc91001f96e"
+        "58dc8da60d062ce89bc220d6d16e87080d14fc11e596c0a58a8dd687abd5de2c"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "a27cbaabe654dac48230eafae9a7bfa5cb38fe6926e954a6fe1dcbd9ba3bd659"
+        "07248cd6c7c5db53b8b9cfff98ddae6a823c5022e4f2d45494835707430f60f2"
     ),
     "scripts/formal/collect_sumeragi_v2_replay_receipt.py": (
-        "374644faf49271b454d6323eb40a3c8b205bd6f0a14af3874e948a2be7e46788"
+        "245e6b6ac906533eb0c2e5c0a879f9fb53ad45e4ff24e6853c3b0b8a7d307ea1"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
         "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
     ),
     "scripts/formal/check_sumeragi_v2_replay_receipt.py": (
-        "94f2e2080d3a83349c7df002785ba245f42aea175212d91f2d8c06725ce18f83"
+        "0f773cfe797f0a3b05865caec82d7db2fcc2c3d0409293899c6795f1b8134108"
     ),
     "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json": (
-        "a2855ca8a62f5e223fd8b2a5824b36b126ec1cfd565cee8f9bafe190387f369f"
+        "58538f42d9c87bad8da8dd5cee31178c59af63dc4aa4fff6ce9356de5ef4c7f8"
     ),
     "scripts/formal/sumeragi_v2_replay_receipt_test.py": (
-        "e6b2b153185783abd3227f45432b5b1e473f7847ed5ee27664fac9dadc23e4a8"
+        "244bc010d9248cee22f2a4ec20f3071b9f3ae536fd7c31d1edcd84f4ed5b2ac2"
     ),
     "scripts/formal/sumeragi_v2_tlc_result_contract.sh": (
         "f74b5f668830daf9f434fb8ad3234cac13ffafd44a3e8341841d616a27ec03ea"
     ),
     "scripts/formal/resolve_java.sh": (
         "ba15e07db976919babff8970495479fb4c9d37dbee703b1590ca45946b87eb1e"
+    ),
+    "scripts/formal/sumeragi_v2_replay_signing.py": (
+        "68e98a5730720d867cccd53415f7d45079109c47376a007d12ef06e72592754c"
+    ),
+    "scripts/formal/finalize_sumeragi_v2_replay_receipt.py": (
+        "1589753df8b567b4df22dcfc820416b96f83356d19a96c58cc0d3dae631d007e"
+    ),
+    "scripts/formal/verify_sumeragi_v2_replay_release.py": (
+        "a2c156fb32a4a510a3688befa5d8e8db01707f5985dd3789e14909223eb933c9"
     ),
 }
 
@@ -162,7 +171,10 @@ def _replay_trace_source_fidelity_errors(
     witness_relative = "formal/sumeragi_v2/SumeragiV2TraceWitness.tla"
     for fragment, description in (
         ("---- MODULE SumeragiV2TraceWitness ----\n", "the witness module header"),
-        ("EXTENDS SumeragiV2\n", "the production-model extension"),
+        (
+            "EXTENDS SumeragiV2Inductive\n",
+            "the canonical inductive-model extension",
+        ),
         (
             "WitnessSpec ==\n"
             "  WitnessInit /\\ [][WitnessNextV2]_WitnessVars "
@@ -302,9 +314,9 @@ def _replay_trace_source_fidelity_errors(
             "the exact process-level replay result check",
         ),
         (
-            'if ! "$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
+            '"$RESOLVED_PYTHON" -B -I -S "$CHECKER" '
             '"${checker_args[@]}" \\\n',
-            "the independent receipt-checker invocation",
+            "the independent fail-closed signing-request check",
         ),
         (
             "wrapper_complete=1\n",
@@ -337,7 +349,6 @@ def _replay_trace_source_fidelity_errors(
             ("tlc2.TLC", "direct TLC launch"),
             ("run_sumeragi_v2_harness.sh", "unexecuted reducer dispatch"),
             ("--integrated", "retired integrated mode"),
-            ("--require-release", "unsupported release-evidence mode"),
             ("ln -s", "runtime compatibility symlink"),
             ("rm -rf", "unbound recursive cleanup"),
         ):
@@ -358,8 +369,13 @@ def _replay_trace_source_fidelity_errors(
         ("term_sent, kill_sent = _terminate_group(process.pid, process)\n", "the timeout process-group cleanup"),
         ('if _read_event_output(events_directory, event, "stderr"):\n', "the empty separate-stderr gate"),
         ('raise CollectionError("normalized replay TSV differs byte-for-byte from the fixture")\n', "the byte-exact normalized fixture gate"),
-        ('"status": "unsigned-diagnostic",\n', "the non-release signing status"),
-        ('"release_evidence": False,\n', "the non-release evidence marker"),
+        (
+            "from sumeragi_v2_replay_signing import SIGNING_CONTRACT\n",
+            "the canonical detached-SSH signing contract import",
+        ),
+        ("signing = dict(SIGNING_CONTRACT)\n", "the sole V1 signing contract"),
+        ('"evidence_class": "release-receipt",\n', "the release receipt class"),
+        ('"execution_validated": True,\n', "the exact execution result marker"),
         ('"schema_version": 1,\n', "the sole V1 schema version"),
         ('"unexpected_files_allowed": False,\n', "the closed artifact inventory"),
     ):
@@ -368,7 +384,6 @@ def _replay_trace_source_fidelity_errors(
     if collector_source is not None:
         for forbidden, description in (
             ('"integrated"', "retired integrated mode"),
-            ('"release"', "nominal release mode"),
             ("run_sumeragi_v2_harness.sh", "unexecuted reducer dispatch"),
         ):
             if forbidden in collector_source:
@@ -380,16 +395,68 @@ def _replay_trace_source_fidelity_errors(
     checker_relative = "scripts/formal/check_sumeragi_v2_replay_receipt.py"
     for fragment, description in (
         ('if receipt["mode"] != "formal-only":\n', "the formal-only mode gate"),
-        ('if receipt["evidence_class"] != "diagnostic":\n', "the diagnostic evidence gate"),
+        (
+            'if receipt["evidence_class"] != "release-receipt":\n',
+            "the release receipt class gate",
+        ),
         ('expected_graph = _source_event_graph(collector, receipt["mode"])\n', "the source-derived event graph"),
         ('if observed_directories != {".", "events"}:\n', "the exact directory inventory"),
         ('if observed_files != expected_files:\n', "the exact file inventory"),
-        ('if receipt["signing"] != expected:\n', "the exact signing record"),
-        ('if require_release:\n', "the release-evidence fail-closed branch"),
-        ('"diagnostic data is not release evidence"\n', "the release rejection diagnostic"),
+        ('_validate_signing_contract(receipt)\n', "the exact signing record"),
+        (
+            'verify_external_signature(snapshot, signature_inputs)\n',
+            "the detached SSHSIG release gate",
+        ),
+        (
+            'snapshot = read_signing_snapshot(\n',
+            "the receipt snapshot captured before structural validation",
+        ),
+        (
+            'require_unchanged(\n        snapshot,\n        "canonical receipt",\n',
+            "the structure-to-signature pathname stability gate",
+        ),
+        (
+            'if snapshot.data != canonical_json(receipt):\n',
+            "the checked-structure to signed-bytes equality gate",
+        ),
+        (
+            'parser.add_argument("--signature", type=Path)\n',
+            "the detached release signature input",
+        ),
+        (
+            'raise ReceiptError("release verification requires every detached SSHSIG input")\n',
+            "the fail-closed signing-request blocker",
+        ),
         ('if result != expected_result:\n', "the exact final result contract"),
     ):
         require_once(checker_relative, fragment, description)
+    checker_source = sources.get(checker_relative)
+    if checker_source is not None:
+        release_markers = (
+            'snapshot = read_signing_snapshot(\n',
+            'receipt = _check_structure(receipt_path)\n',
+            'require_unchanged(\n        snapshot,\n        "canonical receipt",\n',
+            'if snapshot.data != canonical_json(receipt):\n',
+            'verify_external_signature(snapshot, signature_inputs)\n',
+        )
+        release_positions = tuple(
+            checker_source.find(marker) for marker in release_markers
+        )
+        if -1 in release_positions or release_positions != tuple(
+            sorted(release_positions)
+        ):
+            errors.append(
+                f"{repo_root / checker_relative}: release checker must snapshot, "
+                "structurally validate, bind exact bytes, and verify SSHSIG in order"
+            )
+        for forbidden, description in (
+            ("add_mutually_exclusive_group", "a compatibility mode selector"),
+        ):
+            if forbidden in checker_source:
+                errors.append(
+                    f"{repo_root / checker_relative}: release checker must not "
+                    f"retain {description}"
+                )
 
     schema_relative = "scripts/formal/sumeragi_v2_replay_receipt_v1.schema.json"
     schema_source = sources.get(schema_relative)
@@ -402,7 +469,7 @@ def _replay_trace_source_fidelity_errors(
             properties = schema.get("properties", {})
             exact_constants = {
                 "schema_version": 1,
-                "evidence_class": "diagnostic",
+                "evidence_class": "release-receipt",
                 "mode": "formal-only",
             }
             for field, expected in exact_constants.items():
@@ -413,6 +480,7 @@ def _replay_trace_source_fidelity_errors(
                     )
             result_properties = properties.get("result", {}).get("properties", {})
             for field, expected in (
+                ("execution_validated", True),
                 ("sany_status", 0),
                 ("tlc_status", 12),
                 ("normalizer_status", 0),
@@ -426,6 +494,73 @@ def _replay_trace_source_fidelity_errors(
                         f"{repo_root / schema_relative}: receipt result {field} "
                         f"must be the exact V1 constant {expected!r}"
                     )
+            signing_properties = properties.get("signing", {}).get(
+                "properties", {}
+            )
+            for field, expected in (
+                ("scheme", "detached-ssh"),
+                ("provider", "openssh-sshsig"),
+                ("namespace", "iroha-sumeragi-v2-replay-receipt-v1"),
+                ("payload", "receipt.json"),
+                ("artifact", "receipt.json.sig"),
+            ):
+                if signing_properties.get(field) != {"const": expected}:
+                    errors.append(
+                        f"{repo_root / schema_relative}: receipt signing {field} "
+                        f"must be the exact V1 constant {expected!r}"
+                    )
+
+    signing_relative = "scripts/formal/sumeragi_v2_replay_signing.py"
+    for fragment, description in (
+        (
+            'SSHSIG_NAMESPACE = "iroha-sumeragi-v2-replay-receipt-v1"\n',
+            "the sole V1 SSHSIG namespace",
+        ),
+        ('"scheme": SIGNATURE_FORMAT,\n', "the detached-SSH scheme"),
+        ('"active_signers": 1,\n', "the one-entry signer policy"),
+        ("start_new_session=True,\n", "the verifier process-group boundary"),
+        (
+            "def verify_exact_signature_bytes(\n",
+            "the exact staged-byte verifier",
+        ),
+    ):
+        require_once(signing_relative, fragment, description)
+
+    finalizer_relative = "scripts/formal/finalize_sumeragi_v2_replay_receipt.py"
+    for fragment, description in (
+        (
+            '("receipt.json", receipt.data, 0o400),\n',
+            "the immutable archived receipt mode",
+        ),
+        (
+            "archived_verification = verify_exact_signature_bytes(\n",
+            "the archived-byte signature replay",
+        ),
+        (
+            '_write_create_only(\n            output, ATTESTATION_NAME, '
+            "attestation_bytes, 0o400\n        )\n",
+            "the create-only attestation-last publication",
+        ),
+    ):
+        require_once(finalizer_relative, fragment, description)
+
+    verifier_relative = "scripts/formal/verify_sumeragi_v2_replay_release.py"
+    for fragment, description in (
+        ('"receipt.json": 0o400,\n', "the immutable finalized receipt mode"),
+        (
+            "receipt_checker._check_structure(source_receipt.path)\n",
+            "the independent source receipt replay",
+        ),
+        (
+            "verification = verify_exact_signature_bytes(\n",
+            "the exact archived-byte signature replay",
+        ),
+        (
+            "if len(names) != len(set(names)) or set(names) != set(FILE_MODES):\n",
+            "the closed finalized bundle inventory",
+        ),
+    ):
+        require_once(verifier_relative, fragment, description)
 
     return errors
 
@@ -466,7 +601,7 @@ def _exact_tla_call_statement_tokens(
 
 _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "4b7901bcc00d72b997f7ff08050a3730ca6f372ea70a03d21f175aeea7d4a0a8"
+        "971a8bd4cfd654e03fb7bee206b7bdaa9acb1bb449391d9c3218e7b4b13d556e"
     ),
     "SumeragiV2Proofs.tla": (
         "5089eb6e4f98c97f12b0eb13152ec52e2d9134c09da8df78ecfaf1f168739b16"
@@ -3482,7 +3617,7 @@ _EXACT_CERTIFICATE_THEOREM_SHA256: dict[tuple[str, str], str] = {
 
 _EXACT_CERTIFICATE_PROOF_FILE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "4b7901bcc00d72b997f7ff08050a3730ca6f372ea70a03d21f175aeea7d4a0a8"
+        "971a8bd4cfd654e03fb7bee206b7bdaa9acb1bb449391d9c3218e7b4b13d556e"
     ),
 }
 

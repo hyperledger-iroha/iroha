@@ -1480,6 +1480,7 @@
       "IrohaSwift/Sources/IrohaSwift/NoritoJSON.swift",
       "IrohaSwift/Sources/IrohaSwift/NoritoRpcClient.swift",
       "IrohaSwift/Sources/IrohaSwift/NumericV1.swift",
+      "IrohaSwift/Sources/IrohaSwift/OfflineCashDeviceLifecycleBridgeV1.swift",
       "IrohaSwift/Sources/IrohaSwift/OfflineDeviceAttestation.swift",
       "IrohaSwift/Sources/IrohaSwift/PendingTransactionQueue.swift",
       "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",

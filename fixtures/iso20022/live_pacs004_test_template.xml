@@ -1,0 +1,25 @@
+<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:{msg_def_id}">
+    <PmtRtr>
+      <GrpHdr>
+        <MsgId>{business_message_id}-grp</MsgId>
+        <CreDtTm>2025-01-01T12:02:00Z</CreDtTm>
+      </GrpHdr>
+      <OrgnlGrpInf>
+        <OrgnlMsgId>{business_message_id}-orig</OrgnlMsgId>
+      </OrgnlGrpInf>
+      <TxInf>
+        <OrgnlInstrId>{business_message_id}-instr</OrgnlInstrId>
+        <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
+        <ChrgBr>SHAR</ChrgBr>
+        <RtrRsnInf><Rsn><Cd>AC01</Cd></Rsn></RtrRsnInf>
+      </TxInf>
+    </PmtRtr>
+  </Document>
+</DataPDU>

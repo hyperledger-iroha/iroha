@@ -1,5 +1,625 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _lifecycle_decision_apply_lineage_source_fidelity_errors(
+    repo_root: Path,
+) -> list[str]:
+    """Bind both concrete Apply lineages to one neutral worker/terminal corridor."""
+
+    errors: list[str] = []
+
+    def load(relative: str) -> tuple[Path, str]:
+        return _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "lineage-aware lifecycle Decision Apply source",
+        )
+
+    def require_order(
+        path: Path,
+        item: RustItem | None,
+        markers: tuple[str, ...],
+        description: str,
+    ) -> None:
+        if item is None:
+            return
+        tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for marker in markers:
+            marker_tokens = rust_code_tokens(marker)
+            positions = tuple(
+                index
+                for index in range(cursor, len(tokens) - len(marker_tokens) + 1)
+                if tokens[index : index + len(marker_tokens)] == marker_tokens
+            )
+            if not positions:
+                errors.append(
+                    f"{path}:{item.line}: {description} must contain ordered "
+                    f"{marker!r}"
+                )
+                return
+            cursor = positions[0] + len(marker_tokens)
+
+    def reject_aliases(
+        path: Path,
+        source: str,
+        aliases: tuple[str, ...],
+        description: str,
+    ) -> None:
+        tokens = rust_code_tokens(source)
+        observed = tuple(
+            alias
+            for alias in aliases
+            if _token_sequence_count(tokens, rust_code_tokens(alias)) != 0
+        )
+        if observed:
+            errors.append(
+                f"{path}: {description} retains retired recovered-only aliases "
+                f"{observed}"
+            )
+
+    registry_path, registry_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
+    )
+    registry_impl_path, registry_impl_source = load(
+        "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+    )
+    scheduler_path, scheduler_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"
+    )
+    schema_path, schema_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"
+    )
+    adapter_path, adapter_source = load(
+        "crates/iroha_core/src/sumeragi/v2.rs"
+    )
+    worker_path, worker_source = load(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    )
+    worker_services_path, worker_services_source = load(
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"
+    )
+    launch_path, launch_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    )
+    lane_path, lane_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    )
+
+    _require_rust_source_token_sequence(
+        registry_path,
+        registry_source,
+        """
+pub(in crate::sumeragi) enum LifecycleDecisionApplyLineageV1 {
+    Live,
+    Recovered,
+}
+""",
+        "lifecycle Decision Apply must retain a closed live/recovered lineage",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        registry_path,
+        registry_source,
+        """
+pub(in crate::sumeragi) struct LifecycleDecisionApplyDispatchKeyV1 {
+    context: LifecycleDigest,
+    height: u64,
+    owner: OwnerId,
+    ordinal: u128,
+    slot: PhysicalSlotId,
+    digest: LifecycleDigest,
+    lineage: LifecycleDecisionApplyLineageV1,
+}
+""",
+        "lifecycle Decision Apply worker key must retain every carrier coordinate and lineage",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        registry_path,
+        registry_source,
+        "impl Drop for LifecycleDecisionApplyDispatchLinearity",
+        "lifecycle Decision Apply dispatch identity must remain move-only",
+        errors,
+    )
+
+    classifier = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "attest_ready_lifecycle_decision_apply",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        classifier,
+        """
+let (carrier_matches, lineage, dispatch_key) = match &work.kind {
+    ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) => (
+        apply.matches_current_ready_record(address, digest, coordinator),
+        LifecycleDecisionApplyLineageV1::Live,
+        apply.dispatch_key,
+    ),
+    ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) => (
+        apply.matches_current_ready_record(address, digest, coordinator),
+        LifecycleDecisionApplyLineageV1::Recovered,
+        apply.dispatch_key,
+    ),
+    _ => return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind),
+};
+if !carrier_matches || dispatch_key.is_some() {
+""",
+        "lineage-aware Apply classifier must distinguish both exact undispatched carriers",
+        errors,
+    )
+
+    live_reconciliation = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "prepare_ready_live_decision_apply_reconciliation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        live_reconciliation,
+        """
+let attestation = self.attest_ready_lifecycle_decision_apply(coordinator, ordinal)?;
+let dispatch_key = attestation.dispatch_key();
+if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
+    return Ok(None);
+}
+""",
+        "live Apply cleanup authority must derive from the exact neutral attestation and reject recovered substitution",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        live_reconciliation,
+        """
+let ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) = &work.kind else {
+    return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind);
+};
+""",
+        "live Apply cleanup authority must originate only from the live WAL carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        live_reconciliation,
+        "apply.project_reconciliation(dispatch_key)",
+        "live Apply cleanup must retain the exact carrier key",
+        errors,
+    )
+
+    dispatch = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "prepare_lifecycle_decision_apply_dispatch",
+        errors,
+    )
+    require_order(
+        registry_impl_path,
+        dispatch,
+        (
+            "ConcreteLifecycleWorkKind::DurableLiveWalApply(apply)",
+            "LifecycleDecisionApplyLineageV1::Live",
+            ".project_task(identity)",
+            "ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)",
+            "LifecycleDecisionApplyLineageV1::Recovered",
+            ".project_recovered_apply_task(identity, address)",
+            "PreparedLifecycleDecisionApplyDispatchV1",
+        ),
+        "lineage-aware Apply dispatch",
+    )
+
+    terminal_prepare = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "prepare_lifecycle_decision_apply_terminal_transition",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        terminal_prepare,
+        """
+ConcreteLifecycleWorkKind::DurableLiveWalApply(apply)
+    if apply.matches_claimed_record(address, digest, coordinator, lease)
+        && apply.dispatch_key == Some(dispatch_key)
+        && dispatch_key.matches(
+            coordinator.active_context,
+            address,
+            digest,
+            LifecycleDecisionApplyLineageV1::Live,
+        )
+""",
+        "terminal Apply rejoin must authenticate the exact live carrier and lineage",
+        errors,
+    )
+    _require_rust_token_sequence(
+        registry_impl_path,
+        terminal_prepare,
+        """
+ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
+    if apply.matches_claimed_record(address, digest, coordinator, lease)
+        && apply.dispatch_key == Some(dispatch_key)
+        && dispatch_key.matches(
+            coordinator.active_context,
+            address,
+            digest,
+            LifecycleDecisionApplyLineageV1::Recovered,
+        )
+""",
+        "terminal Apply rejoin must authenticate the exact recovered carrier and lineage",
+        errors,
+    )
+
+    terminal_publish = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "publish_lifecycle_decision_apply_terminal_transition",
+        errors,
+    )
+    require_order(
+        registry_impl_path,
+        terminal_publish,
+        (
+            "let carrier_matches = match (&work.kind, prepared.lineage)",
+            "ConcreteLifecycleWorkKind::DurableLiveWalApply(apply)",
+            "LifecycleDecisionApplyLineageV1::Live",
+            "ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)",
+            "LifecycleDecisionApplyLineageV1::Recovered",
+            "let exact_current =",
+            "let exact_staged =",
+            "if !exact_current || !exact_staged",
+            "match publish()",
+            ".remove(&prepared.address)",
+        ),
+        "lineage-specific Apply terminal publication",
+    )
+
+    scheduler_dispatch = _require_rust_item(
+        scheduler_path,
+        scheduler_source,
+        "dispatch_completion_with_runner_debt_and_required_ordinal",
+        errors,
+    )
+    require_order(
+        scheduler_path,
+        scheduler_dispatch,
+        (
+            "prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)",
+            "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
+            "let fence = executor.lifecycle_reducer_fence_observation()",
+            "attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)",
+            "services.capture_lifecycle_completion_capacity_census(probes)",
+            ".select_apply(ordinal)",
+            ".prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
+        ),
+        "live cleanup, complete Apply census, and neutral worker publication",
+    )
+    _require_rust_token_sequence(
+        scheduler_path,
+        scheduler_dispatch,
+        """
+if !reservation.preflight(&prepared) {
+    return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
+}
+reservation.commit(prepared);
+Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
+""",
+        "neutral Apply reservation must preflight before one-shot queue publication",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        scheduler_path,
+        scheduler_source,
+        "InvalidLifecycleDecisionApplyCarrier",
+        "scheduler Apply carrier failure must use the lifecycle-neutral class",
+        errors,
+        count=2,
+    )
+
+    schema_rows = tuple(
+        item
+        for item in rust_items(schema_source, "from_authenticated")
+        if _token_sequence_count(
+            rust_code_tokens(item.source),
+            rust_code_tokens("lifecycle_decision_apply_attestation"),
+        )
+    )
+    if len(schema_rows) != 1:
+        errors.append(
+            f"{schema_path}: require exactly one authenticated scheduler row "
+            f"with lifecycle-neutral Apply authority; found {len(schema_rows)}"
+        )
+    schema_row = schema_rows[0] if len(schema_rows) == 1 else None
+    _require_rust_token_sequence(
+        schema_path,
+        schema_row,
+        """
+LifecycleWorkClass::Apply => {
+    validate_attestation.is_none()
+        && recovered_sign_attestation.is_none()
+        && recovered_fetch_attestation.is_none()
+        && lifecycle_decision_apply_attestation
+            .as_ref()
+            .is_some_and(|attestation| attestation.matches_ready_record(record))
+}
+""",
+        "scheduler schema must bind Apply through the lifecycle-neutral attestation local",
+        errors,
+    )
+    schema_capacity_row = _require_rust_item(
+        schema_path,
+        schema_source,
+        "from_authenticated_with_physical_capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        schema_path,
+        schema_capacity_row,
+        """
+Self::from_authenticated(
+    factory,
+    record,
+    validate_attestation,
+    lifecycle_decision_apply_attestation,
+    recovered_sign_attestation,
+    recovered_fetch_attestation,
+    live_debts,
+)
+""",
+        "physical-capacity schema must preserve the lifecycle-neutral Apply attestation",
+        errors,
+    )
+
+    live_projection = _require_rust_item(
+        adapter_path,
+        adapter_source,
+        "project_live_decision_apply_completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        adapter_path,
+        live_projection,
+        """
+project_lifecycle_decision_apply_completion(
+    permit,
+    LifecycleDecisionApplyLineageV1::Live,
+    context,
+    address,
+    installed_digest,
+    effect,
+    validated_receipt,
+    completion,
+)
+""",
+        "live Apply completion projection must enter the shared worker corridor with live lineage",
+        errors,
+    )
+    shared_projection = _require_rust_item(
+        adapter_path,
+        adapter_source,
+        "project_lifecycle_decision_apply_completion",
+        errors,
+    )
+    _require_rust_token_sequence(
+        adapter_path,
+        shared_projection,
+        """
+if !key.matches_carrier(context, address, installed_digest, lineage)
+    || completion.subject() != *subject
+    || completion.certificate() != certificate
+    || completion.validated_receipt() != validated_receipt
+""",
+        "shared Apply completion projection must rejoin the exact lineage-tagged carrier",
+        errors,
+    )
+
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "V2IoCommand::LifecycleDecisionApply(task)",
+        "worker command queue must retain the neutral lifecycle Apply variant",
+        errors,
+        count=3,
+    )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "V2IoCompletion::LifecycleDecisionApply(guarded)",
+        "worker completion queue must retain the neutral lifecycle Apply variant",
+        errors,
+        count=4,
+    )
+    select_apply = _require_rust_item(
+        worker_path,
+        worker_source,
+        "select_apply",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        select_apply,
+        """
+let Some(LifecycleCompletionPreparedCapacityV1::Apply {
+    key,
+    available: true,
+}) = self.candidates.remove(&ordinal)
+""",
+        "neutral lifecycle Apply selection must consume only the frozen exact row",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        select_apply,
+        """
+Ok(LifecycleDecisionApplyCapacityReservationV1 {
+    queue: self.queue,
+    state: Some(state),
+    operation: Some(operation),
+    key,
+})
+""",
+        "neutral lifecycle Apply selection must preserve its exact queue key",
+        errors,
+    )
+    capture = _require_rust_item(
+        worker_services_path,
+        worker_services_source,
+        "capture_lifecycle_completion_capacity_census",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_services_path,
+        capture,
+        """
+LifecycleCompletionCapacityProbeV1::Apply { ordinal, key } => {
+    if key.lifecycle_ordinal() != ordinal
+        || !key.matches_height_context(&self.context)
+        || !apply_keys.insert(key)
+""",
+        "shared lifecycle census must bind each Apply probe to one exact height-local key",
+        errors,
+    )
+
+    settlement = _require_rust_item(
+        launch_path,
+        launch_source,
+        "settle_lifecycle_decision_apply_completion_owner",
+        errors,
+    )
+    require_order(
+        launch_path,
+        settlement,
+        (
+            "prepare_lifecycle_decision_apply_terminal_transition",
+            "executor.prepare_lifecycle_decision_apply_completion(authority)",
+            "publish_lifecycle_decision_apply_terminal_transition",
+            "persist_exact_staged_successor(&staged)",
+            "owner.coordinator = staged",
+            "adapter.commit_after_durable_settlement()",
+            "executor.commit_lifecycle_decision_apply_finality(finality)",
+            "completion.acknowledge_after_owner_settlement()",
+            "super::super::status::set_v2_status(status)",
+        ),
+        "neutral lifecycle Apply terminal settlement",
+    )
+
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        "fn defer_missing_lifecycle_decision_apply_sidecar(",
+        "lane work must expose only the neutral lifecycle Apply sidecar owner",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        "lifecycle_decision_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>",
+        "lane work must retain the lifecycle-neutral Apply sidecar wait owner",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        "rejected_lifecycle_decision_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>",
+        "lane work must retain the lifecycle-neutral Apply sidecar rejection owner",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        "fn dispatch_next_lifecycle_decision_apply_sidecar_request(",
+        "lane work must expose only the lifecycle-neutral Apply sidecar dispatcher",
+        errors,
+    )
+    lane_constructor = _require_rust_item(
+        lane_path,
+        lane_source,
+        "new_with_output_guard_and_transport_inner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_constructor,
+        """
+lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),
+rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
+""",
+        "lane construction must initialize distinct neutral lifecycle Apply wait and rejection owners",
+        errors,
+    )
+    sidecar_drive = _require_rust_item(
+        launch_path,
+        launch_source,
+        "drive_lifecycle_decision_apply_deferred",
+        errors,
+    )
+    _require_rust_token_sequence(
+        launch_path,
+        sidecar_drive,
+        "lane_work.dispatch_next_lifecycle_decision_apply_sidecar_request",
+        "deferred lifecycle Apply must use the lifecycle-neutral sidecar dispatcher",
+        errors,
+    )
+
+    reject_aliases(
+        registry_path,
+        registry_source,
+        (
+            "ReadyRecoveredDecisionApplyAttestation",
+            "RecoveredDecisionApplyDispatchKeyV1",
+            "RecoveredDecisionApplyDispatchIdentityV1",
+        ),
+        "registry Apply corridor",
+    )
+    reject_aliases(
+        worker_path,
+        worker_source,
+        (
+            "V2IoCommand::RecoveredDecisionApply",
+            "V2IoCompletion::RecoveredDecisionApply",
+            "RecoveredDecisionApplyCapacityReservationV1",
+            "RecoveredCompletionCapacityCensusV1",
+        ),
+        "worker Apply corridor",
+    )
+    reject_aliases(
+        launch_path,
+        launch_source,
+        (
+            "settle_recovered_decision_apply_completion_owner",
+            "RetainedRecoveredDecisionApplyDeferredV1",
+            "drive_recovered_decision_apply_deferred",
+        ),
+        "terminal Apply corridor",
+    )
+    reject_aliases(
+        lane_path,
+        lane_source,
+        (
+            "defer_missing_recovered_decision_apply_sidecar",
+            "recovered_apply_sidecar_waits",
+            "rejected_recovered_apply_sidecars",
+            "dispatch_next_recovered_apply_sidecar_request",
+        ),
+        "sidecar Apply corridor",
+    )
+    reject_aliases(
+        scheduler_path,
+        scheduler_source,
+        ("InvalidRecoveredDecisionApplyCarrier",),
+        "scheduler Apply failure corridor",
+    )
+    reject_aliases(
+        schema_path,
+        schema_source,
+        ("recovered_apply_attestation",),
+        "scheduler schema Apply corridor",
+    )
+    return errors
+
 def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind indexed successor and exact-recovery actions to production order."""
     errors: list[str] = []
@@ -1508,42 +2128,42 @@ let status = launched
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
     )
     if lifecycle_launch_source:
-        recovered_apply_settlement = _require_qualified_rust_item(
+        lifecycle_apply_settlement = _require_qualified_rust_item(
             lifecycle_launch_path,
             lifecycle_launch_source,
             "LaunchedProductionLifecycleV1",
-            "settle_recovered_decision_apply_completion_owner",
+            "settle_lifecycle_decision_apply_completion_owner",
             errors,
-            "recovered Decision Apply settlement publication",
+            "lifecycle Decision Apply settlement publication",
         )
         _require_rust_token_sequence(
             lifecycle_launch_path,
-            recovered_apply_settlement,
+            lifecycle_apply_settlement,
             """
-let status = executor.commit_recovered_decision_apply_finality(finality);
+let status = executor.commit_lifecycle_decision_apply_finality(finality);
 let settled = completion.acknowledge_after_owner_settlement();
 assert!(
-    matches!(settled, RecoveredDecisionApplyWorkerResultV1::Applied(_)),
+    matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
     "borrowed recovered Apply result cannot change before acknowledgement"
 );
 super::super::status::set_v2_status(status);
-Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
+Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
 """,
-            "recovered Decision Apply settlement must preserve its intentional unguarded final publication",
+            "lifecycle Decision Apply settlement must preserve its intentional unguarded final publication",
             errors,
         )
-        if recovered_apply_settlement is not None:
+        if lifecycle_apply_settlement is not None:
             require_token_count(
                 lifecycle_launch_path,
-                "recovered Decision Apply settlement publication",
-                recovered_apply_settlement.source,
+                "lifecycle Decision Apply settlement publication",
+                lifecycle_apply_settlement.source,
                 "super::super::status::set_v2_status(status)",
                 1,
             )
             require_token_count(
                 lifecycle_launch_path,
-                "recovered Decision Apply settlement publication",
-                recovered_apply_settlement.source,
+                "lifecycle Decision Apply settlement publication",
+                lifecycle_apply_settlement.source,
                 "status_publication_enabled",
                 0,
             )
@@ -1716,5 +2336,6 @@ Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     errors.extend(
         _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root)
     )
+    errors.extend(_lifecycle_decision_apply_lineage_source_fidelity_errors(repo_root))
     errors.extend(_successor_recovery_source_fidelity_errors(repo_root))
     return errors

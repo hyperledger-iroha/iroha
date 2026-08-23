@@ -77,6 +77,10 @@ mod model {
     )]
     #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
     #[derive(thiserror::Error)]
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc consumes the field placeholders verbatim; Markdown markup would alter stable error text"
+    )]
     pub enum CanonicalHistoryError {
         /// Canonical history height {height} is outside the committed snapshot ending at {committed_height}
         HeightOutsideSnapshot {

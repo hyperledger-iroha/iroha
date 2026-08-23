@@ -17,7 +17,7 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testMeasuredReleaseArchivesStayWithinTheSafeNFCChunkBudget() {
         let samples: [(String, Int, Int, Int)] = [
-            ("receive-offer", 12_363, 57, 59),
+            ("receive-offer", 12_423, 57, 59),
             ("acknowledgement", 471, 3, 5),
             ("payment-v4-peer-hop-1", 11_887, 55, 57),
         ]

@@ -6102,7 +6102,7 @@ mod tests {
     }
     include!("overlay_admission_policy_tests.rs");
     #[test]
-    fn plain_ivm_axt_only_overlay_persists_envelope_and_replay_guard() {
+    fn plain_ivm_axt_only_overlay_fails_closed_without_authenticated_proof() {
         use iroha_data_model::{
             block::BlockHeader,
             nexus::{AxtHandleReplayKey, DataSpaceId, LaneId},
@@ -6219,16 +6219,24 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
-        overlay
+        let error = overlay
             .apply(&mut state_tx, &authority)
-            .expect("AXT-only plain IVM overlay applies");
-        state_tx.apply();
-        assert_eq!(block.axt_envelopes().len(), 1);
-        assert_eq!(block.axt_envelopes()[0].binding.as_bytes(), &binding);
+            .expect_err("an unverifiable AXT proof must not create durable replay state");
         assert!(
-            block.world.axt_replay_ledger.get(&replay_key).is_some(),
-            "plain overlay application must retain the consumed handle replay guard"
+            matches!(
+                &error,
+                ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                        message,
+                    ),
+                ) if message.contains("committed AXT handle amount cannot be resolved")
+                    && message.contains("InvalidProofEnvelope")
+            ),
+            "unexpected unverifiable-proof rejection: {error:?}"
         );
+        drop(state_tx);
+        assert!(block.axt_envelopes().is_empty());
+        assert!(block.world.axt_replay_ledger.get(&replay_key).is_none());
     }
     #[test]
     fn ivm_proved_axt_only_replay_is_not_dropped() {
@@ -8960,11 +8968,12 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let authority_str = authority.to_string();
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id");
         let handle = AssetHandle {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-            ])
-            .expect("valid AXT fixture asset id"),
+            asset_definition_id: asset_definition_id.clone(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: authority_str.clone(),
@@ -8991,10 +9000,7 @@ seiyaku AliasBoundArguments {
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
             op: axt::SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
-                    0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
-                ])
-                .expect("valid AXT fixture asset id"),
+                asset_definition_id: asset_definition_id.clone(),
                 kind: "transfer".into(),
                 from: authority_str,
                 to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
@@ -9077,11 +9083,18 @@ seiyaku AliasBoundArguments {
         let program = program_with_literals(&code, &literals);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(
-            crate::state::World::default(),
-            Arc::clone(&kura),
-            query,
+        let mut world = crate::state::World::default();
+        world.asset_definitions.insert(
+            asset_definition_id.clone(),
+            iroha_data_model::asset::AssetDefinition::numeric(
+                asset_definition_id,
+                "AXT missing-policy fixture",
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                None,
+            )
+            .build(&authority),
         );
+        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
         assert!(
             state.view().axt_policy_snapshot().entries.is_empty(),
             "expected empty AXT policy snapshot"
@@ -9091,7 +9104,16 @@ seiyaku AliasBoundArguments {
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(kp.private_key());
-        let err = build_overlay_for_transaction(&tx, &state.view())
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("non-zero test block height"),
+            None,
+            None,
+            None,
+            1,
+            0,
+        );
+        let block = state.block(header);
+        let err = build_overlay_for_transaction(&tx, &block)
             .expect_err("overlay should reject AXT handle without policy entry");
         match err {
             OverlayBuildError::AxtReject(ctx) => {
@@ -9724,60 +9746,7 @@ pub(crate) fn enforce_manifest_is_pre_registered<R: StateReadOnly>(
             .to_owned(),
     ))
 }
-fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-    if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
-        match (
-            crate::zk::normalize_halo2_ipa_circuit_id(record_id),
-            crate::zk::normalize_halo2_ipa_circuit_id(env_id),
-        ) {
-            (Some(rec), Some(env)) => rec == env,
-            _ => false,
-        }
-    } else if crate::zk::is_stark_fri_v1_backend(backend) {
-        match (
-            crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, record_id),
-            crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, env_id),
-        ) {
-            (Some(rec), Some(env)) => rec == env,
-            _ => false,
-        }
-    } else {
-        record_id == env_id
-    }
-}
-#[cfg(test)]
-mod circuit_id_match_tests {
-    use super::circuit_id_matches;
-    #[test]
-    fn circuit_id_matching_uses_the_verifier_canonicalizers_and_fails_closed() {
-        assert!(circuit_id_matches(
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            "halo2/ipa:tiny-add",
-            "halo2/pasta/ipa/tiny-add",
-        ));
-        assert!(!circuit_id_matches(
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-        ));
-        assert!(!circuit_id_matches(
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            "INVALID",
-            "INVALID",
-        ));
-        let stark_backend = "stark/fri/sha256-goldilocks";
-        assert!(circuit_id_matches(
-            stark_backend,
-            "ivm-execution-v1",
-            "stark/fri/sha256-goldilocks:ivm-execution-v1",
-        ));
-        assert!(!circuit_id_matches(
-            stark_backend,
-            stark_backend,
-            stark_backend,
-        ));
-    }
-}
+include!("overlay_circuit_id_match_tests.rs");
 fn hash_to_u64_limbs_le(hash: &Hash) -> [u64; 4] {
     let bytes: &[u8; 32] = hash.as_ref();
     let mut limbs = [0u64; 4];

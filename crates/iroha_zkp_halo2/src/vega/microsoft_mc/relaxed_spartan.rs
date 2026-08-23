@@ -321,6 +321,10 @@ mod tests {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the test verifier keeps each Nova/Spartan transcript artifact explicit"
+    )]
     fn verify_wire(
         key: &CommitmentKey,
         shape: &Shape,

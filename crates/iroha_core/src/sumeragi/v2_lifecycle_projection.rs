@@ -807,7 +807,8 @@ impl super::ProductionLifecycleOwnerV1 {
         let (candidate, replay) = prepared.into_candidate_and_replay();
         let serve_key = candidate.key;
         let mut staged = self.coordinator.stage_durable_transaction();
-        let decision = staged.reduce_admit(AdmissionRequest::Candidate(candidate));
+        let (decision, ordinal_reservation) =
+            staged.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate));
         match decision {
             super::AdmissionDecision::Admitted {
                 producer_turn_ordinal: Some(_),
@@ -840,6 +841,16 @@ impl super::ProductionLifecycleOwnerV1 {
                 );
             }
         }
+        let Some(ordinal_reservation) = ordinal_reservation else {
+            return self.certified_serve_preledger_failure(
+                target,
+                publication,
+                CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                Some(decision),
+                Some(replay),
+                None,
+            );
+        };
         let batch = match PreparedCertifiedServeRegistryBatchV1::from_fresh_admitted_pair(
             &staged, serve_key, replay,
         ) {
@@ -863,7 +874,13 @@ impl super::ProductionLifecycleOwnerV1 {
                 &self.verified,
                 &self.coordinator,
                 &staged,
-                || self.coordinator.persist_exact_staged_successor(&staged),
+                || {
+                    self.coordinator
+                        .persist_exact_staged_successor_with_ordinal_reservation(
+                            &staged,
+                            &ordinal_reservation,
+                        )
+                },
             );
         match publication_result {
             Ok(()) => {

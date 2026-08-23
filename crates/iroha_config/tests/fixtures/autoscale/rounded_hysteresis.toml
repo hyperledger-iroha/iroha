@@ -1,0 +1,6 @@
+
+[nexus.autoscale]
+scale_out_latency_ratio = 1.00049
+scale_in_latency_ratio = 1.0004
+scale_out_utilization_ratio = 0.50049
+scale_in_utilization_ratio = 0.5004

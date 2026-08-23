@@ -1,0 +1,13 @@
+
+                bundle_name = "demo"
+                default_dataspace = "universal"
+
+                [profiles.local]
+                client_config = "client.toml"
+                default_gas_limit = 500000
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter"
+                source = "contracts/greeter.ko"
+                artifact = "artifacts/greeter.to"

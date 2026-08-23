@@ -769,6 +769,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         kura_replica_advert_refresh,
         exact_output_handoff_owner,
         exact_output_admission_hook: None,
+        consensus_broadcasts: Vec::new(),
         active_tag,
         last_status: None,
         fatal_reason: None,

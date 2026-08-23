@@ -1,0 +1,3 @@
+seiyaku Demo {
+    kotoage fn run() authorize("Run") { test::assert(true); }
+}

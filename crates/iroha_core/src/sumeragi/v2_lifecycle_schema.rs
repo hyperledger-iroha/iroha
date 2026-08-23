@@ -1751,7 +1751,7 @@ impl SchedulerReadyInputs {
     /// the six authenticated runtime debts into a production scheduler row.
     ///
     /// Validate work requires its registry-derived completion attestation;
-    /// recovered Decision Apply and Sign require their closed worker-dispatch
+    /// lifecycle Decision Apply and recovered Sign require their closed worker-dispatch
     /// attestations. A recovered Sign also seals the one Consensus slot its
     /// successful signature must use for Broadcast before the row is claimed.
     /// Missing, foreign, or mixed authority returns `None`.
@@ -1759,8 +1759,8 @@ impl SchedulerReadyInputs {
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
         validate_attestation: Option<AttestedReadyValidateDemand>,
-        recovered_apply_attestation: Option<
-            super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+        lifecycle_decision_apply_attestation: Option<
+            super::work_registry::ReadyLifecycleDecisionApplyAttestationV1,
         >,
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
@@ -1794,7 +1794,7 @@ impl SchedulerReadyInputs {
         };
         let carrier_matches = match record.work_class {
             LifecycleWorkClass::Validate => {
-                recovered_apply_attestation.is_none()
+                lifecycle_decision_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
                     && recovered_fetch_attestation.is_none()
             }
@@ -1802,7 +1802,7 @@ impl SchedulerReadyInputs {
                 validate_attestation.is_none()
                     && recovered_sign_attestation.is_none()
                     && recovered_fetch_attestation.is_none()
-                    && recovered_apply_attestation
+                    && lifecycle_decision_apply_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
             }
@@ -1810,7 +1810,7 @@ impl SchedulerReadyInputs {
             | LifecycleWorkClass::SignProposal
             | LifecycleWorkClass::SignTimeout => {
                 validate_attestation.is_none()
-                    && recovered_apply_attestation.is_none()
+                    && lifecycle_decision_apply_attestation.is_none()
                     && recovered_fetch_attestation.is_none()
                     && recovered_sign_attestation
                         .as_ref()
@@ -1818,7 +1818,7 @@ impl SchedulerReadyInputs {
             }
             LifecycleWorkClass::Fetch => {
                 validate_attestation.is_none()
-                    && recovered_apply_attestation.is_none()
+                    && lifecycle_decision_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
                     && recovered_fetch_attestation
                         .as_ref()
@@ -1826,7 +1826,7 @@ impl SchedulerReadyInputs {
             }
             _ => {
                 validate_attestation.is_none()
-                    && recovered_apply_attestation.is_none()
+                    && lifecycle_decision_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
                     && recovered_fetch_attestation.is_none()
             }
@@ -1866,8 +1866,8 @@ impl SchedulerReadyInputs {
         factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
         validate_attestation: Option<AttestedReadyValidateDemand>,
-        recovered_apply_attestation: Option<
-            super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+        lifecycle_decision_apply_attestation: Option<
+            super::work_registry::ReadyLifecycleDecisionApplyAttestationV1,
         >,
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
@@ -1882,7 +1882,7 @@ impl SchedulerReadyInputs {
             factory,
             record,
             validate_attestation,
-            recovered_apply_attestation,
+            lifecycle_decision_apply_attestation,
             recovered_sign_attestation,
             recovered_fetch_attestation,
             live_debts,

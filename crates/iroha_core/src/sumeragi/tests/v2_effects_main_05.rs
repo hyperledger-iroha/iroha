@@ -929,6 +929,444 @@ fn install_stored_remote_proposal_replay(
     store_ownership
 }
 
+fn install_recovered_validate_retry_seal(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    replay_tag: EventTag,
+    ordinal: u128,
+) -> (
+    (wire::ConsensusRound, wire::BlockSubject),
+    AdapterEffect,
+    DurableBodyReceipt,
+) {
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let store_ownership =
+        install_stored_remote_proposal_replay(executor, fixture, replay_tag, ordinal);
+    let store_effect = AdapterEffect::StoreBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let effect = AdapterEffect::ValidateBody {
+        tag: replay_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let pending = store_ownership
+        .exact_pending_adapter_effect_binding(&store_effect)
+        .expect("project recovered Validate parent binding")
+        .project_store_validate_successor(&store_effect, &effect)
+        .expect("project recovered Validate pending binding");
+    let durable = executor.durable_bodies[&key].clone();
+    let owner = RecoveredDurableValidateRetryOwnerV1::for_test(
+        effect.clone(),
+        durable.clone(),
+        pending,
+        None,
+    )
+    .expect("seal recovered Validate retry owner");
+    let mut installation = executor
+        .prepare_recovered_durable_validate_retry_install()
+        .expect("prepare recovered Validate retry installation");
+    installation
+        .absorb(owner)
+        .expect("preflight recovered Validate retry owner");
+    installation
+        .commit()
+        .expect("install recovered Validate retry owner");
+    executor.remote_proposal_replay.clear();
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    (key, effect, durable)
+}
+
+fn recovered_validate_retry_ownership(
+    fixture: &Fixture,
+    effect: &AdapterEffect,
+    certificate: Option<wire::QuorumCertificate>,
+    ordinal: u128,
+) -> RuntimeEffectOwnership {
+    let AdapterEffect::ValidateBody { tag, .. } = effect else {
+        unreachable!("retry fixture retains one Validate effect")
+    };
+    let fetch_ownership = match certificate {
+        None => prepared_remote_proposal_fetch_replay(fixture, *tag, ordinal).1,
+        Some(certificate) => {
+            let fetch = AdapterEffect::FetchBody {
+                tag: *tag,
+                round: certificate.proposal_round,
+                subject: certificate.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(fixture, &certificate),
+                certificate: Some(certificate),
+            };
+            bound_test_effect_ownership(&fetch, *tag, ordinal)
+        }
+    };
+    fetch_ownership
+        .rebind_as_inherited_adapter_effect(effect)
+        .expect("carry exact retry authority into Validate")
+}
+
+fn assert_recovered_validate_retry_stutter_is_inert(executor: &V2EffectExecutor<FakeRuntime>) {
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.parked_effect_batch.is_none());
+    assert!(executor.pending_durable_validate_admissions.is_empty());
+    assert_eq!(executor.pending_work(), 0);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let key;
+    let initial_effect;
+    (key, initial_effect, _) =
+        install_recovered_validate_retry_seal(&mut executor, &fixture, tag(0), 9_030);
+    let DurableValidateRetrySealV1::Recovered {
+        owner: initial_owner,
+        frontier: initial_frontier,
+    } = &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("cold installation must retain Recovered lineage")
+    };
+    let initial_owner = Arc::clone(initial_owner);
+    assert_eq!(initial_frontier.phase_for_test(), None);
+
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let prepare_commitment = prepare.execution_commitment;
+    let prepare_effect = AdapterEffect::ValidateBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let prepare_ownership =
+        recovered_validate_retry_ownership(&fixture, &prepare_effect, Some(prepare.clone()), 9_031);
+    let prepare_origin = prepare_ownership.owner().causal_origin().clone();
+    executor
+        .retain_effect_batch(vec![prepare_effect.clone()], vec![prepare_ownership])
+        .expect("None-to-Prepare retry advances only the inert frontier");
+    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
+        &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("authority refinement changed Recovered lineage")
+    };
+    assert!(Arc::ptr_eq(owner, &initial_owner));
+    assert_eq!(frontier.phase_for_test(), Some(wire::GlobalPhase::Prepare));
+    assert_eq!(
+        frontier.commitment_ceiling_for_test(),
+        Some(prepare_commitment)
+    );
+    assert_recovered_validate_retry_stutter_is_inert(&executor);
+
+    let same_ownership =
+        recovered_validate_retry_ownership(&fixture, &prepare_effect, Some(prepare.clone()), 9_036);
+    assert_ne!(
+        same_ownership.owner().causal_origin(),
+        &prepare_origin,
+        "the Same retry must exercise a separately authenticated causal root"
+    );
+    executor
+        .retain_effect_batch(vec![prepare_effect], vec![same_ownership])
+        .expect("same authority from a distinct causal root remains an inert stutter");
+    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
+        &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("same retry changed Recovered lineage")
+    };
+    assert!(Arc::ptr_eq(owner, &initial_owner));
+    assert_eq!(frontier.phase_for_test(), Some(wire::GlobalPhase::Prepare));
+    assert_recovered_validate_retry_stutter_is_inert(&executor);
+
+    let stale_effect = AdapterEffect::ValidateBody {
+        tag: tag(2),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let stale_ownership = recovered_validate_retry_ownership(&fixture, &stale_effect, None, 9_032);
+    executor
+        .retain_effect_batch(vec![stale_effect], vec![stale_ownership])
+        .expect("stale weaker retry stutters without downgrading authority");
+    let DurableValidateRetrySealV1::Recovered { owner, frontier } =
+        &executor.durable_validate_retry_seals[&key]
+    else {
+        panic!("stale retry changed Recovered lineage")
+    };
+    assert!(Arc::ptr_eq(owner, &initial_owner));
+    assert_eq!(frontier.phase_for_test(), Some(wire::GlobalPhase::Prepare));
+    assert_recovered_validate_retry_stutter_is_inert(&executor);
+
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let commit_effect = AdapterEffect::ValidateBody {
+        tag: tag(3),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let commit_ownership =
+        recovered_validate_retry_ownership(&fixture, &commit_effect, Some(commit), 9_033);
+    executor
+        .retain_effect_batch(vec![commit_effect], vec![commit_ownership])
+        .expect("Prepare-to-Commit retry advances the same inert frontier");
+    let accepted = executor.durable_validate_retry_seals[&key].clone();
+    let DurableValidateRetrySealV1::Recovered { owner, frontier } = &accepted else {
+        panic!("Commit refinement changed Recovered lineage")
+    };
+    assert!(Arc::ptr_eq(owner, &initial_owner));
+    assert_eq!(frontier.phase_for_test(), Some(wire::GlobalPhase::Commit));
+    assert_recovered_validate_retry_stutter_is_inert(&executor);
+
+    let rollback_ownership =
+        recovered_validate_retry_ownership(&fixture, &initial_effect, None, 9_034);
+    assert!(matches!(
+        executor.retain_effect_batch(vec![initial_effect], vec![rollback_ownership]),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("body, tag, or exact binding")
+    ));
+    assert_eq!(executor.durable_validate_retry_seals[&key], accepted);
+
+    let mut conflicting = prepare;
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"foreign recovered retry parent state"),
+        Hash::new(b"foreign recovered retry post state"),
+        Hash::new(b"foreign recovered retry writes"),
+        1,
+        Hash::new(b"foreign recovered retry block"),
+    );
+    let conflicting_effect = AdapterEffect::ValidateBody {
+        tag: tag(4),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let conflicting_ownership =
+        recovered_validate_retry_ownership(&fixture, &conflicting_effect, Some(conflicting), 9_035);
+    assert!(
+        executor
+            .retain_effect_batch(vec![conflicting_effect], vec![conflicting_ownership])
+            .is_err()
+    );
+    assert_eq!(executor.durable_validate_retry_seals[&key], accepted);
+    assert_recovered_validate_retry_stutter_is_inert(&executor);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn recovered_validate_retry_later_marker_and_decision_joins_are_atomic() {
+    let fixture = Fixture::new();
+    let commitment = fixture.qc(wire::GlobalPhase::Commit).execution_commitment;
+    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"late cold fact parent state"),
+        Hash::new(b"late cold fact post state"),
+        Hash::new(b"late cold fact writes"),
+        1,
+        Hash::new(b"late cold fact block"),
+    );
+
+    let mut marker_executor = fixture.executor(EffectQueueConfig::default());
+    let (key, _, durable) =
+        install_recovered_validate_retry_seal(&mut marker_executor, &fixture, tag(0), 9_040);
+    let conflicting_prepare = {
+        let mut certificate = fixture.qc(wire::GlobalPhase::Prepare);
+        certificate.execution_commitment = conflicting_commitment;
+        certificate
+    };
+    let effect = AdapterEffect::ValidateBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let ownership =
+        recovered_validate_retry_ownership(&fixture, &effect, Some(conflicting_prepare), 9_041);
+    marker_executor
+        .retain_effect_batch(vec![effect], vec![ownership])
+        .expect("first authenticated commitment latches the recovered frontier");
+    let before_marker = marker_executor.durable_validate_retry_seals[&key].clone();
+    let marker = ValidatedBodyReceipt::for_test_with_commitment(durable.clone(), commitment);
+    assert!(matches!(
+        marker_executor.record_lifecycle_validated_body(
+            ReadyValidatedExecutorCatalogAuthorityV1::for_test(marker.clone())
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable commitment")
+    ));
+    assert!(!marker_executor.validated_bodies.contains_key(&key));
+    assert_eq!(
+        marker_executor.durable_validate_retry_seals[&key],
+        before_marker
+    );
+
+    let mut decision_executor = fixture.executor(EffectQueueConfig::default());
+    let (decision_key, _, _) =
+        install_recovered_validate_retry_seal(&mut decision_executor, &fixture, tag(0), 9_042);
+    let conflicting_effect = AdapterEffect::ValidateBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let conflicting_ownership = recovered_validate_retry_ownership(
+        &fixture,
+        &conflicting_effect,
+        Some({
+            let mut certificate = fixture.qc(wire::GlobalPhase::Prepare);
+            certificate.execution_commitment = conflicting_commitment;
+            certificate
+        }),
+        9_043,
+    );
+    decision_executor
+        .retain_effect_batch(vec![conflicting_effect], vec![conflicting_ownership])
+        .expect("latch conflicting frontier before Decision join");
+    let before_decision = decision_executor.body_ownership_projection();
+    let before_decision_seal =
+        decision_executor.durable_validate_retry_seals[&decision_key].clone();
+    let mut services = fixture.services();
+    assert!(matches!(
+        decision_executor.reconcile_decision_work(
+            (
+                fixture.manifest.round,
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                commitment,
+            ),
+            false,
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable commitment")
+    ));
+    assert_eq!(
+        decision_executor.body_ownership_projection(),
+        before_decision
+    );
+    assert_eq!(
+        decision_executor.durable_validate_retry_seals[&decision_key],
+        before_decision_seal
+    );
+    assert!(decision_executor.protected_decision.is_none());
+    assert!(services.operation_calls.is_empty());
+    assert_eq!(services.retired_all_outbound, 0);
+    assert_eq!(services.retired_candidate_work, 0);
+    assert!(services.sign_tasks.is_empty());
+    assert!(services.fetch_tasks.is_empty());
+    assert!(services.store_tasks.is_empty());
+    assert!(services.apply_tasks.is_empty());
+
+    let mut accepted_executor = fixture.executor(EffectQueueConfig::default());
+    let (accepted_key, _, accepted_durable) =
+        install_recovered_validate_retry_seal(&mut accepted_executor, &fixture, tag(0), 9_044);
+    let exact_marker = ValidatedBodyReceipt::for_test_with_commitment(accepted_durable, commitment);
+    accepted_executor
+        .record_lifecycle_validated_body(ReadyValidatedExecutorCatalogAuthorityV1::for_test(
+            exact_marker,
+        ))
+        .expect("exact later marker latches the empty recovered ceiling");
+    let exact_commit = fixture.qc(wire::GlobalPhase::Commit);
+    let exact_effect = AdapterEffect::ValidateBody {
+        tag: tag(1),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let exact_ownership =
+        recovered_validate_retry_ownership(&fixture, &exact_effect, Some(exact_commit), 9_045);
+    accepted_executor
+        .retain_effect_batch(vec![exact_effect], vec![exact_ownership])
+        .expect("Commit matching the later marker remains an inert stutter");
+    let mut accepted_services = fixture.services();
+    accepted_executor
+        .reconcile_decision_work(
+            (
+                fixture.manifest.round,
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                commitment,
+            ),
+            false,
+            &mut accepted_services,
+        )
+        .expect("Decision matching the marker-bound ceiling commits atomically");
+    assert_eq!(accepted_services.retired_all_outbound, 1);
+    assert_eq!(accepted_services.retired_candidate_work, 1);
+    assert_eq!(
+        accepted_services.operation_calls.get("retire-all-outbound"),
+        Some(&1)
+    );
+    assert_eq!(
+        accepted_services
+            .operation_calls
+            .get("retire-candidate-work"),
+        Some(&1)
+    );
+    let DurableValidateRetrySealV1::Recovered { frontier, .. } =
+        &accepted_executor.durable_validate_retry_seals[&accepted_key]
+    else {
+        panic!("exact later facts changed Recovered lineage")
+    };
+    assert_eq!(frontier.commitment_ceiling_for_test(), Some(commitment));
+    assert_eq!(frontier.phase_for_test(), Some(wire::GlobalPhase::Commit));
+    assert!(accepted_executor.protected_decision.is_some());
+    assert_recovered_validate_retry_stutter_is_inert(&accepted_executor);
+
+    let mut decision_then_marker_executor = fixture.executor(EffectQueueConfig::default());
+    let (decision_then_marker_key, _, decision_then_marker_durable) =
+        install_recovered_validate_retry_seal(
+            &mut decision_then_marker_executor,
+            &fixture,
+            tag(0),
+            9_046,
+        );
+    let mut decision_then_marker_services = fixture.services();
+    decision_then_marker_executor
+        .reconcile_decision_work(
+            (
+                fixture.manifest.round,
+                fixture.manifest.round,
+                fixture.manifest.subject,
+                commitment,
+            ),
+            false,
+            &mut decision_then_marker_services,
+        )
+        .expect("exact Decision latches the empty recovered ceiling");
+    assert_eq!(decision_then_marker_services.retired_all_outbound, 1);
+    assert_eq!(decision_then_marker_services.retired_candidate_work, 1);
+    assert_eq!(
+        decision_then_marker_services
+            .operation_calls
+            .get("retire-all-outbound"),
+        Some(&1)
+    );
+    assert_eq!(
+        decision_then_marker_services
+            .operation_calls
+            .get("retire-candidate-work"),
+        Some(&1)
+    );
+    decision_then_marker_executor
+        .record_lifecycle_validated_body(ReadyValidatedExecutorCatalogAuthorityV1::for_test(
+            ValidatedBodyReceipt::for_test_with_commitment(
+                decision_then_marker_durable,
+                commitment,
+            ),
+        ))
+        .expect("marker matching the Decision-bound ceiling commits atomically");
+    let DurableValidateRetrySealV1::Recovered { frontier, .. } =
+        &decision_then_marker_executor.durable_validate_retry_seals[&decision_then_marker_key]
+    else {
+        panic!("Decision-then-marker join changed Recovered lineage")
+    };
+    assert_eq!(frontier.commitment_ceiling_for_test(), Some(commitment));
+    assert!(
+        decision_then_marker_executor
+            .validated_bodies
+            .contains_key(&decision_then_marker_key)
+    );
+    assert_recovered_validate_retry_stutter_is_inert(&decision_then_marker_executor);
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn periodic_proposal_fetch_stutters_only_against_its_exact_advanced_replay_family() {

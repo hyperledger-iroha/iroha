@@ -4544,8 +4544,8 @@ pub fn record_state_tiered_snapshot(
     cold_bytes: u64,
     hot_promotions: usize,
     hot_demotions: usize,
-    hot_grace_overflow_keys: usize,
-    hot_grace_overflow_bytes: u64,
+    hot_budget_overflow_keys: usize,
+    hot_budget_overflow_bytes: u64,
     cold_reused_entries: usize,
     cold_reused_bytes: u64,
 ) {
@@ -4574,12 +4574,12 @@ pub fn record_state_tiered_snapshot(
             .set(hot_demotions as u64);
         telemetry
             .metrics
-            .state_tiered_hot_grace_overflow_keys
-            .set(hot_grace_overflow_keys as u64);
+            .state_tiered_hot_budget_overflow_keys
+            .set(hot_budget_overflow_keys as u64);
         telemetry
             .metrics
-            .state_tiered_hot_grace_overflow_bytes
-            .set(hot_grace_overflow_bytes);
+            .state_tiered_hot_budget_overflow_bytes
+            .set(hot_budget_overflow_bytes);
         telemetry
             .metrics
             .state_tiered_cold_reused_entries
@@ -7958,7 +7958,6 @@ mod tests {
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
     };
-    use iroha_telemetry::metrics::Collector;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     #[cfg(feature = "telemetry")]
@@ -10869,8 +10868,8 @@ mod tests {
         assert_eq!(metrics.state_tiered_cold_bytes.get(), 1024);
         assert_eq!(metrics.state_tiered_hot_promotions.get(), 1);
         assert_eq!(metrics.state_tiered_hot_demotions.get(), 2);
-        assert_eq!(metrics.state_tiered_hot_grace_overflow_keys.get(), 3);
-        assert_eq!(metrics.state_tiered_hot_grace_overflow_bytes.get(), 2048);
+        assert_eq!(metrics.state_tiered_hot_budget_overflow_keys.get(), 3);
+        assert_eq!(metrics.state_tiered_hot_budget_overflow_bytes.get(), 2048);
         assert_eq!(metrics.state_tiered_cold_reused_entries.get(), 4);
         assert_eq!(metrics.state_tiered_cold_reused_bytes.get(), 512);
     }

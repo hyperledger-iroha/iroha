@@ -492,19 +492,19 @@ fn production_owner_opens_empty_and_two_fetch_storage_atomically() {
     assert_eq!(owner.live_fetch_count_for_test(), 2);
 }
 
-#[test]
-#[allow(clippy::too_many_lines)]
-fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() {
+fn cold_broadcast_output_fixture(
+    fixture: &RecoveryFixture,
+    ordinal: u128,
+) -> (
+    crate::sumeragi::v2::AdapterEffect,
+    LifecycleLedgerRecordV1,
+) {
     use crate::sumeragi::{
         v2::AdapterEffect,
-        v2_lifecycle_coordinator::{
-            LifecycleOutputServiceDispositionV1, open::RecoveredLifecycleOutputSettlementV1,
-            work_registry::PreparedLifecycleAdmissionV1,
-        },
+        v2_lifecycle_coordinator::work_registry::PreparedLifecycleAdmissionV1,
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
 
-    let fixture = RecoveryFixture::new("source-retained-cold-broadcast", 0x23);
     let context = fixture.verified.context();
     let round = wire::ConsensusRound {
         context_id: context.id(),
@@ -540,7 +540,6 @@ fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() 
     let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::Vote(vote),
     ));
-    let ordinal = 1;
     let tag = EventTag::new(context.height, round.view, Generation::new(0x23));
     let ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&effect),
@@ -574,6 +573,21 @@ fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() 
         DurableContinuation::None,
     )
     .expect("construct authenticated cold Broadcast row");
+    (effect, record)
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() {
+    use crate::sumeragi::v2_lifecycle_coordinator::{
+        LifecycleOutputServiceDispositionV1, ProductionCompletionReadyWorkV1,
+        open::RecoveredLifecycleOutputSettlementV1,
+    };
+
+    let fixture = RecoveryFixture::new("source-retained-cold-broadcast", 0x23);
+    let ordinal = 1;
+    let (effect, record) = cold_broadcast_output_fixture(&fixture, ordinal);
+    let expected_owner = record.owner();
 
     let body_directory = TempDir::new().expect("temporary cold Broadcast body store");
     let body_store = fixture.open_store(&body_directory);
@@ -611,6 +625,21 @@ fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() 
             .is_none()
     );
     assert!(owner.coordinator.ready_index.insert(ordinal));
+    assert_eq!(
+        owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None),
+        ProductionCompletionReadyWorkV1::PassThrough,
+        "the authenticated cold Broadcast remains passive while its owner holds settlement"
+    );
+    let recovered_outputs = owner
+        .recovered_lifecycle_outputs
+        .take()
+        .expect("cold Broadcast owner retains its move-only output census");
+    assert_eq!(
+        owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None),
+        ProductionCompletionReadyWorkV1::Invalid,
+        "a logical Ready Broadcast cannot pass without its cold owner or a registry carrier"
+    );
+    owner.recovered_lifecycle_outputs = Some(recovered_outputs);
 
     let calls = std::cell::Cell::new(0_u8);
     assert!(matches!(
@@ -625,6 +654,11 @@ fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() 
     ));
     assert_eq!(calls.get(), 1);
     assert!(owner.has_recovered_lifecycle_outputs());
+    assert_eq!(
+        owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None),
+        ProductionCompletionReadyWorkV1::PassThrough,
+        "SourceRetained preserves the authenticated passive scheduler carrier"
+    );
     assert_eq!(owner.coordinator.records[&ordinal].owner, expected_owner);
     assert_eq!(
         owner.coordinator.records[&ordinal].state,
@@ -667,6 +701,102 @@ fn cold_broadcast_source_retention_preserves_ready_row_until_exact_acceptance() 
     assert_eq!(
         terminal.records()[0].terminal(),
         Some(Some(TerminalOutcome::Advanced))
+    );
+}
+
+#[test]
+fn later_cold_broadcast_stays_passive_until_an_older_fetch_retires() {
+    use crate::sumeragi::v2_lifecycle_coordinator::{
+        LifecycleOutputServiceDispositionV1, ProductionCompletionReadyWorkV1,
+        open::RecoveredLifecycleOutputSettlementV1, work_registry::ConcreteWorkAddress,
+    };
+
+    let fixture = RecoveryFixture::new("older-fetch-before-cold-broadcast", 0x24);
+    let body_directory = TempDir::new().expect("temporary ordered cold-output body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let fetch_ordinal = 1;
+    let broadcast_ordinal = 2;
+    let fetch = fixture.fetch_record(&mut body_store, 0, 0x34, fetch_ordinal, None, false);
+    let (broadcast_effect, broadcast) =
+        cold_broadcast_output_fixture(&fixture, broadcast_ordinal);
+    let payload_directory = TempDir::new().expect("temporary ordered cold-output payload store");
+    let (payload_store, payloads) =
+        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+    let ledger = fixture.ledger(vec![fetch, broadcast]);
+    let ledger_directory = TempDir::new().expect("temporary ordered cold-output ledger store");
+    let ledger_store = fixture.persist_ledger(&ledger_directory, &ledger);
+    let cut = ledger
+        .into_durable_certified_body_pipeline_storage_recovery_cut(
+            fixture.verified.clone(),
+            ledger_store,
+            body_store,
+        )
+        .expect("authenticate ordered cold-output storage cut");
+    let mut owner = cut
+        .open_owner_for_test(payload_store, payloads)
+        .expect("cold-open ordered lifecycle owner");
+
+    let calls = std::cell::Cell::new(0_u8);
+    assert_eq!(
+        owner
+            .settle_next_recovered_lifecycle_output(|_| {
+                calls.set(calls.get().saturating_add(1));
+                Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                    LifecycleOutputServiceDispositionV1::Accepted,
+                )
+            })
+            .expect("an older Ready row defers cold-output settlement"),
+        RecoveredLifecycleOutputSettlementV1::Deferred
+    );
+    assert_eq!(calls.get(), 0, "Deferred cannot enter output service");
+    assert_eq!(
+        owner.classify_schedulable_completion_work(&owner.coordinator.ready_index, None),
+        ProductionCompletionReadyWorkV1::CompletionIo,
+        "the older Fetch remains schedulable while the later cold Broadcast is passive"
+    );
+
+    let fetch_record = owner.coordinator.records[&fetch_ordinal].clone();
+    let (&fetch_slot, &fetch_digest) = fetch_record
+        .physical_slots
+        .first_key_value()
+        .expect("recovered Fetch retains one exact physical slot");
+    let fetch_address =
+        ConcreteWorkAddress::new(fetch_record.owner, fetch_ordinal, fetch_slot)
+            .expect("recovered Fetch retains an exact registry address");
+    let mut staged = owner.coordinator.stage_durable_transaction();
+    staged
+        .finish_terminal(fetch_ordinal, TerminalOutcome::Cancelled)
+        .expect("retire the already-authenticated older Fetch fixture");
+    owner
+        .coordinator
+        .persist_exact_staged_successor(&staged)
+        .expect("publish the older Fetch terminal cut");
+    drop(
+        owner
+            .registry
+            .registry_mut()
+            .rollback_exact(fetch_address, fetch_digest)
+            .expect("retire the exact older Fetch registry carrier"),
+    );
+    owner.coordinator = staged;
+
+    assert_eq!(
+        owner
+            .settle_next_recovered_lifecycle_output(|observed| {
+                assert_eq!(observed, &broadcast_effect);
+                calls.set(calls.get().saturating_add(1));
+                Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                    LifecycleOutputServiceDispositionV1::Accepted,
+                )
+            })
+            .expect("the next bounded retry settles the newly-oldest cold Broadcast"),
+        RecoveredLifecycleOutputSettlementV1::Completed
+    );
+    assert_eq!(calls.get(), 1);
+    assert!(!owner.has_recovered_lifecycle_outputs());
+    assert_eq!(
+        owner.coordinator.records[&broadcast_ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Advanced)
     );
 }
 

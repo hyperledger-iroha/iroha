@@ -31,7 +31,7 @@ use super::{
     },
     output_guard::{ConsensusFailStopOperation, ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::{
-        RecoveredDecisionApplyTaskV1, RecoveredDecisionApplyWorkerResultV1, V2ApplyService,
+        LifecycleDecisionApplyTaskV1, LifecycleDecisionApplyWorkerResultV1, V2ApplyService,
     },
     v2_body_store::{
         BodyStoreCompletion, DurableBodyReceipt, DurableCertifiedServeBodyReadbackV1,
@@ -60,11 +60,12 @@ use super::{
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         CertifiedServeTerminalReplayAuthorizationV1, ClaimedCertifiedServeDispatchV1,
         DeferredDurableValidateDispatch, DurableValidateDispatch, ExecutedDurableValidateDispatch,
-        LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal, LifecycleValidateDispatchKeyV1,
-        PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
+        LifecycleDecisionApplyDispatchKeyV1, LifecycleIngressIoTargetKind,
+        LifecycleIngressIoTargetSeal, LifecycleValidateDispatchKeyV1,
+        PreparedLifecycleDecisionApplyDispatchV1, PreparedLifecycleIngressSelector,
         PreparedRecoveredLifecycleSignDispatch,
         ProductionLifecycleServeRetirementAuthenticationPermitV1,
-        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        ProductionV2CompletionObserverActivationPermitV1,
         RecoveredDecisionFetchBodyPersistenceCompletionV1,
         RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
         RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1, TurnLease,
@@ -794,10 +795,10 @@ enum V2IoCommand {
     PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1),
     LifecycleValidate(LifecycleValidateTaskV1),
     Apply(ApplyTask),
-    RecoveredDecisionApply(RecoveredDecisionApplyTaskV1),
+    LifecycleDecisionApply(LifecycleDecisionApplyTaskV1),
     RecoveredLifecycleSign(RecoveredLifecycleSignTaskV1),
     #[cfg(test)]
-    RecoveredDecisionApplyFixture(RecoveredDecisionApplyDispatchKeyV1),
+    LifecycleDecisionApplyFixture(LifecycleDecisionApplyDispatchKeyV1),
     LifecycleCertifiedServe(LifecycleCertifiedServeTaskV1),
     LoadCandidate {
         acquisition_id: LockedCandidateAcquisitionId,
@@ -828,10 +829,10 @@ impl V2IoCommand {
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_) => V2IoAdmissionClass::Consensus,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => V2IoAdmissionClass::Consensus,
+            Self::LifecycleDecisionApplyFixture(_) => V2IoAdmissionClass::Consensus,
             Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
                 V2IoAdmissionClass::Control
             }
@@ -843,7 +844,7 @@ impl V2IoCommand {
             Self::Store(task) => Some(task.id()),
             Self::PersistCertifiedFetchBody(task) => Some(task.work_id()),
             Self::Apply(task) => Some(task.id()),
-            Self::RecoveredDecisionApply(_)
+            Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
@@ -852,7 +853,7 @@ impl V2IoCommand {
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
     /// Runtime lifecycle retained by a completion-producing consensus command.
@@ -861,7 +862,7 @@ impl V2IoCommand {
             Self::Sign { task, .. } => Some(task.lifecycle_ordinal()),
             Self::Store(task) => Some(task.lifecycle_ordinal()),
             Self::Apply(task) => Some(task.lifecycle_ordinal()),
-            Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            Self::LifecycleDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
             Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
             Self::PersistRecoveredDecisionFetchBody(task) => {
                 Some(task.dispatch_key().lifecycle_ordinal())
@@ -869,7 +870,7 @@ impl V2IoCommand {
             Self::LifecycleValidate(task) => Some(task.key.lifecycle_ordinal()),
             Self::LifecycleCertifiedServe(task) => Some(task.lifecycle_ordinal()),
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
+            Self::LifecycleDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
             Self::PersistCertifiedFetchBody(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -885,13 +886,13 @@ impl V2IoCommand {
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
     const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
@@ -899,7 +900,7 @@ impl V2IoCommand {
             Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
             Self::Store(_) => Some(V2IoCancellableKind::Store),
             Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
@@ -909,7 +910,7 @@ impl V2IoCommand {
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
     fn work_descriptor(&self) -> Option<(EffectWorkId, V2IoWorkDescriptor)> {
@@ -950,7 +951,7 @@ impl V2IoCommand {
                     validated_receipt: task.validated_receipt().clone(),
                 },
             )),
-            Self::RecoveredDecisionApply(_)
+            Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
@@ -959,14 +960,14 @@ impl V2IoCommand {
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
-    const fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+    const fn lifecycle_decision_apply_key(&self) -> Option<LifecycleDecisionApplyDispatchKeyV1> {
         match self {
-            Self::RecoveredDecisionApply(task) => Some(task.dispatch_key()),
+            Self::LifecycleDecisionApply(task) => Some(task.dispatch_key()),
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(key) => Some(*key),
+            Self::LifecycleDecisionApplyFixture(key) => Some(*key),
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
@@ -989,13 +990,13 @@ impl V2IoCommand {
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
     const fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
@@ -1006,14 +1007,14 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
     const fn lifecycle_validate_key(&self) -> Option<LifecycleValidateDispatchKeyV1> {
@@ -1024,14 +1025,14 @@ impl V2IoCommand {
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_)
+            | Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
             #[cfg(test)]
-            Self::RecoveredDecisionApplyFixture(_) => None,
+            Self::LifecycleDecisionApplyFixture(_) => None,
         }
     }
 }
@@ -1091,7 +1092,7 @@ struct V2IoCompletionOwnership {
     service_debt: u64,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
-    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    lifecycle_decision_apply: Option<LifecycleDecisionApplyDispatchKeyV1>,
     recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
     recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
     lifecycle_validate: Option<LifecycleValidateDispatchKeyV1>,
@@ -1193,7 +1194,7 @@ impl V2IoAdmission {
         retained_at: Instant,
         requires_runtime_capacity: bool,
         runtime_lifecycle_ordinal: Option<u128>,
-        recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+        lifecycle_decision_apply: Option<LifecycleDecisionApplyDispatchKeyV1>,
         recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
         recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
         lifecycle_validate: Option<LifecycleValidateDispatchKeyV1>,
@@ -1212,7 +1213,7 @@ impl V2IoAdmission {
             service_debt: 0,
             requires_runtime_capacity,
             runtime_lifecycle_ordinal,
-            recovered_decision_apply,
+            lifecycle_decision_apply,
             recovered_lifecycle_sign,
             recovered_decision_fetch,
             lifecycle_validate,
@@ -1238,9 +1239,9 @@ impl V2IoAdmission {
         // sends always retain an ownership record before publication.
         let _ = state.owned.remove(position);
     }
-    fn recovered_decision_apply_completion_is_exact(
+    fn lifecycle_decision_apply_completion_is_exact(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
     ) -> bool {
         let state = self
             .completion_state
@@ -1249,7 +1250,7 @@ impl V2IoAdmission {
         let mut matches = state.owned.iter().filter(|owned| {
             owned.requires_runtime_capacity
                 && owned.runtime_lifecycle_ordinal == Some(key.lifecycle_ordinal())
-                && owned.recovered_decision_apply == Some(key)
+                && owned.lifecycle_decision_apply == Some(key)
         });
         matches.next().is_some() && matches.next().is_none()
     }
@@ -1345,7 +1346,7 @@ impl V2IoAdmission {
         };
         if owner.requires_runtime_capacity
             || owner.runtime_lifecycle_ordinal != Some(ordinal)
-            || owner.recovered_decision_apply.is_some()
+            || owner.lifecycle_decision_apply.is_some()
             || owner.recovered_lifecycle_sign.is_some()
             || owner.recovered_decision_fetch.is_some()
             || owner.lifecycle_validate.is_some()
@@ -1361,9 +1362,9 @@ impl V2IoAdmission {
         }
         state.owned.remove(position).is_some()
     }
-    fn transfer_recovered_decision_apply_completion(
+    fn transfer_lifecycle_decision_apply_completion(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
     ) -> bool {
         let mut state = self
             .completion_state
@@ -1376,7 +1377,7 @@ impl V2IoAdmission {
             .filter_map(|(position, owned)| {
                 (owned.requires_runtime_capacity
                     && owned.runtime_lifecycle_ordinal == Some(key.lifecycle_ordinal())
-                    && owned.recovered_decision_apply == Some(key))
+                    && owned.lifecycle_decision_apply == Some(key))
                 .then_some(position)
             });
         let Some(position) = positions.next() else {
@@ -1387,13 +1388,13 @@ impl V2IoAdmission {
         }
         state.owned.remove(position).is_some()
     }
-    fn acknowledge_recovered_decision_apply_completion(
+    fn acknowledge_lifecycle_decision_apply_completion(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
     ) {
         assert!(
-            self.transfer_recovered_decision_apply_completion(key),
-            "settled recovered Apply must retain one exact completion owner"
+            self.transfer_lifecycle_decision_apply_completion(key),
+            "settled lifecycle Decision Apply must retain one exact completion owner"
         );
     }
     fn completion_requires_runtime_capacity_at(&self, position: usize) -> Option<bool> {
@@ -1454,7 +1455,7 @@ struct V2IoTrackedWork {
     state: V2IoWorkState,
 }
 #[derive(Debug)]
-struct V2IoTrackedRecoveredDecisionApplyV1 {
+struct V2IoTrackedLifecycleDecisionApplyV1 {
     state: V2IoWorkState,
 }
 #[derive(Debug)]
@@ -1467,31 +1468,31 @@ struct V2IoTrackedRecoveredDecisionFetchBodyV1 {
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     state: V2IoWorkState,
 }
-enum RecoveredDecisionApplyRetryQueueErrorV1<T> {
+enum LifecycleDecisionApplyRetryQueueErrorV1<T> {
     Unavailable(T),
     InvalidOwner(T),
 }
-trait RecoveredDecisionApplyRetryTaskV1 {
-    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1;
+trait LifecycleDecisionApplyRetryTaskV1 {
+    fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1;
     fn into_command(self) -> V2IoCommand;
 }
-impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyTaskV1 {
-    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
-        RecoveredDecisionApplyTaskV1::dispatch_key(self)
+impl LifecycleDecisionApplyRetryTaskV1 for LifecycleDecisionApplyTaskV1 {
+    fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
+        LifecycleDecisionApplyTaskV1::dispatch_key(self)
     }
     fn into_command(self) -> V2IoCommand {
-        V2IoCommand::RecoveredDecisionApply(self)
+        V2IoCommand::LifecycleDecisionApply(self)
     }
 }
 #[cfg(test)]
-struct RecoveredDecisionApplyRetryTaskFixtureV1(RecoveredDecisionApplyDispatchKeyV1);
+struct LifecycleDecisionApplyRetryTaskFixtureV1(LifecycleDecisionApplyDispatchKeyV1);
 #[cfg(test)]
-impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyRetryTaskFixtureV1 {
-    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+impl LifecycleDecisionApplyRetryTaskV1 for LifecycleDecisionApplyRetryTaskFixtureV1 {
+    fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.0
     }
     fn into_command(self) -> V2IoCommand {
-        V2IoCommand::RecoveredDecisionApplyFixture(self.0)
+        V2IoCommand::LifecycleDecisionApplyFixture(self.0)
     }
 }
 #[derive(Debug)]
@@ -1506,8 +1507,8 @@ struct V2IoTrackedLifecycleValidateV1 {
 struct V2IoCommandQueueState {
     commands: VecDeque<V2IoCommand>,
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
-    recovered_decision_applies:
-        BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+    lifecycle_decision_applies:
+        BTreeMap<LifecycleDecisionApplyDispatchKeyV1, V2IoTrackedLifecycleDecisionApplyV1>,
     recovered_lifecycle_signs:
         BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,
     recovered_decision_fetch_bodies:
@@ -1984,55 +1985,55 @@ impl Drop for LifecycleValidateCapacityReservationV1<'_> {
         }
     }
 }
-/// Locked Consensus capacity until a recovered Apply dispatch enters FIFO.
-#[must_use = "the recovered Decision Apply reservation must commit its prepared dispatch"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
+/// Locked Consensus capacity until a lifecycle Decision Apply dispatch enters FIFO.
+#[must_use = "the lifecycle Decision Apply reservation must commit its prepared dispatch"]
+pub(in crate::sumeragi) struct LifecycleDecisionApplyCapacityReservationV1<'a> {
     queue: &'a V2IoCommandQueue,
     state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
     operation: Option<ConsensusFailStopOperation<'a>>,
-    key: RecoveredDecisionApplyDispatchKeyV1,
+    key: LifecycleDecisionApplyDispatchKeyV1,
 }
-impl RecoveredDecisionApplyCapacityReservationV1<'_> {
+impl LifecycleDecisionApplyCapacityReservationV1<'_> {
     /// Recheck that the claimed registry projection names this exact reservation.
     pub(in crate::sumeragi) fn preflight(
         &self,
-        prepared: &PreparedRecoveredDecisionApplyDispatch<'_>,
+        prepared: &PreparedLifecycleDecisionApplyDispatchV1<'_>,
     ) -> bool {
         let state = self
             .state
             .as_ref()
-            .expect("live recovered Apply reservation retains its queue cut");
+            .expect("live lifecycle Decision Apply reservation retains its queue cut");
         prepared.dispatch_key() == self.key
-            && !state.recovered_decision_applies.contains_key(&self.key)
+            && !state.lifecycle_decision_applies.contains_key(&self.key)
     }
     /// Atomically arm the registry dispatch and publish its dedicated worker command.
     pub(in crate::sumeragi) fn commit(
         mut self,
-        prepared: PreparedRecoveredDecisionApplyDispatch<'_>,
+        prepared: PreparedLifecycleDecisionApplyDispatchV1<'_>,
     ) {
         assert!(
             self.preflight(&prepared),
-            "reserved recovered Decision Apply changed before queue publication"
+            "reserved lifecycle Decision Apply changed before queue publication"
         );
         let task = prepared.commit_for_worker();
         assert_eq!(
             task.dispatch_key(),
             self.key,
-            "registry projection returned another recovered Apply dispatch"
+            "registry projection returned another lifecycle Decision Apply dispatch"
         );
         let mut state = self
             .state
             .take()
-            .expect("committed recovered Apply reservation retains its queue cut");
+            .expect("committed lifecycle Decision Apply reservation retains its queue cut");
         // Take this after the queue guard so unwinding activates restart before
         // another producer can acquire the released FIFO mutex.
         let operation = self
             .operation
             .take()
-            .expect("committed recovered Apply retains its fail-stop operation");
-        let replaced = state.recovered_decision_applies.insert(
+            .expect("committed lifecycle Decision Apply retains its fail-stop operation");
+        let replaced = state.lifecycle_decision_applies.insert(
             self.key,
-            V2IoTrackedRecoveredDecisionApplyV1 {
+            V2IoTrackedLifecycleDecisionApplyV1 {
                 state: V2IoWorkState::Queued,
             },
         );
@@ -2042,13 +2043,13 @@ impl RecoveredDecisionApplyCapacityReservationV1<'_> {
         );
         state
             .commands
-            .push_back(V2IoCommand::RecoveredDecisionApply(task));
+            .push_back(V2IoCommand::LifecycleDecisionApply(task));
         drop(state);
         self.queue.ready.notify_all();
         operation.complete();
     }
 }
-impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
+impl Drop for LifecycleDecisionApplyCapacityReservationV1<'_> {
     fn drop(&mut self) {
         drop(self.operation.take());
         if let Some(state) = self.state.take() {
@@ -2173,10 +2174,10 @@ pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
     /// The same carrier already owns queued, active, or pending work.
     AlreadyDispatched,
 }
-/// One registry-authenticated recovered Completion row whose physical corridor
+/// One registry-authenticated lifecycle Completion row whose physical corridor
 /// must participate in the same scheduler snapshot as every peer row.
-#[must_use = "every recovered Completion probe must enter one composite census"]
-pub(in crate::sumeragi) enum RecoveredCompletionCapacityProbeV1 {
+#[must_use = "every lifecycle Completion probe must enter one composite census"]
+pub(in crate::sumeragi) enum LifecycleCompletionCapacityProbeV1 {
     /// One lifecycle-owned Validate bound to its exact registry carrier.
     Validate {
         /// Exact logical Ready ordinal.
@@ -2184,12 +2185,12 @@ pub(in crate::sumeragi) enum RecoveredCompletionCapacityProbeV1 {
         /// Immutable registry-attested worker key.
         key: LifecycleValidateDispatchKeyV1,
     },
-    /// One recovered Decision Apply bound to its dedicated worker key.
+    /// One lifecycle Decision Apply bound to its dedicated worker key.
     Apply {
         /// Exact logical Ready ordinal.
         ordinal: u128,
         /// Closed worker dispatch key retained by the registry attestation.
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
     },
     /// One recovered lifecycle Sign bound to its dedicated worker key.
     Sign {
@@ -2209,13 +2210,13 @@ pub(in crate::sumeragi) enum RecoveredCompletionCapacityProbeV1 {
     },
 }
 
-enum RecoveredCompletionPreparedCapacityV1 {
+enum LifecycleCompletionPreparedCapacityV1 {
     Validate {
         key: LifecycleValidateDispatchKeyV1,
         available: bool,
     },
     Apply {
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
         available: bool,
     },
     Sign {
@@ -2229,7 +2230,7 @@ enum RecoveredCompletionPreparedCapacityV1 {
     },
 }
 
-impl RecoveredCompletionPreparedCapacityV1 {
+impl LifecycleCompletionPreparedCapacityV1 {
     const fn available(&self) -> bool {
         match self {
             Self::Validate { available, .. }
@@ -2249,18 +2250,18 @@ impl RecoveredCompletionPreparedCapacityV1 {
 
 /// Fail-stop snapshot freezing both recovered-Completion corridors; armed Drop
 /// closes output before releasing either mutex.
-#[must_use = "the recovered Completion census must select one row or complete unchanged"]
-pub(in crate::sumeragi) struct RecoveredCompletionCapacityCensusV1<'service> {
+#[must_use = "the lifecycle Completion census must select one row or complete unchanged"]
+pub(in crate::sumeragi) struct LifecycleCompletionCapacityCensusV1<'service> {
     operation: Option<ConsensusFailStopOperation<'service>>,
     pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
     queue: &'service V2IoCommandQueue,
     state: Option<std::sync::MutexGuard<'service, V2IoCommandQueueState>>,
     worker_predecessor_debt: u64,
     output_predecessor_debt: u64,
-    candidates: BTreeMap<u128, RecoveredCompletionPreparedCapacityV1>,
+    candidates: BTreeMap<u128, LifecycleCompletionPreparedCapacityV1>,
 }
 
-impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
+impl<'service> LifecycleCompletionCapacityCensusV1<'service> {
     /// Return one row's frozen physical availability and predecessor debt.
     pub(in crate::sumeragi) fn authenticated_capacity(
         &self,
@@ -2294,7 +2295,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         drop(self.pending.take());
         self.operation
             .take()
-            .expect("recovered Completion census retains its fail-stop operation")
+            .expect("lifecycle Completion census retains its fail-stop operation")
             .complete();
     }
 
@@ -2303,7 +2304,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         mut self,
         ordinal: u128,
     ) -> Result<LifecycleValidateCapacityReservationV1<'service>, Self> {
-        let Some(RecoveredCompletionPreparedCapacityV1::Validate {
+        let Some(LifecycleCompletionPreparedCapacityV1::Validate {
             key,
             available: true,
         }) = self.candidates.remove(&ordinal)
@@ -2339,8 +2340,8 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
     pub(in crate::sumeragi) fn select_apply(
         mut self,
         ordinal: u128,
-    ) -> Result<RecoveredDecisionApplyCapacityReservationV1<'service>, Self> {
-        let Some(RecoveredCompletionPreparedCapacityV1::Apply {
+    ) -> Result<LifecycleDecisionApplyCapacityReservationV1<'service>, Self> {
+        let Some(LifecycleCompletionPreparedCapacityV1::Apply {
             key,
             available: true,
         }) = self.candidates.remove(&ordinal)
@@ -2350,21 +2351,21 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         let state = self
             .state
             .take()
-            .expect("selected recovered Apply retains the worker queue cut");
+            .expect("selected lifecycle Decision Apply retains the worker queue cut");
         let operation = self
             .operation
             .take()
-            .expect("selected recovered Apply retains the fail-stop operation");
+            .expect("selected lifecycle Decision Apply retains the fail-stop operation");
         assert!(
             state.commands.len() < self.queue.capacity
                 && self
                     .queue
                     .admission
                     .try_reserve(V2IoAdmissionClass::Consensus),
-            "frozen recovered Apply capacity changed before selection"
+            "frozen lifecycle Decision Apply capacity changed before selection"
         );
         drop(self.pending.take());
-        Ok(RecoveredDecisionApplyCapacityReservationV1 {
+        Ok(LifecycleDecisionApplyCapacityReservationV1 {
             queue: self.queue,
             state: Some(state),
             operation: Some(operation),
@@ -2377,7 +2378,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         mut self,
         ordinal: u128,
     ) -> Result<RecoveredLifecycleSignCapacityReservationV1<'service>, Self> {
-        let Some(RecoveredCompletionPreparedCapacityV1::Sign {
+        let Some(LifecycleCompletionPreparedCapacityV1::Sign {
             key,
             available: true,
         }) = self.candidates.remove(&ordinal)
@@ -2421,7 +2422,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
         ),
         Self,
     > {
-        let Some(RecoveredCompletionPreparedCapacityV1::Fetch {
+        let Some(LifecycleCompletionPreparedCapacityV1::Fetch {
             owner,
             fanout,
             available: true,
@@ -2449,7 +2450,7 @@ impl<'service> RecoveredCompletionCapacityCensusV1<'service> {
     }
 }
 
-impl Drop for RecoveredCompletionCapacityCensusV1<'_> {
+impl Drop for LifecycleCompletionCapacityCensusV1<'_> {
     fn drop(&mut self) {
         // Activate restart while both corridors are still frozen. The locks
         // are released only after this custom Drop returns.
@@ -2594,8 +2595,8 @@ enum V2IoTrySendError {
         work_id: EffectWorkId,
         command: V2IoCommand,
     },
-    UnreservedRecoveredDecisionApply {
-        key: RecoveredDecisionApplyDispatchKeyV1,
+    UnreservedLifecycleDecisionApply {
+        key: LifecycleDecisionApplyDispatchKeyV1,
         command: V2IoCommand,
     },
 }
@@ -2608,8 +2609,8 @@ impl std::fmt::Debug for V2IoTrySendError {
                 .debug_struct("ConflictingWorkId")
                 .field("work_id", work_id)
                 .finish(),
-            Self::UnreservedRecoveredDecisionApply { key, .. } => formatter
-                .debug_struct("UnreservedRecoveredDecisionApply")
+            Self::UnreservedLifecycleDecisionApply { key, .. } => formatter
+                .debug_struct("UnreservedLifecycleDecisionApply")
                 .field("key", key)
                 .finish(),
         }
@@ -2635,7 +2636,7 @@ fn build_v2_io_command_channel(
         state: Mutex::new(V2IoCommandQueueState {
             commands: VecDeque::with_capacity(capacity.min(1_024)),
             work: BTreeMap::new(),
-            recovered_decision_applies: BTreeMap::new(),
+            lifecycle_decision_applies: BTreeMap::new(),
             recovered_lifecycle_signs: BTreeMap::new(),
             recovered_decision_fetch_bodies: BTreeMap::new(),
             lifecycle_validates: BTreeMap::new(),
@@ -2762,7 +2763,7 @@ impl V2IoCommandQueue {
         ))
     }
     /// Project worker capacity for one recovered candidate without changing the queue cut.
-    fn recovered_completion_worker_capacity(&self, state: &V2IoCommandQueueState) -> bool {
+    fn lifecycle_completion_worker_capacity(&self, state: &V2IoCommandQueueState) -> bool {
         state.commands.len() < self.capacity
             && self.admission.queued() < self.admission.limit(V2IoAdmissionClass::Consensus)
     }
@@ -2772,8 +2773,8 @@ impl V2IoCommandQueue {
         class: V2IoAdmissionClass,
         command: V2IoCommand,
     ) -> Result<(), V2IoTrySendError> {
-        if let Some(key) = command.recovered_decision_apply_key() {
-            return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
+        if let Some(key) = command.lifecycle_decision_apply_key() {
+            return Err(V2IoTrySendError::UnreservedLifecycleDecisionApply { key, command });
         }
         assert!(
             command.recovered_lifecycle_sign_key().is_none(),
@@ -2882,11 +2883,11 @@ impl V2IoCommandQueue {
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
                 }
-                if let Some(key) = command.recovered_decision_apply_key() {
+                if let Some(key) = command.lifecycle_decision_apply_key() {
                     let tracked = state
-                        .recovered_decision_applies
+                        .lifecycle_decision_applies
                         .get_mut(&key)
-                        .expect("queued recovered Decision Apply must have an ownership record");
+                        .expect("queued lifecycle Decision Apply must have an ownership record");
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
                 }
@@ -2952,11 +2953,11 @@ impl V2IoCommandQueue {
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
         }
-        if let Some(key) = command.recovered_decision_apply_key() {
+        if let Some(key) = command.lifecycle_decision_apply_key() {
             let tracked = state
-                .recovered_decision_applies
+                .lifecycle_decision_applies
                 .get_mut(&key)
-                .expect("queued recovered Decision Apply must have an ownership record");
+                .expect("queued lifecycle Decision Apply must have an ownership record");
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
         }
@@ -3003,21 +3004,21 @@ impl V2IoCommandQueue {
         assert_eq!(tracked.state, V2IoWorkState::Active);
         tracked.state = V2IoWorkState::CompletionPending;
     }
-    fn complete_recovered_decision_apply(
+    fn complete_lifecycle_decision_apply(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-        result: &RecoveredDecisionApplyWorkerResultV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
+        result: &LifecycleDecisionApplyWorkerResultV1,
     ) -> Result<(), String> {
         let mut state = self.lock();
         let tracked = state
-            .recovered_decision_applies
+            .lifecycle_decision_applies
             .get_mut(&key)
             .ok_or_else(|| {
-                "completed recovered Decision Apply lost its lifecycle owner".to_owned()
+                "completed lifecycle Decision Apply lost its lifecycle owner".to_owned()
             })?;
         if tracked.state != V2IoWorkState::Active || result.dispatch_key() != key {
             return Err(
-                "completed recovered Decision Apply changed its exact dispatch material".to_owned(),
+                "completed lifecycle Decision Apply changed its exact dispatch material".to_owned(),
             );
         }
         tracked.state = V2IoWorkState::CompletionPending;
@@ -3114,45 +3115,45 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
-    fn retry_recovered_decision_apply<T: RecoveredDecisionApplyRetryTaskV1>(
+    fn retry_lifecycle_decision_apply<T: LifecycleDecisionApplyRetryTaskV1>(
         &self,
         task: T,
-    ) -> Result<(), RecoveredDecisionApplyRetryQueueErrorV1<T>> {
+    ) -> Result<(), LifecycleDecisionApplyRetryQueueErrorV1<T>> {
         let key = task.dispatch_key();
         let mut state = self.lock();
         if !state.sender_open
             || !state.receiver_open
             || !self
                 .admission
-                .recovered_decision_apply_completion_is_exact(key)
+                .lifecycle_decision_apply_completion_is_exact(key)
             || state
-                .recovered_decision_applies
+                .lifecycle_decision_applies
                 .get(&key)
                 .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
             || state
                 .commands
                 .iter()
-                .any(|command| command.recovered_decision_apply_key() == Some(key))
+                .any(|command| command.lifecycle_decision_apply_key() == Some(key))
         {
-            return Err(RecoveredDecisionApplyRetryQueueErrorV1::InvalidOwner(task));
+            return Err(LifecycleDecisionApplyRetryQueueErrorV1::InvalidOwner(task));
         }
         if state.commands.len() >= self.capacity
             || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
         {
-            return Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(task));
+            return Err(LifecycleDecisionApplyRetryQueueErrorV1::Unavailable(task));
         }
         // Transfer the exact keyed completion slot back to the command FIFO
         // while the same queue cut is still locked. The worker cannot publish
         // the replacement completion before the old owner is gone.
         assert!(
             self.admission
-                .transfer_recovered_decision_apply_completion(key),
-            "locked recovered Apply retry must retain its exact completion owner"
+                .transfer_lifecycle_decision_apply_completion(key),
+            "locked lifecycle Decision Apply retry must retain its exact completion owner"
         );
         state
-            .recovered_decision_applies
+            .lifecycle_decision_applies
             .get_mut(&key)
-            .expect("validated recovered Apply retry retains its command owner")
+            .expect("validated lifecycle Decision Apply retry retains its command owner")
             .state = V2IoWorkState::Queued;
         state.commands.push_back(task.into_command());
         drop(state);
@@ -3167,31 +3168,31 @@ impl V2IoCommandQueue {
             .expect("delivered Sumeragi v2 completion must have an ownership record");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
     }
-    fn prepare_recovered_decision_apply_ack(
+    fn prepare_lifecycle_decision_apply_ack(
         self: &Arc<Self>,
-        key: RecoveredDecisionApplyDispatchKeyV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
         output_guard: Arc<ConsensusOutputGuard>,
-    ) -> Result<RecoveredDecisionApplyWorkAckV1, String> {
+    ) -> Result<LifecycleDecisionApplyWorkAckV1, String> {
         let state = self.lock();
-        let tracked = state.recovered_decision_applies.get(&key).ok_or_else(|| {
-            "recovered Decision Apply completion lost its exact command owner".to_owned()
+        let tracked = state.lifecycle_decision_applies.get(&key).ok_or_else(|| {
+            "lifecycle Decision Apply completion lost its exact command owner".to_owned()
         })?;
         if tracked.state != V2IoWorkState::CompletionPending {
             return Err(
-                "recovered Decision Apply completion crossed a non-pending command owner"
+                "lifecycle Decision Apply completion crossed a non-pending command owner"
                     .to_owned(),
             );
         }
         if !self
             .admission
-            .recovered_decision_apply_completion_is_exact(key)
+            .lifecycle_decision_apply_completion_is_exact(key)
         {
             return Err(
-                "recovered Decision Apply completion changed its bounded FIFO ownership".to_owned(),
+                "lifecycle Decision Apply completion changed its bounded FIFO ownership".to_owned(),
             );
         }
         drop(state);
-        Ok(RecoveredDecisionApplyWorkAckV1 {
+        Ok(LifecycleDecisionApplyWorkAckV1 {
             queue: Arc::clone(self),
             output_guard,
             key,
@@ -3214,12 +3215,12 @@ impl V2IoCommandQueue {
         self.admission
             .transfer_recovered_lifecycle_sign_completion_at(key, ownership_position)
     }
-    fn acknowledge_recovered_decision_apply(&self, key: RecoveredDecisionApplyDispatchKeyV1) {
+    fn acknowledge_lifecycle_decision_apply(&self, key: LifecycleDecisionApplyDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
-            .recovered_decision_applies
+            .lifecycle_decision_applies
             .remove(&key)
-            .expect("settled recovered Decision Apply must retain its exact command owner");
+            .expect("settled lifecycle Decision Apply must retain its exact command owner");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
     }
     fn acknowledge_recovered_lifecycle_sign(&self, key: RecoveredLifecycleSignDispatchKeyV1) {
@@ -3383,7 +3384,7 @@ impl V2IoCommandQueue {
             .work
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         state
-            .recovered_decision_applies
+            .lifecycle_decision_applies
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         state
             .recovered_lifecycle_signs
@@ -3447,12 +3448,12 @@ impl V2IoCommandReceiver {
     fn complete_work(&self, work_id: EffectWorkId) {
         self.queue.complete_work(work_id);
     }
-    fn complete_recovered_decision_apply(
+    fn complete_lifecycle_decision_apply(
         &self,
-        key: RecoveredDecisionApplyDispatchKeyV1,
-        result: &RecoveredDecisionApplyWorkerResultV1,
+        key: LifecycleDecisionApplyDispatchKeyV1,
+        result: &LifecycleDecisionApplyWorkerResultV1,
     ) -> Result<(), String> {
-        self.queue.complete_recovered_decision_apply(key, result)
+        self.queue.complete_lifecycle_decision_apply(key, result)
     }
     fn complete_recovered_lifecycle_sign(
         &self,

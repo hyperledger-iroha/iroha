@@ -587,12 +587,12 @@ impl PreparedReadyDurableValidateApplyPublication<'_> {
             .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?
             .project_sealed_validate_apply_candidate(permit, verified, receipt)
     }
-    /// Consume the completed WAL seal into closed ordinary Apply registry work.
+    /// Consume the completed WAL seal into its dedicated live Apply carrier.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn prepare_registry_work(
         mut self,
         permit: LiveValidateApplyWorkProjectionPermit,
-        receipt: &DurableBodyReceipt,
+        receipt: &ValidatedBodyReceipt,
     ) -> Result<Self, Self> {
         if self.registry_work.is_some() {
             return Err(self);

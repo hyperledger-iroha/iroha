@@ -209,6 +209,72 @@ pub(super) struct PreparedLiveValidateApplyRegistryPublication<'registry, 'adapt
 pub(super) struct LiveValidateApplyRegistryPublicationError<'registry, 'adapter> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidateApplyPublication<'adapter>,
+    reason: LiveValidateApplyRegistryPublicationFailureReason,
+}
+/// Exact fail-stop stage that rejected a live Validate-to-Apply publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LiveValidateApplyRegistryPublicationFailureReason {
+    /// The prepared registry carrier no longer matches the claimed parent lease.
+    LeaseMismatch,
+    /// The prepared registry carrier does not retain a successful validation.
+    UnexpectedOutcome,
+    /// The exact completed Validate parent is absent from the registry.
+    MissingParent,
+    /// The completed Validate carrier lost its durable validated receipt.
+    MissingReceipt,
+    /// The staged child coordinates cannot form one concrete registry address.
+    InvalidChildAddress,
+    /// The staged child address is not the exact same-owner Effect-slot successor.
+    ChildAddressMismatch,
+    /// Another concrete carrier already occupies the exact staged child address.
+    ChildAddressOccupied {
+        address: ConcreteWorkAddress,
+        incumbent_kind: &'static str,
+        incumbent_digest: LifecycleDigest,
+    },
+    /// The retained WAL effect could not close over the staged Apply candidate.
+    AdapterWork,
+    /// The closed Apply work did not match the exact staged child row.
+    RegistryWorkMismatch,
+}
+impl LiveValidateApplyRegistryPublicationError<'_, '_> {
+    /// Return only the closed failure discriminator; retained authorities stay opaque.
+    pub(super) const fn reason(&self) -> LiveValidateApplyRegistryPublicationFailureReason {
+        self.reason
+    }
+}
+
+fn concrete_work_kind_name(kind: &ConcreteLifecycleWorkKind) -> &'static str {
+    match kind {
+        ConcreteLifecycleWorkKind::PendingAdapter { .. } => "PendingAdapter",
+        ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => "CertifiedFetchCompletion",
+        ConcreteLifecycleWorkKind::DurableStoreBody(_) => "DurableStoreBody",
+        ConcreteLifecycleWorkKind::DurableValidateBody(_) => "DurableValidateBody",
+        ConcreteLifecycleWorkKind::DurableValidateCompletion(_) => "DurableValidateCompletion",
+        ConcreteLifecycleWorkKind::DurableLiveWalApply(_) => "DurableLiveWalApply",
+        ConcreteLifecycleWorkKind::DurableLiveWalSign(_) => "DurableLiveWalSign",
+        ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_) => "DurableRecoveredWalSign",
+        ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_) => {
+            "DurableRecoveredLifecycleNextWalVoteSign"
+        }
+        ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_) => {
+            "DurableRecoveredWalControlSign"
+        }
+        ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_) => {
+            "DurableRecoveredLifecycleSignedBroadcast"
+        }
+        ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_) => {
+            "DurableRecoveredWalDecisionFetch"
+        }
+        ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_) => {
+            "DurableRecoveredDecisionStore"
+        }
+        ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_) => {
+            "DurableRecoveredDecisionApply"
+        }
+        ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => "DurableCertifiedServe",
+        ConcreteLifecycleWorkKind::DurableProducerTurn(_) => "DurableProducerTurn",
+    }
 }
 /// Pre-fsync live registry publication using the recovered-WAL exclusive
 /// detached-parent/child-vacancy reservation.
@@ -940,28 +1006,69 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
         LiveValidateApplyRegistryPublicationError<'registry, 'adapter>,
     > {
         let Self { registry, adapter } = self;
-        let child_address = ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot);
-        let receipt = registry
-            .validated_completion()
-            .map(|completion| completion.incumbent.durable_receipt.clone());
-        let coordinates_are_exact = registry.matches_exact_lease(lease)
-            && registry.outcome_kind == ReadyDurableValidateOutcomeKind::Validated
-            && registry.registry.entries.contains_key(&registry.address)
-            && receipt.is_some()
-            && child_address.is_some_and(|address| {
-                address != registry.address
-                    && address.owner == registry.address.owner
-                    && address.ordinal == child_ordinal
-                    && address.slot == PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
-                    && !registry.registry.entries.contains_key(&address)
-            });
-        if !coordinates_are_exact {
+        if !registry.matches_exact_lease(lease) {
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::LeaseMismatch,
             });
         }
-        let receipt = receipt.expect("validated Apply preflight retains its durable body");
+        if registry.outcome_kind != ReadyDurableValidateOutcomeKind::Validated {
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::UnexpectedOutcome,
+            });
+        }
+        if !registry.registry.entries.contains_key(&registry.address) {
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::MissingParent,
+            });
+        }
+        let Some(receipt) = registry
+            .validated_completion()
+            .and_then(|completion| completion.outcome.validated_receipt().cloned())
+        else {
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::MissingReceipt,
+            });
+        };
+        let Some(child_address) =
+            ConcreteWorkAddress::new(lease.owner(), child_ordinal, child_slot)
+        else {
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::InvalidChildAddress,
+            });
+        };
+        if child_address == registry.address
+            || child_address.owner != registry.address.owner
+            || child_address.ordinal != child_ordinal
+            || child_address.slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
+        {
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::ChildAddressMismatch,
+            });
+        }
+        if let Some(incumbent) = registry.registry.entries.get(&child_address) {
+            let reason = LiveValidateApplyRegistryPublicationFailureReason::ChildAddressOccupied {
+                address: child_address,
+                incumbent_kind: concrete_work_kind_name(&incumbent.kind),
+                incumbent_digest: incumbent.digest(),
+            };
+            return Err(LiveValidateApplyRegistryPublicationError {
+                _registry: registry,
+                _adapter: adapter,
+                reason,
+            });
+        }
         let adapter = match adapter.prepare_registry_work(
             LiveValidateApplyWorkProjectionPermit::new(admission_candidate),
             &receipt,
@@ -971,6 +1078,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 return Err(LiveValidateApplyRegistryPublicationError {
                     _registry: registry,
                     _adapter: adapter,
+                    reason: LiveValidateApplyRegistryPublicationFailureReason::AdapterWork,
                 });
             }
         };
@@ -978,9 +1086,9 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
+                reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
             });
         }
-        let child_address = child_address.expect("exact Apply coordinates retain one child");
         let PreparedReadyDurableValidateExecution {
             registry,
             address: parent_address,
@@ -1013,15 +1121,16 @@ impl PreparedLiveValidateApplyRegistryPublication<'_, '_> {
     }
 }
 impl LiveValidateApplyRegistryReservation<'_> {
-    /// Install prechecked ordinary Apply work at the reserved child address.
-    fn install_live_apply(self, work: ConcreteLifecycleWork) {
+    /// Install the prechecked dedicated live Apply at the reserved child address.
+    fn install_live_apply(self, work: PreparedLiveValidateApplyRegistryWork) {
         let Self {
             registry,
             parent_address,
             child_address,
             child_digest,
-            _detached_parent: _,
+            _detached_parent,
         } = self;
+        let work = work.into_concrete(parent_address, _detached_parent, child_address);
         debug_assert_ne!(parent_address, child_address);
         debug_assert!(!registry.entries.contains_key(&parent_address));
         debug_assert!(!registry.entries.contains_key(&child_address));
@@ -1329,23 +1438,25 @@ pub(super) struct DurableValidateCompletionAuthority {
     payload: DurablePayloadReference,
 }
 /// Typed location of one published successful validation carrier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct PublishedValidated {
     location: DurableValidatePublishedLocation,
 }
 /// Typed location of one published deterministic-rejection carrier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct PublishedRejected {
     location: DurableValidatePublishedLocation,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 struct DurableValidatePublishedLocation {
     address: ConcreteWorkAddress,
     incumbent_digest: LifecycleDigest,
     replacement_digest: LifecycleDigest,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
 }
 /// Move-only merge-sidecar dependency retaining its exact executed dispatch.
 #[derive(Debug)]
@@ -1367,6 +1478,177 @@ pub(in crate::sumeragi) enum DurableValidateCompletionPublication {
     /// Merge-sidecar absence left both volatile sides exactly Waiting/original.
     DeferredMergeSidecar(DeferredDurableValidateDispatch),
 }
+
+/// Move-only exact identity of one Ready Validate successor which must run
+/// before physical completion classification resumes.
+enum ReadyValidateSuccessorIdentityV1 {
+    /// A successful volatile Validate completion replaced its same-address carrier.
+    PublishedValidated(DurableValidatePublishedLocation),
+    /// A rejected volatile Validate completion replaced its same-address carrier.
+    PublishedRejected(DurableValidatePublishedLocation),
+    /// A durable merge-sidecar registration woke its unchanged carrier.
+    SidecarWake {
+        dispatch_key: LifecycleValidateDispatchKeyV1,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    },
+}
+
+/// Move-only exact identity of one Ready Validate successor.
+///
+/// The launched Completion owner retains this token ahead of physical queue
+/// classification so the same-address successor is freshly authenticated and
+/// reduced before any Runtime turn can rediscover Apply.
+#[must_use = "the exact Ready Validate successor must be synchronously resolved"]
+pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
+    identity: ReadyValidateSuccessorIdentityV1,
+    reducer_fence_wait: Option<WaitToken>,
+}
+
+impl ReadyValidateSuccessorV1 {
+    /// Consume one successful validation publication into the exact successor token.
+    pub(in crate::sumeragi) const fn from_validated(published: PublishedValidated) -> Self {
+        Self {
+            identity: ReadyValidateSuccessorIdentityV1::PublishedValidated(published.location),
+            reducer_fence_wait: None,
+        }
+    }
+
+    /// Consume one deterministic rejection publication into the exact successor token.
+    pub(in crate::sumeragi) const fn from_rejected(published: PublishedRejected) -> Self {
+        Self {
+            identity: ReadyValidateSuccessorIdentityV1::PublishedRejected(published.location),
+            reducer_fence_wait: None,
+        }
+    }
+
+    /// Bind a consumed sidecar registration to the fresh unchanged Ready carrier.
+    pub(super) fn from_sidecar_wake(
+        dispatch_key: LifecycleValidateDispatchKeyV1,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        attestation: AttestedReadyValidateDemand,
+    ) -> Option<Self> {
+        (attestation.requires_io_dispatch()
+            && attestation.dispatch_key() == dispatch_key
+            && dispatch_key.matches_consensus_round(&round))
+        .then_some(Self {
+                identity: ReadyValidateSuccessorIdentityV1::SidecarWake {
+                    dispatch_key,
+                    round,
+                    subject,
+                },
+                reducer_fence_wait: None,
+            })
+    }
+
+    /// Return the same-address lifecycle ordinal which must be selected next.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        match &self.identity {
+            ReadyValidateSuccessorIdentityV1::PublishedValidated(location)
+            | ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => {
+                location.address.ordinal
+            }
+            ReadyValidateSuccessorIdentityV1::SidecarWake { dispatch_key, .. } => {
+                dispatch_key.lifecycle_ordinal()
+            }
+        }
+    }
+
+    /// Recheck the complete Ready carrier coordinate against the fresh registry seal.
+    pub(super) fn exactly_matches_ready_attestation(
+        &self,
+        attestation: AttestedReadyValidateDemand,
+    ) -> bool {
+        let key = attestation.dispatch_key();
+        match &self.identity {
+            ReadyValidateSuccessorIdentityV1::PublishedValidated(location)
+            | ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => {
+                !attestation.requires_io_dispatch()
+                    && key.owner() == location.address.owner
+                    && key.lifecycle_ordinal() == location.address.ordinal
+                    && key.slot() == location.address.slot
+                    && key.digest() == location.replacement_digest
+                    && location.incumbent_digest != location.replacement_digest
+            }
+            ReadyValidateSuccessorIdentityV1::SidecarWake { dispatch_key, .. } => {
+                attestation.requires_io_dispatch() && key == *dispatch_key
+            }
+        }
+    }
+
+    /// Return whether resolving this token must enter the dedicated Validate worker.
+    pub(super) const fn requires_io_dispatch(&self) -> bool {
+        matches!(
+            &self.identity,
+            ReadyValidateSuccessorIdentityV1::SidecarWake { .. }
+        )
+    }
+
+    /// Borrow the exact preliminary retransmit owner for this successor.
+    ///
+    /// The fresh registry attestation supplies the installed dispatch key;
+    /// publication or sidecar ownership supplies the immutable round and
+    /// subject. Rejected publication is explicitly marked so an Apply can
+    /// never coalesce under a deterministic rejection.
+    pub(super) fn preliminary_retransmit_identity(
+        &self,
+        attestation: AttestedReadyValidateDemand,
+    ) -> Option<(
+        LifecycleValidateDispatchKeyV1,
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        bool,
+    )> {
+        if !self.exactly_matches_ready_attestation(attestation) {
+            return None;
+        }
+        let key = attestation.dispatch_key();
+        match &self.identity {
+            ReadyValidateSuccessorIdentityV1::PublishedValidated(location) => {
+                Some((key, location.round, location.subject, true))
+            }
+            ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => {
+                Some((key, location.round, location.subject, false))
+            }
+            ReadyValidateSuccessorIdentityV1::SidecarWake { round, subject, .. } => {
+                Some((key, *round, *subject, true))
+            }
+        }
+    }
+
+    /// Borrow the exact reducer-fence wait retained by a Busy preview.
+    pub(super) const fn reducer_fence_wait(&self) -> Option<WaitToken> {
+        self.reducer_fence_wait
+    }
+
+    /// Retain this exact successor across one reducer-fence Busy result.
+    pub(super) fn retain_on_reducer_fence(mut self, wait: WaitToken) -> Option<Self> {
+        if !matches!(wait.source(), WaitSource::External(_))
+            || self
+                .reducer_fence_wait
+                .is_some_and(|current| current.source() != wait.source())
+        {
+            return None;
+        }
+        self.reducer_fence_wait = Some(wait);
+        Some(self)
+    }
+}
+
+impl PublishedValidated {
+    /// Return the exact lifecycle ordinal whose validated carrier became Ready.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        self.location.address.ordinal
+    }
+}
+
+impl PublishedRejected {
+    /// Return the exact lifecycle ordinal whose rejected carrier became Ready.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        self.location.address.ordinal
+    }
+}
 /// Borrow-bound exact executed-dispatch reattachment.
 ///
 /// Drop changes nothing. The only consuming paths either return the dispatch
@@ -1387,11 +1669,11 @@ pub(super) struct StagedDurableValidateCompletion<'a> {
     address: ConcreteWorkAddress,
     request: Option<DetachedDurableValidateExecution>,
     wake: Option<DurableValidateWakeAuthority>,
-    publication: PublishedDurableValidateCompletion,
+    publication: Option<PublishedDurableValidateCompletion>,
     armed: bool,
 }
-/// Infallible Copy metadata returned when an armed carrier is committed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Infallible move-only metadata returned when an armed carrier is committed.
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum PublishedDurableValidateCompletion {
     /// Exact successful-validation publication metadata.
     Validated(PublishedValidated),
@@ -1437,6 +1719,17 @@ pub(super) struct PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter> {
 pub(super) struct PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     fetch_address: ConcreteWorkAddress,
+    store: super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1,
+    adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
+}
+/// Recovered Fetch successor rebound to its exact staged Store row.
+///
+/// Durable actor-global admission chooses the address. The original Fetch
+/// remains installed until the exact bound successor is fsynced and published.
+#[must_use = "bound recovered Decision Store successor has not been published"]
+pub(super) struct BoundRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    fetch_address: ConcreteWorkAddress,
     store_address: ConcreteWorkAddress,
     store: super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1,
     adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
@@ -1448,6 +1741,19 @@ pub(super) struct PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapt
 /// carrier, while the preview keeps the serialized runtime borrowed.
 #[must_use = "recovered signed Broadcast successor has not been published"]
 pub(super) struct PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
+    registry: &'registry mut ConcreteLifecycleWorkRegistry,
+    sign_address: ConcreteWorkAddress,
+    broadcast: super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+    verified: VerifiedHeightContext,
+    adapter: crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter>,
+}
+/// Recovered Sign successor rebound to its exact staged Broadcast row.
+///
+/// The registry address does not exist until actor-global durable admission
+/// has reserved and staged the child ordinal. Dropping this token before
+/// LedgerV1 publication leaves the original Sign carrier installed.
+#[must_use = "bound recovered signed Broadcast successor has not been published"]
+pub(super) struct BoundRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
     registry: &'registry mut ConcreteLifecycleWorkRegistry,
     sign_address: ConcreteWorkAddress,
     broadcast_address: ConcreteWorkAddress,

@@ -1,4 +1,163 @@
 impl ConcreteLifecycleWorkRegistry {
+    /// Join every exact cold Ready Validate carrier to its replay authority.
+    ///
+    /// This read-only launch cut deliberately returns no owner when the runtime
+    /// has no Ready Validate row. Every carrier is accepted only after its
+    /// complete logical, physical, replay, and candidate-authority coordinates
+    /// are revalidated. A Commit-refined carrier must additionally equal the
+    /// runtime's sole replayed Decision.
+    pub(super) fn project_recovered_durable_validate_retry_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        decision: Option<(
+            wire::ConsensusRound,
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
+    ) -> Result<RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1>
+    {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidDecision);
+        }
+        if let Some((decision_round, proposal_round, _, _)) = decision
+            && (decision_round != proposal_round
+                || decision_round.context_id.0.as_ref()
+                    != coordinator.active_context.id().as_bytes()
+                || decision_round.height != coordinator.active_context.height())
+        {
+            return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidDecision);
+        }
+        let mut logical_keys = std::collections::BTreeSet::new();
+        for work in self.entries.values() {
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+                continue;
+            };
+            let statement = validate
+                .pending
+                .candidate_statement()
+                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
+            let Some(subject) = statement.subject() else {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+            };
+            if !logical_keys.insert((statement.proposal_round(), subject)) {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers);
+            }
+        }
+        let mut owners = BTreeMap::new();
+        for (address, work) in &self.entries {
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+                continue;
+            };
+            let record = coordinator
+                .records
+                .get(&address.ordinal)
+                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
+            let metadata = coordinator
+                .durable_records
+                .get(&address.ordinal)
+                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
+            let statement = validate
+                .pending
+                .candidate_statement()
+                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
+            let Some(subject) = statement.subject() else {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+            };
+            let expected_key = LifecycleKey::new(
+                coordinator.active_context.id(),
+                LifecycleRound::new(statement.round().height, statement.round().view),
+                Some(LifecycleRound::new(
+                    statement.proposal_round().height,
+                    statement.proposal_round().view,
+                )),
+                Some(projection::block_subject(subject)),
+                LifecyclePhase::Validate,
+                statement
+                    .execution_commitment()
+                    .map(projection::execution_commitment),
+            );
+            let matching_decision = decision.filter(|(_, proposal_round, decision_subject, _)| {
+                *proposal_round == statement.proposal_round() && *decision_subject == subject
+            });
+            match (statement.phase(), statement.execution_commitment()) {
+                (Some(wire::GlobalPhase::Commit), Some(commitment)) => {
+                    let carrier_decision = (
+                        statement.round(),
+                        statement.proposal_round(),
+                        subject,
+                        commitment,
+                    );
+                    if decision != Some(carrier_decision) {
+                        return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+                    }
+                }
+                (Some(wire::GlobalPhase::Prepare), Some(_)) | (None, None) => {}
+                _ => {
+                    return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+                }
+            }
+            let AdapterEffect::ValidateBody {
+                round,
+                subject: effect_subject,
+                ..
+            } = &validate.effect
+            else {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+            };
+            if *round != statement.proposal_round()
+                || *effect_subject != subject
+                || statement.context_id() != statement.round().context_id
+                || statement.context_id() != statement.proposal_round().context_id
+                || statement.context_id().0.as_ref() != coordinator.active_context.id().as_bytes()
+                || statement.round().height != coordinator.active_context.height()
+                || record.state != super::LifecycleState::Ready
+                || record.work_class != LifecycleWorkClass::Validate
+                || record.stage
+                    != LifecycleStage::new(
+                        LifecycleStageKind::ValidateBody,
+                        PredecessorScope::Independent,
+                    )
+                || record.key != expected_key
+                || record.ordinal != address.ordinal
+                || record.owner != address.owner
+                || record.physical_slots != BTreeMap::from([(address.slot, work.digest)])
+                || record.episode.slot_universe != std::collections::BTreeSet::from([address.slot])
+                || record.episode.consumed_slots != std::collections::BTreeSet::from([address.slot])
+                || coordinator.key_index.get(&record.key) != Some(&record.ordinal)
+                || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
+                || !coordinator.ready_index.contains(&record.ordinal)
+                || !work.validates_at(*address)
+                || !validate.matches_recovered_record(
+                    coordinator.active_context,
+                    record,
+                    metadata,
+                    work.digest,
+                )
+            {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+            }
+            let binding = validate
+                .pending
+                .project_recovered_durable_validate_retry_binding(
+                    &validate.effect,
+                    matching_decision,
+                )
+                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
+            let key = (*round, subject);
+            let owner = RecoveredDurableValidateRetryOwnerV1 {
+                expected_decision: matching_decision,
+                effect: validate.effect.clone(),
+                durable_receipt: validate.durable_receipt.clone(),
+                binding,
+            };
+            if owners.insert(key, owner).is_some() {
+                return Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers);
+            }
+        }
+        Ok(RecoveredDurableValidateRetryCensusV1 { owners })
+    }
+
     /// Seal the complete current Ready census when its oldest row is an
     /// executable ProducerTurn. `Ok(None)` means another Ready row must run
     /// first, or there is no Ready work.
@@ -2911,16 +3070,38 @@ impl ConcreteLifecycleWorkRegistry {
                     else {
                         return false;
                     };
-                    projected.key == record.key
-                        && projected.causal_root == record.owner.causal_root()
-                        && projected.work_class == record.work_class
-                        && projected.stage == record.stage
-                        && projected.reconstruction_source == metadata.reconstruction_source
+                    let payload_is_exact = match (
+                        projected.work_class,
+                        projected.stage.kind(),
+                        metadata.payload,
+                    ) {
+                        (
+                            LifecycleWorkClass::Apply,
+                            LifecycleStageKind::ApplyDecision,
+                            DurablePayloadReference::BodyFrame(frame),
+                        ) => frame.matches_key(record.key),
+                        (LifecycleWorkClass::Apply, _, _) => false,
+                        (_, _, DurablePayloadReference::None) => true,
+                        _ => false,
+                    };
+                    let candidate = CandidateAdmission::new(
+                        projected.key,
+                        projected.causal_root,
+                        projected.work_class,
+                        projected.stage,
+                        projected.initial_state,
+                        projected.reconstruction_source,
+                        metadata.payload,
+                        metadata.replay_authority.clone(),
+                        projected.physical_geometry,
+                        None,
+                    );
+                    candidate.initial_state == InitialLifecycleState::Ready
+                        && candidate_core_matches(&candidate)
                         && physical == record.physical_slots
                         && universe == record.episode.slot_universe
                         && consumed == record.episode.consumed_slots
-                        && metadata.payload == DurablePayloadReference::None
-                        && metadata.continuation == super::schema::DurableContinuation::None
+                        && payload_is_exact
                         && replay_authority == &metadata.replay_authority
                 }
                 ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) => {
@@ -2964,6 +3145,11 @@ impl ConcreteLifecycleWorkRegistry {
                             .incumbent
                             .project_candidate(verified)
                             .is_ok_and(|candidate| candidate_core_matches(&candidate))
+                }
+                ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) => {
+                    apply.dispatch_key.is_none()
+                        && apply.validates_in_ledger(&exact_ledger)
+                        && apply.matches_current_ready_record(address, digest, coordinator)
                 }
                 ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
                     sign.dispatch_key.is_none()
@@ -3767,7 +3953,7 @@ impl ConcreteLifecycleWorkRegistry {
             ));
         }
         match &live.companion {
-            PreparedLiveWalCompanionV1::None => {
+            PreparedLiveWalCompanionV1::None | PreparedLiveWalCompanionV1::ApplyBodyFrame(_) => {
                 let PreparedLiveWalAdmissionV1 { bound, companion } = live;
                 let BoundAdapterEffectV1 {
                     effect,
@@ -4426,6 +4612,7 @@ impl ConcreteLifecycleWorkRegistry {
             | ConcreteLifecycleWorkKind::DurableStoreBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
             | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
@@ -4440,29 +4627,31 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
-    /// Attest one exact Ready recovered Decision Apply without exposing its carrier.
+    /// Attest one exact Ready lifecycle Decision Apply without exposing its carrier.
     ///
     /// This is a read-only join over the coordinator's complete logical row,
     /// durable metadata, reverse indexes, and the registry's immutable closed
     /// carrier. Success discloses only the typed bounded-I/O demand and opaque
     /// exact-position key needed by the production scheduler; it grants no
     /// execution or extraction authority.
-    pub(super) fn attest_ready_recovered_decision_apply(
+    pub(super) fn attest_ready_lifecycle_decision_apply(
         &self,
         coordinator: &LifecycleCoordinator,
         ordinal: u128,
-    ) -> Result<ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError>
-    {
+    ) -> Result<
+        ReadyLifecycleDecisionApplyAttestationV1,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
         let Some(record) = coordinator.records.get(&ordinal) else {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex);
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex);
         };
         let Some(metadata) = coordinator.durable_records.get(&ordinal) else {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex);
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex);
         };
         let Some((slot, digest)) =
             exact_single_record_slot(record, LifecycleWorkClass::Apply.capacity_class())
         else {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex);
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex);
         };
         if coordinator.fault.is_some()
             || coordinator.active_lease.is_some()
@@ -4512,10 +4701,10 @@ impl ConcreteLifecycleWorkRegistry {
             || metadata.continuation != super::schema::DurableContinuation::None
             || !matches!(metadata.payload, DurablePayloadReference::BodyFrame(_))
         {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex);
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex);
         }
         let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
-            .ok_or(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex)?;
+            .ok_or(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex)?;
         if self
             .entries
             .keys()
@@ -4523,51 +4712,100 @@ impl ConcreteLifecycleWorkRegistry {
             .count()
             != 1
         {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCoordinatorIndex);
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCoordinatorIndex);
         }
         let work = self.entries.get(&address).ok_or(
-            ReadyRecoveredDecisionApplyAttestationError::Registry(RegistryError::Missing),
+            ReadyLifecycleDecisionApplyAttestationErrorV1::Registry(RegistryError::Missing),
         )?;
         if !work.validates_at(address) {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::Registry(
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::Registry(
                 RegistryError::CorruptWork,
             ));
         }
         if work.digest != digest {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::Registry(
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::Registry(
                 RegistryError::DigestMismatch,
             ));
         }
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::WrongWorkKind);
+        let (carrier_matches, lineage, dispatch_key) = match &work.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) => (
+                apply.matches_current_ready_record(address, digest, coordinator),
+                LifecycleDecisionApplyLineageV1::Live,
+                apply.dispatch_key,
+            ),
+            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) => (
+                apply.matches_current_ready_record(address, digest, coordinator),
+                LifecycleDecisionApplyLineageV1::Recovered,
+                apply.dispatch_key,
+            ),
+            _ => return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind),
         };
-        if !apply.matches_current_ready_record(address, digest, coordinator) {
-            return Err(ReadyRecoveredDecisionApplyAttestationError::InvalidCarrier);
+        if !carrier_matches || dispatch_key.is_some() {
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier);
         }
-        Ok(ReadyRecoveredDecisionApplyAttestation {
-            demand: ReadyRecoveredDecisionApplyDemand::BoundedIo,
-            dispatch_key: RecoveredDecisionApplyDispatchKeyV1::new(
+        Ok(ReadyLifecycleDecisionApplyAttestationV1 {
+            demand: ReadyLifecycleDecisionApplyDemandV1::BoundedIo,
+            dispatch_key: LifecycleDecisionApplyDispatchKeyV1::new(
                 coordinator.active_context,
                 address,
                 digest,
+                lineage,
             ),
-            _seal: ReadyRecoveredDecisionApplyAttestationSeal,
+            lineage,
+            _seal: ReadyLifecycleDecisionApplyAttestationSealV1,
         })
     }
-    /// Project one exact claimed recovered Decision Apply into its dedicated worker task.
+    /// Project the exact Ready live Apply into an executor-only cleanup authority.
+    ///
+    /// Recovered carriers return `None` and retain their cold-start contract.
+    /// No queue identity, lease, or worker reservation is created here.
+    pub(super) fn prepare_ready_live_decision_apply_reconciliation(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        Option<LiveLifecycleDecisionApplyReconciliationAuthorityV1>,
+        ReadyLifecycleDecisionApplyAttestationErrorV1,
+    > {
+        let attestation = self.attest_ready_lifecycle_decision_apply(coordinator, ordinal)?;
+        let dispatch_key = attestation.dispatch_key();
+        if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
+            return Ok(None);
+        }
+        let address =
+            ConcreteWorkAddress::new(dispatch_key.owner, dispatch_key.ordinal, dispatch_key.slot)
+                .ok_or(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier)?;
+        let work = self.entries.get(&address).ok_or(
+            ReadyLifecycleDecisionApplyAttestationErrorV1::Registry(RegistryError::Missing),
+        )?;
+        let ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) = &work.kind else {
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind);
+        };
+        if work.digest != dispatch_key.digest
+            || !apply.matches_current_ready_record(address, work.digest, coordinator)
+            || apply.dispatch_key.is_some()
+        {
+            return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier);
+        }
+        apply
+            .project_reconciliation(dispatch_key)
+            .map(Some)
+            .ok_or(ReadyLifecycleDecisionApplyAttestationErrorV1::InvalidCarrier)
+    }
+    /// Project one exact claimed lifecycle Decision Apply into its dedicated worker task.
     ///
     /// The coordinator must still retain the sole active lease and the registry
     /// must still contain the unchanged closed carrier at its exact Effect/0
     /// address. Success consumes a registry-minted move-only dispatch identity;
     /// no generic adapter effect, receipt, pending binding, or candidate parts
     /// cross this boundary.
-    pub(super) fn prepare_recovered_decision_apply_dispatch(
+    pub(super) fn prepare_lifecycle_decision_apply_dispatch(
         &mut self,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> Result<
-        PreparedRecoveredDecisionApplyDispatch<'_>,
-        RecoveredDecisionApplyDispatchProjectionError,
+        PreparedLifecycleDecisionApplyDispatchV1<'_>,
+        LifecycleDecisionApplyDispatchProjectionErrorV1,
     > {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
@@ -4577,63 +4815,88 @@ impl ConcreteLifecycleWorkRegistry {
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || lease.physical_slots().len() != 1
         {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::InvalidLease);
+            return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidLease);
         }
         let Some((&slot, &digest)) = lease.physical_slots().first_key_value() else {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::InvalidLease);
+            return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidLease);
         };
         if slot.capacity_class() != Some(LifecycleWorkClass::Apply.capacity_class()) {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::InvalidLease);
+            return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidLease);
         }
         let address = ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), slot)
-            .ok_or(RecoveredDecisionApplyDispatchProjectionError::InvalidLease)?;
+            .ok_or(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidLease)?;
         let work = self.entries.get_mut(&address).ok_or(
-            RecoveredDecisionApplyDispatchProjectionError::Registry(RegistryError::Missing),
+            LifecycleDecisionApplyDispatchProjectionErrorV1::Registry(RegistryError::Missing),
         )?;
         if !work.validates_at(address) {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::Registry(
+            return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::Registry(
                 RegistryError::CorruptWork,
             ));
         }
         if work.digest != digest {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::Registry(
+            return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::Registry(
                 RegistryError::DigestMismatch,
             ));
         }
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &mut work.kind else {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::WrongWorkKind);
+        let (carrier, task) = match &mut work.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) => {
+                if !apply.matches_claimed_record(address, digest, coordinator, lease) {
+                    return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidCarrier);
+                }
+                if apply.dispatch_key.is_some() {
+                    return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::AlreadyDispatched);
+                }
+                let identity = LifecycleDecisionApplyDispatchIdentityV1::new(
+                    coordinator.active_context,
+                    address,
+                    digest,
+                    LifecycleDecisionApplyLineageV1::Live,
+                );
+                let task = apply
+                    .project_task(identity)
+                    .ok_or(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidCarrier)?;
+                (PreparedLifecycleDecisionApplyCarrierV1::Live(apply), task)
+            }
+            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) => {
+                if !apply.matches_claimed_record(address, digest, coordinator, lease) {
+                    return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidCarrier);
+                }
+                if apply.dispatch_key.is_some() {
+                    return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::AlreadyDispatched);
+                }
+                let identity = LifecycleDecisionApplyDispatchIdentityV1::new(
+                    coordinator.active_context,
+                    address,
+                    digest,
+                    LifecycleDecisionApplyLineageV1::Recovered,
+                );
+                let task = apply
+                    .carrier
+                    .project_recovered_apply_task(identity, address)
+                    .ok_or(LifecycleDecisionApplyDispatchProjectionErrorV1::InvalidCarrier)?;
+                (
+                    PreparedLifecycleDecisionApplyCarrierV1::Recovered(apply),
+                    task,
+                )
+            }
+            _ => return Err(LifecycleDecisionApplyDispatchProjectionErrorV1::WrongWorkKind),
         };
-        if !apply.matches_claimed_record(address, digest, coordinator, lease) {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::InvalidCarrier);
-        }
-        if apply.dispatch_key.is_some() {
-            return Err(RecoveredDecisionApplyDispatchProjectionError::AlreadyDispatched);
-        }
-        let identity = RecoveredDecisionApplyDispatchIdentityV1::new(
-            coordinator.active_context,
-            address,
-            digest,
-        );
-        let task = apply
-            .carrier
-            .project_recovered_apply_task(identity)
-            .ok_or(RecoveredDecisionApplyDispatchProjectionError::InvalidCarrier)?;
         let key = task.dispatch_key();
-        Ok(PreparedRecoveredDecisionApplyDispatch {
-            work: apply,
+        Ok(PreparedLifecycleDecisionApplyDispatchV1 {
+            carrier,
             task: Some(task),
             key,
         })
     }
     /// Bind one guarded Applied worker result to the exact in-flight carrier.
-    pub(super) fn prepare_recovered_decision_apply_terminal_transition(
+    pub(super) fn prepare_lifecycle_decision_apply_terminal_transition(
         &self,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
-        completion: &crate::sumeragi::v2_apply::RecoveredDecisionApplyCompletionV1,
+        completion: &crate::sumeragi::v2_apply::LifecycleDecisionApplyCompletionV1,
     ) -> Option<(
-        PreparedRecoveredDecisionApplyTerminalTransitionV1,
-        crate::sumeragi::v2::RecoveredDecisionApplyAdapterCompletionAuthorityV1,
+        PreparedLifecycleDecisionApplyTerminalTransitionV1,
+        crate::sumeragi::v2::LifecycleDecisionApplyAdapterCompletionAuthorityV1,
     )> {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
@@ -4648,58 +4911,114 @@ impl ConcreteLifecycleWorkRegistry {
         let (&slot, &digest) = lease.physical_slots().first_key_value()?;
         let address = ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), slot)?;
         let work = self.entries.get(&address)?;
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
-            return None;
-        };
         let dispatch_key = completion.dispatch_key();
-        if work.digest != digest
-            || !work.validates_at(address)
-            || !apply.matches_claimed_record(address, digest, coordinator, lease)
-            || apply.dispatch_key != Some(dispatch_key)
-            || !dispatch_key.matches(coordinator.active_context, address, digest)
-        {
+        if work.digest != digest || !work.validates_at(address) {
             return None;
         }
-        let authority = apply.carrier.project_recovered_apply_completion(
-            RecoveredDecisionApplyCompletionProjectionPermit::new(),
-            completion,
-        )?;
+        let (lineage, authority) = match &work.kind {
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(apply)
+                if apply.matches_claimed_record(address, digest, coordinator, lease)
+                    && apply.dispatch_key == Some(dispatch_key)
+                    && dispatch_key.matches(
+                        coordinator.active_context,
+                        address,
+                        digest,
+                        LifecycleDecisionApplyLineageV1::Live,
+                    ) =>
+            {
+                (
+                    LifecycleDecisionApplyLineageV1::Live,
+                    apply.project_completion(
+                        LifecycleDecisionApplyCompletionProjectionPermitV1::new(),
+                        completion,
+                    )?,
+                )
+            }
+            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
+                if apply.matches_claimed_record(address, digest, coordinator, lease)
+                    && apply.dispatch_key == Some(dispatch_key)
+                    && dispatch_key.matches(
+                        coordinator.active_context,
+                        address,
+                        digest,
+                        LifecycleDecisionApplyLineageV1::Recovered,
+                    ) =>
+            {
+                (
+                    LifecycleDecisionApplyLineageV1::Recovered,
+                    apply.carrier.project_recovered_apply_completion(
+                        LifecycleDecisionApplyCompletionProjectionPermitV1::new(),
+                        address,
+                        completion,
+                    )?,
+                )
+            }
+            _ => return None,
+        };
         Some((
-            PreparedRecoveredDecisionApplyTerminalTransitionV1 {
+            PreparedLifecycleDecisionApplyTerminalTransitionV1 {
                 address,
                 digest,
                 dispatch_key,
-                _linearity: RecoveredDecisionApplyTerminalTransitionLinearity,
+                lineage,
+                _linearity: LifecycleDecisionApplyTerminalTransitionLinearityV1,
             },
             authority,
         ))
     }
-    /// Publish one exact recovered Apply terminal around LedgerV1 fsync.
+    /// Publish one exact lifecycle Apply terminal around LedgerV1 fsync.
     ///
     /// Every logical and physical check occurs before `publish`. Success is
     /// followed only by the infallible removal of the prevalidated carrier.
-    pub(super) fn publish_recovered_decision_apply_terminal_transition<T, E>(
+    pub(super) fn publish_lifecycle_decision_apply_terminal_transition<T, E>(
         &mut self,
-        prepared: PreparedRecoveredDecisionApplyTerminalTransitionV1,
+        prepared: PreparedLifecycleDecisionApplyTerminalTransitionV1,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
         lease: &TurnLease,
         publish: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, RecoveredDecisionApplyTerminalPublicationError<E>> {
+    ) -> Result<T, LifecycleDecisionApplyTerminalPublicationErrorV1<E>> {
         let Some(work) = self.entries.get(&prepared.address) else {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
+            return Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Preflight(
                 prepared,
             ));
         };
-        let ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply) = &work.kind else {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
-                prepared,
-            ));
+        let carrier_matches = match (&work.kind, prepared.lineage) {
+            (
+                ConcreteLifecycleWorkKind::DurableLiveWalApply(apply),
+                LifecycleDecisionApplyLineageV1::Live,
+            ) => {
+                apply.dispatch_key == Some(prepared.dispatch_key)
+                    && apply.matches_claimed_record(
+                        prepared.address,
+                        prepared.digest,
+                        current,
+                        lease,
+                    )
+            }
+            (
+                ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply),
+                LifecycleDecisionApplyLineageV1::Recovered,
+            ) => {
+                apply.dispatch_key == Some(prepared.dispatch_key)
+                    && apply.matches_claimed_record(
+                        prepared.address,
+                        prepared.digest,
+                        current,
+                        lease,
+                    )
+            }
+            _ => false,
         };
         let exact_current = work.digest == prepared.digest
             && work.validates_at(prepared.address)
-            && apply.dispatch_key == Some(prepared.dispatch_key)
-            && apply.matches_claimed_record(prepared.address, prepared.digest, current, lease);
+            && prepared.dispatch_key.matches(
+                current.active_context,
+                prepared.address,
+                prepared.digest,
+                prepared.lineage,
+            )
+            && carrier_matches;
         let mut expected = current.stage_durable_transaction();
         expected.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
         let same_ledger_target = matches!(
@@ -4735,7 +5054,7 @@ impl ConcreteLifecycleWorkRegistry {
                         == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
                 });
         if !exact_current || !exact_staged {
-            return Err(RecoveredDecisionApplyTerminalPublicationError::Preflight(
+            return Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Preflight(
                 prepared,
             ));
         }
@@ -4744,13 +5063,13 @@ impl ConcreteLifecycleWorkRegistry {
                 drop(
                     self.entries
                         .remove(&prepared.address)
-                        .expect("recovered Apply preflight retained the exact carrier"),
+                        .expect("lifecycle Apply preflight retained the exact carrier"),
                 );
                 Ok(value)
             }
-            Err(error) => Err(RecoveredDecisionApplyTerminalPublicationError::Publication(
-                error, prepared,
-            )),
+            Err(error) => {
+                Err(LifecycleDecisionApplyTerminalPublicationErrorV1::Publication(error, prepared))
+            }
         }
     }
     /// Prepare execution of one exact Ready durable Validate completion.

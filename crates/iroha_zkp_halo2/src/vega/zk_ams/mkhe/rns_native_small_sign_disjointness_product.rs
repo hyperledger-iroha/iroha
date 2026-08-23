@@ -1029,13 +1029,6 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     pub(super) const fn binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
         self._binding_digest
     }
-
-    /// Consume statement-8 evidence and recover its exact statement-5 owner.
-    pub(super) fn into_previous_v1(
-        self,
-    ) -> RnsNativeComparatorRangeCarryPrerequisiteV1<'source, 'proof, S> {
-        self._previous
-    }
 }
 
 /// Consume statement 5 and verify all 258 bounded statement-8 cores

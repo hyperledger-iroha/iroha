@@ -1541,21 +1541,6 @@ impl ZkAmsPhase23AccumulatorShapeV1 {
             })
     }
 }
-/// Canonical release-packed input to six-family materialization.
-#[cfg_attr(test, derive(Clone))]
-#[derive(PartialEq, Eq)]
-pub(super) struct ZkAmsPhase23PackedAccumulatorSetV1 {
-    /// Complete accumulator shape.
-    pub shape: ZkAmsPhase23AccumulatorShapeV1,
-    pub x: Vec<ZkAmsT256PackedPlaintextV1>,
-    /// Packed chunks for `u`, repeated in every one of the `shape.e` used
-    /// slots. Materialization rejects any non-identical replica.
-    pub u: Vec<ZkAmsT256PackedPlaintextV1>,
-    pub e: Vec<ZkAmsT256PackedPlaintextV1>,
-    pub r_e: Vec<ZkAmsT256PackedPlaintextV1>,
-    pub w: Vec<ZkAmsT256PackedPlaintextV1>,
-    pub r_w: Vec<ZkAmsT256PackedPlaintextV1>,
-}
 /// Canonical, padding-free materialization of all six accumulator families.
 #[cfg_attr(test, derive(Clone))]
 #[derive(PartialEq, Eq)]

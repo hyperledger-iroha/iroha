@@ -172,11 +172,11 @@ for config in "${configs[@]}"; do
     cd "$FORMAL_DIR"
     case "$config" in
       quorum_count|quorum_stake)
-        "${common[@]}" SumeragiV2.tla
+        "${common[@]}" SumeragiV2Inductive.tla
         ;;
       safety_count|safety_stake)
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
-          -simulate "num=${TRACE_COUNT}" SumeragiV2.tla
+          -simulate "num=${TRACE_COUNT}" SumeragiV2Inductive.tla
         ;;
       chain_epoch)
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \

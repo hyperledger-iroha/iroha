@@ -1878,6 +1878,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the parity test keeps final-identity signing and both independent tamper checks in one ordered scenario"
+    )]
     fn signer_and_final_network_id_restaging_have_exact_context_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut config = checked_in_config(&root.join("defaults/kagami/iroha3-dev/config.toml"));
@@ -2393,7 +2397,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             toml::to_string_pretty(&config_table).expect("render peer config"),
         )
         .expect("write peer config");
-        let parsed_config = load_peer_config(&config_path).expect("load peer config");
+        load_peer_config(&config_path).expect("load peer config");
         let args = Args {
             genesis_file,
             out_file: None,

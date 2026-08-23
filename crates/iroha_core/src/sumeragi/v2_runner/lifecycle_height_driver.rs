@@ -11,6 +11,18 @@ fn completion_selection_stops_batch(
     )
 }
 
+/// Return whether a just-published Validate retained its exact Ready-successor
+/// token and must re-enter Completion before any Runtime turn.
+fn completion_selection_retries_before_runtime(
+    selection: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
+) -> bool {
+    matches!(
+        selection,
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { .. }
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { .. }
+    )
+}
+
 fn ingress_selection_retries_before_producer(
     selection: &super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1,
 ) -> bool {
@@ -41,6 +53,27 @@ fn ingress_restart_error(output_guard: &ConsensusOutputGuard) -> V2RunnerError {
 pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     /// No authenticated in-flight lifecycle lease blocks ProducerTurn planning.
     Eligible,
+    /// One exact published/woken Validate successor must resolve before any
+    /// ordinary owner can rediscover Apply.
+    AwaitingValidateSuccessor {
+        /// Exact same-address Validate ordinal retained by the move-only token.
+        ordinal: u128,
+    },
+    /// One exact Validate successor is waiting for the reducer fence to advance.
+    AwaitingValidateFence {
+        /// Exact same-address Validate ordinal.
+        ordinal: u128,
+        /// Exact reducer-fence generation which still owns the retry.
+        wait: super::super::v2_lifecycle_coordinator::WaitToken,
+    },
+    /// The exact live Apply barrier is installed while its Ready child awaits
+    /// normal global scheduling and bounded worker capacity.
+    AwaitingLiveApplyQueue {
+        /// Exact terminalized Validate parent.
+        parent_ordinal: u128,
+        /// Exact protected actor-global Apply child ordinal.
+        child_ordinal: u128,
+    },
     /// A queued worker or parked worker result must advance through Completion.
     AwaitingCompletion,
     /// A no-lease terminal replay worker must finish before finalization.
@@ -87,11 +120,47 @@ impl LifecycleProducerClaimDispositionV1 {
         !matches!(self, Self::Eligible)
     }
 
+    /// Return whether this state may consume the Ready scheduler branch.
+    const fn permits_ready_completion(self) -> bool {
+        matches!(self, Self::Eligible | Self::AwaitingLiveApplyQueue { .. })
+    }
+
+    /// Return whether an empty physical cut must still select this exact child.
+    const fn requires_exact_ready_selection(self) -> bool {
+        matches!(self, Self::AwaitingLiveApplyQueue { .. })
+    }
+
+    const fn required_ready_ordinal(self) -> Option<u128> {
+        match self {
+            Self::AwaitingLiveApplyQueue { child_ordinal, .. } => Some(child_ordinal),
+            Self::Eligible
+            | Self::AwaitingValidateSuccessor { .. }
+            | Self::AwaitingValidateFence { .. }
+            | Self::AwaitingCompletion
+            | Self::AwaitingReplayCompletion => None,
+        }
+    }
+
+    const fn validate_successor_ordinal(self) -> Option<u128> {
+        match self {
+            Self::AwaitingValidateSuccessor { ordinal }
+            | Self::AwaitingValidateFence { ordinal, .. } => Some(ordinal),
+            Self::Eligible
+            | Self::AwaitingLiveApplyQueue { .. }
+            | Self::AwaitingCompletion
+            | Self::AwaitingReplayCompletion => None,
+        }
+    }
+
     /// Return whether this target must yield after one Runtime turn, before Ingress.
     const fn blocks_ingress(self) -> bool {
         matches!(
             self,
-            Self::AwaitingCompletion | Self::AwaitingReplayCompletion
+            Self::AwaitingValidateSuccessor { .. }
+                | Self::AwaitingValidateFence { .. }
+                | Self::AwaitingCompletion
+                | Self::AwaitingReplayCompletion
+                | Self::AwaitingLiveApplyQueue { .. }
         )
     }
 
@@ -110,10 +179,115 @@ impl LifecycleProducerClaimDispositionV1 {
         };
 
         if selected.restart_required() {
-            return Ok(self);
+            return Ok(Self::Eligible);
         }
 
         match (self, selected) {
+            (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
+                Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
+            }
+            (Self::Eligible, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
+                Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
+            }
+            (Self::AwaitingCompletion, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
+                Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
+            }
+            (
+                state @ Self::AwaitingValidateSuccessor { ordinal },
+                Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: pending_ordinal,
+                },
+            ) if ordinal == *pending_ordinal => Ok(state),
+            (
+                Self::AwaitingValidateSuccessor { ordinal },
+                Completion::LifecycleValidateSuccessorFencePending {
+                    ordinal: pending_ordinal,
+                    wait,
+                },
+            ) if ordinal == *pending_ordinal => Ok(Self::AwaitingValidateFence {
+                ordinal,
+                wait: *wait,
+            }),
+            (
+                state @ Self::AwaitingValidateFence { ordinal, wait },
+                Completion::LifecycleValidateSuccessorFencePending {
+                    ordinal: pending_ordinal,
+                    wait: pending_wait,
+                },
+            ) if ordinal == *pending_ordinal
+                && wait.source() == pending_wait.source()
+                && wait.observed_generation() <= pending_wait.observed_generation() =>
+            {
+                let _ = state;
+                Ok(Self::AwaitingValidateFence {
+                    ordinal,
+                    wait: *pending_wait,
+                })
+            }
+            (
+                Self::Eligible
+                | Self::AwaitingCompletion
+                | Self::AwaitingValidateSuccessor { .. }
+                | Self::AwaitingValidateFence { .. },
+                Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
+                    parent_ordinal,
+                    child_ordinal,
+                    child: super::super::v2_lifecycle_coordinator::LifecycleWorkClass::Apply,
+                })),
+            ) if self
+                .validate_successor_ordinal()
+                .is_none_or(|ordinal| ordinal == *parent_ordinal) =>
+            {
+                Ok(Self::AwaitingLiveApplyQueue {
+                    parent_ordinal: *parent_ordinal,
+                    child_ordinal: *child_ordinal,
+                })
+            }
+            (
+                Self::AwaitingCompletion
+                | Self::AwaitingValidateSuccessor { .. }
+                | Self::AwaitingValidateFence { .. },
+                Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
+                    parent_ordinal,
+                    child:
+                        super::super::v2_lifecycle_coordinator::LifecycleWorkClass::SignVote
+                        | super::super::v2_lifecycle_coordinator::LifecycleWorkClass::InvalidBodyReport,
+                    ..
+                })),
+            ) if self
+                .validate_successor_ordinal()
+                .is_none_or(|ordinal| ordinal == *parent_ordinal) =>
+            {
+                Ok(Self::Eligible)
+            }
+            (
+                Self::AwaitingCompletion
+                | Self::AwaitingValidateSuccessor { .. }
+                | Self::AwaitingValidateFence { .. },
+                Completion::CompletionIoDispatch(Ok(Dispatch::ValidateNoSuccessor { ordinal })),
+            ) if self
+                .validate_successor_ordinal()
+                .is_none_or(|expected| expected == *ordinal) =>
+            {
+                Ok(Self::Eligible)
+            }
+            (
+                Self::AwaitingValidateSuccessor { ordinal: expected }
+                | Self::AwaitingValidateFence {
+                    ordinal: expected, ..
+                },
+                Completion::CompletionIoDispatch(Ok(Dispatch::ValidateQueued { ordinal })),
+            ) if expected == *ordinal => Ok(Self::AwaitingCompletion),
+            (
+                Self::AwaitingLiveApplyQueue { child_ordinal, .. },
+                Completion::CompletionIoDispatch(Ok(Dispatch::ApplyQueued { ordinal })),
+            ) if child_ordinal == *ordinal => Ok(Self::AwaitingCompletion),
+            (
+                state @ Self::AwaitingLiveApplyQueue { child_ordinal, .. },
+                Completion::CompletionIoDispatch(Ok(Dispatch::CapacityUnavailable {
+                    protected_live_apply_ordinal: Some(protected_ordinal),
+                })),
+            ) if child_ordinal == *protected_ordinal => Ok(state),
             (
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(
@@ -145,10 +319,9 @@ impl LifecycleProducerClaimDispositionV1 {
                 // completion owner across the outer producer boundary.
                 Ok(Self::Eligible)
             }
-            (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyDeferred)
-            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyRequeued)
-            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyCompletionDeferred)
-            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry)
+            (Self::AwaitingCompletion, Completion::LifecycleDecisionApplyDeferred)
+            | (Self::AwaitingCompletion, Completion::LifecycleDecisionApplyRequeued)
+            | (Self::AwaitingCompletion, Completion::LifecycleDecisionApplyCompletionDeferred)
             | (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
                 Ok(Self::AwaitingCompletion)
             }
@@ -174,7 +347,7 @@ impl LifecycleProducerClaimDispositionV1 {
                 Self::AwaitingCompletion,
                 Completion::RecoveredDecisionFetchCompletion(FetchSettlement::Retry(_)),
             ) => Ok(Self::AwaitingCompletion),
-            (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyApplied)
+            (Self::AwaitingCompletion, Completion::LifecycleDecisionApplyApplied)
             | (
                 Self::AwaitingCompletion,
                 Completion::RecoveredLifecycleSignCompletion(SignCompletion::Broadcast(
@@ -194,11 +367,6 @@ impl LifecycleProducerClaimDispositionV1 {
                 Completion::RecoveredDecisionFetchCompletion(FetchSettlement::Applied),
             )
             | (Self::AwaitingCompletion, Completion::CertifiedFetchBodyPersisted)
-            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublished)
-            | (
-                Self::Eligible | Self::AwaitingCompletion,
-                Completion::LifecycleValidateSidecarWoken,
-            )
             | (Self::AwaitingCompletion, Completion::CertifiedServeClaimedCompleted) => {
                 Ok(Self::Eligible)
             }
@@ -214,7 +382,7 @@ impl LifecycleProducerClaimDispositionV1 {
             ) => Ok(self),
             (
                 Self::Eligible,
-                Completion::CompletionIoDispatch(Ok(Dispatch::CapacityUnavailable)),
+                Completion::CompletionIoDispatch(Ok(Dispatch::CapacityUnavailable { .. })),
             )
             | (Self::Eligible, Completion::RecoveredLifecycleBroadcastRefanout(_)) => Ok(self),
             _ => Err(LifecycleProducerClaimTransitionErrorV1::Completion),
@@ -313,7 +481,7 @@ fn recovered_output_drain_disposition(
 /// Drain one bounded ordinary Completion/Runtime/Ingress batch through the
 /// activated lifecycle owner.
 ///
-/// Recovered completion and Decision-Fetch work receives the real borrow-bound
+/// Lifecycle completion and Decision-Fetch work receives the real borrow-bound
 /// runner turn before ordinary work. A pass-through keeps that same borrow
 /// alive until the ordinary completion/runtime tail runs, while an ordinary
 /// ingress winner is already dequeued and must enter the shared opaque
@@ -387,11 +555,21 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         None
                     }
                     PreGate::Selected(selected) => Some(selected),
-                    PreGate::Ready(ready)
-                        if producer_claim == LifecycleProducerClaimDispositionV1::Eligible =>
-                    {
-                        match activated.drive_ready_completion_turn(ready) {
+                    PreGate::Ready(ready) if producer_claim.permits_ready_completion() => {
+                        let completion = match producer_claim.required_ready_ordinal() {
+                            Some(ordinal) => activated
+                                .drive_ready_completion_turn_requiring_ordinal(ready, ordinal),
+                            None => activated.drive_ready_completion_turn(ready),
+                        };
+                        match completion {
                             CompletionTurn::PassThrough(empty_turn) => {
+                                if producer_claim.requires_exact_ready_selection() {
+                                    drop(empty_turn);
+                                    return Err(producer_claim_transition_error(
+                                        &output_guard,
+                                        LifecycleProducerClaimTransitionErrorV1::Completion,
+                                    ));
+                                }
                                 // Ready census was empty. Do not generic-drain:
                                 // a lifecycle completion may arrive after the
                                 // physical pre-gate and must be reclassified.
@@ -413,6 +591,15 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     producer_claim = producer_claim
                         .observe_completion(&selected)
                         .map_err(|error| producer_claim_transition_error(&output_guard, error))?;
+                    if completion_selection_retries_before_runtime(&selected) {
+                        // The move-only published-successor token is retained
+                        // ahead of physical completion classification. Yield
+                        // this iteration so Runtime cannot precede its exact
+                        // same-address consumption.
+                        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                            producer_claim,
+                        ));
+                    }
                     if completion_selection_stops_batch(&selected) {
                         // Settlement makes the adjacent ProducerTurn Ready.
                         // Let run_inner claim it before any Runtime or
@@ -579,6 +766,80 @@ mod tests {
         assert!(!completion_selection_stops_batch(
             &ProductionLifecycleCompletionSelectionV1::RestartRequired
         ));
+    }
+
+    #[test]
+    fn published_validate_token_retries_before_runtime_and_apply_barrier_is_exact() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            LifecycleWorkClass, ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+        };
+
+        assert!(completion_selection_retries_before_runtime(
+            &Completion::LifecycleValidatePublished { ordinal: 7 }
+        ));
+        assert!(!completion_selection_retries_before_runtime(
+            &Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
+                parent_ordinal: 7,
+                child_ordinal: 13,
+                child: LifecycleWorkClass::Apply,
+            }))
+        ));
+        assert!(!completion_selection_retries_before_runtime(
+            &Completion::CompletionIoDispatch(Ok(Dispatch::BodyStageAdvanced {
+                parent_ordinal: 7,
+                child_ordinal: 13,
+                child: LifecycleWorkClass::SignVote,
+            }))
+        ));
+        let claim = LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            .observe_completion(&Completion::LifecycleValidatePublished { ordinal: 7 })
+            .expect("published Validate retains its asynchronous claim");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 7 }
+        );
+        let claim = claim
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::BodyStageAdvanced {
+                    parent_ordinal: 7,
+                    child_ordinal: 13,
+                    child: LifecycleWorkClass::Apply,
+                },
+            )))
+            .expect("exact Apply child carries an installed retransmit owner");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingLiveApplyQueue {
+                parent_ordinal: 7,
+                child_ordinal: 13,
+            }
+        );
+        assert!(
+            claim
+                .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                    Dispatch::CapacityUnavailable {
+                        protected_live_apply_ordinal: Some(12),
+                    },
+                )))
+                .is_err()
+        );
+        let claim = claim
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::CapacityUnavailable {
+                    protected_live_apply_ordinal: Some(13),
+                },
+            )))
+            .expect("capacity retry names the same protected Apply child");
+        let claim = claim
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ApplyQueued { ordinal: 13 },
+            )))
+            .expect("the exact child enters its dedicated queue");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+        );
     }
 
     #[test]

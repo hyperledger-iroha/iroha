@@ -109,8 +109,10 @@ mod tests {
     #[test]
     fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
         let mut left = Nexus::default();
-        let mut left_lane = LaneConfigMetadata::default();
-        left_lane.description = Some("left operator note".to_owned());
+        let mut left_lane = LaneConfigMetadata {
+            description: Some("left operator note".to_owned()),
+            ..LaneConfigMetadata::default()
+        };
         left_lane
             .metadata
             .insert("operator.owner".to_owned(), "left".to_owned());
@@ -497,6 +499,23 @@ mod tests {
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
+        assert!(offline.kagemusha_promotion_controller_public_key.is_none());
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_key_id
+                .is_none()
+        );
+        assert!(
+            offline
+                .kagemusha_catalog_revalidation_authority_public_key
+                .is_none()
+        );
+        assert!(offline.kagemusha_promotion_reservation_path.is_none());
+        assert!(
+            offline
+                .kagemusha_validator_qualification_seal_path
+                .is_none()
+        );
         assert_eq!(
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
@@ -1442,8 +1461,10 @@ mod tests {
     #[test]
     fn sumeragi_v2_nexus_amx_hash_excludes_operator_descriptions() {
         let mut left = Nexus::default();
-        let mut left_lane = LaneConfigMetadata::default();
-        left_lane.description = Some("left lane note".to_owned());
+        let mut left_lane = LaneConfigMetadata {
+            description: Some("left lane note".to_owned()),
+            ..LaneConfigMetadata::default()
+        };
         left_lane
             .metadata
             .insert("operator.owner".to_owned(), "left".to_owned());

@@ -7356,6 +7356,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// or capability mismatches).
     #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
+    #[expect(
+        clippy::large_futures,
+        reason = "the source-sealed wrapper preserves exact startup delegation and avoids a release-path allocation"
+    )]
     pub async fn start_with_crypto(
         identity_keys: P2pIdentityKeys,
         config: Config,
@@ -15750,7 +15754,7 @@ mod tests {
         };
     }
     macro_rules! direct_frame {
-        ($origin:expr, $target:expr, $priority:expr, $payload:expr) => {
+        ($origin:expr, $target:expr, $priority:expr, $payload:expr $(,)?) => {
             RelayMessage::new(
                 $origin,
                 RelayTarget::Direct(($target).clone()),
@@ -15866,7 +15870,7 @@ mod tests {
     }
     type TestPeerReceivers<T> = crate::peer::handles::TestPeerHandleReceivers<WireMessage<T>>;
     fn random_peer_id() -> PeerId {
-        random_peer_id()
+        PeerId::from(KeyPair::random().public_key().clone())
     }
     fn test_peer(address: SocketAddr) -> Peer {
         Peer::new(address, KeyPair::random().public_key().clone())

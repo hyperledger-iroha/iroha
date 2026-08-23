@@ -460,6 +460,10 @@ impl ZeroPaddingCheckedV1 {
     }
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the large exact-fixture authority exists only in test builds"
+)]
 enum FirstPartyStageAuthorityV1 {
     Production,
     #[cfg(test)]

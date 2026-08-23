@@ -821,11 +821,14 @@ LiveWalPersistedReplayStateV1::Canonical { stage, authority }
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
         """
-if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+if let Err(error) = coordinator
+    .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+{
     coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
     return Err(LiveValidateReportPublicationError {
         _coordinator: coordinator,
         _staged: staged,
+        _ordinal_reservation: ordinal_reservation,
         _failure: LiveValidateReportPublicationFailure::Ledger {
             _error: error,
             _publication: publication,

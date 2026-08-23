@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -60,17 +60,51 @@ to:
 
 - Run the focused and workspace Rust Cargo tests and strict all-target Clippy
   from the settled candidate.
-- Reconcile the remaining source-file budget ratchets without raising the
-  reviewed ceilings merely to absorb merge growth.
+- Close the remaining aggregate source objective without raising the currently
+  reconciled per-file ratchets merely to absorb merge growth.
 - Regenerate the exact context/genesis goldens from that candidate and attach
   the required authorized signatures, including clean OpenAPI provenance.
 - Recompute and verify the source, formal, and release seals from one immutable
   tree; mutable-tree checks are not release evidence.
 
+## Kagemusha production evidence closeout
+
+The authenticated V4 publisher and phase-separated rollout commands are now
+implemented and fail closed. The remaining work is external evidence and
+release execution:
+
+- Restore the physical iPhone lane with the exact pinned Xcode 26.6 toolchain,
+  USB/CoreDevice tunnel and DDI readiness, and a provisioning profile for the
+  fixed App ID that authorizes production App Attest. Then capture and qualify
+  the real assertion against the authority-issued request, reviewed production
+  policy, prepared application root, and immutable candidate; development,
+  simulator, or synthetic evidence is not substitutable.
+- Freeze the exact sixteen-file candidate, install the signed promotion
+  reservation and runtime-only keys, publish the seventeenth promotion record
+  through the authenticated controller, and collect exactly four protected
+  validator qualification seals carrying one identical canonical
+  runtime-effective projection. The typed projection and post-genesis producer
+  are implemented; only real protected-host artifacts can close this item.
+  Mutable-tree or workflow-only checks are not release receipts.
+- With explicit write authorization, execute the journaled activation on the
+  qualified four-validator deployment, prove the exact transaction wire and
+  bounded finality chain, and issue the no-replace receipt. Then have the
+  promotion controller sign the bounded post-receipt canary's permit, minimal
+  non-disclosing exact-hash reservation, and complete private authorization.
+  Journal the complete canary before the separately authorized reservation and
+  canary writes; prove the exact reserved entrypoint committed successfully and
+  issuer-sign its canary evidence. Finally challenge all four qualified direct
+  HTTPS origins with one precommitted random issuer-signed nonce, verify each
+  node signature and one canary-anchored shared finality chain, and publish the
+  no-replace post-canary validator-liveness artifact. A three-of-four commit QC
+  alone is finality context, not evidence that every validator answered. Complete
+  the release-wide workspace tests and strict all-target Clippy from that same
+  immutable source before closing readiness.
+
 ## Workspace review closure
 
-- Run the remaining focused AXT/FastPQ/Core suites and release-wide workspace
-  matrix against the regenerated eight-limb Blake2b-256 FastPQ proof/trace
+- Run the remaining release-wide workspace matrix against the regenerated
+  eight-limb Blake2b-256 FastPQ proof/trace
   fixtures and the first-release AXT hard cut. Retired single-field metadata
   proofs, pre-incarnation handles, and pre-ratchet snapshots must not be
   accepted or migrated by relabelling; pre-transition-set block results and
@@ -174,8 +208,10 @@ to:
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
-  4,500,000-line working target. Derive the mutable tree's exact aggregate
-  count and remaining gap after source freeze; do not redefine the baseline,
+  4,500,000-line working target. The current mutable-tree checkpoint counts
+  4,955,673 lines, 415,673 above the hard ceiling, with all per-file ratchets
+  reconciled. Recompute the exact count and gap after source freeze; do not
+  redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
   security, consensus, SDK, or release-evidence behavior to close it. Keep
   deterministic oversized-file exceptions as exact ratchets and the
@@ -222,7 +258,7 @@ The Kagemusha reset genesis-signing identity cycle is closed in source:
 generation-zero lane incarnations use the network-independent `static:v2`
 domain, final `NetworkId` remains the exact signed-genesis hash, and Kagami
 re-stages the signed block under that final identity before publication. Keep
-the production gate open until the real external signer, final two-pass render,
+the production gate closed until the real external signer, final two-pass render,
 and selected installed `iroha3d --check-config` reproduce the same Nexus/AMX
 and execution-policy commitments; focused source regressions and regenerated
 profiles are not operator release receipts.
@@ -1122,10 +1158,12 @@ source validation.
   macOS hosts and under a Linux cgroup hard limit. Keep future reductions inside
   bounded modules and derive-family isolation rather than adding crates or
   feature fragmentation.
-- Move additional SDK/code-generation callers onto the focused
-  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
-  until every documented and CI caller has migrated, then remove only the
-  adapters whose replacement paths have parity evidence.
+- Keep Norito RPC fixture generation behind the sole create-only
+  `xtask norito-rpc-fixtures --output-root <absent-absolute-external-root>`
+  owner and its internal `norito_codegen_exporter` library, followed by the
+  sole `xtask norito-rpc-verify` checker. SDKs and CI are consumers of those
+  outputs; do not add SDK-local generators, generic exporter binaries,
+  compatibility commands, or migration adapters.
 
 ## Taira development networks
 
@@ -1184,10 +1222,10 @@ On the current mutable tree, the independent static release inventory contract
 contains 84 legs, 864/864 production tests across 43 modules, 522/522 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
-The grouped SDK closure is 1,399 paths at
-`1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`,
-and diagnostics is 1,401 paths at
-`973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`.
+The grouped SDK closure is 1,400 paths at
+`fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`,
+and diagnostics is 1,402 paths at
+`f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
 The newly declared Java typed-intent path remains untracked, so the exact
 tracked-source gate still awaits authorized staging. These are mutable-tree
 source inventories, not a sealed receipt.
@@ -1281,9 +1319,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 58 parents and 372
+source check. The reviewed Rust include topology contains 58 parents and 382
 direct entries; its canonical payload SHA-256 is
-`2473d6bdd7ace178461e9997a36168396e8034238d054b81955d9639c4872cb8`.
+`88d98be869f1d8c314a9fee9496b0be390aed1189e28b7bdbfca661cc2ea1f5c`.
 The release-inventory contract is statically reconciled at 84/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
@@ -1297,11 +1335,11 @@ correspondence plus drain/restart/liveness evidence remain mandatory.
 The Rust-owned protocol-4 grouped fixture contains 56 negative controls and
 hashes to
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`;
-its staged grouped and diagnostics suite-source manifests contain 1,399 and
-1,401 records respectively and hash to
-`1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+its staged grouped and diagnostics suite-source manifests contain 1,400 and
+1,402 records respectively and hash to
+`fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
 and
-`973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`;
+`f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -1396,11 +1434,11 @@ The remaining work is evidence-driven and must stay in order:
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 56 negative controls,
   fixture SHA-256
   `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`,
-  staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
+  staged grouped/diagnostics suite-source manifests at exactly 1,400 and 1,402
   records with SHA-256 values
-  `1779c5ccb601b35849953ff62bfb49dc49aa405232cbc6aa1025c772c3d3bc15`
+  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
   and
-  `973022b1bfa2aa35e988cefda749abfcaeaeb2e2795fb2fe31732ab07af8b7f8`,
+  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -1430,9 +1468,9 @@ bounds passed after installing the checksum-pinned TLAPM standard library.
 That archived manifest does not attest the current generation-fencing source.
 `G-FORMAL` remains open pending strict TLAPS, pinned Verus, the remaining
 mutation matrices, and a clean aggregate release receipt. The current
-pinned-seed TLC witness and all eight
-production-reducer replay tests are fresh and green at exactly 100 normalized
-actions; that trace result alone does not promote a theorem. In particular,
+pinned-seed TLC witness contains exactly 100 normalized formal actions. It is a
+formal-only trace and does not claim production-reducer executions; that trace
+result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now have explicit
 source proof bodies. Their promoted target statuses are accepted for release
@@ -25040,13 +25078,12 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
-- Recover the independently archived original `Cargo.lock` and toolchain
-  provenance for the source-evidenced predecessor
-  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, then run its 33 comparable native
-  workloads and the candidate on the same controlled runner. The predecessor
-  contains no `Cargo.lock`; its workload hashes bind benchmark source only and
-  cannot replace the missing provenance. Until it is recovered, no
-  reproducible locked 5% comparison is claimed.
+- Run the candidate and the approved, source-and-lock-authenticated benchmark
+  baseline through `.github/workflows/kotodama_perf.yml` on the same quiet,
+  pinned runner and retain the workflow evidence for the `<=5%` threshold. The
+  unauthenticated July predecessor is not a V1 input and must not be recovered,
+  rebuilt, or reintroduced as compatibility evidence. Until the controlled
+  workflow completes, no reproducible 5% comparison is claimed.
 - Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
   .NET 8 environment; `dotnet` is unavailable on this host.
 

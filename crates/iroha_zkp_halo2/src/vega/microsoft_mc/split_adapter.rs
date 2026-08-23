@@ -574,7 +574,7 @@ fn replay_sha256_compression(
         s1 = s1.xor(recorder, new_e.rotr(11))?;
         s1 = s1.xor(recorder, new_e.rotr(25))?;
         let ch = ReplayWord::sha256_ch(recorder, new_e, f, g)?;
-        let temp1 = vec![
+        let temp1 = [
             h,
             s1,
             ch,
@@ -666,8 +666,8 @@ impl Figure9CompressionStep {
     ) -> Result<[u32; SHA256_STATE_WORDS], Figure9SplitAdapterError> {
         let mut state = [0_u32; SHA256_STATE_WORDS];
         for (word_index, word) in state.iter_mut().enumerate() {
-            for bit in 0..SHA256_WORD_BITS {
-                if sources[word_index][bit].resolve(shared_witness)? {
+            for (bit, source) in sources[word_index].iter().enumerate() {
+                if source.resolve(shared_witness)? {
                     *word |= 1 << bit;
                 }
             }
@@ -1467,7 +1467,7 @@ mod tests {
             .expect("fixture bit length");
         let mut padded = message.to_vec();
         padded.push(0x80);
-        while (padded.len() + 8) % SHA256_BLOCK_BYTES != 0 {
+        while !(padded.len() + 8).is_multiple_of(SHA256_BLOCK_BYTES) {
             padded.push(0);
         }
         padded.extend_from_slice(&bit_length.to_be_bytes());

@@ -989,6 +989,10 @@ fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
         .collect();
     TomlValue::Array(entries)
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the geometry verifier keeps all interdependent queue bounds and mutations in one auditable sequence"
+)]
 fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: usize) -> Result<()> {
     let mut queues = table(config, "sumeragi.queues");
     let command_capacity = sumeragi_queue_capacity(
@@ -1077,8 +1081,7 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
         authenticated_non_validator_sources,
     )
     .map_err(|error| eyre!("wizard Sumeragi lifecycle capacity geometry is invalid: {error}"))?;
-    let mut changed = false;
-    if required_bodies > configured_bodies {
+    let bodies_changed = if required_bodies > configured_bodies {
         queues.insert(
             "bodies".into(),
             TomlValue::Integer(i64::try_from(required_bodies).map_err(|_| {
@@ -1087,9 +1090,11 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
                 )
             })?),
         );
-        changed = true;
-    }
-    if required_body_bytes > configured_body_bytes {
+        true
+    } else {
+        false
+    };
+    let body_bytes_changed = if required_body_bytes > configured_body_bytes {
         queues.insert(
             "body_bytes".into(),
             TomlValue::Integer(i64::try_from(required_body_bytes).map_err(|_| {
@@ -1098,9 +1103,11 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
                 )
             })?),
         );
-        changed = true;
-    }
-    if changed {
+        true
+    } else {
+        false
+    };
+    if bodies_changed || body_bytes_changed {
         set_table(config, "sumeragi.queues", queues);
     }
     Ok(())
@@ -1625,6 +1632,10 @@ mod tests {
         assert!(!rendered.contains("--genesis-manifest-json"));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the geometry scenario proves both required scaling and preservation of larger authored capacities on one config"
+    )]
     fn wizard_scales_body_ingress_for_seven_validators_without_shrinking_authored_capacity() {
         let mut local_keypair = None;
         let mut peers = Vec::new();
@@ -1799,6 +1810,10 @@ mod tests {
             .expect("wizard queue scaling must pass canonical config admission");
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the profile matrix validates complete generated Nexus and Taira templates through both canonical admission paths"
+    )]
     fn wizard_sora_profile_templates_pass_canonical_and_cli_profile_admission() {
         let keypair = checked_wizard_bls_keypair();
         let transport_keypair = checked_wizard_transport_keypair();

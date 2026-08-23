@@ -1248,6 +1248,10 @@ fn expected_anchor_core_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     core
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "alias validation keeps every authenticated digest family explicit"
+)]
 fn validate_global_aliases_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: &RnsNativeRlweSourceStatementStageV1<'_, S>,

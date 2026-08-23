@@ -527,3 +527,297 @@ def _formal_artifacts(
         _snapshot_contract(tlaps_resource_jsonl),
         _snapshot_contract(tlaps_resource_summary),
     )
+
+
+def _formal_replay_release(
+    *,
+    source_receipt_path: Path,
+    release_root_path: Path,
+    expected_signature_sha256: str,
+    expected_ssh_keygen_sha256: str,
+    expected_allowed_signers_sha256: str,
+    expected_revocation_sha256: str,
+    principal: str,
+    expected_signer_fingerprint: str,
+    checker_environment: dict[str, str],
+    repo_root: Path,
+) -> dict[str, Any]:
+    """Verify and inventory the detached-SSH formal replay release bundle."""
+
+    expected_signature_sha256 = _require_digest(
+        expected_signature_sha256,
+        "expected formal replay signature digest",
+    )
+    verifier = (
+        repo_root
+        / "scripts"
+        / "formal"
+        / "verify_sumeragi_v2_replay_release.py"
+    )
+    try:
+        if release_root_path.resolve(strict=True) != release_root_path:
+            raise ReceiptError("formal replay release root is not canonical")
+        root_metadata = release_root_path.lstat()
+        names = {entry.name for entry in os.scandir(release_root_path)}
+    except OSError as error:
+        raise ReceiptError("formal replay release root is unavailable") from error
+    expected_names = {
+        "receipt.json",
+        "receipt.json.sig",
+        "ssh-keygen.release-tool",
+        "allowed_signers",
+        "revocation.krl",
+        "release-attestation.json",
+    }
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or stat.S_IMODE(root_metadata.st_mode) != 0o700
+        or root_metadata.st_uid != os.geteuid()
+        or names != expected_names
+    ):
+        raise ReceiptError("formal replay release inventory is not exact")
+    release_root_contract = _capture_directory_contract(
+        release_root_path,
+        "formal replay release root",
+    )
+
+    specs = (
+        (
+            "source_receipt",
+            source_receipt_path,
+            0o600,
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "receipt",
+            release_root_path / "receipt.json",
+            0o400,
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "signature",
+            release_root_path / "receipt.json.sig",
+            0o400,
+            _MAX_POLICY_BYTES,
+        ),
+        (
+            "ssh_keygen",
+            release_root_path / "ssh-keygen.release-tool",
+            0o500,
+            _MAX_TOOL_BYTES,
+        ),
+        (
+            "allowed_signers",
+            release_root_path / "allowed_signers",
+            0o400,
+            _MAX_POLICY_BYTES,
+        ),
+        (
+            "revocation",
+            release_root_path / "revocation.krl",
+            0o400,
+            _MAX_POLICY_BYTES,
+        ),
+        (
+            "attestation",
+            release_root_path / "release-attestation.json",
+            0o400,
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+    )
+    snapshots: dict[str, EvidenceSnapshot] = {}
+    for label, path, mode, maximum in specs:
+        snapshot = _bounded_evidence_snapshot(
+            path,
+            f"formal replay release {label}",
+            maximum_bytes=maximum,
+        )
+        if (
+            snapshot.mode != mode
+            or snapshot.owner != os.geteuid()
+            or snapshot.nlink != 1
+        ):
+            raise ReceiptError(
+                f"formal replay release {label} metadata is not exact"
+            )
+        snapshots[label] = snapshot
+    if snapshots["signature"].sha256 != expected_signature_sha256:
+        raise ReceiptError("formal replay signature digest changed after verification")
+    for label, expected in (
+        ("ssh_keygen", expected_ssh_keygen_sha256),
+        ("allowed_signers", expected_allowed_signers_sha256),
+        ("revocation", expected_revocation_sha256),
+    ):
+        if snapshots[label].sha256 != expected:
+            raise ReceiptError(
+                f"formal replay release {label} differs from protected policy"
+            )
+
+    if snapshots["source_receipt"].data != snapshots["receipt"].data:
+        raise ReceiptError(
+            "formal replay source and finalized receipt bytes differ"
+        )
+    try:
+        source_value = json.loads(snapshots["source_receipt"].data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ReceiptError("formal replay source receipt is malformed") from error
+    if not isinstance(source_value, dict):
+        raise ReceiptError("formal replay source receipt is not an object")
+    source_inventory = source_value.get("artifact_inventory")
+    if not isinstance(source_inventory, list):
+        raise ReceiptError("formal replay source artifact inventory is absent")
+    source_root = source_receipt_path.parent
+    source_root_contract = _capture_directory_contract(
+        source_root,
+        "formal replay source root",
+    )
+    source_artifacts: list[EvidenceSnapshot] = []
+    source_names: list[str] = []
+    for index, record in enumerate(source_inventory):
+        if not isinstance(record, dict):
+            raise ReceiptError(
+                f"formal replay source artifact {index} is malformed"
+            )
+        relative = record.get("path")
+        relative_path = PurePosixPath(relative) if isinstance(relative, str) else None
+        if (
+            relative_path is None
+            or relative_path.is_absolute()
+            or not relative_path.parts
+            or any(part in {"", ".", ".."} for part in relative_path.parts)
+        ):
+            raise ReceiptError(
+                f"formal replay source artifact {index} path is unsafe"
+            )
+        source_names.append(relative)
+        artifact = _bounded_evidence_snapshot(
+            source_root.joinpath(*relative_path.parts),
+            f"formal replay source artifact {index}",
+            maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
+        )
+        if (
+            record.get("sha256") != artifact.sha256
+            or record.get("size_bytes") != artifact.size
+            or record.get("mode") != artifact.mode
+            or record.get("nlink") != artifact.nlink
+            or artifact.owner != os.geteuid()
+            or artifact.nlink != 1
+        ):
+            raise ReceiptError(
+                f"formal replay source artifact {index} metadata differs"
+            )
+        source_artifacts.append(artifact)
+    if source_names != sorted(set(source_names)):
+        raise ReceiptError(
+            "formal replay source artifact paths are not sorted and unique"
+        )
+
+    verifier_dependencies = tuple(
+        _bounded_evidence_snapshot(
+            repo_root / "scripts" / "formal" / name,
+            f"signed formal replay release verifier dependency {name}",
+            maximum_bytes=_MAX_HELPER_BYTES,
+            allowed_owners={os.geteuid()},
+        )
+        for name in (
+            "check_sumeragi_v2_replay_receipt.py",
+            "sumeragi_v2_replay_signing.py",
+        )
+    )
+    status, stdout, stderr = _run_bounded_python_validator(
+        verifier,
+        [
+            str(source_receipt_path),
+            "--release-root",
+            str(release_root_path),
+            "--expected-signature-sha256",
+            expected_signature_sha256,
+            "--expected-ssh-keygen-sha256",
+            expected_ssh_keygen_sha256,
+            "--expected-allowed-signers-sha256",
+            expected_allowed_signers_sha256,
+            "--expected-revocation-sha256",
+            expected_revocation_sha256,
+            "--principal",
+            principal,
+            "--expected-signer-fingerprint",
+            expected_signer_fingerprint,
+        ],
+        cwd=repo_root,
+        environment=checker_environment,
+        name="signed formal replay release verifier",
+        watched_contracts=(
+            *snapshots.values(),
+            *source_artifacts,
+            *verifier_dependencies,
+        ),
+    )
+    expected_stdout = (
+        "verified finalized Sumeragi V2 replay release for "
+        f"{expected_signer_fingerprint}\n"
+    ).encode("utf-8")
+    if status != 0 or stdout != expected_stdout or stderr:
+        raise ReceiptError(
+            "signed formal replay release failed independent verification"
+        )
+    if (
+        _capture_directory_contract(
+            release_root_path,
+            "formal replay release root after verification",
+        )
+        != release_root_contract
+        or _capture_directory_contract(
+            source_root,
+            "formal replay source root after verification",
+        )
+        != source_root_contract
+    ):
+        raise ReceiptError(
+            "formal replay release directories changed during verification"
+        )
+    for label, path, _mode, maximum in specs:
+        current = _bounded_evidence_snapshot(
+            path,
+            f"formal replay release {label} after verification",
+            maximum_bytes=maximum,
+        )
+        if current != snapshots[label]:
+            raise ReceiptError(
+                f"formal replay release {label} changed during verification"
+            )
+    for index, expected in enumerate(source_artifacts):
+        current = _bounded_evidence_snapshot(
+            expected.path,
+            f"formal replay source artifact {index} after verification",
+            maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
+        )
+        if current != expected:
+            raise ReceiptError(
+                f"formal replay source artifact {index} changed during verification"
+            )
+
+    def full_record(snapshot: EvidenceSnapshot) -> dict[str, Any]:
+        return {
+            "path": str(snapshot.path),
+            "sha256": snapshot.sha256,
+            "size_bytes": snapshot.size,
+            "mode": f"{snapshot.mode:04o}",
+            "owner_uid": snapshot.owner,
+            "nlink": snapshot.nlink,
+        }
+
+    return {
+        "schema_version": 1,
+        "scheme": "detached-ssh",
+        "provider": "openssh-sshsig",
+        "namespace": "iroha-sumeragi-v2-replay-receipt-v1",
+        "principal": principal,
+        "signer_fingerprint": expected_signer_fingerprint,
+        "source_artifacts": [
+            full_record(snapshot) for snapshot in source_artifacts
+        ],
+        **{
+            label: full_record(snapshots[label])
+            for label, _path, _mode, _maximum in specs
+        },
+    }

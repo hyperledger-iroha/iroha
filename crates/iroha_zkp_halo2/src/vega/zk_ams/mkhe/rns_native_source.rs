@@ -376,23 +376,6 @@ pub trait ZkAmsMkheRnsNativeSourceSnapshotV1 {
     }
 }
 
-/// Move-only immutable source snapshot that supports authenticated repeated
-/// random reads for the lifetime of the owner.
-///
-/// This is deliberately a distinct capability rather than a blanket
-/// implementation for [`ZkAmsMkheRnsNativeSourceSnapshotV1`].  Implementors
-/// must return the same authenticated plaintext for the same arena/slot in any
-/// order, retain the same layout and structural receipt across successful
-/// reads, and permanently poison their backing owner after an operational or
-/// authentication failure.  Concrete implementations must not implement
-/// `Clone` or `Copy`.
-///
-/// The current crate declares no production implementation.  In particular,
-/// the one-pass source-statement fixture does not satisfy this contract.  A
-/// future confidential-spool adapter must provide separate conformance
-/// evidence before any downstream replay or release gate can use it.
-pub trait ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1: ZkAmsMkheRnsNativeSourceSnapshotV1 {}
-
 /// Move-only sequential source writer.
 pub trait ZkAmsMkheRnsNativeSourceWriterV1: Sized {
     /// Concrete secret owner accepted by writes.

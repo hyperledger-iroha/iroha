@@ -1,5 +1,4 @@
-//! Unit coverage for PrepareQC split classification and message-control evidence.
-
+/// Unit coverage for PrepareQC split classification and message-control evidence.
 use super::*;
 use iroha::{
     crypto::{Hash, HashOf},
@@ -127,6 +126,8 @@ fn held_prepare_vote(
         height: Some(reference.round.height),
         view: Some(reference.round.view),
         block_hash: Some(reference.subject.block_hash),
+        manifest_hash: None,
+        chunk_index: None,
         subject: Some(reference.subject),
         execution_commitment: Some(reference.execution_commitment),
         signer: Some(signer),
@@ -149,6 +150,8 @@ fn held_timeout_vote(
         height: Some(HEIGHT),
         view: Some(FIRST_VIEW),
         block_hash: None,
+        manifest_hash: None,
+        chunk_index: None,
         subject: None,
         execution_commitment: None,
         signer: Some(signer),
@@ -172,6 +175,8 @@ fn held_prepare_certificate(
         height: Some(reference.round.height),
         view: Some(reference.round.view),
         block_hash: Some(reference.subject.block_hash),
+        manifest_hash: None,
+        chunk_index: None,
         subject: Some(reference.subject),
         execution_commitment: Some(reference.execution_commitment),
         signer: None,
@@ -195,6 +200,8 @@ fn held_timeout_certificate(
         height: Some(HEIGHT),
         view: Some(FIRST_VIEW),
         block_hash: reference.map(|reference| reference.subject.block_hash),
+        manifest_hash: None,
+        chunk_index: None,
         subject: reference.map(|reference| reference.subject),
         execution_commitment: reference.map(|reference| reference.execution_commitment),
         signer: None,

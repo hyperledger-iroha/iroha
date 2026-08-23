@@ -1,0 +1,8 @@
+
+[nexus]
+lane_count = 1
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = { "autoscale.managed" = "true" }

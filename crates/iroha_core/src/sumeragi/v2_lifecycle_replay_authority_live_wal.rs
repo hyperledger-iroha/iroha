@@ -207,14 +207,14 @@ impl SealedLiveWalPersistedEffectV1 {
         )
         .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
     }
-    /// Consume the completed Apply seal into closed ordinary registry work.
+    /// Consume the completed Apply seal into its dedicated live registry carrier.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_live_validate_apply_work(
         self,
         permit: LiveValidateApplyWorkProjectionPermit,
-        receipt: &DurableBodyReceipt,
+        receipt: &ValidatedBodyReceipt,
     ) -> Result<PreparedLiveValidateApplyRegistryWork, Self> {
-        if !self.exactly_binds_completed_apply(receipt) {
+        if !self.exactly_binds_completed_apply(receipt.durable()) {
             return Err(self);
         }
         let Self {
@@ -237,6 +237,7 @@ impl SealedLiveWalPersistedEffectV1 {
             effect,
             pending,
             replay_authority.clone(),
+            receipt,
         ) {
             Ok(work) => Ok(work),
             Err((_error, effect, pending)) => Err(Self {

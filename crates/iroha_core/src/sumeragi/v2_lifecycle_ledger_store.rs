@@ -781,6 +781,21 @@ impl LifecycleCoordinator {
         let successor = LifecycleLedgerV1::from_coordinator(staged)?;
         store.persist_exact_successor(&current, &successor)
     }
+    /// Fsync one exact staged successor, then publish its actor-global ordinal range.
+    ///
+    /// The reservation stays fenced until the complete LedgerV1 replacement is
+    /// durable. If cursor publication fails, the caller remains fail-closed and
+    /// restart restores the shared cursor from the fsynced ledger high-water mark.
+    pub(super) fn persist_exact_staged_successor_with_ordinal_reservation(
+        &self,
+        staged: &Self,
+        reservation: &DurableLifecycleOrdinalReservation,
+    ) -> Result<(), LifecycleLedgerError> {
+        self.persist_exact_staged_successor(staged)?;
+        reservation
+            .commit_after_durable_publication()
+            .map_err(LifecycleLedgerError::InvalidLedger)
+    }
     /// Fsync one all-row finalized successor against this exact live owner.
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn persist_exact_finalization_successor(
         self,

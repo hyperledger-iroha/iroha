@@ -48,7 +48,9 @@ fn recovered_sign_completion_classifies_only_lost_or_post_publication_owners_for
 #[test]
 fn completion_classifier_consumes_composite_fetch_and_refanout_results() {
     let dispatched = ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Ok(
-        ProductionCompletionDispatchV1::CapacityUnavailable,
+        ProductionCompletionDispatchV1::CapacityUnavailable {
+            protected_live_apply_ordinal: None,
+        },
     ));
     assert!(!dispatched.restart_required());
     let dispatch_error = ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Err(
@@ -84,10 +86,10 @@ fn completion_classifier_consumes_composite_fetch_and_refanout_results() {
     assert!(refanout_error.restart_required());
 
     assert!(
-        ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRestartRequired
+        ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyRestartRequired
             .restart_required()
     );
     assert!(
-        !ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied.restart_required()
+        !ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied.restart_required()
     );
 }

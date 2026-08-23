@@ -30,9 +30,11 @@ fast transaction validation.
   `cold_store_root` and older directories are offloaded to `da_store_root` once
   `max_cold_bytes` is exceeded; reads hit the cold root first and rehydrate
   payloads back into `cold_store_root` when DA-backed shards are accessed.
-- `hot_retained_bytes` enforces a hot-tier byte budget derived from deterministic
-  in-memory WSV sizing. Grace retention may temporarily exceed this budget; the
-  overflow is reported via telemetry.
+- `hot_retained_bytes` enforces a deterministic hot-tier budget weight: each
+  entry charges its canonical Norito-encoded key bytes plus the measured value
+  footprint. This is not an allocator-exact resident-memory measurement. Grace
+  retention or entries unavailable to an incremental snapshot may temporarily
+  exceed the budget; telemetry reports the total overflow.
 - `hot_retained_grace_snapshots` keeps newly hot entries pinned for a short
   window to reduce hot/cold churn when rankings fluctuate.
 - Cold payloads reuse the last persisted shard when the value hash is unchanged,

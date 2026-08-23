@@ -1,0 +1,20 @@
+
+            seiyaku Branches {
+                view fn classify(int value) -> int {
+                    if value < 0 {
+                        return -1;
+                    } else if value == 0 {
+                        return 0;
+                    } else {
+                        return 1;
+                    }
+                }
+
+                view fn grouped(int value) -> int {
+                    return (value);
+                }
+
+                view fn pair() -> (int, bool) {
+                    return (1, true);
+                }
+            }

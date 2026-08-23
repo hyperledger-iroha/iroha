@@ -839,8 +839,13 @@ fn probe_start() -> std::time::Instant {
 }
 
 #[cfg(not(feature = "adaptive-telemetry"))]
+struct DisabledProbeStart;
+
+#[cfg(not(feature = "adaptive-telemetry"))]
 #[inline]
-fn probe_start() {}
+fn probe_start() -> DisabledProbeStart {
+    DisabledProbeStart
+}
 
 #[cfg(feature = "adaptive-telemetry")]
 #[inline]
@@ -850,7 +855,7 @@ fn probe_elapsed(start: std::time::Instant) -> u64 {
 
 #[cfg(not(feature = "adaptive-telemetry"))]
 #[inline]
-fn probe_elapsed(_start: ()) -> u64 {
+fn probe_elapsed(_start: DisabledProbeStart) -> u64 {
     0
 }
 

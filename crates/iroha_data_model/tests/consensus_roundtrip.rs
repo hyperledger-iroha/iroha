@@ -14,9 +14,9 @@ use iroha_data_model::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
             PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding, QuorumCertificateRef,
-            SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2HeightContextStatus,
-            SumeragiV2QcResponse, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutVote,
-            ValidatorPower,
+            SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2GenesisContextParameters,
+            SumeragiV2HeightContextStatus, SumeragiV2QcResponse, SumeragiV2Status,
+            SumeragiV2StatusPhase, TimeoutVote, ValidationError, ValidatorPower,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -44,6 +44,23 @@ fn sample_hash(seed: u8) -> Hash {
 }
 fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
+}
+
+#[test]
+fn genesis_context_parameters_reject_noncanonical_hash_markers() {
+    let mut context = SumeragiV2GenesisContextParameters::recommended();
+    context.nexus_amx_context_hash[Hash::LENGTH - 1] &= !1;
+    assert_eq!(
+        context.validate(),
+        Err(ValidationError::InvalidNexusAmxContextHash),
+    );
+
+    let mut context = SumeragiV2GenesisContextParameters::recommended();
+    context.execution_policy_hash[Hash::LENGTH - 1] &= !1;
+    assert_eq!(
+        context.validate(),
+        Err(ValidationError::InvalidExecutionPolicyHash),
+    );
 }
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
     assert!(u8::try_from(len).is_ok(), "len must fit in u8");

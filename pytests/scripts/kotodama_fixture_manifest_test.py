@@ -120,6 +120,49 @@ def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
+def test_trigger_semantics_include_inventory_drift_fails_closed(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    included_source = (
+        tmp_path
+        / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
+    )
+    source = included_source.read_text(encoding="utf-8")
+    included_source.write_text(
+        source.replace(
+            "fn trigger_decl_builds_typed_metadata()",
+            "fn changed_trigger_semantics_test_name()",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_trigger_semantics_fixture_inventory_drift_fails_closed(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    included_source = (
+        tmp_path
+        / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
+    )
+    source = included_source.read_text(encoding="utf-8")
+    included_source.write_text(
+        source.replace(
+            "../test_sources/trigger_decl_supports_data_filter_1.ko",
+            "../test_sources/trigger_decl_supports_data_filter_changed.ko",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        checker.ValidationError,
+        match="legacy fixture include inventory differs",
+    ):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
 @pytest.mark.parametrize(
     "retired_key, value",
     [
@@ -164,3 +207,12 @@ def test_legacy_payload_omission_fails_closed(tmp_path: Path) -> None:
 def test_repository_paths_cannot_escape_the_root() -> None:
     with pytest.raises(checker.ValidationError, match="repository-relative"):
         checker._relative_path("../escape.ko", "test.path")
+
+
+def test_child_include_paths_cannot_escape_the_root() -> None:
+    with pytest.raises(checker.ValidationError, match="escapes the repository"):
+        checker._resolved_include_path(
+            "crates/kotodama_lang/src/semantic/tests/child.rs",
+            "../../../../../../escape.ko",
+            "test include",
+        )

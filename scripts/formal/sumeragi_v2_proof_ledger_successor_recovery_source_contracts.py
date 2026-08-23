@@ -710,7 +710,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionCompletionDispatchV1::ApplyQueued",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
-                        "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
+                        "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched .activate(Instant::now(), activation, local_proposal_state)",
                         "drop(auxiliary_hold)", "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
@@ -878,6 +878,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
         )
+        ledger_store_path, ledger_store_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs"
+        )
         worker_path, worker_source = load(
             "crates/iroha_core/src/sumeragi/v2_worker.rs"
         )
@@ -970,6 +973,520 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             and schema_source
             and apply_source
         ):
+            cold_validate_owner = region(
+                registry_path,
+                registry_source,
+                "move-only cold Ready Validate retry owner",
+                "pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1 {",
+                "/// Closed failure while joining cold Validate retry authority at launch.",
+            )
+            require_tokens(
+                registry_path,
+                "move-only cold Ready Validate retry owner",
+                cold_validate_owner,
+                (
+                    "expected_decision: Option<(wire::ConsensusRound, wire::ConsensusRound, wire::BlockSubject, wire::ExecutionCommitment,)>",
+                    "effect: AdapterEffect",
+                    "durable_receipt: DurableBodyReceipt",
+                    "binding: RecoveredDurableValidateRetryBindingV1",
+                    "fn key(",
+                    "fn bind_validated_marker(",
+                    "fn exactly_matches_validated_marker(",
+                    "self.key() == key",
+                    "validated.durable() == &self.durable_receipt",
+                    "bind_validated_marker_commitment(validated.execution_commitment())",
+                    "exactly_matches_validated_marker_commitment(",
+                    "fn initial_retry_frontier(",
+                    "fn exactly_matches_retry(",
+                    "frontier: &RecoveredDurableValidateRetryFrontierV1",
+                    ".project_retry(&self.effect, frontier, effect, incoming)",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "move-only cold Ready Validate retry owner",
+                cold_validate_owner,
+                ("derive(Clone", "fn into_parts(", "fn into_ownership("),
+            )
+            cold_validate_census = region(
+                registry_path,
+                registry_source,
+                "opaque complete cold Ready Validate retry census",
+                "pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1 {",
+                "/// Closed failure while joining cold Validate retry authority at launch.",
+            )
+            require_tokens(
+                registry_path,
+                "opaque complete cold Ready Validate retry census",
+                cold_validate_census,
+                (
+                    "owners: BTreeMap<",
+                    "fn classify_and_bind_validated_marker(",
+                    "self.owners.get_mut(&key)",
+                    "owner.bind_validated_marker(key, validated)",
+                    "fn install_into_executor",
+                    "for owner in self.owners.into_values()",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "opaque complete cold Ready Validate retry census",
+                cold_validate_census,
+                ("derive(Clone", "fn iter(", "fn into_parts(", "Vec<"),
+            )
+            cold_validate_projection = _require_rust_item(
+                registry_validate_impl_path,
+                registry_validate_impl_source,
+                "project_recovered_durable_validate_retry_census",
+                errors,
+            )
+            if cold_validate_projection is not None:
+                require_order(
+                    registry_validate_impl_path,
+                    "complete cold Ready Validate owner census",
+                    cold_validate_projection.source,
+                    (
+                        "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
+                        "if let Some((decision_round, proposal_round, _, _)) = decision",
+                        "decision_round != proposal_round",
+                        "let mut logical_keys = std::collections::BTreeSet::new()",
+                        "for work in self.entries.values()",
+                        "ConcreteLifecycleWorkKind::DurableValidateBody(validate)",
+                        "candidate_statement()",
+                        "logical_keys.insert((statement.proposal_round(), subject))",
+                        "RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers",
+                        "let mut owners = BTreeMap::new()",
+                        "for (address, work) in &self.entries",
+                        "let expected_key = LifecycleKey::new(",
+                        "let matching_decision = decision.filter(",
+                        "Some(wire::GlobalPhase::Commit), Some(commitment)",
+                        "decision != Some(carrier_decision)",
+                        "Some(wire::GlobalPhase::Prepare), Some(_)",
+                        "AdapterEffect::ValidateBody",
+                        "record.state != super::LifecycleState::Ready",
+                        "record.work_class != LifecycleWorkClass::Validate",
+                        "record.key != expected_key",
+                        "record.physical_slots != BTreeMap::from([(address.slot, work.digest)])",
+                        "coordinator.ready_index.contains(&record.ordinal)",
+                        "validate.matches_recovered_record(",
+                        "project_recovered_durable_validate_retry_binding(",
+                        "matching_decision",
+                        "owners.insert(key, owner).is_some()",
+                        "RecoveredDurableValidateRetryCensusV1",
+                    ),
+                )
+            cold_validate_binding_region = region(
+                runtime_path,
+                runtime_source,
+                "closed cold Ready Validate retry binding and frontier",
+                "pub(in crate::sumeragi) struct RecoveredDurableValidateRetryBindingV1 {",
+                "/// Mint the unique pending owner of one exact payload-free live-WAL continuation.",
+            )
+            require_tokens(
+                runtime_path,
+                "closed cold Ready Validate retry binding and frontier",
+                cold_validate_binding_region,
+                (
+                    "authority_ceiling_commitment: Option<wire::ExecutionCommitment>",
+                    "pub(in crate::sumeragi) struct RecoveredDurableValidateRetryFrontierV1",
+                    "effect: AdapterEffect",
+                    "statement: RuntimeCandidateSemanticStatement",
+                    "fn bind_validated_marker_commitment(",
+                    "self.authority_ceiling_commitment = Some(commitment)",
+                    "fn exactly_matches_validated_marker_commitment(",
+                    "fn initial_frontier(",
+                    "authority_ceiling_commitment: self.authority_ceiling_commitment",
+                    "fn project_retry(",
+                ),
+            )
+            cold_validate_commitment_projection = _require_qualified_rust_item(
+                runtime_path,
+                runtime_source,
+                "RecoveredDurableValidateRetryFrontierV1",
+                "project_commitment_ceiling",
+                errors,
+                "pure recovered Validate durable commitment projection",
+            )
+            if cold_validate_commitment_projection is not None:
+                require_order(
+                    runtime_path,
+                    "pure recovered Validate durable commitment projection",
+                    cold_validate_commitment_projection.source,
+                    (
+                        "self.authority_ceiling_commitment.is_some_and(|expected| expected != commitment)",
+                        "let mut projected = self.clone()",
+                        "projected.authority_ceiling_commitment = Some(commitment)",
+                        "Ok(projected)",
+                    ),
+                )
+            pending_retry_binding = region(
+                runtime_path,
+                runtime_source,
+                "ordinal-free recovered Validate pending binding",
+                "pub(crate) struct PendingRuntimeEffectBinding {",
+                "/// Move-only restart successor derived from one exact recovered WAL vote.",
+            )
+            require_tokens(
+                runtime_path,
+                "ordinal-free recovered Validate pending binding",
+                pending_retry_binding,
+                (
+                    "causal_lifecycle_key: iroha_crypto::Hash",
+                    "effect_kind: u8",
+                    "candidate_kind: u8",
+                    "projection_hash: iroha_crypto::Hash",
+                ),
+            )
+            reject_tokens(
+                runtime_path,
+                "ordinal-free recovered Validate pending binding",
+                pending_retry_binding,
+                ("ordinal:", "lifecycle_ordinal:"),
+            )
+            cold_validate_binding = _require_qualified_rust_item(
+                runtime_path,
+                runtime_source,
+                "RecoveredDurableValidateRetryBindingV1",
+                "project_retry",
+                errors,
+                "exact cold Ready Validate retry binding",
+            )
+            if cold_validate_binding is not None:
+                require_order(
+                    runtime_path,
+                    "exact cold Ready Validate retry binding",
+                    cold_validate_binding.source,
+                    (
+                        "frontier_tag != recovered_tag",
+                        "incoming_tag != frontier_tag",
+                        "frontier_round != recovered_round",
+                        "frontier_subject != recovered_subject",
+                        "incoming_round != recovered_round",
+                        "incoming_subject != recovered_subject",
+                        "self.pending.validate_exact(recovered_effect)",
+                        "incoming.validate_exact()",
+                        "recovered_statement.commit_refinement_to(self.expected_retry_statement)",
+                        "recovered_statement.body_stage_authority_relation_to(frontier.statement)",
+                        "RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade",
+                        "frontier.statement.body_stage_authority_relation_to(incoming_statement)",
+                        "frontier.authority_ceiling_commitment.zip(incoming_commitment)",
+                        "RuntimeFetchAuthorityRelation::Upgrade => incoming_statement",
+                        "RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale",
+                        "incoming_binding.effect_identity != effect_identity",
+                        "candidate.statement != Some(incoming_statement)",
+                        "RuntimeEffectOwnership::new_bound(",
+                        "Ok((",
+                        "effect: effect.clone()",
+                        "statement: retained_statement",
+                        ".authority_ceiling_commitment.or(incoming_commitment)",
+                    ),
+                )
+                reject_tokens(
+                    runtime_path,
+                    "origin-neutral cold Ready Validate retry binding",
+                    cold_validate_binding.source,
+                    (
+                        "incoming.exact_pending_adapter_effect_binding(effect)",
+                        "incoming_pending.causal_lifecycle_key != self.pending.causal_lifecycle_key",
+                    ),
+                )
+            cold_validate_seal = region(
+                effects_path,
+                effects_source,
+                "lineage-separated durable Validate retry seal",
+                "enum DurableValidateRetrySealV1 {",
+                "struct DurableValidateRetryProjectionV1 {",
+            )
+            require_tokens(
+                effects_path,
+                "lineage-separated durable Validate retry seal",
+                cold_validate_seal,
+                (
+                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, }",
+                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, }",
+                ),
+            )
+            reject_tokens(
+                effects_path,
+                "lineage-separated durable Validate retry seal",
+                cold_validate_seal,
+                ("Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)",),
+            )
+            cold_validate_retry_projection = _require_rust_item(
+                effects_path,
+                effects_source,
+                "project_retry",
+                errors,
+            )
+            if cold_validate_retry_projection is not None:
+                require_order(
+                    effects_path,
+                    "non-substitutable live and recovered Validate retry projection",
+                    cold_validate_retry_projection.source,
+                    (
+                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, }",
+                        "adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)",
+                        "seal: Self::Live",
+                        "Self::Recovered { owner, frontier }",
+                        "owner.exactly_matches_retry(frontier, effect, incoming)",
+                        "seal: Self::Recovered {",
+                        "owner: Arc::clone(owner)",
+                        "frontier",
+                    ),
+                )
+                reject_tokens(
+                    effects_path,
+                    "non-substitutable recovered Validate retry projection",
+                    cold_validate_retry_projection.source,
+                    ("owner: Arc::new(incoming",),
+                )
+            cold_validate_durable_commitment_join = _require_rust_item(
+                effects_path,
+                effects_source,
+                "project_recovered_commitment_ceiling",
+                errors,
+            )
+            if cold_validate_durable_commitment_join is not None:
+                require_order(
+                    effects_path,
+                    "lineage-preserving recovered Validate durable commitment join",
+                    cold_validate_durable_commitment_join.source,
+                    (
+                        "Self::Live { .. } => Ok(None)",
+                        "Self::Recovered { owner, frontier }",
+                        "frontier.project_commitment_ceiling(commitment)",
+                        "owner: Arc::clone(owner)",
+                        "frontier",
+                    ),
+                )
+            cold_validate_install = region(
+                effects_path,
+                effects_source,
+                "atomic cold Ready Validate retry installation",
+                "pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1",
+                "impl<R: EffectRuntime> V2EffectExecutor<R>",
+            )
+            require_tokens(
+                effects_path,
+                "atomic cold Ready Validate retry installation",
+                cold_validate_install,
+                (
+                    "owner.exactly_matches_validated_marker(key, validated)",
+                    "DurableValidateRetrySealV1::Recovered {",
+                    "frontier: owner.initial_retry_frontier()",
+                    "owner: Arc::new(owner)",
+                ),
+            )
+            reject_tokens(
+                effects_path,
+                "atomic cold Ready Validate retry installation",
+                cold_validate_install,
+                ("DurableValidateRetrySealV1::Recovered(Arc::new(owner))",),
+            )
+            cold_validate_catalog_open = _require_rust_item(
+                effects_path,
+                effects_source,
+                "open_with_body_store",
+                errors,
+            )
+            if cold_validate_catalog_open is not None:
+                require_order(
+                    effects_path,
+                    "owner-exact cold Ready Validate marker deferral",
+                    cold_validate_catalog_open.source,
+                    (
+                        "body_store.ensure_recovered_markers_revalidated()",
+                        "let recovered_bodies = body_store.recovery_catalog()",
+                        "let recovered_validations = body_store.validated_recovery_catalog()",
+                        "for (key, validated_receipt) in &recovered_validations",
+                        "validated_receipt.durable() != durable_receipt",
+                        "recovered_validate_retry_census.classify_and_bind_validated_marker(",
+                        "runtime.recover_validated_body(manifest, validated_receipt)",
+                        "Self::with_runtime_and_guard(",
+                        "install_recovered_validation_catalog(",
+                        "recovered_validate_retry_census.install_into_executor(",
+                        "construction.complete()",
+                    ),
+                )
+                require_token_count(
+                    effects_path,
+                    "owner-exact cold Ready Validate marker deferral",
+                    cold_validate_catalog_open.source,
+                    "Vec<RecoveredDurableValidateRetryOwnerV1>",
+                    0,
+                )
+                require_token_count(
+                    effects_path,
+                    "owner-exact cold Ready Validate marker deferral",
+                    cold_validate_catalog_open.source,
+                    "recovered_validate_retry_census.iter(",
+                    0,
+                )
+                require_token_count(
+                    effects_path,
+                    "owner-exact cold Ready Validate marker deferral",
+                    cold_validate_catalog_open.source,
+                    "mut recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1",
+                    1,
+                )
+            cold_validate_record_marker = _require_rust_item(
+                effects_path,
+                effects_source,
+                "record_lifecycle_validated_body",
+                errors,
+            )
+            if cold_validate_record_marker is not None:
+                require_order(
+                    effects_path,
+                    "pre-mutation recovered Validate marker commitment join",
+                    cold_validate_record_marker.source,
+                    (
+                        "self.validated_bodies.get(&key).is_some_and(|existing| existing != &validated)",
+                        "let projected_recovered_seal = self.durable_validate_retry_seals.get(&key)",
+                        "seal.project_recovered_commitment_ceiling(validated.execution_commitment())",
+                        ".transpose()",
+                        ".map_err(EffectExecutorError::Contract)?",
+                        "self.validated_bodies.entry(key).or_insert(validated)",
+                        "self.durable_validate_retry_seals.insert(key, seal)",
+                    ),
+                )
+            retain_effect_batch = _require_rust_item(
+                effects_path,
+                effects_source,
+                "retain_effect_batch_at_frontier",
+                errors,
+            )
+            if retain_effect_batch is not None:
+                retry_start = retain_effect_batch.source.find(
+                    "if let AdapterEffect::ValidateBody { round, subject, .. } = effect"
+                )
+                retry_end = retain_effect_batch.source.find(
+                    "let mut candidate_semantic_identity = evidence.candidate_semantic_identity()",
+                    retry_start,
+                )
+                if retry_start < 0 or retry_end < 0:
+                    errors.append(
+                        f"{effects_path}:{retain_effect_batch.line}: missing exact cold "
+                        "Validate retry-stutter branch"
+                    )
+                else:
+                    retry_stutter = retain_effect_batch.source[retry_start:retry_end]
+                    require_order(
+                        effects_path,
+                        "exact cold Ready Validate retry stutter",
+                        retry_stutter,
+                        (
+                            "retained_validate_retry_seals.get(&(*round, *subject)).cloned()",
+                            "seal.project_retry(effect, evidence)",
+                            "RuntimeCandidateAdmissionDisposition::CoalescedRetry",
+                            "production_adapter_effect_candidate_trace_projection(",
+                            "check_production_effect_to_candidate_transition(",
+                            "retained_validate_retry_seals.insert((*round, *subject), projected.seal)",
+                            "retain_effect.push(false)",
+                            "continue",
+                        ),
+                    )
+                    for forbidden in (
+                        "install_pending_durable_validate_admission",
+                        "enqueue_",
+                        "dispatch_",
+                    ):
+                        require_token_count(
+                            effects_path,
+                            "exact cold Ready Validate retry stutter",
+                            retry_stutter,
+                            forbidden,
+                            0,
+                        )
+            decision_cleanup = _require_rust_item(
+                effects_path,
+                effects_source,
+                "reconcile_decision_work",
+                errors,
+            )
+            if decision_cleanup is not None:
+                require_order(
+                    effects_path,
+                    "Decision-scoped cold Validate retry cleanup",
+                    decision_cleanup.source,
+                    (
+                        "let projected_recovered_decision_seal = self.durable_validate_retry_seals.get(&decision_body)",
+                        "seal.project_recovered_commitment_ceiling(decision_commitment)",
+                        ".transpose()",
+                        ".map_err(EffectExecutorError::Contract)?",
+                        "!self.pending_durable_validate_admissions.is_empty()",
+                        "self.preflight_remote_proposal_replay_indexes()?",
+                        "self.runtime.retire_proposal_work_after_decision(",
+                        "let Some(seal) = projected_recovered_decision_seal",
+                        "self.durable_validate_retry_seals.insert(decision_body, seal)",
+                        "self.durable_validate_retry_seals.retain(|key, _| !drain_decision_body && *key == decision_body)",
+                        "self.protected_decision = Some(durable_decision)",
+                    ),
+                )
+            lifecycle_launch_item = _require_qualified_rust_item(
+                launch_path,
+                launch_source,
+                "ProductionLifecycleOwnerV1",
+                "launch",
+                errors,
+                "cold Ready Validate owner launch installation",
+                expected_attributes=(
+                    "#[allow(clippy::result_large_err)]",
+                    "#[inline(never)]",
+                ),
+            )
+            if lifecycle_launch_item is not None:
+                require_order(
+                    launch_path,
+                    "cold Ready Validate census launch installation",
+                    lifecycle_launch_item.source,
+                    (
+                        "runtime.replayed_decision_key()",
+                        "project_recovered_durable_validate_retry_census(",
+                        "V2EffectExecutor::open_with_body_store(",
+                        "recovered_validate_retry_census",
+                        "ProductionV2Services::start_with_apply_service(",
+                        "construction.complete()",
+                    ),
+                )
+                require_token_count(
+                    launch_path,
+                    "cold Ready Validate census launch installation",
+                    lifecycle_launch_item.source,
+                    "&recovered_validate_retry_census",
+                    0,
+                )
+                require_token_count(
+                    launch_path,
+                    "cold Ready Validate census launch installation",
+                    lifecycle_launch_item.source,
+                    "install_recovered_durable_validate_retry_owners",
+                    0,
+                )
+                require_token_count(
+                    launch_path,
+                    "cold Ready Validate census launch installation",
+                    lifecycle_launch_item.source,
+                    "arm_live_clocks",
+                    0,
+                )
+            lifecycle_activation = _require_rust_item(
+                launch_path,
+                launch_source,
+                "activate_with",
+                errors,
+            )
+            if lifecycle_activation is not None:
+                require_order(
+                    launch_path,
+                    "post-install live clock and ingress activation",
+                    lifecycle_activation.source,
+                    (
+                        "self.executor.arm_live_clocks(clock_activation, now)",
+                        "self.services.activate_effect_completion_observer(observer)",
+                        "publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)",
+                    ),
+                )
             cold_apply_startup = _require_rust_item(
                 ledger_path,
                 ledger_source,
@@ -1263,7 +1780,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fresh Serve exhaustive all-live registry census",
                     all_live_census.source,
                     "apply.dispatch_key.is_none()",
-                    1,
+                    2,
                 )
             fresh_serve_preflight = _require_rust_item(
                 registry_path,
@@ -1316,10 +1833,87 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "!registry.exactly_covers_all_live_work(&self.verified, &self.coordinator)",
                         "retain_for_admission_with_verified_retention",
                         "let mut staged = self.coordinator.stage_durable_transaction()",
+                        "staged.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate))",
+                        "producer_turn_ordinal: Some(_)",
+                        "let Some(ordinal_reservation) = ordinal_reservation",
                         "PreparedCertifiedServeRegistryBatchV1::from_fresh_admitted_pair",
                         "install_certified_serve_fresh_batch_before_publication",
-                        "self.coordinator.persist_exact_staged_successor(&staged)",
+                        "self.coordinator.persist_exact_staged_successor_with_ordinal_reservation( &staged, &ordinal_reservation, )",
                         "self.coordinator = staged",
+                    ),
+                )
+            fresh_serve_ordinal_allocator = _require_rust_item(
+                owner_path,
+                owner_source,
+                "reduce_admit_with_ordinal_allocator",
+                errors,
+            )
+            if fresh_serve_ordinal_allocator is not None:
+                require_order(
+                    owner_path,
+                    "fresh Serve and ProducerTurn reserve one exact two-ordinal range",
+                    fresh_serve_ordinal_allocator.source,
+                    (
+                        "let producer = match (candidate.work_class, candidate.producer_turn.as_ref())",
+                        "(LifecycleWorkClass::CertifiedServe, Some(producer)) => Some(producer)",
+                        "let ordinal_count = if producer.is_some() { 2_usize } else { 1_usize }",
+                        "allocate(self.high_water, ordinal_count)",
+                    ),
+                )
+            durable_ordinal_admission = _require_rust_item(
+                owner_path,
+                owner_source,
+                "reduce_admit_with_durable_ordinals",
+                errors,
+            )
+            if durable_ordinal_admission is not None:
+                require_order(
+                    owner_path,
+                    "live durable admission fences the allocator range",
+                    durable_ordinal_admission.source,
+                    (
+                        "self.lifecycle_ordinal_authority.clone()",
+                        "self.reduce_admit_with_ordinal_allocator",
+                        "authority.begin_durable_range(high_water, count)",
+                        "reservation = Some(pending)",
+                    ),
+                )
+            durable_ordinal_publication = _require_rust_item(
+                ledger_store_path,
+                ledger_store_source,
+                "persist_exact_staged_successor_with_ordinal_reservation",
+                errors,
+            )
+            if durable_ordinal_publication is not None:
+                require_order(
+                    ledger_store_path,
+                    "durable ordinal publication follows exact LedgerV1 fsync",
+                    durable_ordinal_publication.source,
+                    (
+                        "self.persist_exact_staged_successor(staged)?",
+                        "reservation.commit_after_durable_publication()",
+                    ),
+                )
+            fresh_serve_pair_regression = _require_rust_item(
+                owner_path,
+                owner_source,
+                "paired_launch_ordinal_authority_reserves_one_certified_serve_pair",
+                errors,
+            )
+            if fresh_serve_pair_regression is not None:
+                require_order(
+                    owner_path,
+                    "fresh Serve pair fences and publishes exactly two ordinals",
+                    fresh_serve_pair_regression.source,
+                    (
+                        "ordinal: 14",
+                        "producer_turn_ordinal: Some(15)",
+                        "next_ordinal_for_test()",
+                        "Some(14)",
+                        "persist_durable_projection_with_ordinal_reservation(reservation.as_ref())",
+                        "next_ordinal_for_test()",
+                        "Some(16)",
+                        "persisted.high_water(), 15",
                     ),
                 )
             require_tokens(
@@ -1404,10 +1998,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
-                    "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
+                    "super::authority::lifecycle_ordinal_authorities_after_high_watermark(self.coordinator.high_water(),)",
+                    "RuntimeLifecycleOrdinalSource::from_authority(runtime_ordinal_authority)",
                     "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+                    "lifecycle_ordinals.advance_past(high_watermark)",
                     "leader_wire_launch.open_gate(",
                     "leader_wire_restore.scheduler_ordinal_high_watermark()",
+                    "self.coordinator.bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)",
                     "ProductionLeaderWireIngressBindingV1::bind(",
                     "self.adapter_startup.take()",
                     "self.body_store.take()",
@@ -3110,7 +3707,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 registry_source,
                 "opaque recovered Broadcast-and-next-Sign registry preparation",
                 "pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
-                "impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>",
+                "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>",
             )
             require_order(
                 registry_path,
@@ -3136,6 +3733,71 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "persist_exact_successor",
                 ),
             )
+            ordinary_body_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_body_stage_transition",
+                errors,
+            )
+            if ordinary_body_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "ordinary adjacent body successor reserves exactly one ordinal",
+                    ordinary_body_transition.source,
+                    (
+                        "BodyStagePayloadRelationV1::OrdinaryBodyFrame, 1",
+                    ),
+                )
+            recovered_decision_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_recovered_decision_fetch_store_transition",
+                errors,
+            )
+            if recovered_decision_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "recovered Decision Fetch-to-Store reserves exactly one ordinal",
+                    recovered_decision_transition.source,
+                    (
+                        "BodyStagePayloadRelationV1::RecoveredDecisionFetch, 1",
+                    ),
+                )
+            recovered_single_broadcast_transition = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "prepare_recovered_lifecycle_sign_broadcast_transition",
+                errors,
+            )
+            if recovered_single_broadcast_transition is not None:
+                require_tokens(
+                    body_pipeline_path,
+                    "single recovered Broadcast reserves exactly one ordinal",
+                    recovered_single_broadcast_transition.source,
+                    (
+                        "stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate, 1)",
+                    ),
+                )
+            body_transition_reservation = _require_rust_item(
+                body_pipeline_path,
+                body_pipeline_source,
+                "stage_body_stage_transition_with_payload_relation",
+                errors,
+            )
+            if body_transition_reservation is not None:
+                require_order(
+                    body_pipeline_path,
+                    "adjacent body successor retains its actor-global ordinal reservation",
+                    body_transition_reservation.source,
+                    (
+                        "ordinal_count: usize",
+                        "reserve_body_transition_ordinals(coordinator, ordinal_count)",
+                        "ordinal_reservation.first()",
+                        "staged.reduce_admit_with_ordinal_allocator",
+                        "count != 1 || expected_child_ordinal <= high_water",
+                        "Ok(StagedBodyStageTransition { staged, ordinal_reservation",
+                    ),
+                )
             combined_transition = region(
                 body_pipeline_path,
                 body_pipeline_source,
@@ -3148,9 +3810,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "inert recovered Broadcast-and-next-Sign coordinator staging",
                 combined_transition,
                 (
-                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast)",
-                    "first.child_ordinal.checked_add(1)",
-                    "staged.reduce_admit(AdmissionRequest::Candidate(next_sign))",
+                    "stage_recovered_lifecycle_sign_broadcast_transition(coordinator, lease, broadcast, 2)",
+                    "ordinal_reservation.last()",
+                    "broadcast_ordinal.checked_add(1)",
+                    "staged.reduce_admit_with_ordinal_allocator( AdmissionRequest::Candidate(next_sign)",
+                    "count != 1 || expected_next_sign_ordinal <= high_water",
+                    "Ok((expected_next_sign_ordinal, expected_next_sign_ordinal))",
                     "next_sign_owner == broadcast_owner",
                     "staged.high_water != next_sign_ordinal",
                     "capacity_generation_before[&CapacityClass::Effect].saturating_add(1)",
@@ -3180,7 +3845,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "durable recovered Broadcast-and-next-Sign publication",
                 combined_transition_publication,
                 (
-                    "persist_exact_staged_successor(&self.staged)",
+                    "persist_exact_staged_successor_with_ordinal_reservation( &self.staged, &self.ordinal_reservation, )",
                     "successor.commit_after_publication()",
                     "*coordinator = staged",
                     "if publication_is_vote",
@@ -3212,7 +3877,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 adapter_source,
                 "durable recovered Proposal adapter two-child commit",
                 "pub(in crate::sumeragi) fn commit_after_durable_broadcast_and_sign(self)",
-                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+                "/// Borrow-bound adapter successor for one registry-owned lifecycle Apply",
             )
             require_order(
                 adapter_path,
@@ -3236,7 +3901,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 adapter_source,
                 "durable recovered Vote adapter two-child commit",
                 "pub(in crate::sumeragi) fn commit_after_durable_vote_broadcast_and_sign(self)",
-                "/// Borrow-bound adapter successor for one registry-owned recovered Apply",
+                "/// Borrow-bound adapter successor for one registry-owned lifecycle Apply",
             )
             require_order(
                 adapter_path,
@@ -3417,7 +4082,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-                "pub(in crate::sumeragi) fn drive_recovered_decision_apply_deferred(",
+                "pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(",
             )
             require_order(
                 launch_path,
@@ -3757,7 +4422,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "recovered Sign capacity capture release",
                 "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-                "fn recovered_completion_worker_capacity(",
+                "fn lifecycle_completion_worker_capacity(",
             )
             require_token_count(
                 worker_path,
@@ -3808,7 +4473,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 "launched unified lifecycle completion Drop order",
                 "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
-                "/// Result of draining one dedicated recovered Apply worker completion.",
+                "/// Sole parked lifecycle completion owner for this height.",
             )
             require_order(
                 launch_path,
@@ -3824,8 +4489,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_completion_with_runner_debt(",
-                "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
+                "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+                "pub(super) fn dispatch_ready_validate_successor(",
             )
             require_order(
                 scheduler_path,
@@ -3835,7 +4500,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "attest_ready_recovered_decision_fetch",
                     "authenticate_recovered_decision_fetch_request(",
                     "take_request_authority()",
-                    "capture_recovered_completion_capacity_census(probes)",
+                    "capture_lifecycle_completion_capacity_census(probes)",
                     "self.coordinator.plan_turn(inputs)",
                     "census.select_fetch(ordinal)",
                     "prepare_recovered_decision_fetch_request_registration(owner)",
@@ -3852,7 +4517,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "services.matches_lifecycle_executor_output_guard(executor)",
                     "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
-                    "RecoveredCompletionCapacityProbeV1::Fetch",
+                    "LifecycleCompletionCapacityProbeV1::Fetch",
                     "authenticated_capacity(ordinal, &factory)",
                     "prepared.dispatch_key() != registration.dispatch_key()",
                     "installed != dispatch_key",

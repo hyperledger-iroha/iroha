@@ -797,6 +797,201 @@ def _validate_terminal_release_evidence(
             ):
                 raise BootstrapError(f"{label} contains an unsafe entry")
 
+    formal_replay = _require_exact_json_fields(
+        receipt_evidence["formal_replay_release"],
+        {
+            "schema_version",
+            "scheme",
+            "provider",
+            "namespace",
+            "principal",
+            "signer_fingerprint",
+            "source_artifacts",
+            "source_receipt",
+            "receipt",
+            "signature",
+            "ssh_keygen",
+            "allowed_signers",
+            "revocation",
+            "attestation",
+        },
+        "terminal formal replay release",
+    )
+    replay_environment = {
+        "source_receipt": authenticated_environment.get(
+            "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"
+        ),
+        "release_root": authenticated_environment.get(
+            "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"
+        ),
+        "signature_sha256": authenticated_environment.get(
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256"
+        ),
+        "principal": authenticated_environment.get(
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL"
+        ),
+        "signer_fingerprint": authenticated_environment.get(
+            "SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT"
+        ),
+        "ssh_keygen_sha256": authenticated_environment.get(
+            "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256"
+        ),
+        "allowed_signers_sha256": authenticated_environment.get(
+            "SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256"
+        ),
+        "revocation_sha256": authenticated_environment.get(
+            "SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256"
+        ),
+    }
+    if (
+        not all(
+            isinstance(value, str) and value
+            for value in replay_environment.values()
+        )
+        or type(formal_replay["schema_version"]) is not int
+        or not all(
+            isinstance(formal_replay[field], str)
+            for field in (
+                "scheme",
+                "provider",
+                "namespace",
+                "principal",
+                "signer_fingerprint",
+            )
+        )
+        or formal_replay["schema_version"] != 1
+        or formal_replay["scheme"] != "detached-ssh"
+        or formal_replay["provider"] != "openssh-sshsig"
+        or formal_replay["namespace"]
+        != "iroha-sumeragi-v2-replay-receipt-v1"
+        or formal_replay["principal"] != replay_environment["principal"]
+        or formal_replay["signer_fingerprint"]
+        != replay_environment["signer_fingerprint"]
+        or _FINGERPRINT_RE.fullmatch(formal_replay["signer_fingerprint"])
+        is None
+    ):
+        raise BootstrapError(
+            "terminal formal replay signing identity is not authenticated"
+        )
+
+    source_receipt = capture_artifact(
+        formal_replay["source_receipt"],
+        "terminal formal replay source receipt",
+        full=True,
+        maximum_bytes=128 * 1024 * 1024,
+        expected_mode=0o600,
+        containment_root=Path(str(replay_environment["source_receipt"])).parent,
+    )
+    if str(source_receipt.path) != replay_environment["source_receipt"]:
+        raise BootstrapError(
+            "terminal formal replay source receipt is not the authenticated input"
+        )
+    source_records = formal_replay["source_artifacts"]
+    expected_source_names = {
+        "01-standalone_sany.stdout",
+        "01-standalone_sany.stderr",
+        "02-raw_tlc.stdout",
+        "02-raw_tlc.stderr",
+        "03-normalizer.stdout",
+        "03-normalizer.stderr",
+    }
+    if not isinstance(source_records, list) or len(source_records) != len(
+        expected_source_names
+    ):
+        raise BootstrapError(
+            "terminal formal replay source artifact inventory is incomplete"
+        )
+    source_event_names: list[str] = []
+    for index, record in enumerate(source_records):
+        snapshot = capture_artifact(
+            record,
+            f"terminal formal replay source artifact {index}",
+            full=True,
+            maximum_bytes=256 * 1024 * 1024,
+            expected_mode=0o600,
+            containment_root=source_receipt.path.parent,
+        )
+        if snapshot.path.parent != source_receipt.path.parent / "events":
+            raise BootstrapError(
+                "terminal formal replay source artifact escaped events"
+            )
+        source_event_names.append(snapshot.path.name)
+    if source_event_names != sorted(expected_source_names):
+        raise BootstrapError(
+            "terminal formal replay source artifacts are not exact and sorted"
+        )
+    require_inventory(
+        source_receipt.path.parent,
+        {"receipt.json", "events"},
+        "terminal formal replay source root",
+        containment_root=source_receipt.path.parent,
+        expected_mode=0o700,
+    )
+    require_inventory(
+        source_receipt.path.parent / "events",
+        expected_source_names,
+        "terminal formal replay source events",
+        containment_root=source_receipt.path.parent,
+        expected_mode=0o700,
+    )
+
+    release_receipt_record = formal_replay["receipt"]
+    if not isinstance(release_receipt_record, dict) or not isinstance(
+        release_receipt_record.get("path"), str
+    ):
+        raise BootstrapError("terminal formal replay finalized receipt is malformed")
+    replay_release_root = Path(release_receipt_record["path"]).parent
+    if str(replay_release_root) != replay_environment["release_root"]:
+        raise BootstrapError(
+            "terminal formal replay release root is not the authenticated input"
+        )
+    finalized_specs = (
+        ("receipt", "receipt.json", 0o400, 128 * 1024 * 1024),
+        ("signature", "receipt.json.sig", 0o400, 16 * 1024 * 1024),
+        ("ssh_keygen", "ssh-keygen.release-tool", 0o500, 512 * 1024 * 1024),
+        ("allowed_signers", "allowed_signers", 0o400, 16 * 1024 * 1024),
+        ("revocation", "revocation.krl", 0o400, 16 * 1024 * 1024),
+        (
+            "attestation",
+            "release-attestation.json",
+            0o400,
+            128 * 1024 * 1024,
+        ),
+    )
+    finalized: dict[str, LargeFileSnapshot] = {}
+    for field, filename, mode, maximum_bytes in finalized_specs:
+        finalized[field] = capture_artifact(
+            formal_replay[field],
+            f"terminal formal replay finalized {field}",
+            full=True,
+            expected_path=replay_release_root / filename,
+            maximum_bytes=maximum_bytes,
+            expected_mode=mode,
+            containment_root=replay_release_root,
+        )
+    if (
+        finalized["receipt"].sha256 != source_receipt.sha256
+        or finalized["receipt"].size != source_receipt.size
+        or finalized["signature"].sha256
+        != replay_environment["signature_sha256"]
+        or finalized["ssh_keygen"].sha256
+        != replay_environment["ssh_keygen_sha256"]
+        or finalized["allowed_signers"].sha256
+        != replay_environment["allowed_signers_sha256"]
+        or finalized["revocation"].sha256
+        != replay_environment["revocation_sha256"]
+    ):
+        raise BootstrapError(
+            "terminal formal replay bundle differs from authenticated policy"
+        )
+    require_inventory(
+        replay_release_root,
+        {filename for _field, filename, _mode, _maximum in finalized_specs},
+        "terminal formal replay finalized root",
+        containment_root=replay_release_root,
+        expected_mode=0o700,
+    )
+
     simple_specs = (
         (
             "g_unit_focused_test_inventory",
@@ -3606,6 +3801,49 @@ def _run_protected_receipt_validator(
         return _receipt_nested_artifact_path(
             receipt, fields, release_artifact_root(fields)
         )
+
+    formal_replay = receipt.get("evidence", {}).get("formal_replay_release")
+    if not isinstance(formal_replay, dict):
+        raise BootstrapError("terminal receipt omits its formal replay release")
+    formal_source_rendered = environment.get(
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"
+    )
+    formal_release_root_rendered = environment.get(
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"
+    )
+    if not isinstance(formal_source_rendered, str) or not isinstance(
+        formal_release_root_rendered, str
+    ):
+        raise BootstrapError(
+            "authenticated runner omits the formal replay release paths"
+        )
+    formal_source = _absolute_resolved_existing(
+        Path(formal_source_rendered), "authenticated formal replay source receipt"
+    )
+    formal_release_root = _absolute_resolved_existing(
+        Path(formal_release_root_rendered),
+        "authenticated formal replay release root",
+    )
+    formal_source_receipt = _receipt_nested_artifact_path(
+        receipt,
+        ("formal_replay_release", "source_receipt"),
+        formal_source.parent,
+    )
+    formal_release_receipt = _receipt_nested_artifact_path(
+        receipt,
+        ("formal_replay_release", "receipt"),
+        formal_release_root,
+    )
+    if (
+        formal_source_receipt != formal_source
+        or formal_release_receipt != formal_release_root / "receipt.json"
+        or not isinstance(formal_replay.get("signature"), dict)
+        or not isinstance(formal_replay["signature"].get("sha256"), str)
+        or not isinstance(formal_replay.get("principal"), str)
+    ):
+        raise BootstrapError(
+            "terminal formal replay validator inputs are not exact"
+        )
     scaling_digests: dict[str, str] = {}
     for field, environment_name in _SCALING_DIGEST_ENVIRONMENT.items():
         value = environment.get(environment_name)
@@ -3672,6 +3910,14 @@ def _run_protected_receipt_validator(
         str(receipt_artifact("corridor_completion")),
         "--formal-completion",
         str(receipt_artifact("formal_completion")),
+        "--formal-replay-source-receipt",
+        str(formal_source_receipt),
+        "--formal-replay-release-root",
+        str(formal_release_root),
+        "--expected-formal-replay-signature-sha256",
+        formal_replay["signature"]["sha256"],
+        "--formal-replay-principal",
+        formal_replay["principal"],
         "--seed-completion",
         str(receipt_artifact("seed_matrix_completion")),
         "--chaos-completion",
