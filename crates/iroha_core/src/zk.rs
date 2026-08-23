@@ -399,7 +399,7 @@ pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
 /// Build the canonical inline verifier key for `ivm-execution-v1`.
 ///
 /// The returned key is a real Halo2 IPA verifier key envelope
-/// (`CID1` + `IPAK` + `H2VK`) for the current IVM execution binding circuit,
+/// (`IPAK` + `CID1` + `H2VK`) for the current IVM execution binding circuit,
 /// suitable for WSV registration.
 ///
 /// # Errors
@@ -3294,47 +3294,16 @@ mod zk1 {
     pub fn wrap_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
         write_tlv(buf, *b"CID1", circuit_id.as_bytes());
     }
-    /// Parse an optional circuit identifier (`CID1`) from a ZK1 envelope.
-    #[allow(dead_code)]
-    pub fn circuit_id_any(bytes: &[u8]) -> Result<Option<String>, ()> {
-        if !is_envelope(bytes) || bytes.len() < 4 {
-            return Err(());
-        }
-        let mut cursor = Cursor::new(&bytes[4..]);
-        let mut circuit_id = None;
-        while usize::try_from(cursor.position()).map_err(|_| ())? < cursor.get_ref().len() {
-            let Some((tag, payload)) = read_tlv(&mut cursor) else {
-                return Err(());
-            };
-            if &tag == b"CID1" {
-                if circuit_id.is_some() {
-                    return Err(());
-                }
-                let value = std::str::from_utf8(payload).map_err(|_| ())?.trim();
-                if value.is_empty() {
-                    return Err(());
-                }
-                circuit_id = Some(value.to_owned());
-            }
-        }
-        Ok(circuit_id)
-    }
-    /// Require a strict Halo2 IPA verifier-key envelope and return its `IPAK`.
-    ///
-    /// The accepted verifier-key container is exactly one `CID1`, one `IPAK`,
-    /// and one non-empty `H2VK` TLV. This keeps reserved circuit profiles from
-    /// accepting arbitrary key bytes under a matching commitment.
-    pub fn ensure_halo2_ipa_vk_envelope_shape_any_k(
-        bytes: &[u8],
-        expected_circuit_id: &str,
-    ) -> Result<u32, String> {
+    /// Parse the one canonical Halo2 IPA verifier-key carrier.
+    fn parse_halo2_ipa_vk_envelope(bytes: &[u8]) -> Result<(&str, u32, &[u8]), String> {
         if !is_envelope(bytes) || bytes.len() < 4 {
             return Err("invalid CID1/Halo2 IPA verifier-key envelope".to_owned());
         }
         let mut cursor = Cursor::new(&bytes[4..]);
-        let mut saw_cid = false;
+        let mut circuit_id = None;
         let mut ipa_k = None;
-        let mut saw_h2vk = false;
+        let mut h2vk = None;
+        let mut position = 0_u8;
         while usize::try_from(cursor.position())
             .map_err(|_| "invalid CID1/Halo2 IPA verifier-key envelope".to_owned())?
             < cursor.get_ref().len()
@@ -3342,26 +3311,8 @@ mod zk1 {
             let Some((tag, payload)) = read_tlv(&mut cursor) else {
                 return Err("invalid CID1/Halo2 IPA verifier-key envelope".to_owned());
             };
-            match &tag {
-                b"CID1" => {
-                    if saw_cid {
-                        return Err("invalid CID1 payload".to_owned());
-                    }
-                    let value = std::str::from_utf8(payload)
-                        .map_err(|_| "invalid CID1 payload".to_owned())?
-                        .trim();
-                    if value.is_empty() {
-                        return Err("invalid CID1 payload".to_owned());
-                    }
-                    if value != expected_circuit_id {
-                        return Err(format!("CID1 `{value}` is not `{expected_circuit_id}`"));
-                    }
-                    saw_cid = true;
-                }
-                b"IPAK" => {
-                    if ipa_k.is_some() {
-                        return Err("duplicate IPAK payload".to_owned());
-                    }
+            match (position, &tag) {
+                (0, b"IPAK") => {
                     if payload.len() != 4 {
                         return Err("invalid IPAK payload".to_owned());
                     }
@@ -3369,31 +3320,54 @@ mod zk1 {
                         payload[0], payload[1], payload[2], payload[3],
                     ]));
                 }
-                b"H2VK" => {
-                    if saw_h2vk {
-                        return Err("duplicate H2VK payload".to_owned());
+                (1, b"CID1") => {
+                    let value = std::str::from_utf8(payload)
+                        .map_err(|_| "invalid CID1 payload".to_owned())?;
+                    if !iroha_data_model::zk::open_verify_circuit_id_is_portable(value)
+                        || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(value)
+                    {
+                        return Err("invalid CID1 payload".to_owned());
                     }
+                    circuit_id = Some(value);
+                }
+                (2, b"H2VK") => {
                     if payload.is_empty() {
                         return Err("empty H2VK payload".to_owned());
                     }
-                    saw_h2vk = true;
+                    h2vk = Some(payload);
                 }
-                _ => {
-                    let tag_label = std::str::from_utf8(&tag).unwrap_or("<non-utf8>");
-                    return Err(format!("unexpected verifier-key TLV `{tag_label}`"));
-                }
+                _ => return Err("verifier-key TLVs are not in canonical order".to_owned()),
             }
+            position = position.saturating_add(1);
         }
-        if !saw_cid {
-            return Err("CID1 is missing".to_owned());
+        if position != 3 {
+            return Err("verifier-key envelope must contain IPAK, CID1, H2VK".to_owned());
         }
+        let circuit_id = circuit_id.ok_or_else(|| "CID1 is missing".to_owned())?;
         let ipa_k = ipa_k.ok_or_else(|| "IPAK is missing".to_owned())?;
-        if !saw_h2vk {
-            return Err("H2VK is missing".to_owned());
+        let h2vk = h2vk.ok_or_else(|| "H2VK is missing".to_owned())?;
+        Ok((circuit_id, ipa_k, h2vk))
+    }
+    /// Require a strict Halo2 IPA verifier-key envelope and return its `IPAK`.
+    ///
+    /// The accepted verifier-key container is exactly `IPAK`, `CID1`, `H2VK`
+    /// in that order. This keeps reserved circuit profiles from accepting
+    /// arbitrary key bytes or alternate encodings under a matching commitment.
+    pub fn ensure_halo2_ipa_vk_envelope_shape_any_k(
+        bytes: &[u8],
+        expected_circuit_id: &str,
+    ) -> Result<u32, String> {
+        let (circuit_id, ipa_k, _) = parse_halo2_ipa_vk_envelope(bytes)?;
+        if circuit_id != expected_circuit_id {
+            return Err(format!(
+                "CID1 `{circuit_id}` is not `{expected_circuit_id}`"
+            ));
         }
         Ok(ipa_k)
     }
-    /// Return the unique Halo2 verifier-key payload from a strict ZK1 key envelope.
+    /// Return the unique Halo2 verifier-key payload from a bounded ZK1 envelope.
+    /// Production callers first enforce the strict carrier shape above; the
+    /// looser extraction remains available only to in-crate tiny-circuit tests.
     pub fn h2vk_payload(bytes: &[u8]) -> Result<&[u8], String> {
         if !is_envelope(bytes) || bytes.len() < 4 {
             return Err("invalid Halo2 IPA verifier-key envelope".to_owned());
@@ -3516,48 +3490,9 @@ mod zk1 {
     }
 }
 #[cfg(test)]
-/// Test-only helpers for constructing canonical ZK1 proof envelopes.
-pub mod zk1_test_helpers {
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp},
-        plonk::VerifyingKey,
-    };
-    /// Begin a new ZK1 envelope.
-    #[inline]
-    pub fn wrap_start() -> Vec<u8> {
-        super::zk1::wrap_start()
-    }
-    /// Append raw proof bytes to a ZK1 envelope.
-    #[inline]
-    pub fn wrap_append_proof(buf: &mut Vec<u8>, transcript_bytes: &[u8]) {
-        super::zk1::wrap_append_proof(buf, transcript_bytes)
-    }
-    /// Append the Halo2 IPA parameter `k` TLV to a ZK1 envelope.
-    #[inline]
-    pub fn wrap_append_ipa_k(buf: &mut Vec<u8>, k: u32) {
-        super::zk1::wrap_append_ipa_k(buf, k)
-    }
-    /// Append the circuit identifier TLV used for verifier-key commitment domain separation.
-    #[inline]
-    pub fn wrap_append_circuit_id(buf: &mut Vec<u8>, circuit_id: &str) {
-        super::zk1::wrap_append_circuit_id(buf, circuit_id)
-    }
-    /// Append a verifying key payload encoded for Pasta curves.
-    #[inline]
-    pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &VerifyingKey<Curve>) {
-        super::zk1::wrap_append_vk_pasta(buf, vk)
-    }
-    /// Append Pasta-Fp instance columns to a ZK1 envelope.
-    #[inline]
-    pub fn wrap_append_instances_pasta_fp(instances: &[Fp], buf: &mut Vec<u8>) {
-        super::zk1::wrap_append_instances_pasta_fp(instances, buf)
-    }
-    /// Append Pasta-Fp instance column slices to a ZK1 envelope.
-    #[inline]
-    pub fn wrap_append_instances_pasta_fp_cols(cols: &[&[Fp]], buf: &mut Vec<u8>) {
-        super::zk1::wrap_append_instances_pasta_fp_cols(cols, buf)
-    }
-}
+#[path = "zk/zk1_test_helpers.rs"]
+/// Test-only helpers for constructing canonical and retired proof carriers.
+pub mod zk1_test_helpers;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 macro_rules! advice {
     (@call $region:ident, $annotation:expr, $column:expr, $offset:expr, $value:expr) => {
@@ -6250,7 +6185,6 @@ mod debug_backend_tests {
     #[test]
     fn halo2_ivm_execution_rejects_legacy_unauthenticated_inner_headers() {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
-        use iroha_zkp_halo2::{FLAG_LOOKUPS, Halo2ProofEnvelope};
 
         let fixture = test_utils::halo2_ivm_execution_envelope(
             iroha_crypto::Hash::new(b"legacy-inner-header/code"),
@@ -6281,19 +6215,26 @@ mod debug_backend_tests {
             .collect();
         assert_eq!(public_inputs.len(), 16);
 
-        let legacy_headers = [(13, 0, 0), (0, 13, FLAG_LOOKUPS)];
+        const RETIRED_LOOKUP_FLAG: u8 = 0x01;
+        let legacy_headers = [(13, 0, 0), (0, 13, RETIRED_LOOKUP_FLAG)];
         let mut encoded_headers = Vec::new();
         for (n_in, n_out, flags) in legacy_headers {
-            let legacy = Halo2ProofEnvelope::new(
+            outer.proof_bytes = zk1_test_helpers::retired_halo2_envelope(
                 u8::try_from(IVM_EXECUTION_V1_IPA_K).expect("IVM IPA k fits u8"),
                 n_in,
                 n_out,
                 flags,
-                public_inputs.clone(),
-                raw_proof.clone(),
-            )
-            .expect("legacy header shape");
-            outer.proof_bytes = legacy.to_bytes();
+                &public_inputs,
+                &raw_proof,
+            );
+            assert!(
+                extract_pasta_instance_columns_bytes(&outer.proof_bytes).is_none(),
+                "byte instance extraction must reject the retired carrier"
+            );
+            assert!(
+                extract_pasta_fp_instances(&outer.proof_bytes).is_none(),
+                "field instance extraction must reject the retired carrier"
+            );
             encoded_headers.push(outer.proof_bytes.clone());
             let legacy_proof = ProofBox::new(
                 ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -9446,8 +9387,8 @@ mod halo2_ipa_parameter_source_tests {
     }
     fn ivm_vk_metadata(ipa_k: u32, h2vk_k: u32) -> Vec<u8> {
         let mut bytes = zk1::wrap_start();
-        zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
         zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
+        zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
         let mut h2vk = vec![0u8; 10 + 32];
         h2vk[0] = 0x02;
         h2vk[1..5].copy_from_slice(&h2vk_k.to_le_bytes());
@@ -9614,7 +9555,7 @@ mod zkparse {
     ///
     /// The circuit identifier selects one fixed `k`. Both `IPAK` and the
     /// processed `H2VK` header must repeat that value in a strict
-    /// `CID1`/`IPAK`/`H2VK` envelope. Generator construction happens only
+    /// `IPAK`/`CID1`/`H2VK` envelope. Generator construction happens only
     /// after these cheap checks, so key metadata cannot select an unbounded
     /// domain.
     pub fn params_for_circuit_v1(vk_bytes: &[u8], circuit_id: &str) -> Option<PastaParams> {
@@ -9663,29 +9604,8 @@ mod zkparse {
         }
         Some(pasta_params_new(ipa_k))
     }
-    /// Parse an optional circuit identifier from a verifier-key container.
-    pub fn circuit_id_any(vk_bytes: &[u8]) -> Result<Option<String>, ()> {
-        let mut cursor = envelope_cursor(vk_bytes).ok_or(())?;
-        let mut circuit_id = None;
-        while usize::try_from(cursor.position()).map_err(|_| ())? < cursor.get_ref().len() {
-            let Some((tag, payload)) = read_tlv(&mut cursor) else {
-                return Err(());
-            };
-            if &tag == b"CID1" {
-                if circuit_id.is_some() {
-                    return Err(());
-                }
-                let value = std::str::from_utf8(payload).map_err(|_| ())?.trim();
-                if value.is_empty() {
-                    return Err(());
-                }
-                circuit_id = Some(value.to_owned());
-            }
-        }
-        Ok(circuit_id)
-    }
-    /// Parse a canonical proof envelope with exactly one `PROF`, at most one
-    /// `I10P`, and no unrecognized metadata.
+    /// Parse a canonical proof envelope containing `PROF` followed by an
+    /// optional `I10P`, with no unrecognized metadata.
     ///
     /// Circuits with no public instances omit `I10P`; circuits with instances
     /// must carry one non-empty, exactly consumed payload. The verifier still
@@ -9696,24 +9616,19 @@ mod zkparse {
         let mut cursor = envelope_cursor(bytes).ok_or("invalid ZK1 proof envelope")?;
         let mut proof_payload: Option<Vec<u8>> = None;
         let mut inst_cols: Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> = None;
+        let mut position = 0_u8;
         while (cursor.position() as usize) < cursor.get_ref().len() {
             let Some((tag, payload)) = read_tlv(&mut cursor) else {
                 return Err("malformed ZK1 TLV");
             };
-            match &tag {
-                b"PROF" => {
-                    if proof_payload.is_some() {
-                        return Err("duplicate PROF TLV");
-                    }
+            match (position, &tag) {
+                (0, b"PROF") => {
                     if payload.is_empty() {
                         return Err("empty PROF TLV");
                     }
                     proof_payload = Some(payload.to_vec());
                 }
-                b"I10P" => {
-                    if inst_cols.is_some() {
-                        return Err("duplicate I10P TLV");
-                    }
+                (1, b"I10P") => {
                     let mut inner = Cursor::new(payload);
                     let cols = read_u32(&mut inner).ok_or("malformed I10P TLV")? as usize;
                     let rows = read_u32(&mut inner).ok_or("malformed I10P TLV")? as usize;
@@ -9747,8 +9662,9 @@ mod zkparse {
                     }
                     inst_cols = Some(columns);
                 }
-                _ => return Err("unexpected ZK1 TLV"),
+                _ => return Err("proof TLVs are not in canonical order"),
             }
+            position = position.saturating_add(1);
         }
         let payload = proof_payload.ok_or("missing PROF TLV")?;
         let inst_cols = inst_cols.unwrap_or_default();
@@ -9779,14 +9695,6 @@ pub(crate) fn extract_pasta_fp_instances(
 pub(crate) fn extract_pasta_instance_columns_bytes(
     proof_bytes: &[u8],
 ) -> Option<Vec<Vec<[u8; 32]>>> {
-    use iroha_zkp_halo2::Halo2ProofEnvelope;
-    if let Ok(env) = Halo2ProofEnvelope::from_bytes(proof_bytes) {
-        let mut columns = Vec::with_capacity(env.public_inputs.len());
-        for input in env.public_inputs {
-            columns.push(vec![input]);
-        }
-        return Some(columns);
-    }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
@@ -9810,20 +9718,6 @@ pub(crate) fn extract_pasta_instance_columns_bytes(
 fn extract_pasta_fp_instances_impl(
     proof_bytes: &[u8],
 ) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
-    use iroha_zkp_halo2::Halo2ProofEnvelope;
-    if let Ok(env) = Halo2ProofEnvelope::from_bytes(proof_bytes) {
-        let mut columns = Vec::with_capacity(env.public_inputs.len());
-        for chunk in &env.public_inputs {
-            let mut repr =
-                <halo2_proofs::halo2curves::pasta::Fp as halo2_proofs::halo2curves::ff::PrimeField>::Repr::default();
-            repr.as_mut().copy_from_slice(chunk);
-            let scalar = Option::from(
-                <halo2_proofs::halo2curves::pasta::Fp as halo2_proofs::halo2curves::ff::PrimeField>::from_repr(repr),
-            )?;
-            columns.push(vec![scalar]);
-        }
-        return Some(columns);
-    }
     zkparse::strict_proof_and_instances(proof_bytes)
         .ok()
         .map(|(_, cols)| cols)
@@ -12194,22 +12088,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         Some(p) => p,
         None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
     };
-    let expected_vk_circuit = match normalize_halo2_ipa_circuit_id(backend) {
-        Some(circuit_id) => circuit_id,
-        None => return reject("invalid backend circuit id"),
-    };
-    match zkparse::circuit_id_any(vk_box.bytes.as_slice()) {
-        Ok(Some(vk_circuit_id)) => {
-            let Some(normalized_vk_circuit) = normalize_halo2_ipa_circuit_id(&vk_circuit_id) else {
-                return reject("invalid verifying key CID1 circuit id");
-            };
-            if normalized_vk_circuit != expected_vk_circuit {
-                return reject("verifying key CID1 circuit id mismatch");
-            }
-        }
-        Ok(None) => {}
-        Err(()) => return reject("invalid verifying key CID1 payload"),
-    }
     // Production proofs use one strict ZK1 carrier. The older binary envelope
     // has caller-controlled `n_in`, `n_out`, and `flags` header fields that are
     // not absorbed by Halo2's transcript, so accepting it would leave multiple

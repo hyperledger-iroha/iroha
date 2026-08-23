@@ -556,7 +556,7 @@ pub fn derive_zk_ace_privacy_authorization_digest(
     let mut normalized = public_inputs.statement.clone();
     normalized.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
     let statement_bytes = norito::encode_canonical(&normalized)?;
-    Ok(zk_ace_poseidon2_domain_hash(
+    Ok(zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(
         b"zk-ace.privacy-authorization.v1",
         &[
             &public_inputs.version.to_be_bytes(),
@@ -582,17 +582,15 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
         limbs,
     }
 }
-/// Domain-separated dense-MDS Poseidon `x^7` hash over canonical byte parts.
+/// Domain-separated dense-MDS Goldilocks Poseidon `x^7` hash over canonical byte parts.
 ///
-/// The function name predates correction of the implementation descriptor and
-/// remains as a source-compatibility alias; this construction is not Poseidon2.
 /// Its four returned words are sequential outputs of one capacity-1 sponge and
 /// therefore provide only about 32 bits of generic collision resistance as a
 /// combined digest. ZK-ACE production activation remains disabled until four
 /// independent lane-domain hashes replace this candidate construction.
 #[must_use]
-pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let words = zk_ace_poseidon2_domain_words(domain, parts);
+pub fn zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let words = zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
     let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
     sponge.absorb_slice(&words);
     let mut out = [0u8; 32];
@@ -603,7 +601,7 @@ pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] 
 }
 /// Canonical Goldilocks preimage used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
 #[must_use]
-pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
+pub fn zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
     let mut words = Vec::new();
     let domain = zk_ace_pack_bytes_to_field_limbs(domain);
     words.push(domain.length);
@@ -617,7 +615,7 @@ pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64>
     words
 }
 fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    zk_ace_poseidon2_domain_hash(domain, parts)
+    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain, parts)
 }
 /// Derive the ZK-ACE identity commitment from its private witness components.
 pub fn derive_zk_ace_identity_commitment(
