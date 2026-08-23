@@ -1307,11 +1307,11 @@ def test_native_exact_object_prune_contract_rejects_security_relation_drift(
         (
             "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality("
-            "&committed_block, commit_topology)",
+            "&committed_block)",
         ),
         (
             ".apply_without_execution_with_verified_v2_finality("
-            "&committed_block, commit_topology)",
+            "&committed_block)",
             ".pending_autoscale_retirement_binding()",
         ),
         (
@@ -1354,7 +1354,7 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
     module = load_checker()
     models = copy_native_prepublication_fixture(tmp_path, module)
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
-    swap_ordered_once(path, earlier, later)
+    swap_ordered_once_after(path, "fn validate_and_apply(", earlier, later)
     errors = validate_native_prepublication_fixture(tmp_path, module, models)
     assert any(
         "ordered Native prepublication item "
@@ -1561,7 +1561,7 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     assert validate_fixture(tmp_path, module, contract) == ()
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs"
     constructor = "Some(CheckedProductionTransition::unwitnessed(projection))"
     symbol = "check_production_in_flight_reservation_transition"
     replace_once_after(path, f"pub(crate) fn {symbol}(", constructor,
@@ -1598,7 +1598,7 @@ def test_inflight_composed_contract_rejects_rehydrate_action_tag_drift(
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs"
     symbol = (
         "pub(crate) fn "
         "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition("
@@ -1751,7 +1751,7 @@ def test_inflight_layout_contract_rejects_partial_lane_transport_whitelist(
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs"
     replace_once(
         path,
         "        if !message.is_lane_local() {\n",
@@ -1807,7 +1807,7 @@ def test_inflight_layout_contract_rejects_non_retireable_lane_transport_omission
             "HashOf::new(message) != message_hash",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker/autonomous_lane_output_reconstruction.rs",
             "applied_height_reconstruction_covers",
             "non-retireable lane transport must drain before applied-height handoff",
             "lane transport handoff accepted",

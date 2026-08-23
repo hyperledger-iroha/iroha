@@ -552,7 +552,7 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         UNIT_GRAPH_KEYS,
         "normalized Cargo unit graph",
     )
-    if graph["version"] != 1:
+    if type(graph["version"]) is not int or graph["version"] != 1:
         raise ProjectionProductionError("normalized Cargo unit-graph version is not 1")
     units = graph["units"]
     if not isinstance(units, list) or not 1 <= len(units) <= 100_000:

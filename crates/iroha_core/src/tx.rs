@@ -2738,9 +2738,7 @@ impl StateBlock<'_> {
             validation_fee_credit,
         })
     }
-    /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
-    ///
-    /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
+    /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -2875,6 +2873,8 @@ impl StateBlock<'_> {
         let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
+        state_transaction.kagemusha_taira_canary_external_entrypoint =
+            matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);

@@ -214,6 +214,12 @@ The ordered operation inventories are exact:
   `final-bootstrap-independent-authentication`,
   `final-external-completion-publication`.
 
+The standalone validator and receipt writer derive the exact 23/38/7/8
+cardinalities from these candidate-bound plans. In particular, an unplanned
+eighth `network-scale-soak` operation is rejected; the seven-operation plan
+and its `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`
+digest are authoritative.
+
 The command records contain only path-free protected tool IDs, canonical
 relative arguments, and stable archive/evidence IDs. These approvals are
 filesystem-protected operator decisions, not digital signatures or claims of

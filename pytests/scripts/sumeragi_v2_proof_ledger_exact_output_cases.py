@@ -52,7 +52,7 @@
             "the lane effect must preserve the exact immutable sidecar carrier",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
             "let data = NetworkMessage::CertifiedMergeSidecar(message);",
             "let data = NetworkMessage::CertifiedMergeSidecar(Arc::new((*message).clone()));",
@@ -1881,7 +1881,7 @@
             "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
             "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
             "CertifiedMergeSidecarMessage::CloseAck(_)\n"
             "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"

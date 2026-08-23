@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client.transport
 
+import java.util.Collections
 import java.util.TreeMap
 
 /** SDK-owned transport response wrapper to decouple callers from `java.net.http.HttpResponse`. */
@@ -25,9 +26,13 @@ class TransportResponse(
             if (source == null) return emptyMap()
             val merged = TreeMap<String, MutableList<String>>(String.CASE_INSENSITIVE_ORDER)
             for ((key, value) in source) {
-                merged.getOrPut(key) { ArrayList() }.addAll(value)
+                merged.getOrPut(key) { ArrayList() }.addAll(value.orEmpty())
             }
-            return merged.mapValues { (_, values) -> values.toList() }
+            val copy = TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER)
+            for ((name, values) in merged) {
+                copy[name] = Collections.unmodifiableList(ArrayList(values))
+            }
+            return Collections.unmodifiableMap(copy)
         }
     }
 
@@ -61,7 +66,7 @@ class TransportResponse(
             this.headers.clear()
             if (headers != null) {
                 for ((key, value) in headers) {
-                    this.headers[key] = value.toMutableList()
+                    this.headers[key] = value.orEmpty().toMutableList()
                 }
             }
             return this

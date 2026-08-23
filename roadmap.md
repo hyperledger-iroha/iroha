@@ -66,6 +66,11 @@ to:
   the required authorized signatures, including clean OpenAPI provenance.
 - Recompute and verify the source, formal, and release seals from one immutable
   tree; mutable-tree checks are not release evidence.
+- After that candidate is frozen, obtain the four owner-held protected approval
+  files for the exact `23/38/7/8` operation plans. The validator and receipt
+  writer now derive those counts from the candidate-bound contract and reject
+  an unplanned eighth `network-scale-soak` operation; this source repair is not
+  a substitute for operator approval.
 
 ## Kagemusha production evidence closeout
 
@@ -209,7 +214,7 @@ release execution:
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
   4,500,000-line working target. The current mutable-tree checkpoint counts
-  4,955,673 lines, 415,673 above the hard ceiling, with all per-file ratchets
+  4,964,649 lines, 424,649 above the hard ceiling, with all per-file ratchets
   reconciled. Recompute the exact count and gap after source freeze; do not
   redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
@@ -310,11 +315,11 @@ durable-Validate suite is 5/5, the Verus inventory is 29/29, and the exact
 final-source enlarged-stack coordinator aggregate is 462/462. The production
 nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
 corridors, exact `iroha_core` test-target compile, reviewed include closure,
-and legacy-codec guard are green. Current merge reconciliation leaves 15
-file-budget findings, including merged-tree Sumeragi growth and four
-downward-only ratchet refreshes; split and ratchet work remains outstanding,
-and allowances must not increase. The include manifest contains 66 parents and
-398 entries. The exact proof-ledger checker has only the separately
+and legacy-codec guard are green. Current merge reconciliation ratcheted five
+decreased-file baselines down and leaves 11 file-budget findings, including
+merged-tree Sumeragi growth; split work remains outstanding, and allowances
+must not increase. The include manifest contains 66 parents and 398 entries.
+The exact proof-ledger checker has only the separately
 recorded task-start Cargo.lock mismatch outstanding. Still outstanding are
 strict four-validator, current-source release, and broader workspace/Clippy
 evidence. `Cargo.lock` changed concurrently
