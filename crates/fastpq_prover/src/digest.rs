@@ -21,7 +21,10 @@ const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
 /// # Errors
 ///
 /// Returns [`Error::ParameterMismatch`] when the provided parameters do not
-/// match the batch annotation, or propagates Norito encoding failures.
+/// match the batch annotation, [`Error::TraceDomainCapacityExceeded`] when the
+/// padded rows exceed the parameter domain, [`Error::VerifierLimitExceeded`]
+/// when the canonical trace schema is too wide, or propagates trace encoding
+/// failures.
 pub fn trace_commitment(params: &StarkParameterSet, batch: &TransitionBatch) -> Result<Hash> {
     if params.name != batch.parameter {
         return Err(Error::ParameterMismatch {
@@ -29,9 +32,40 @@ pub fn trace_commitment(params: &StarkParameterSet, batch: &TransitionBatch) -> 
             actual: batch.parameter.clone(),
         });
     }
+    ensure_trace_capacity(params, batch.transitions.len())?;
+    crate::trace::ensure_trace_schema_limit(batch, crate::trace::DEFAULT_MAX_TRACE_COLUMNS)?;
     let trace = build_trace(batch)?;
     let column_digests = column_hashes(&trace, params)?;
     trace_commitment_from_digests(params, &trace, &column_digests)
+}
+/// Ensure the mandatory power-of-two trace padding fits the selected parameter domain.
+///
+/// This check lives ahead of trace construction so oversized statements fail with a structured
+/// error instead of reaching assertion-based FFT planner geometry.
+pub(super) fn ensure_trace_capacity(
+    params: &StarkParameterSet,
+    transition_rows: usize,
+) -> Result<()> {
+    let padded_rows =
+        transition_rows
+            .max(1)
+            .checked_next_power_of_two()
+            .ok_or(Error::TraceLengthOverflow {
+                rows: transition_rows,
+            })?;
+    let max_rows = 1usize
+        .checked_shl(params.trace_log_size)
+        .ok_or(Error::TraceLengthOverflow {
+            rows: transition_rows,
+        })?;
+    if padded_rows > max_rows {
+        return Err(Error::TraceDomainCapacityExceeded {
+            rows: transition_rows,
+            padded_rows,
+            max_rows,
+        });
+    }
+    Ok(())
 }
 pub fn trace_commitment_from_digests(
     params: &StarkParameterSet,
@@ -299,6 +333,54 @@ mod tests {
                 expected,
                 actual
             } if expected == "fastpq-lane-latency" && actual == "fastpq-lane-balanced"
+        ));
+    }
+    #[test]
+    fn trace_commitment_rejects_rows_exceeding_parameter_domain_without_panicking() {
+        let mut params = CANONICAL_PARAMETER_SETS[0];
+        params.trace_log_size = 1;
+        let mut batch = TransitionBatch::new(params.name, PublicInputs::default());
+        for key in [b"a".as_slice(), b"b".as_slice(), b"c".as_slice()] {
+            batch.push(StateTransition::new(
+                key.to_vec(),
+                Vec::new(),
+                Vec::new(),
+                OperationKind::MetaSet,
+            ));
+        }
+
+        let error =
+            trace_commitment(&params, &batch).expect_err("three rows exceed a two-row domain");
+        assert!(matches!(
+            error,
+            Error::TraceDomainCapacityExceeded {
+                rows: 3,
+                padded_rows: 4,
+                max_rows: 2,
+            }
+        ));
+        ensure_trace_capacity(&params, 0).expect("empty trace still occupies one padding row");
+    }
+    #[test]
+    fn trace_commitment_rejects_wide_schema_before_trace_allocation() {
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let mut batch = TransitionBatch::new(params.name, PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"wide-value".to_vec(),
+            vec![0xA5; (crate::trace::DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
+            Vec::new(),
+            OperationKind::MetaSet,
+        ));
+        let actual = crate::trace::column_count_for_batch(&batch).expect("schema count");
+        let error = trace_commitment(&params, &batch)
+            .expect_err("wide commitment schema must fail before materialisation");
+        assert!(matches!(
+            error,
+            Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: crate::trace::DEFAULT_MAX_TRACE_COLUMNS,
+            } if observed == actual
         ));
     }
     #[test]

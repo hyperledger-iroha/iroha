@@ -54,8 +54,9 @@ use fastpq_isi::poseidon::STATE_WIDTH;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use metal::{
-    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
-    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
+    Buffer, CommandBuffer, CommandQueue, CompileOptions, ComputeCommandEncoderRef,
+    ComputePipelineState, Device, Library, MTLCommandBufferStatus, MTLDeviceLocation,
+    MTLLanguageVersion, MTLResourceOptions, MTLSize, NSRange,
 };
 use norito::json::{self, Value};
 use smallvec::SmallVec;
@@ -168,7 +169,7 @@ static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
 /// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
 /// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
-    if Device::system_default().is_none() {
+    if select_metal_device().is_none() {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     }
     let ctx = bn254_poseidon_context()?;
@@ -339,7 +340,7 @@ fn dispatch_bn254_fft_columns<'a>(
         let width = usize::try_from(batch_columns).expect("batch column count fits usize");
         let range = start..start + width;
         let mut buffer = flatten_with_stats(&columns[range.clone()], ColumnStagingPhase::Fft);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (queue, queue_index) = context.queues.select(column_count_u32, batch_index);
         let (threadgroups, threadgroup) =
             bn254_threadgroup_geometry(&context.bn254_fft, column_len_u64);
@@ -434,8 +435,8 @@ fn dispatch_bn254_lde_columns(
         zero_fill_ms: elapsed_ms(start.elapsed()),
         queue_delta: None,
     });
-    let coeff_metal = shared_buffer(&context.device, coeff_buffer.as_mut_slice());
-    let eval_metal = shared_buffer(&context.device, eval_buffer.as_mut_slice());
+    let coeff_metal = shared_pooled_buffer(&context.device, &mut coeff_buffer);
+    let eval_metal = shared_pooled_buffer(&context.device, &mut eval_buffer);
     let coset_scalar = bn254_scalar_from_canonical_limbs(&coset)?;
     let coset_limbs = bn254_scalar_to_canonical_limbs(&coset_scalar);
     let coset_buffer = upload_bn254_coset(&context.device, &coset_limbs)?;
@@ -2331,17 +2332,65 @@ fn register_metal_device_hints(device: &Device) {
     ));
 }
 fn load_metal_library(device: &Device) -> MetalResult<Library> {
-    let library_path =
-        resolve_metal_library_path().ok_or_else(|| GpuError::Unsupported(GpuBackend::Metal))?;
+    if let Some(library_path) = resolve_metal_library_path() {
+        return device
+            .new_library_with_file(&library_path)
+            .map_err(|err| GpuError::Execution {
+                backend: GpuBackend::Metal,
+                message: format!("failed to load Metal library {}: {err}", library_path),
+            });
+    }
+    debug!(
+        target: "fastpq::metal",
+        "offline fastpq.metallib unavailable; compiling embedded Metal source"
+    );
+    compile_embedded_metal_library(device)
+}
+fn compile_embedded_metal_library(device: &Device) -> MetalResult<Library> {
+    let options = CompileOptions::new();
+    options.set_language_version(MTLLanguageVersion::V3_0);
+    options.set_fast_math_enabled(false);
     device
-        .new_library_with_file(&library_path)
+        .new_library_with_source(&embedded_metal_library_source(), &options)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Metal,
-            message: format!("failed to load Metal library: {err}"),
+            message: format!("failed to compile embedded Metal library: {err}"),
         })
 }
+fn embedded_metal_library_source() -> String {
+    const PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n";
+    const PARAMS: &str = include_str!("../metal/include/params.h");
+    const FIELD: &str = include_str!("../metal/kernels/field.metal");
+    const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
+    const POSEIDON: &str = include_str!("../metal/kernels/poseidon2.metal");
+    const BN254: &str = include_str!("../metal/kernels/bn254.metal");
+
+    let mut source = String::with_capacity(
+        PRELUDE.len() + PARAMS.len() + FIELD.len() + NTT.len() + POSEIDON.len() + BN254.len(),
+    );
+    source.push_str(PRELUDE);
+    source.push_str(PARAMS);
+    source.push('\n');
+    source.push_str(FIELD);
+    source.push('\n');
+    append_embedded_translation_unit(&mut source, NTT);
+    append_embedded_translation_unit(&mut source, POSEIDON);
+    append_embedded_translation_unit(&mut source, BN254);
+    source
+}
+fn append_embedded_translation_unit(destination: &mut String, translation_unit: &str) {
+    for line in translation_unit.lines() {
+        // Quoted includes are repository-local files already embedded above.
+        // System includes remain in the source for the runtime compiler.
+        if line.trim_start().starts_with("#include \"") {
+            continue;
+        }
+        destination.push_str(line);
+        destination.push('\n');
+    }
+}
 fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
-    let Some(device) = Device::system_default() else {
+    let Some(device) = select_metal_device() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     };
     register_metal_device_hints(&device);
@@ -2362,7 +2411,7 @@ fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
     })
 }
 fn build_metal_context() -> MetalResult<MetalPipelines> {
-    let Some(device) = Device::system_default() else {
+    let Some(device) = select_metal_device() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     };
     register_metal_device_hints(&device);
@@ -2424,19 +2473,29 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     })
 }
 fn resolve_metal_library_path() -> Option<String> {
-    debug_env_var("FASTPQ_METAL_LIB")
-        .and_then(|path| {
-            if !path.is_empty() && Path::new(&path).exists() {
-                Some(path)
-            } else {
-                None
-            }
-        })
+    resolve_metal_library_path_candidates(
+        debug_env_var("FASTPQ_METAL_LIB"),
+        option_env!("FASTPQ_METAL_LIB"),
+    )
+}
+fn resolve_metal_library_path_candidates(
+    runtime_override: Option<String>,
+    build_path: Option<&str>,
+) -> Option<String> {
+    runtime_override
+        .filter(|path| !path.is_empty())
         .or_else(|| {
-            option_env!("FASTPQ_METAL_LIB")
-                .filter(|path| !path.is_empty() && Path::new(path).exists())
+            build_path
+                // Build-script paths live under Cargo's output directory and may
+                // disappear when a binary is packaged or moved. Unlike an explicit
+                // runtime override, a stale embedded path should use the source
+                // fallback instead of making otherwise valid Metal hardware unusable.
+                .filter(|path| !path.is_empty() && Path::new(path).is_file())
                 .map(str::to_owned)
         })
+}
+fn select_metal_device() -> Option<Device> {
+    Device::system_default().or_else(|| Device::all().into_iter().next())
 }
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
     let fanout_override = queue_fanout_override();
@@ -2647,7 +2706,7 @@ fn dispatch_fft_columns<'a>(
         let width = usize::try_from(batch_columns).expect("batch column count fits usize");
         let range = start..start + width;
         let mut buffer = flatten_with_stats(&columns[range.clone()], ColumnStagingPhase::Fft);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (queue, queue_index) = context.queues.select(queue_total_columns, batch_index);
         let mut args = base_args;
         args.column_count = batch_columns;
@@ -3069,8 +3128,8 @@ pub(crate) fn lde_columns_async(
         queue_delta,
     });
     let context = metal_context()?;
-    let coeff_metal = shared_buffer(&context.device, coeff_buffer.as_mut_slice());
-    let eval_metal = shared_buffer(&context.device, eval_buffer.as_mut_slice());
+    let coeff_metal = shared_pooled_buffer(&context.device, &mut coeff_buffer);
+    let eval_metal = shared_pooled_buffer(&context.device, &mut eval_buffer);
     let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, lde_root, false);
     let limits = pipeline_limits(&context.lde);
     let tuning = metal_config::fft_tuning(eval_log, limits.exec_width, limits.max_threads);
@@ -3194,7 +3253,7 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
         let element_range = poseidon_element_range(offset, count)?;
         let mut buffer =
             clone_slice_with_stats(&states[element_range.clone()], ColumnStagingPhase::Poseidon);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (threadgroups, threadgroup, logical_threads, states_per_lane) =
             poseidon_dispatch_geometry(count, tuning, &limits);
         let args = PoseidonArgs {
@@ -3262,7 +3321,9 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         .map_err(|_| GpuError::InvalidInput("poseidon block count exceeds u32::MAX"))?;
     let padded_len_u32 = u32::try_from(padded_len)
         .map_err(|_| GpuError::InvalidInput("poseidon padded length exceeds u32::MAX"))?;
-    let limits = pipeline_limits(&context.poseidon_trace_fused);
+    // Keep tuning and submission tied to the same function-specific pipeline limits.
+    let pipeline = &context.poseidon_hash;
+    let limits = pipeline_limits(pipeline);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     // Cross-column command batching is parity-covered, but packed multiple
     // sponge states per Metal lane diverges for non-leading lanes on current
@@ -3287,15 +3348,15 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
             &payloads[payload_range.clone()],
             ColumnStagingPhase::Poseidon,
         );
-        let payload_buffer = shared_buffer(&context.device, payload_chunk.as_mut_slice());
+        let payload_buffer = shared_pooled_buffer(&context.device, &mut payload_chunk);
         let count_usize = usize::try_from(count)
             .map_err(|_| GpuError::InvalidInput("poseidon batch count exceeds usize bounds"))?;
         let mut state_chunk = PooledBuffer::zeroed(count_usize * STATE_WIDTH);
-        let state_buffer = shared_buffer(&context.device, state_chunk.as_mut_slice());
-        let mut slice_chunk = batch
+        let state_buffer = shared_pooled_buffer(&context.device, &mut state_chunk);
+        let slice_chunk = batch
             .rebased_slices(column_offset, count_usize)
             .ok_or_else(|| GpuError::InvalidInput("poseidon descriptor rebasing failed"))?;
-        let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+        let slice_buffer = copied_buffer(&context.device, &slice_chunk);
         let (threadgroups, threadgroup, logical_threads, states_per_lane) =
             poseidon_dispatch_geometry(count, tuning, &limits);
         let args = PoseidonArgs {
@@ -3316,7 +3377,7 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
         let mut ticket = submit_compute_with_geometry(
             queue,
             queue_index,
-            &context.poseidon_hash,
+            pipeline,
             Some((threadgroups, threadgroup, logical_threads)),
             logical_threads,
             Some(profile),
@@ -3370,9 +3431,9 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
         .map_err(|_| GpuError::InvalidInput("poseidon row column count exceeds u32::MAX"))?;
     let context = metal_context()?;
     let mut column_chunk = flatten_with_stats(columns, ColumnStagingPhase::Poseidon);
-    let column_buffer = shared_buffer(&context.device, column_chunk.as_mut_slice());
+    let column_buffer = shared_pooled_buffer(&context.device, &mut column_chunk);
     let mut result = PooledBuffer::zeroed(row_len);
-    let result_buffer = shared_buffer(&context.device, result.as_mut_slice());
+    let result_buffer = shared_pooled_buffer(&context.device, &mut result);
     let limits = pipeline_limits(&context.poseidon_hash_rows);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     // Row hashing absorbs values one at a time with sponge padding. Keep each
@@ -3566,13 +3627,13 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     let params = bn254_poseidon_width3_params();
     let staged_words = if words.is_empty() { &[0u64][..] } else { words };
     let mut word_chunk = PooledBuffer::from_slice(staged_words);
-    let word_buffer = shared_buffer(&context.device, word_chunk.as_mut_slice());
-    let mut slice_chunk = metal_slices;
-    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+    let word_buffer = shared_pooled_buffer(&context.device, &mut word_chunk);
+    let slice_chunk = metal_slices;
+    let slice_buffer = copied_buffer(&context.device, &slice_chunk);
     let mut round_constants = PooledBuffer::from_slice(&params.round_constants);
-    let round_buffer = shared_buffer(&context.device, round_constants.as_mut_slice());
+    let round_buffer = shared_pooled_buffer(&context.device, &mut round_constants);
     let mut mds = PooledBuffer::from_slice(&params.mds);
-    let mds_buffer = shared_buffer(&context.device, mds.as_mut_slice());
+    let mds_buffer = shared_pooled_buffer(&context.device, &mut mds);
     let output_len = slices
         .len()
         .checked_mul(BN254_LIMBS)
@@ -3580,7 +3641,7 @@ pub(crate) fn bn254_poseidon_hash_words_async(
             "BN254 Poseidon output length overflows",
         ))?;
     let mut output = PooledBuffer::zeroed(output_len);
-    let output_buffer = shared_buffer(&context.device, output.as_mut_slice());
+    let output_buffer = shared_pooled_buffer(&context.device, &mut output);
     let limits = pipeline_limits(&context.bn254_poseidon_hash);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
@@ -3680,13 +3741,13 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
         poseidon_dispatch_geometry(column_count, tuning, &limits);
     let mut payload_chunk = clone_slice_with_stats(batch.payloads(), ColumnStagingPhase::Poseidon);
-    let payload_buffer = shared_buffer(&context.device, payload_chunk.as_mut_slice());
-    let mut slice_chunk = batch
+    let payload_buffer = shared_pooled_buffer(&context.device, &mut payload_chunk);
+    let slice_chunk = batch
         .rebased_slices(0, batch.columns())
         .ok_or_else(|| GpuError::InvalidInput("poseidon descriptor rebasing failed"))?;
-    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+    let slice_buffer = copied_buffer(&context.device, &slice_chunk);
     let mut hash_chunk = PooledBuffer::zeroed(batch.columns() + parent_count as usize);
-    let hash_buffer = shared_buffer(&context.device, hash_chunk.as_mut_slice());
+    let hash_buffer = shared_pooled_buffer(&context.device, &mut hash_chunk);
     let args = PoseidonFusedArgs {
         state_count: column_count,
         states_per_lane,
@@ -3767,20 +3828,53 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     wait_for_ticket(parent_ticket)?;
     Ok(hash_chunk.as_slice().to_vec())
 }
-fn shared_buffer<T>(device: &Device, data: &mut [T]) -> Buffer {
-    let byte_len = u64::try_from(mem::size_of_val(data))
+struct MetalBufferBackingRetention {
+    backing: Mutex<Option<Arc<PooledBufferBacking>>>,
+}
+impl MetalBufferBackingRetention {
+    fn new(backing: Arc<PooledBufferBacking>) -> Self {
+        Self {
+            backing: Mutex::new(Some(backing)),
+        }
+    }
+    fn release(&self) {
+        let _ = self
+            .backing
+            .lock()
+            .expect("Metal buffer backing-retention lock poisoned")
+            .take();
+    }
+}
+fn shared_pooled_buffer(device: &Device, data: &mut PooledBuffer) -> Buffer {
+    let byte_len = u64::try_from(mem::size_of_val(data.as_slice()))
         .expect("Metal shared buffer length must fit into u64");
+    let data_ptr = data.as_mut_slice().as_mut_ptr().cast();
+    let retention = Arc::new(MetalBufferBackingRetention::new(data.backing()));
+    let completion_retention = Arc::clone(&retention);
+    let deallocator = ConcreteBlock::new(move |_: *const c_void, _: u64| {
+        completion_retention.release();
+    })
+    .copy();
     let buffer = device.new_buffer_with_bytes_no_copy(
-        data.as_mut_ptr().cast(),
+        data_ptr,
         byte_len,
         MTLResourceOptions::StorageModeShared,
-        None,
+        Some(&deallocator),
     );
     buffer.did_modify_range(NSRange {
         location: 0,
         length: byte_len,
     });
     buffer
+}
+fn copied_buffer<T>(device: &Device, data: &[T]) -> Buffer {
+    let byte_len = u64::try_from(mem::size_of_val(data))
+        .expect("Metal copied buffer length must fit into u64");
+    device.new_buffer_with_data(
+        data.as_ptr().cast(),
+        byte_len,
+        MTLResourceOptions::StorageModeShared,
+    )
 }
 fn submit_compute<F>(
     queue: &CommandQueue,
@@ -3995,7 +4089,6 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
             if let Some(label) = trace_label {
                 trace_dispatch_end_label(Some(label), duration.unwrap_or_default(), false);
             }
-            ticket.permit.complete();
             return Err(GpuError::Execution {
                 backend: GpuBackend::Metal,
                 message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
@@ -4220,10 +4313,30 @@ impl BufferPool {
         self.spare.len()
     }
 }
-struct PooledBuffer {
+struct PooledBufferBacking {
     data: Vec<u64>,
 }
+impl Drop for PooledBufferBacking {
+    fn drop(&mut self) {
+        let data = mem::take(&mut self.data);
+        if data.capacity() == 0 {
+            return;
+        }
+        buffer_pool()
+            .lock()
+            .expect("buffer pool poisoned")
+            .recycle(data);
+    }
+}
+struct PooledBuffer {
+    backing: Arc<PooledBufferBacking>,
+}
 impl PooledBuffer {
+    fn from_vec(data: Vec<u64>) -> Self {
+        Self {
+            backing: Arc::new(PooledBufferBacking { data }),
+        }
+    }
     fn from_columns(columns: &[Vec<u64>]) -> Self {
         let len = columns.first().map_or(0, Vec::len);
         let total_len = len.saturating_mul(columns.len());
@@ -4232,37 +4345,34 @@ impl PooledBuffer {
         for column in columns {
             data.extend_from_slice(column);
         }
-        Self { data }
+        Self::from_vec(data)
     }
     fn from_slice(elements: &[u64]) -> Self {
         let mut data = acquire_buffer(elements.len());
         data.clear();
         data.extend_from_slice(elements);
-        Self { data }
+        Self::from_vec(data)
     }
     fn zeroed(len: usize) -> Self {
         let mut data = acquire_buffer(len);
         data.resize(len, 0);
-        Self { data }
+        Self::from_vec(data)
     }
     fn as_slice(&self) -> &[u64] {
-        &self.data
+        &self.backing.data
     }
     fn as_mut_slice(&mut self) -> &mut [u64] {
-        self.data.as_mut_slice()
+        Arc::get_mut(&mut self.backing)
+            .expect("pooled buffer cannot be mutated after Metal retains its backing")
+            .data
+            .as_mut_slice()
     }
-}
-impl Drop for PooledBuffer {
-    fn drop(&mut self) {
-        if self.data.capacity() == 0 {
-            self.data.clear();
-            return;
-        }
-        let buffer = mem::take(&mut self.data);
-        buffer_pool()
-            .lock()
-            .expect("buffer pool poisoned")
-            .recycle(buffer);
+    fn backing(&self) -> Arc<PooledBufferBacking> {
+        Arc::clone(&self.backing)
+    }
+    #[cfg(test)]
+    fn weak_backing_for_tests(&self) -> std::sync::Weak<PooledBufferBacking> {
+        Arc::downgrade(&self.backing)
     }
 }
 struct CommandSemaphoreState {
@@ -4558,7 +4668,13 @@ impl CommandPermit {
 }
 impl Drop for CommandPermit {
     fn drop(&mut self) {
-        self.complete();
+        // A committed command buffer owns a completion-handler clone. Releasing its permit here
+        // would let a timed-out or partially submitted batch exceed the configured in-flight cap
+        // while Metal is still executing it. Unlaunched permits have no callback and must be
+        // returned immediately.
+        if !self.completion.is_launched() {
+            self.complete();
+        }
     }
 }
 struct CommandPermitCompletion {
@@ -4584,6 +4700,9 @@ impl CommandPermitCompletion {
         {
             record_queue_launch(self.queue_index);
         }
+    }
+    fn is_launched(&self) -> bool {
+        self.launched.load(Ordering::Acquire)
     }
     fn complete(&self) {
         if self.launched.swap(false, Ordering::AcqRel) {
@@ -5171,6 +5290,61 @@ mod tests {
     use iroha_crypto::Hash;
     use std::{thread, time::Duration};
     const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
+    const REQUIRED_PIPELINES: &[&str] = &[
+        POSEIDON_PERMUTE_KERNEL,
+        POSEIDON_HASH_KERNEL,
+        POSEIDON_HASH_ROWS_KERNEL,
+        POSEIDON_TRACE_FUSED_KERNEL,
+        POSEIDON_TRACE_PARENTS_KERNEL,
+        FFT_KERNEL,
+        LDE_KERNEL,
+        POST_TILE_KERNEL,
+        BN254_FFT_KERNEL,
+        BN254_LDE_KERNEL,
+        BN254_POSEIDON_HASH_KERNEL,
+    ];
+    #[test]
+    fn embedded_metal_source_is_self_contained() {
+        let source = embedded_metal_library_source();
+        assert!(
+            !source
+                .lines()
+                .any(|line| line.trim_start().starts_with("#include \"")),
+            "runtime Metal source must not depend on repository-relative includes"
+        );
+        for name in REQUIRED_PIPELINES {
+            assert!(
+                source.contains(&format!("kernel void {name}")),
+                "runtime Metal source is missing {name}"
+            );
+        }
+    }
+    #[test]
+    fn metal_library_resolution_fails_closed_only_for_explicit_override() {
+        let missing = "/definitely/missing/fastpq.metallib";
+        assert_eq!(
+            resolve_metal_library_path_candidates(Some(missing.to_owned()), None).as_deref(),
+            Some(missing),
+            "an invalid explicit override must reach the loader and report an error"
+        );
+        assert_eq!(
+            resolve_metal_library_path_candidates(None, Some(missing)),
+            None,
+            "a stale build-time path must select embedded source fallback"
+        );
+    }
+    #[test]
+    fn embedded_metal_source_builds_every_required_pipeline() {
+        let Some(device) = select_metal_device() else {
+            return;
+        };
+        let library = compile_embedded_metal_library(&device)
+            .expect("embedded Metal source should compile on a visible device");
+        for name in REQUIRED_PIPELINES {
+            load_pipeline(&device, &library, name)
+                .unwrap_or_else(|error| panic!("embedded Metal pipeline {name} failed: {error}"));
+        }
+    }
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
         (0..column_count)
@@ -5373,11 +5547,24 @@ mod tests {
         let stats = super::take_kernel_stats().expect("kernel stats enabled");
         super::enable_kernel_stats(false);
         assert_eq!(actual, expected);
-        assert!(
-            stats
-                .iter()
-                .any(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1),
-            "expected a vectorized Poseidon dispatch, got {stats:?}"
+        let sample = stats
+            .iter()
+            .find(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1)
+            .unwrap_or_else(|| panic!("expected a vectorized Poseidon dispatch, got {stats:?}"));
+        let actual_limits = super::PipelineLimits {
+            exec_width: sample.execution_width,
+            max_threads: sample.max_threads_per_group,
+        };
+        let mut expected_tuning = crate::metal_config::poseidon_tuning(
+            actual_limits.exec_width,
+            actual_limits.max_threads,
+        );
+        expected_tuning.states_per_lane = 1;
+        let (_, expected_threadgroup, _, _) =
+            super::poseidon_dispatch_geometry(sample.column_count, expected_tuning, &actual_limits);
+        assert_eq!(
+            sample.threadgroup_width, expected_threadgroup.width,
+            "Poseidon column geometry must use the limits of the pipeline that was dispatched"
         );
     }
     #[test]
@@ -5535,6 +5722,31 @@ mod tests {
         assert_eq!(buffer.as_slice(), &[0, 0, 0, 0]);
     }
     #[test]
+    fn partial_batch_abort_retains_each_backing_until_metal_deallocation() {
+        let buffers = [PooledBuffer::zeroed(4), PooledBuffer::zeroed(8)];
+        let weak_backings = buffers
+            .iter()
+            .map(PooledBuffer::weak_backing_for_tests)
+            .collect::<Vec<_>>();
+        let retentions = buffers
+            .iter()
+            .map(|buffer| MetalBufferBackingRetention::new(buffer.backing()))
+            .collect::<Vec<_>>();
+
+        drop(buffers);
+        assert!(
+            weak_backings
+                .iter()
+                .all(|backing| backing.upgrade().is_some())
+        );
+
+        retentions[0].release();
+        assert!(weak_backings[0].upgrade().is_none());
+        assert!(weak_backings[1].upgrade().is_some());
+        retentions[1].release();
+        assert!(weak_backings[1].upgrade().is_none());
+    }
+    #[test]
     fn queue_stats_capture_overlap() {
         super::enable_queue_depth_stats(true);
         {
@@ -5567,6 +5779,36 @@ mod tests {
         super::enable_queue_depth_stats(false);
         assert_eq!(stats.dispatch_count, 1);
         assert_eq!(stats.queues[0].dispatch_count, 1);
+    }
+    #[test]
+    fn launched_permit_drop_defers_release_to_completion_handler() {
+        let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
+        assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
+        let completion = Arc::new(super::CommandPermitCompletion::new(semaphore, 0));
+        let mut permit = super::CommandPermit {
+            completion: Arc::clone(&completion),
+        };
+        permit.mark_launched();
+
+        drop(permit);
+        assert_eq!(
+            semaphore.in_flight_for_tests(),
+            1,
+            "a timed-out/dropped launched ticket must keep its permit"
+        );
+        completion.complete();
+        assert_eq!(semaphore.in_flight_for_tests(), 0);
+    }
+    #[test]
+    fn unlaunched_permit_drop_releases_immediately() {
+        let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
+        assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
+        let permit = super::CommandPermit {
+            completion: Arc::new(super::CommandPermitCompletion::new(semaphore, 0)),
+        };
+
+        drop(permit);
+        assert_eq!(semaphore.in_flight_for_tests(), 0);
     }
     #[test]
     fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {

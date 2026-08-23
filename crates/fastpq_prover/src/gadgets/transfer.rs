@@ -6,7 +6,7 @@ use iroha_data_model::{
     asset::id::AssetDefinitionId,
     fastpq::{
         TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
-        TransferTranscript, normalized_numeric_to_u64,
+        TransferTranscript, normalized_numeric_to_u64, transfer_asset_scales,
     },
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -115,31 +115,33 @@ impl TransferRowKey {
     }
 }
 /// Build an index of transfer proofs keyed by transition rows.
+///
+/// A row shape may legitimately recur after intervening updates to other leaves. Preserve every
+/// proof in transcript order so callers do not silently replace an earlier Merkle path with the
+/// later one.
 #[must_use]
 pub fn index_row_proofs(
     inputs: &[TransferGadgetInput],
-) -> HashMap<TransferRowKey, TransferMerkleProof> {
+) -> HashMap<TransferRowKey, VecDeque<TransferMerkleProof>> {
     let mut map = HashMap::new();
     for witness in inputs {
         for delta in &witness.deltas {
             let sender_key = balance_key(&delta.asset_definition, &delta.from_account);
             let receiver_key = balance_key(&delta.asset_definition, &delta.to_account);
-            map.insert(
-                TransferRowKey::new(
-                    sender_key.clone(),
-                    delta.from_balance_before.to_le_bytes().to_vec(),
-                    delta.from_balance_after.to_le_bytes().to_vec(),
-                ),
-                delta.smt_proof.from.clone(),
-            );
-            map.insert(
-                TransferRowKey::new(
-                    receiver_key.clone(),
-                    delta.to_balance_before.to_le_bytes().to_vec(),
-                    delta.to_balance_after.to_le_bytes().to_vec(),
-                ),
-                delta.smt_proof.to.clone(),
-            );
+            map.entry(TransferRowKey::new(
+                sender_key.clone(),
+                delta.from_balance_before.to_le_bytes().to_vec(),
+                delta.from_balance_after.to_le_bytes().to_vec(),
+            ))
+            .or_insert_with(VecDeque::new)
+            .push_back(delta.smt_proof.from.clone());
+            map.entry(TransferRowKey::new(
+                receiver_key.clone(),
+                delta.to_balance_before.to_le_bytes().to_vec(),
+                delta.to_balance_after.to_le_bytes().to_vec(),
+            ))
+            .or_insert_with(VecDeque::new)
+            .push_back(delta.smt_proof.to.clone());
         }
     }
     map
@@ -328,8 +330,9 @@ fn padding_hash(level: usize) -> Hash {
 /// credit in the same transfer delta.
 ///
 /// # Errors
-/// Returns [`Error::TransferInvariant`] if the two balance keys collide in the
-/// 32-bit V1 transfer tree.
+/// Returns [`Error::TransferInvariant`] if distinct balance keys collide in the
+/// 32-bit V1 transfer tree or if a self-transfer credit does not start from the
+/// sender's post-debit balance.
 pub fn build_transfer_smt_witness_pair(
     sender_key: &[u8],
     sender_before: u64,
@@ -340,7 +343,9 @@ pub fn build_transfer_smt_witness_pair(
 ) -> Result<(TransferSmtWitness, TransferSmtWitness), Error> {
     let mut state = TransferSmtState::default();
     state.insert(sender_key, sender_before)?;
-    state.insert(receiver_key, receiver_before)?;
+    if sender_key != receiver_key {
+        state.insert(receiver_key, receiver_before)?;
+    }
     let sender = state.update_witness(sender_key, sender_before, sender_after)?;
     let receiver = state.update_witness(receiver_key, receiver_before, receiver_after)?;
     Ok((sender, receiver))
@@ -350,21 +355,25 @@ pub fn build_transfer_smt_witness_pair(
 ///
 /// This helper is intended for fixture builders and execution-captured V1 batch materialization. It
 /// does not synthesize independent row paths: every witness is derived from one shared transfer SMT
-/// and the returned roots must be used as the batch public roots.
+/// and the returned roots must be used as the batch public roots. Repairs are committed only after
+/// the full sequence succeeds, so an error leaves every input transcript unchanged.
 ///
 /// # Errors
-/// Returns [`Error::TransferInvariant`] if a balance cannot be normalized, two leaves collide in
-/// the 32-bit V1 transfer tree, or a declared transfer delta is not arithmetically valid.
+/// Returns [`Error::TransferInvariant`] if a transcript is empty or carries an invalid supplied
+/// digest, a balance cannot be normalized, two leaves collide in the 32-bit V1 transfer tree, or a
+/// declared transfer delta is not arithmetically valid.
 pub fn attach_transfer_smt_witnesses(
     transcripts: &mut [TransferTranscript],
 ) -> Result<([u8; 32], [u8; 32]), Error> {
+    validate_transcript_structure_and_digests(transcripts)?;
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut state = TransferSmtState::default();
     let mut seeded_keys = BTreeSet::new();
     let mut delta_count = 0usize;
     for transcript in transcripts.iter() {
         for delta in &transcript.deltas {
             delta_count = delta_count.saturating_add(1);
-            let scale = delta.normalized_scale();
+            let scale = asset_scale(&asset_scales, delta);
             let from_key = balance_key(&delta.asset_definition, &delta.from_account);
             if seeded_keys.insert(from_key.clone()) {
                 state.insert(
@@ -387,54 +396,84 @@ pub fn attach_transfer_smt_witnesses(
         });
     }
     let old_root = state.root().into();
-    for transcript in transcripts {
-        for delta in &mut transcript.deltas {
-            let scale = delta.normalized_scale();
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
+    let mut staged_updates = Vec::with_capacity(delta_count);
+    for transcript in transcripts.iter() {
+        for delta in &transcript.deltas {
+            let scale = asset_scale(&asset_scales, delta);
+            // Validate the declared transfer at its own precision before replacing stale balance
+            // snapshots with the values chained from the live SMT state. Requiring every stale
+            // balance to fit the stable asset scale here would prevent the repair below.
+            let _ = BalanceSnapshot::from_delta(delta)?;
+            let amount = numeric_to_u64("amount", &delta.amount, scale)?;
             let from_key = balance_key(&delta.asset_definition, &delta.from_account);
             let from_balance_before = state.current_value(&from_key)?;
             let from_balance_after =
                 from_balance_before
-                    .checked_sub(snapshot.amount)
+                    .checked_sub(amount)
                     .ok_or_else(|| Error::TransferInvariant {
                         details: format!(
-                            "sender balance underflow while chaining transfer SMT: before={from_balance_before}, amount={}",
-                            snapshot.amount
+                            "sender balance underflow while chaining transfer SMT: before={from_balance_before}, amount={amount}"
                         ),
                     })?;
-            if from_balance_before != snapshot.from_before
-                || from_balance_after != snapshot.from_after
-            {
-                delta.from_balance_before =
-                    Quantity::try_from_numeric(Numeric::new(from_balance_before, scale))
-                        .expect("non-negative FASTPQ quantity");
-                delta.from_balance_after =
-                    Quantity::try_from_numeric(Numeric::new(from_balance_after, scale))
-                        .expect("non-negative FASTPQ quantity");
-            }
-            delta.from_smt_witness =
+            let from_balance_before_quantity =
+                Quantity::try_from_numeric(Numeric::new(from_balance_before, scale))
+                    .expect("non-negative FASTPQ quantity");
+            let from_balance_after_quantity =
+                Quantity::try_from_numeric(Numeric::new(from_balance_after, scale))
+                    .expect("non-negative FASTPQ quantity");
+            let from_smt_witness =
                 state.update_witness(&from_key, from_balance_before, from_balance_after)?;
             let to_key = balance_key(&delta.asset_definition, &delta.to_account);
             let to_balance_before = state.current_value(&to_key)?;
             let to_balance_after =
                 to_balance_before
-                    .checked_add(snapshot.amount)
+                    .checked_add(amount)
                     .ok_or_else(|| Error::TransferInvariant {
                         details: "receiver balance overflow while chaining transfer SMT".into(),
                     })?;
-            if to_balance_before != snapshot.to_before || to_balance_after != snapshot.to_after {
-                delta.to_balance_before =
-                    Quantity::try_from_numeric(Numeric::new(to_balance_before, scale))
-                        .expect("non-negative FASTPQ quantity");
-                delta.to_balance_after =
-                    Quantity::try_from_numeric(Numeric::new(to_balance_after, scale))
-                        .expect("non-negative FASTPQ quantity");
-            }
-            delta.to_smt_witness =
+            let to_balance_before_quantity =
+                Quantity::try_from_numeric(Numeric::new(to_balance_before, scale))
+                    .expect("non-negative FASTPQ quantity");
+            let to_balance_after_quantity =
+                Quantity::try_from_numeric(Numeric::new(to_balance_after, scale))
+                    .expect("non-negative FASTPQ quantity");
+            let to_smt_witness =
                 state.update_witness(&to_key, to_balance_before, to_balance_after)?;
+            staged_updates.push(AttachedTransferDelta {
+                from_balance_before: from_balance_before_quantity,
+                from_balance_after: from_balance_after_quantity,
+                to_balance_before: to_balance_before_quantity,
+                to_balance_after: to_balance_after_quantity,
+                from_smt_witness,
+                to_smt_witness,
+            });
         }
     }
-    Ok((old_root, state.root().into()))
+    let new_root = state.root().into();
+    let mut updates = staged_updates.into_iter();
+    for transcript in transcripts {
+        for delta in &mut transcript.deltas {
+            let update = updates
+                .next()
+                .expect("one staged FASTPQ witness update per transfer delta");
+            delta.from_balance_before = update.from_balance_before;
+            delta.from_balance_after = update.from_balance_after;
+            delta.to_balance_before = update.to_balance_before;
+            delta.to_balance_after = update.to_balance_after;
+            delta.from_smt_witness = update.from_smt_witness;
+            delta.to_smt_witness = update.to_smt_witness;
+        }
+    }
+    debug_assert!(updates.next().is_none());
+    Ok((old_root, new_root))
+}
+struct AttachedTransferDelta {
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
+    from_smt_witness: TransferSmtWitness,
+    to_smt_witness: TransferSmtWitness,
 }
 struct TransferSmtState {
     levels: Vec<BTreeMap<u32, Hash>>,
@@ -597,27 +636,24 @@ pub fn decode_transcripts(
 /// Convert validated transcripts into structured gadget inputs.
 ///
 /// # Errors
-/// Returns [`Error::TransferInvariant`] when required digests are missing or
-/// the transcript fails arithmetic checks.
+/// Returns [`Error::TransferInvariant`] when a supplied digest violates transcript policy or the
+/// transcript fails structural, arithmetic, or SMT-root checks.
 pub fn transcripts_to_witnesses(
     transcripts: &[TransferTranscript],
     expected_old_root: &[u8; 32],
     expected_new_root: &[u8; 32],
 ) -> Result<Vec<TransferGadgetInput>, Error> {
+    validate_transcript_structure_and_digests(transcripts)?;
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut current_root = *expected_old_root;
     let mut inputs = Vec::with_capacity(transcripts.len());
     for transcript in transcripts {
-        if transcript.deltas.is_empty() {
-            return Err(Error::TransferInvariant {
-                details: "transfer transcript must contain at least one delta".into(),
-            });
-        }
         let authority_digest = transcript.authority_digest;
         let mut deltas = Vec::with_capacity(transcript.deltas.len());
         for delta in &transcript.deltas {
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
+            let snapshot =
+                BalanceSnapshot::from_delta_at_scale(delta, asset_scale(&asset_scales, delta))?;
             let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
-            enforce_poseidon_policy(transcript, &poseidon_digest)?;
             let smt_proof = TransferSmtProof::from_transcript(delta, &snapshot)?;
             require_root(smt_proof.from.root_before, current_root, "sender pre-root")?;
             current_root = smt_proof.from.root_after;
@@ -661,15 +697,16 @@ pub fn verify_transcripts(
     transitions: &[StateTransition],
     transcripts: &[TransferTranscript],
 ) -> Result<(), Error> {
+    validate_transcript_structure_and_digests(transcripts)?;
     if transcripts.is_empty() {
         return Ok(());
     }
+    let asset_scales = transfer_asset_scales(transcripts);
     let mut transfer_rows = index_transfers(transitions);
     for transcript in transcripts {
         for delta in &transcript.deltas {
-            let snapshot = BalanceSnapshot::from_delta(delta)?;
-            let poseidon_digest = compute_poseidon_digest(delta, &transcript.batch_hash);
-            enforce_poseidon_policy(transcript, &poseidon_digest)?;
+            let snapshot =
+                BalanceSnapshot::from_delta_at_scale(delta, asset_scale(&asset_scales, delta))?;
             ensure_transfer_rows(&mut transfer_rows, transitions, delta, &snapshot)?;
         }
     }
@@ -681,23 +718,36 @@ pub fn verify_transcripts(
     }
     Ok(())
 }
-fn enforce_poseidon_policy(transcript: &TransferTranscript, digest: &Hash) -> Result<(), Error> {
-    if let Some(expected) = &transcript.poseidon_preimage_digest {
-        if transcript.deltas.len() == 1 {
-            if digest != expected {
+fn validate_transcript_structure_and_digests(
+    transcripts: &[TransferTranscript],
+) -> Result<(), Error> {
+    for transcript in transcripts {
+        match transcript.deltas.as_slice() {
+            [] => {
                 return Err(Error::TransferInvariant {
-                    details: format!(
-                        "poseidon digest mismatch for transfer {} -> {} ({})",
-                        transcript.deltas[0].from_account,
-                        transcript.deltas[0].to_account,
-                        transcript.deltas[0].asset_definition
-                    ),
+                    details: "transfer transcript must contain at least one delta".into(),
                 });
             }
-        } else {
-            return Err(Error::TransferInvariant {
-                details: "multi-delta transcripts must omit poseidon_preimage_digest until per-delta digests land".into(),
-            });
+            [delta] => {
+                if let Some(expected) = &transcript.poseidon_preimage_digest {
+                    let actual = compute_poseidon_digest(delta, &transcript.batch_hash);
+                    if &actual != expected {
+                        return Err(Error::TransferInvariant {
+                            details: format!(
+                                "poseidon digest mismatch for transfer {} -> {} ({})",
+                                delta.from_account, delta.to_account, delta.asset_definition
+                            ),
+                        });
+                    }
+                }
+            }
+            [_, _, ..] => {
+                if transcript.poseidon_preimage_digest.is_some() {
+                    return Err(Error::TransferInvariant {
+                        details: "multi-delta transcripts must omit poseidon_preimage_digest until per-delta digests land".into(),
+                    });
+                }
+            }
         }
     }
     Ok(())
@@ -812,7 +862,12 @@ struct BalanceSnapshot {
 }
 impl BalanceSnapshot {
     fn from_delta(delta: &TransferDeltaTranscript) -> Result<Self, Error> {
-        let target_scale = delta.normalized_scale();
+        Self::from_delta_at_scale(delta, delta.normalized_scale())
+    }
+    fn from_delta_at_scale(
+        delta: &TransferDeltaTranscript,
+        target_scale: u32,
+    ) -> Result<Self, Error> {
         let amount = numeric_to_u64("amount", &delta.amount, target_scale)?;
         let from_before = numeric_to_u64(
             "from_balance_before",
@@ -852,6 +907,15 @@ impl BalanceSnapshot {
                 ),
             });
         }
+        if delta.from_account == delta.to_account
+            && (to_before != from_after || to_after != from_before)
+        {
+            return Err(Error::TransferInvariant {
+                details: format!(
+                    "self-transfer legs do not chain: sender={from_before}->{from_after}, receiver={to_before}->{to_after}"
+                ),
+            });
+        }
         Ok(Self {
             amount,
             from_before,
@@ -875,6 +939,12 @@ impl BalanceSnapshot {
     fn transfer_amount(&self) -> u64 {
         self.amount
     }
+}
+fn asset_scale(scales: &BTreeMap<AssetDefinitionId, u32>, delta: &TransferDeltaTranscript) -> u32 {
+    scales
+        .get(&delta.asset_definition)
+        .copied()
+        .unwrap_or_else(|| delta.normalized_scale())
 }
 fn numeric_to_u64(field: &'static str, value: &Quantity, target_scale: u32) -> Result<u64, Error> {
     normalized_numeric_to_u64(value.as_numeric(), target_scale)
@@ -971,6 +1041,18 @@ mod tests {
         verify_transcripts(&transitions, &[]).expect("empty transcript set is a no-op");
     }
     #[test]
+    fn verify_transcripts_rejects_an_empty_transcript() {
+        let mut transcript = sample_transcript();
+        transcript.deltas.clear();
+        transcript.poseidon_preimage_digest = None;
+
+        let err = verify_transcripts(&[], &[transcript])
+            .expect_err("a present transcript must contain a delta");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("at least one delta"))
+        );
+    }
+    #[test]
     fn verify_transcripts_detects_sender_mismatch() {
         let mut transcript = sample_transcript();
         transcript.deltas[0].from_balance_after = Quantity::from(1u32);
@@ -1011,6 +1093,23 @@ mod tests {
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("overflow fails");
         assert!(
             matches!(err, Error::TransferInvariant { details } if details.contains("overflow"))
+        );
+    }
+    #[test]
+    fn transfer_snapshot_rejects_unlinked_self_transfer_legs() {
+        let mut transcript = sample_transcript();
+        let delta = &mut transcript.deltas[0];
+        delta.to_account = delta.from_account.clone();
+        delta.to_balance_before = Quantity::from(158u32);
+        delta.to_balance_after = Quantity::from(200u32);
+        BalanceSnapshot::from_delta(delta).expect("canonical self-transfer legs chain");
+
+        delta.to_balance_before = Quantity::from(1_000u32);
+        delta.to_balance_after = Quantity::from(1_042u32);
+        let err = BalanceSnapshot::from_delta(delta)
+            .expect_err("independently balanced self-transfer legs must still chain");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("self-transfer legs do not chain"))
         );
     }
     #[test]
@@ -1174,6 +1273,33 @@ mod tests {
         assert!(delta.smt_proof.has_paired_paths());
     }
     #[test]
+    fn transfer_smt_witness_pair_chains_self_transfer_on_one_leaf() {
+        let key = b"asset/rose/alice";
+        let (sender, receiver) = build_transfer_smt_witness_pair(key, 200, 158, key, 158, 200)
+            .expect("self-transfer debit and credit chain");
+
+        assert_eq!(sender.root_after, receiver.root_before);
+        assert_eq!(sender.root_before, receiver.root_after);
+        TransferMerkleProof::from_witness(&sender)
+            .expect("sender proof shape")
+            .verify_update(key, 200, 158, "sender")
+            .expect("sender proof authenticates debit");
+        TransferMerkleProof::from_witness(&receiver)
+            .expect("receiver proof shape")
+            .verify_update(key, 158, 200, "receiver")
+            .expect("receiver proof authenticates credit");
+    }
+    #[test]
+    fn transfer_smt_witness_pair_rejects_unchained_self_transfer_credit() {
+        let key = b"asset/rose/alice";
+        let err = build_transfer_smt_witness_pair(key, 200, 158, key, 159, 201)
+            .expect_err("self-transfer credit must start at the post-debit balance");
+
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("pre-balance does not match current state"))
+        );
+    }
+    #[test]
     fn transcripts_to_witnesses_accept_multi_delta_batches() {
         let transcript = sample_multi_transcript();
         let (old_root, new_root) = transcript_roots(&transcript);
@@ -1229,6 +1355,82 @@ mod tests {
         );
     }
     #[test]
+    fn attach_transfer_smt_witnesses_rejects_empty_transcript_in_mixed_input() {
+        let mut empty = sample_transcript();
+        empty.deltas.clear();
+        empty.poseidon_preimage_digest = None;
+        let mut transcripts = vec![empty, sample_transcript()];
+
+        let err = attach_transfer_smt_witnesses(&mut transcripts)
+            .expect_err("every present transcript must contain a delta");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("at least one delta"))
+        );
+    }
+    #[test]
+    fn attach_transfer_smt_witnesses_rejects_stale_single_delta_digest_before_mutation() {
+        let mut transcript = sample_transcript();
+        transcript.poseidon_preimage_digest = Some(Hash::prehashed([0xEE; 32]));
+        transcript.deltas[0].from_smt_witness = TransferSmtWitness::default();
+        transcript.deltas[0].to_smt_witness = TransferSmtWitness::default();
+        let original = transcript.clone();
+
+        let err = attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript))
+            .expect_err("stale supplied digest must fail before witness attachment");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("poseidon digest mismatch"))
+        );
+        assert_eq!(transcript, original);
+    }
+    #[test]
+    fn attach_transfer_smt_witnesses_rejects_multi_delta_digest_before_mutation() {
+        let mut transcript = sample_multi_transcript();
+        transcript.poseidon_preimage_digest = Some(Hash::prehashed([0xEE; 32]));
+        let original = transcript.clone();
+
+        let err = attach_transfer_smt_witnesses(std::slice::from_mut(&mut transcript))
+            .expect_err("multi-delta transcript cannot carry one aggregate digest");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("multi-delta transcripts must omit"))
+        );
+        assert_eq!(transcript, original);
+    }
+    #[test]
+    fn attach_transfer_smt_witnesses_rejects_late_overflow_without_partial_mutation() {
+        let mut first = sample_transcript();
+        let first_delta = &mut first.deltas[0];
+        first_delta.amount = Quantity::from(1_u64);
+        first_delta.from_balance_before = Quantity::from(1_u64);
+        first_delta.from_balance_after = Quantity::from(0_u64);
+        first_delta.to_balance_before = Quantity::from(u64::MAX - 1);
+        first_delta.to_balance_after = Quantity::from(u64::MAX);
+        first_delta.from_smt_witness = TransferSmtWitness::default();
+        first_delta.to_smt_witness = TransferSmtWitness::default();
+        first.poseidon_preimage_digest = None;
+
+        let mut second = sample_transcript();
+        second.batch_hash = Hash::prehashed([0x22; 32]);
+        let second_delta = &mut second.deltas[0];
+        second_delta.from_account = (*iroha_test_samples::CARPENTER_ID).clone();
+        second_delta.amount = Quantity::from(1_u64);
+        second_delta.from_balance_before = Quantity::from(1_u64);
+        second_delta.from_balance_after = Quantity::from(0_u64);
+        second_delta.to_balance_before = Quantity::from(0_u64);
+        second_delta.to_balance_after = Quantity::from(1_u64);
+        second_delta.from_smt_witness = TransferSmtWitness::default();
+        second_delta.to_smt_witness = TransferSmtWitness::default();
+        second.poseidon_preimage_digest = None;
+
+        let mut transcripts = vec![first, second];
+        let original = transcripts.clone();
+        let err = attach_transfer_smt_witnesses(&mut transcripts)
+            .expect_err("the second credit cannot increase a balance already at u64::MAX");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("receiver balance overflow"))
+        );
+        assert_eq!(transcripts, original);
+    }
+    #[test]
     fn attach_transfer_smt_witnesses_chains_multiple_transcripts() {
         let mut transcripts = vec![sample_transcript(), chained_second_transcript()];
         let (old_root, new_root) =
@@ -1244,17 +1446,38 @@ mod tests {
         verify_transcripts(&transitions, &transcripts).expect("transcripts verify");
     }
     #[test]
-    fn attach_transfer_smt_witnesses_chains_stale_repeated_balances() {
-        let mut transcripts = vec![sample_transcript(), sample_transcript()];
+    fn attach_transfer_smt_witnesses_repairs_higher_precision_stale_balances() {
+        let first = sample_transcript();
+        let mut second = sample_transcript();
+        let delta = &mut second.deltas[0];
+        delta.amount = "0.5".parse().expect("canonical quantity");
+        delta.from_balance_before = "158.001".parse().expect("canonical quantity");
+        delta.from_balance_after = "157.501".parse().expect("canonical quantity");
+        delta.to_balance_before = "43.001".parse().expect("canonical quantity");
+        delta.to_balance_after = "43.501".parse().expect("canonical quantity");
+        delta.from_smt_witness = TransferSmtWitness::default();
+        delta.to_smt_witness = TransferSmtWitness::default();
+        second.poseidon_preimage_digest = None;
+        let mut transcripts = vec![first, second];
+
         let (old_root, new_root) =
             attach_transfer_smt_witnesses(&mut transcripts).expect("attach witnesses");
         let second = &transcripts[1].deltas[0];
         assert_eq!(second.from_balance_before, Quantity::from(158u32));
-        assert_eq!(second.from_balance_after, Quantity::from(116u32));
+        assert_eq!(
+            second.from_balance_after,
+            "157.5".parse::<Quantity>().expect("canonical quantity")
+        );
         assert_eq!(second.to_balance_before, Quantity::from(43u32));
-        assert_eq!(second.to_balance_after, Quantity::from(85u32));
-        transcripts_to_witnesses(&transcripts, &old_root, &new_root)
+        assert_eq!(
+            second.to_balance_after,
+            "43.5".parse::<Quantity>().expect("canonical quantity")
+        );
+        let witnesses = transcripts_to_witnesses(&transcripts, &old_root, &new_root)
             .expect("chained witnesses verify");
+        assert_eq!(witnesses[0].deltas[0].from_balance_before, 2_000);
+        assert_eq!(witnesses[1].deltas[0].from_balance_before, 1_580);
+        assert_eq!(witnesses[1].deltas[0].from_balance_after, 1_575);
     }
     #[test]
     fn transcripts_to_witnesses_accepts_empty_list_when_roots_match() {
@@ -1428,13 +1651,42 @@ mod tests {
             (200u64).to_le_bytes().to_vec(),
             (158u64).to_le_bytes().to_vec(),
         );
-        assert!(index.contains_key(&sender_key));
+        assert_eq!(index.get(&sender_key).map(VecDeque::len), Some(1));
         let receiver_key = TransferRowKey::new(
             balance_key(&delta.asset_definition, &delta.to_account),
             (1u64).to_le_bytes().to_vec(),
             (43u64).to_le_bytes().to_vec(),
         );
-        assert!(index.contains_key(&receiver_key));
+        assert_eq!(index.get(&receiver_key).map(VecDeque::len), Some(1));
+    }
+
+    #[test]
+    fn row_proof_index_preserves_repeated_row_paths_in_order() {
+        let transcript = sample_transcript();
+        let (old_root, new_root) = transcript_roots(&transcript);
+        let witnesses =
+            transcripts_to_witnesses(std::slice::from_ref(&transcript), &old_root, &new_root)
+                .expect("witnesses");
+        let first = witnesses[0].deltas[0].clone();
+        let mut later = first.clone();
+        later.smt_proof.from.root_before[0] ^= 0x5A;
+        later.smt_proof.from.siblings[0][0] ^= 0xA5;
+        let inputs = [TransferGadgetInput {
+            batch_hash: witnesses[0].batch_hash,
+            authority_digest: witnesses[0].authority_digest,
+            deltas: vec![first.clone(), later.clone()],
+        }];
+
+        let index = index_row_proofs(&inputs);
+        let sender_key = TransferRowKey::new(
+            balance_key(&first.asset_definition, &first.from_account),
+            first.from_balance_before.to_le_bytes().to_vec(),
+            first.from_balance_after.to_le_bytes().to_vec(),
+        );
+        let queue = index.get(&sender_key).expect("repeated sender row");
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0], first.smt_proof.from);
+        assert_eq!(queue[1], later.smt_proof.from);
     }
     #[test]
     fn transfer_row_key_from_transition_matches_explicit_key() {

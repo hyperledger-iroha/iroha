@@ -44,7 +44,7 @@ const DEFAULT_MAX_VERIFY_QUERY_PATH_LEN: usize = 64;
 /// Default maximum FRI values carried by a single round opening.
 const DEFAULT_MAX_VERIFY_FRI_ROUND_VALUES: usize = 16;
 /// Default maximum AIR row values carried by a sampled opening.
-const DEFAULT_MAX_VERIFY_AIR_ROW_VALUES: usize = 512;
+const DEFAULT_MAX_VERIFY_AIR_ROW_VALUES: usize = trace::DEFAULT_MAX_TRACE_COLUMNS;
 /// Public inputs committed by the prover and checked by the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
 #[repr(C)]
@@ -337,6 +337,13 @@ impl Prover {
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
         let params_version = canonical_params_version(&self.params)
             .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
+        if self.params.name != batch.parameter {
+            return Err(Error::ParameterMismatch {
+                expected: self.params.name.to_owned(),
+                actual: batch.parameter.clone(),
+            });
+        }
+        trace::ensure_trace_schema_limit(batch, DEFAULT_MAX_VERIFY_AIR_ROW_VALUES)?;
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
         let permission_hashes = collect_permission_hashes(batch)?;
@@ -403,6 +410,7 @@ pub fn verify_with_limits_and_semantics(
     enforce_verify_limits(batch, proof, limits)?;
     validate_canonical_goldilocks_elements(proof)?;
     validate_batch_semantics(batch, semantics)?;
+    trace::ensure_trace_schema_limit(batch, limits.max_air_row_values)?;
     verify_after_limits(batch, proof)
 }
 
@@ -427,6 +435,7 @@ fn verify_with_limits_raw(
 ) -> Result<()> {
     enforce_verify_limits(batch, proof, limits)?;
     validate_canonical_goldilocks_elements(proof)?;
+    trace::ensure_trace_schema_limit(batch, limits.max_air_row_values)?;
     verify_after_limits(batch, proof)
 }
 
@@ -2276,6 +2285,20 @@ mod tests {
         super::verify(&batch, &proof).expect("strict empty no-op verification");
     }
     #[test]
+    fn full_width_slot_uses_a_canonical_trace_residue() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = TransitionBatch::new(
+            "fastpq-lane-balanced",
+            PublicInputs {
+                slot: u64::MAX,
+                ..PublicInputs::default()
+            },
+        );
+        let proof = prover.prove(&batch).expect("full-width slot proof");
+        assert_eq!(proof.public_io.slot, u64::MAX);
+        super::verify(&batch, &proof).expect("full-width slot verification");
+    }
+    #[test]
     fn strict_state_profile_rejects_cryptographically_valid_mint_statement() {
         let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
         let batch = sample_batch();
@@ -3966,6 +3989,38 @@ mod tests {
                 actual,
                 max
             } if actual == path_len && max + 1 == path_len
+        ));
+    }
+    #[test]
+    fn trace_schema_width_is_bounded_before_proving_or_verifier_replay() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"opaque-effect".to_vec(),
+            vec![0xA5; (DEFAULT_MAX_VERIFY_AIR_ROW_VALUES + 1) * crate::LIMB_BYTES],
+            Vec::new(),
+            OperationKind::MetaSet,
+        ));
+        let actual = trace::column_count_for_batch(&batch).expect("metadata carrier schema");
+        assert!(actual > DEFAULT_MAX_VERIFY_AIR_ROW_VALUES);
+
+        let prover = Prover::canonical("fastpq-lane-balanced").expect("canonical prover");
+        assert!(matches!(
+            prover.prove_raw_statement(&batch),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: DEFAULT_MAX_VERIFY_AIR_ROW_VALUES,
+            }) if observed == actual
+        ));
+
+        let proof = materialise_sample_artifact(sample_backend_artifact()).expect("sample proof");
+        assert!(matches!(
+            verify_with_limits(&batch, &proof, VerifyLimits::default()),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: DEFAULT_MAX_VERIFY_AIR_ROW_VALUES,
+            }) if observed == actual
         ));
     }
     #[test]

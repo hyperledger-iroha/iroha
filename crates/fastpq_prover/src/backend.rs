@@ -6,7 +6,7 @@ use crate::{
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
         hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
-        merkle_root_with_first_level,
+        merkle_root_with_first_level_with_mode,
     },
 };
 use core::convert::TryFrom;
@@ -42,8 +42,6 @@ const MIN_POSEIDON_LIMB_GPU_BATCH_MESSAGES: usize = 32;
 #[cfg(feature = "fastpq-gpu")]
 // Tiny row batches underutilise the fixed Metal dispatch and have failed under shared Izanami load.
 const MIN_POSEIDON_ROW_GPU_ROWS: usize = 32;
-#[cfg(target_os = "macos")]
-const METAL_FRAMEWORK: &str = "/System/Library/Frameworks/Metal.framework/Metal";
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 static DEBUG_METAL_ENUM_ENV: OnceLock<bool> = OnceLock::new();
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -544,7 +542,6 @@ fn system_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod detection_tests {
     use super::*;
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     fn availability(enabled: &[GpuBackend]) -> BackendAvailability {
         enabled
             .iter()
@@ -624,7 +621,7 @@ mod detection_tests {
     }
     #[test]
     fn backend_config_defaults_to_cpu_execution_mode() {
-        let params = CANONICAL_PARAMETER_SETS[0];
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let config = BackendConfig::new(params);
         assert_eq!(config.execution_mode(), ExecutionMode::Cpu);
         assert_eq!(config.poseidon_mode(), PoseidonExecutionMode::Cpu);
@@ -635,19 +632,26 @@ mod observer_tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+    static OBSERVER_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct ExecutionModeObserverGuard;
     impl Drop for ExecutionModeObserverGuard {
         fn drop(&mut self) {
             clear_execution_mode_observer();
+            crate::trace::clear_poseidon_pipeline_observer();
+            crate::trace::clear_trace_merkle_mode_observer();
         }
     }
     #[test]
     fn execution_mode_observer_receives_resolution() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
         clear_execution_mode_observer();
         let _observer_guard = ExecutionModeObserverGuard;
         let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
         set_execution_mode_observer(move |requested, resolved, backend| {
-            let _ = tx.send((requested, resolved, backend));
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send((requested, resolved, backend));
+            }
         });
         let resolved = ExecutionMode::Auto.resolve();
         let (requested, resolved_event, backend) = rx
@@ -668,43 +672,83 @@ mod observer_tests {
         }
         clear_execution_mode_observer();
     }
+    #[test]
+    fn backend_prove_uses_configured_execution_and_poseidon_modes() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        crate::trace::clear_poseidon_pipeline_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+
+        let (execution_tx, execution_rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |requested, resolved, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = execution_tx.send((requested, resolved, backend));
+            }
+        });
+        let (poseidon_tx, poseidon_rx) = mpsc::channel();
+        crate::trace::set_poseidon_pipeline_observer(move |policy, path, backend| {
+            if std::thread::current().id() == test_thread {
+                let _ = poseidon_tx.send((policy, path, backend));
+            }
+        });
+
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let backend = StarkBackend::new(
+            BackendConfig::new(params)
+                .with_execution_mode(ExecutionMode::Cpu)
+                .with_poseidon_mode(PoseidonExecutionMode::Auto),
+        );
+        let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
+        backend
+            .prove(&batch, &PublicIO::default(), 1, 1)
+            .expect("configured backend proof");
+
+        let (requested, resolved, _) = execution_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("execution-mode event");
+        assert_eq!(requested, ExecutionMode::Cpu);
+        assert_eq!(resolved, ExecutionMode::Cpu);
+        let (policy, path, _) = poseidon_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Poseidon-policy event");
+        assert_eq!(policy.requested(), PoseidonExecutionMode::Auto);
+        assert_eq!(policy.resolved(), ExecutionMode::Cpu);
+        assert_eq!(path, "cpu_fallback");
+    }
+    #[test]
+    fn canonical_commitment_derivation_forces_cpu_trace_merkle_levels() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        crate::trace::clear_trace_merkle_mode_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+        let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        crate::trace::set_trace_merkle_mode_observer(move |mode| {
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send(mode);
+            }
+        });
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
+
+        derive_batch_commitments(&params, &batch, &PublicIO::default(), 1, 1)
+            .expect("canonical commitments");
+
+        let modes = rx.try_iter().collect::<Vec<_>>();
+        assert!(!modes.is_empty(), "trace Merkle mode must be observed");
+        assert!(
+            modes.iter().all(|mode| *mode == ExecutionMode::Cpu),
+            "canonical commitment derivation must keep trace Merkle levels on CPU: {modes:?}"
+        );
+    }
 }
 #[cfg(target_os = "macos")]
 fn metal_available() -> bool {
-    if metal_library_path().is_none() {
-        #[cfg(feature = "fastpq-gpu")]
-        tracing::warn!(
-            target: "fastpq::planner",
-            "Metal device detected path requires a compiled fastpq.metallib; GPU backend disabled"
-        );
-        return false;
-    }
-    if metal_device_visible_via_api() {
-        return true;
-    }
-    if !Path::new(METAL_FRAMEWORK).exists() {
-        return false;
-    }
-    let output = match Command::new("system_profiler")
-        .args(["SPDisplaysDataType", "-detailLevel", "basic"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let text = match String::from_utf8(output.stdout) {
-        Ok(text) => text,
-        Err(_) => return false,
-    };
-    let lowered = text.to_lowercase();
-    lowered.contains("metal: supported")
-        || lowered.contains("metal gpu family")
-        || lowered.contains("metal: up to date")
+    // The offline Metal compiler is an optional Xcode component on recent macOS
+    // releases. Runtime source compilation remains available through MTLDevice,
+    // so accelerator discovery must reflect usable hardware rather than the
+    // presence of a build-time `fastpq.metallib` artifact.
+    metal_device_visible_via_api()
 }
 #[cfg(target_os = "macos")]
 fn macos_opencl_devices_present() -> bool {
@@ -805,6 +849,7 @@ fn device_location_label(location: MTLDeviceLocation) -> &'static str {
         _ => "unknown",
     }
 }
+#[cfg(not(target_os = "macos"))]
 fn metal_library_path() -> Option<String> {
     overrides::guard_env_override(|| {
         overrides::debug_env_string("FASTPQ_METAL_LIB").and_then(|path| {
@@ -1546,16 +1591,22 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
 /// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
 /// selector and witness evaluations using the canonical Goldilocks field
 /// arithmetic.
+///
+/// # Errors
+///
+/// Returns [`Error::LookupColumnLengthMismatch`] when the selector and witness
+/// columns do not contain the same number of evaluations.
 pub fn compute_lookup_grand_product(
     selector_values: &[u64],
     witness_values: &[u64],
     gamma: u64,
-) -> u64 {
-    assert_eq!(
-        selector_values.len(),
-        witness_values.len(),
-        "lookup witness LDE columns must share a length"
-    );
+) -> Result<u64> {
+    if selector_values.len() != witness_values.len() {
+        return Err(Error::LookupColumnLengthMismatch {
+            selector_len: selector_values.len(),
+            witness_len: witness_values.len(),
+        });
+    }
     let mut acc = FIELD_ONE;
     let mut running = Vec::with_capacity(witness_values.len());
     for (&selector, &witness) in selector_values.iter().zip(witness_values.iter()) {
@@ -1564,7 +1615,7 @@ pub fn compute_lookup_grand_product(
         }
         running.push(acc);
     }
-    poseidon::hash_field_elements_cpu(&running)
+    Ok(poseidon::hash_field_elements_cpu(&running))
 }
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
@@ -2187,6 +2238,17 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
     Ok(openings)
 }
 
+struct BatchPreparationContext<'a> {
+    params: &'a StarkParameterSet,
+    batch: &'a TransitionBatch,
+    public_io: &'a PublicIO,
+    protocol_version: u16,
+    params_version: u16,
+    transcript_trace_root: Option<u64>,
+    execution_mode: ExecutionMode,
+    poseidon_policy: PoseidonPipelinePolicy,
+}
+
 #[derive(Debug)]
 struct PreparedBatch {
     trace_rows: u32,
@@ -2225,20 +2287,25 @@ pub struct BatchDerivedCommitments {
 }
 
 #[allow(clippy::too_many_lines)]
-fn prepare_batch(
-    params: &StarkParameterSet,
-    batch: &TransitionBatch,
-    public_io: &PublicIO,
-    protocol_version: u16,
-    params_version: u16,
-    transcript_trace_root: Option<u64>,
-) -> Result<PreparedBatch> {
+fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch> {
+    let &BatchPreparationContext {
+        params,
+        batch,
+        public_io,
+        protocol_version,
+        params_version,
+        transcript_trace_root,
+        execution_mode,
+        poseidon_policy,
+    } = context;
     if params.name != batch.parameter {
         return Err(Error::ParameterMismatch {
             expected: params.name.to_string(),
             actual: batch.parameter.clone(),
         });
     }
+    crate::digest::ensure_trace_capacity(params, batch.transitions.len())?;
+    crate::trace::ensure_trace_schema_limit(batch, crate::trace::DEFAULT_MAX_TRACE_COLUMNS)?;
     let trace = build_trace(batch)?;
     ensure_base_trace_constraints(&trace)?;
     let column_names = trace
@@ -2247,9 +2314,8 @@ fn prepare_batch(
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
     let planner = Planner::new(params);
-    let canonical_mode = ExecutionMode::Cpu;
-    let poseidon_policy = PoseidonPipelinePolicy::for_mode(canonical_mode);
-    let polynomial_data = derive_polynomial_data(&trace, &planner, canonical_mode);
+    let poseidon_mode = poseidon_policy.resolved();
+    let polynomial_data = derive_polynomial_data(&trace, &planner, execution_mode);
     let transfer_plan = polynomial_data.transfer_plan().clone();
     if transfer_plan.total_deltas() > 0 {
         tracing::debug!(
@@ -2264,23 +2330,26 @@ fn prepare_batch(
         &trace,
         &polynomial_data.coefficients,
         &planner,
-        canonical_mode,
+        execution_mode,
         poseidon_policy,
     );
-    let derived_trace_root =
-        merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
+    let derived_trace_root = merkle_root_with_first_level_with_mode(
+        column_digests.leaves(),
+        column_digests.fused_parents(),
+        poseidon_mode,
+    );
     let trace_root = transcript_trace_root.unwrap_or(derived_trace_root);
     let lde_columns = polynomial_data.into_lde_columns();
-    let lde_rows = hash_trace_rows_with_mode(&lde_columns, canonical_mode);
-    let lde_values = extend_row_hashes(&planner, canonical_mode, lde_rows, trace.padded_len);
+    let lde_rows = hash_trace_rows_with_mode(&lde_columns, poseidon_mode);
+    let lde_values = extend_row_hashes(&planner, execution_mode, lde_rows, trace.padded_len);
     let lde_domain_size =
         u32::try_from(lde_values.len()).map_err(|_| Error::TraceLengthOverflow {
             rows: lde_values.len(),
         })?;
-    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, canonical_mode)?;
-    let lde_root = merkle_root_with_mode(&lde_hashes, canonical_mode);
-    let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, canonical_mode)?;
-    let air_trace_root = merkle_root_with_mode(&air_trace_leaves, canonical_mode);
+    let lde_hashes = hash_lde_leaves_with_mode(&lde_values, params.fri.arity, poseidon_mode)?;
+    let lde_root = merkle_root_with_mode(&lde_hashes, poseidon_mode);
+    let air_trace_leaves = hash_air_trace_rows_with_mode(&lde_columns, poseidon_mode)?;
+    let air_trace_root = merkle_root_with_mode(&air_trace_leaves, poseidon_mode);
     let mut transcript = Transcript::initialise(
         public_io,
         params.name,
@@ -2301,7 +2370,7 @@ fn prepare_batch(
         &lde_columns[selector_index],
         &lde_columns[witness_index],
         gamma,
-    );
+    )?;
     let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
     for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
@@ -2313,8 +2382,8 @@ fn prepare_batch(
     let air_composition_values =
         air_composition_values(&column_names, &lde_columns, &alphas, next_step)?;
     let air_composition_leaves =
-        hash_air_composition_leaves_with_mode(&air_composition_values, canonical_mode)?;
-    let air_composition_root = merkle_root_with_mode(&air_composition_leaves, canonical_mode);
+        hash_air_composition_leaves_with_mode(&air_composition_values, poseidon_mode)?;
+    let air_composition_root = merkle_root_with_mode(&air_composition_leaves, poseidon_mode);
     transcript.append_message(
         TRANSCRIPT_TAG_AIR_ROOTS,
         &[
@@ -2354,14 +2423,16 @@ pub fn derive_batch_commitments(
     protocol_version: u16,
     params_version: u16,
 ) -> Result<BatchDerivedCommitments> {
-    let prepared = prepare_batch(
+    let prepared = prepare_batch(&BatchPreparationContext {
         params,
         batch,
         public_io,
         protocol_version,
         params_version,
-        None,
-    )?;
+        transcript_trace_root: None,
+        execution_mode: ExecutionMode::Cpu,
+        poseidon_policy: PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
+    })?;
     Ok(BatchDerivedCommitments {
         trace_root: prepared.trace_root,
         air_trace_root: prepared.air_trace_root,
@@ -2382,6 +2453,10 @@ impl StarkBackend {
         params_version: u16,
         transcript_trace_root: Option<u64>,
     ) -> Result<BackendArtifact> {
+        let execution_mode = self.config.execution_mode().resolve();
+        let poseidon_policy =
+            PoseidonPipelinePolicy::new(self.config.poseidon_mode(), execution_mode);
+        let poseidon_mode = poseidon_policy.resolved();
         let PreparedBatch {
             trace_rows,
             trace_root,
@@ -2399,15 +2474,16 @@ impl StarkBackend {
             air_composition_values,
             air_composition_leaves,
             mut transcript,
-        } = prepare_batch(
-            &self.config.params,
+        } = prepare_batch(&BatchPreparationContext {
+            params: &self.config.params,
             batch,
             public_io,
             protocol_version,
             params_version,
             transcript_trace_root,
-        )?;
-        let canonical_mode = ExecutionMode::Cpu;
+            execution_mode,
+            poseidon_policy,
+        })?;
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
@@ -2419,7 +2495,7 @@ impl StarkBackend {
             &air_composition_values,
             &self.config.params,
             &mut transcript,
-            canonical_mode,
+            poseidon_mode,
         )?;
         let query_indices = sample_queries(
             lde_values.len(),
@@ -2434,7 +2510,7 @@ impl StarkBackend {
             &query_indices,
             self.config.params.fri.arity,
             lde_values.len(),
-            canonical_mode,
+            poseidon_mode,
         )?;
         let air_openings = open_air_constraint_openings_with_mode(
             &lde_columns,
@@ -2443,13 +2519,13 @@ impl StarkBackend {
             &air_composition_leaves,
             &query_indices,
             next_step,
-            canonical_mode,
+            poseidon_mode,
         )?;
         let fri_query_openings = open_fri_query_chains(
             &fri_layer_values,
             &query_indices,
             self.config.params.fri.arity,
-            canonical_mode,
+            poseidon_mode,
         )?;
         Ok(BackendArtifact {
             parameter: self.config.params.name.to_string(),
@@ -3204,8 +3280,46 @@ mod tests {
             lde_columns[selector_index].as_slice(),
             lde_columns[perm_index].as_slice(),
             gamma,
-        );
+        )
+        .expect("matching lookup column lengths");
         assert_ne!(product, 0);
+    }
+    #[test]
+    fn lookup_grand_product_rejects_mismatched_column_lengths() {
+        let err = compute_lookup_grand_product(&[1, 0], &[7], 3).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::LookupColumnLengthMismatch {
+                selector_len: 2,
+                witness_len: 1
+            }
+        ));
+    }
+    #[test]
+    fn low_level_backend_rejects_wide_trace_schema_before_allocation() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let mut batch = TransitionBatch::new(params.name, PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"wide-value".to_vec(),
+            vec![0xA5; (crate::trace::DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
+            Vec::new(),
+            OperationKind::MetaSet,
+        ));
+        let actual = crate::trace::column_count_for_batch(&batch).expect("schema count");
+        assert!(actual > crate::trace::DEFAULT_MAX_TRACE_COLUMNS);
+
+        let backend = StarkBackend::new(BackendConfig::new(params));
+        let err = backend
+            .prove(&batch, &crate::proof::PublicIO::default(), 1, 1)
+            .expect_err("wide trace schema must fail before materialisation");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: crate::trace::DEFAULT_MAX_TRACE_COLUMNS,
+            } if observed == actual
+        ));
     }
     #[test]
     fn fri_round_arity_uses_a_real_final_subgroup_and_rejects_padding() {

@@ -1,7 +1,8 @@
-//! CUDA build helper for the FASTPQ prover.
+//! GPU build helper for the FASTPQ prover.
 //!
-//! The runtime kernels are generated via NVRTC/Metal in `gpu.rs`. This build
-//! script remains to support the static CUDA path when `fastpq-gpu` is enabled.
+//! Metal kernels are compiled into an offline library when the toolchain is
+//! available, with runtime source compilation retained as a fallback. This
+//! script also supports the static CUDA path when `fastpq-gpu` is enabled.
 // SPDX-License-Identifier: Apache-2.0
 use std::{
     env,
@@ -24,12 +25,17 @@ fn main() {
     let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if fastpq_gpu_feature
-        && target_os == "macos"
-        && let Err(error) = compile_metal_shaders()
-    {
-        println!("cargo:warning={error}");
-        println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+    let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();
+    if fastpq_gpu_feature && target_os == "macos" {
+        if skip_gpu_build {
+            println!(
+                "cargo:warning=FASTPQ_SKIP_GPU_BUILD set; skipping offline Metal shader build and using runtime source compilation"
+            );
+            println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+        } else if let Err(error) = ensure_metal_toolchain().and_then(|()| compile_metal_shaders()) {
+            println!("cargo:warning={error}; falling back to runtime Metal source compilation");
+            println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+        }
     }
     if !cuda_feature && !fastpq_gpu_feature {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
@@ -41,7 +47,7 @@ fn main() {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
     }
-    if env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some() {
+    if skip_gpu_build {
         println!("cargo:warning=FASTPQ_SKIP_GPU_BUILD set; CUDA backend disabled.");
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
@@ -93,6 +99,47 @@ fn nvcc_available() -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+fn ensure_metal_toolchain() -> Result<(), String> {
+    if metal_toolchain_available() {
+        return Ok(());
+    }
+    println!(
+        "cargo:warning=FASTPQ Metal Toolchain is not installed; running `xcodebuild -downloadComponent MetalToolchain`"
+    );
+    let status = Command::new("xcodebuild")
+        .args(["-downloadComponent", "MetalToolchain"])
+        .status()
+        .map_err(|err| format!("failed to launch Metal Toolchain download: {err}"))?;
+    if !status.success() {
+        return Err(format!(
+            "`xcodebuild -downloadComponent MetalToolchain` failed with status {status}"
+        ));
+    }
+    // Clear xcrun's negative lookup cache before resolving the newly installed tools.
+    let _ = Command::new("xcrun").arg("--kill-cache").status();
+    if metal_toolchain_available() {
+        Ok(())
+    } else {
+        Err(
+            "Metal Toolchain download completed, but `metal`/`metallib` are still unavailable"
+                .to_owned(),
+        )
+    }
+}
+fn metal_toolchain_available() -> bool {
+    let Ok(metal) = find_xcrun_tool("metal") else {
+        return false;
+    };
+    let metal_runs = Command::new(&metal)
+        .arg("-v")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !metal_runs {
+        return false;
+    }
+    find_xcrun_tool("metallib").is_ok() || metal.with_file_name("metallib").is_file()
 }
 fn compile_metal_shaders() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
