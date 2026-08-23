@@ -16,6 +16,10 @@
 )]
 
 use super::{
+    rns_native_cross_field_inventory::{
+        RnsNativeCrossFieldInventoryErrorV1, RnsNativePreQpcsCrossProofLeaseIssuerV1,
+        RnsNativePreQpcsCrossProofLeaseV1, RnsNativePreQpcsQMaskInventoryPreflightV1,
+    },
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1,
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
@@ -27,9 +31,12 @@ use super::{
     rns_native_transcript::{
         ZkAmsMkheRnsNativeChallengeSeedsV1, ZkAmsMkheRnsNativeOpeningCommitmentV1,
     },
-    rns_native_wire::ZkAmsMkheRnsNativeProofSectionKindV1,
+    rns_native_wire::{ZkAmsMkheRnsNativeProofEnvelopeV1, ZkAmsMkheRnsNativeProofSectionKindV1},
 };
 use crate::vega::sponge::Keccak256;
+
+#[cfg(test)]
+use std::cell::Cell;
 
 const TERMINAL_TAG_V1: [u8; 4] = *b"ZATB";
 const RNS_QPCS_TAG_V1: [u8; 4] = *b"ZARQ";
@@ -77,6 +84,18 @@ pub(super) const CROSS_LOOKUP_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + SUMCHECK_COUNT_V1 * (1 + 32)
     + PROOF_FRAME_BYTES_V1
     + CODEC_DIGEST_BYTES_V1;
+const CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1: usize =
+    CROSS_LOOKUP_FIXED_BYTES_V1 - PROOF_FRAME_BYTES_V1 - CODEC_DIGEST_BYTES_V1;
+pub(super) const CROSS_LOOKUP_PROOF_OFFSET_V1: usize =
+    CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 + PROOF_FRAME_BYTES_V1;
+const CROSS_LOOKUP_ENVELOPE_SECTION_INDEX_V1: usize = 2;
+const CROSS_LOOKUP_PROOF_MAX_BYTES_V1: usize =
+    ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup.max_bytes() as usize
+        - CROSS_LOOKUP_FIXED_BYTES_V1;
+const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1: usize = 2_886;
+const CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1: usize =
+    2 * CROSS_LOOKUP_PROOF_MAX_BYTES_V1 + CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1;
+const CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1: usize = MAX_SECTION_DIGESTS_V1 * 32;
 const ZERO_PADDING_FIXED_BYTES_V1: usize = COMMON_PREFIX_BYTES_V1
     + 1
     + 2 * 32
@@ -97,7 +116,53 @@ const _: () = {
     assert!(FRI_COUNT_V1 == 18);
     assert!(SUMCHECK_COUNT_V1 == 29);
     assert!(MAX_SECTION_DIGESTS_V1 >= 482);
+    assert!(CROSS_LOOKUP_FIXED_BYTES_V1 == 2_811);
+    assert!(CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 == 2_743);
+    assert!(CROSS_LOOKUP_PROOF_OFFSET_V1 == 2_779);
+    assert!(CROSS_LOOKUP_ENVELOPE_SECTION_INDEX_V1 == 2);
+    assert!(PROOF_BODY_DOMAIN_V1.len() == 50);
+    assert!(CODEC_DIGEST_DOMAIN_V1.len() == 45);
+    assert!(CROSS_LOOKUP_PROOF_MAX_BYTES_V1 == 8_385_797);
+    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_FIXED_BYTES_V1 == 2_886);
+    assert!(CROSS_LOOKUP_UNBOUND_HASH_ABSORPTION_MAX_BYTES_V1 == 16_774_480);
+    assert!(CROSS_LOOKUP_DIGEST_REGISTRY_STACK_BYTES_V1 == 16_384);
 };
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CrossLookupUnboundAuditCountersV1 {
+    parse_passes: usize,
+    proof_hash_passes: usize,
+    codec_hash_passes: usize,
+    final_context_binds: usize,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1: Cell<CrossLookupUnboundAuditCountersV1> =
+        const { Cell::new(CrossLookupUnboundAuditCountersV1 {
+            parse_passes: 0,
+            proof_hash_passes: 0,
+            codec_hash_passes: 0,
+            final_context_binds: 0,
+        }) };
+}
+
+#[cfg(test)]
+fn update_cross_lookup_unbound_audit_counters_v1(
+    update: impl FnOnce(&mut CrossLookupUnboundAuditCountersV1),
+) {
+    CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1.with(|cell| {
+        let mut counters = cell.get();
+        update(&mut counters);
+        cell.set(counters);
+    });
+}
+
+#[cfg(test)]
+fn cross_lookup_unbound_audit_counters_v1() -> CrossLookupUnboundAuditCountersV1 {
+    CROSS_LOOKUP_UNBOUND_AUDIT_COUNTERS_V1.with(Cell::get)
+}
 
 /// Failure while constructing, encoding, or decoding a typed proof section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -428,11 +493,10 @@ impl<'a> DecoderV1<'a> {
     }
 }
 
-fn read_header_v1(
+fn read_unbound_header_v1(
     decoder: &mut DecoderV1<'_>,
     kind: ZkAmsMkheRnsNativeProofSectionKindV1,
     total_bytes: usize,
-    expected: SectionHeaderV1,
 ) -> Result<SectionHeaderV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
     if decoder.array::<4>()? != tag_v1(kind)
         || decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1
@@ -441,13 +505,22 @@ fn read_header_v1(
     {
         return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding);
     }
-    let actual = SectionHeaderV1 {
+    Ok(SectionHeaderV1 {
         profile_manifest_digest: decoder.array()?,
         profile_digest: decoder.array()?,
         topology_digest: decoder.array()?,
         release_candidate_digest: decoder.array()?,
         transcript_digest: decoder.array()?,
-    };
+    })
+}
+
+fn read_header_v1(
+    decoder: &mut DecoderV1<'_>,
+    kind: ZkAmsMkheRnsNativeProofSectionKindV1,
+    total_bytes: usize,
+    expected: SectionHeaderV1,
+) -> Result<SectionHeaderV1, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let actual = read_unbound_header_v1(decoder, kind, total_bytes)?;
     if actual != expected {
         return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
     }
@@ -1031,6 +1104,150 @@ impl<'a> ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1<'a> {
     }
 }
 
+struct UnboundCrossFieldGlobalLookupSectionV1<'a> {
+    header: SectionHeaderV1,
+    cross_field_challenge_seed: [u8; 32],
+    global_lookup_challenge_seed: [u8; 32],
+    cross_field_root: [u8; 32],
+    global_lookup_root: [u8; 32],
+    point_evaluation_digests: [[u8; 32]; POINT_COUNT_V1],
+    limb_relation_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    sumcheck_round_digests: [[u8; 32]; SUMCHECK_COUNT_V1],
+    proof: &'a [u8],
+    proof_digest: [u8; 32],
+    codec_digest: [u8; 32],
+}
+
+impl<'a> UnboundCrossFieldGlobalLookupSectionV1<'a> {
+    fn bind_final_context_v1(
+        self,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<
+        ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a>,
+        ZkAmsMkheRnsNativeSectionCodecErrorV1,
+    > {
+        if self.header != canonical_header_v1(transcript)?
+            || self.cross_field_challenge_seed != transcript.cross_field_challenge_seed()
+            || self.global_lookup_challenge_seed != transcript.global_lookup_challenge_seed()
+            || self.cross_field_root != transcript.cross_field_root()
+            || self.global_lookup_root != transcript.global_lookup_root()
+        {
+            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
+        }
+        #[cfg(test)]
+        update_cross_lookup_unbound_audit_counters_v1(|counters| {
+            counters.final_context_binds += 1;
+        });
+        Ok(ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1 {
+            header: self.header,
+            cross_field_challenge_seed: self.cross_field_challenge_seed,
+            global_lookup_challenge_seed: self.global_lookup_challenge_seed,
+            cross_field_root: self.cross_field_root,
+            global_lookup_root: self.global_lookup_root,
+            point_evaluation_digests: self.point_evaluation_digests,
+            limb_relation_digests: self.limb_relation_digests,
+            sumcheck_round_digests: self.sumcheck_round_digests,
+            proof: self.proof,
+            proof_digest: self.proof_digest,
+        })
+    }
+}
+
+fn validate_unbound_cross_lookup_static_header_v1(
+    header: SectionHeaderV1,
+) -> Result<(), ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()
+        .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)?;
+    manifest
+        .validate()
+        .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)?;
+    let topology = zk_ams_mkhe_rns_native_topology_v1()
+        .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)?;
+    topology
+        .validate()
+        .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)?;
+    if header.profile_manifest_digest != manifest.manifest_digest
+        || header.profile_digest != manifest.profile_digest
+        || header.topology_digest != topology.topology_digest
+        || header.release_candidate_digest
+            != zk_ams_mkhe_rns_native_release_candidate_digest_v1()
+                .map_err(|_| ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch)?
+    {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
+    }
+    Ok(())
+}
+
+fn decode_unbound_cross_field_global_lookup_v1(
+    bytes: &[u8],
+) -> Result<UnboundCrossFieldGlobalLookupSectionV1<'_>, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
+    let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
+    preflight_v1(bytes, kind, CROSS_LOOKUP_FIXED_BYTES_V1 + 1)?;
+    #[cfg(test)]
+    update_cross_lookup_unbound_audit_counters_v1(|counters| counters.parse_passes += 1);
+    let mut decoder = DecoderV1::new(bytes);
+    let header = read_unbound_header_v1(&mut decoder, kind, bytes.len())?;
+    validate_unbound_cross_lookup_static_header_v1(header)?;
+    if decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1
+        || usize::from(decoder.u8()?) != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+        || decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1
+    {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
+    }
+    let cross_field_challenge_seed = decoder.array()?;
+    let global_lookup_challenge_seed = decoder.array()?;
+    let cross_field_root = decoder.array()?;
+    let global_lookup_root = decoder.array()?;
+    let mut registry = DigestRegistryV1::new();
+    insert_header_digests_v1(&mut registry, header)?;
+    for digest in [
+        cross_field_challenge_seed,
+        global_lookup_challenge_seed,
+        cross_field_root,
+        global_lookup_root,
+    ] {
+        registry.insert(digest)?;
+    }
+    let point_evaluation_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
+    let limb_relation_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
+    let sumcheck_round_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
+    if decoder.position() != CROSS_LOOKUP_PROOF_LENGTH_OFFSET_V1 {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding);
+    }
+    #[cfg(test)]
+    update_cross_lookup_unbound_audit_counters_v1(|counters| {
+        counters.proof_hash_passes += 1;
+    });
+    let (proof, proof_digest) = read_proof_v1(&mut decoder, kind, &mut registry)?;
+    let expected_proof = bytes
+        .get(CROSS_LOOKUP_PROOF_OFFSET_V1..bytes.len() - CODEC_DIGEST_BYTES_V1)
+        .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)?;
+    if !core::ptr::eq(proof.as_ptr(), expected_proof.as_ptr())
+        || proof.len() != expected_proof.len()
+        || proof != expected_proof
+    {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding);
+    }
+    #[cfg(test)]
+    update_cross_lookup_unbound_audit_counters_v1(|counters| {
+        counters.codec_hash_passes += 1;
+    });
+    let codec_digest = finish_decoding_v1(&mut decoder, kind, &mut registry)?;
+    Ok(UnboundCrossFieldGlobalLookupSectionV1 {
+        header,
+        cross_field_challenge_seed,
+        global_lookup_challenge_seed,
+        cross_field_root,
+        global_lookup_root,
+        point_evaluation_digests,
+        limb_relation_digests,
+        sumcheck_round_digests,
+        proof,
+        proof_digest,
+        codec_digest,
+    })
+}
+
 /// Borrowed, typed cross-field and committed-global-lookup proof section.
 ///
 /// The five evaluation points, forty limbs, and twenty-nine sumcheck rounds
@@ -1091,55 +1308,7 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
         bytes: &'a [u8],
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     ) -> Result<Self, ZkAmsMkheRnsNativeSectionCodecErrorV1> {
-        let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
-        preflight_v1(bytes, kind, CROSS_LOOKUP_FIXED_BYTES_V1 + 1)?;
-        let expected_header = canonical_header_v1(transcript)?;
-        let mut decoder = DecoderV1::new(bytes);
-        let header = read_header_v1(&mut decoder, kind, bytes.len(), expected_header)?;
-        if decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_POINT_COUNT_V1
-            || usize::from(decoder.u8()?) != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
-            || decoder.u8()? != ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1
-        {
-            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount);
-        }
-        let cross_field_challenge_seed = decoder.array()?;
-        let global_lookup_challenge_seed = decoder.array()?;
-        let cross_field_root = decoder.array()?;
-        let global_lookup_root = decoder.array()?;
-        if cross_field_challenge_seed != transcript.cross_field_challenge_seed()
-            || global_lookup_challenge_seed != transcript.global_lookup_challenge_seed()
-            || cross_field_root != transcript.cross_field_root()
-            || global_lookup_root != transcript.global_lookup_root()
-        {
-            return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
-        }
-        let mut registry = DigestRegistryV1::new();
-        insert_header_digests_v1(&mut registry, header)?;
-        for digest in [
-            cross_field_challenge_seed,
-            global_lookup_challenge_seed,
-            cross_field_root,
-            global_lookup_root,
-        ] {
-            registry.insert(digest)?;
-        }
-        let point_evaluation_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
-        let limb_relation_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
-        let sumcheck_round_digests = read_indexed_u8_v1(&mut decoder, &mut registry)?;
-        let (proof, proof_digest) = read_proof_v1(&mut decoder, kind, &mut registry)?;
-        finish_decoding_v1(&mut decoder, kind, &mut registry)?;
-        Ok(Self {
-            header,
-            cross_field_challenge_seed,
-            global_lookup_challenge_seed,
-            cross_field_root,
-            global_lookup_root,
-            point_evaluation_digests,
-            limb_relation_digests,
-            sumcheck_round_digests,
-            proof,
-            proof_digest,
-        })
+        decode_unbound_cross_field_global_lookup_v1(bytes)?.bind_final_context_v1(transcript)
     }
 
     /// Encode the exact canonical cross-field/lookup section after a cap preflight.
@@ -1232,6 +1401,245 @@ impl<'a> ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'a> {
         registry.insert(self.proof_digest)?;
         Ok(())
     }
+}
+
+// This is a transport-source fact, not proof verification or release
+// authority. Every live consumer remains separately fail-closed.
+const PRE_QPCS_CROSS_ENVELOPE_SOURCE_IMPLEMENTED_V1: bool = true;
+const PRE_QPCS_CROSS_ENVELOPE_LIVE_INTEGRATED_V1: bool = false;
+const PRE_QPCS_CROSS_ENVELOPE_RESOURCE_QUALIFIED_V1: bool = false;
+const PRE_QPCS_CROSS_ENVELOPE_RELEASE_READY_V1: bool = false;
+
+const _: () = {
+    assert!(PRE_QPCS_CROSS_ENVELOPE_SOURCE_IMPLEMENTED_V1);
+    assert!(!PRE_QPCS_CROSS_ENVELOPE_LIVE_INTEGRATED_V1);
+    assert!(!PRE_QPCS_CROSS_ENVELOPE_RESOURCE_QUALIFIED_V1);
+    assert!(!PRE_QPCS_CROSS_ENVELOPE_RELEASE_READY_V1);
+};
+
+/// Move-only context-free parse of the exact envelope-owned cross section.
+///
+/// It authenticates canonical transport structure only. Final transcript
+/// context and every algebraic claim remain unverified.
+#[allow(
+    missing_copy_implementations,
+    reason = "the exact envelope section must be split and consumed once"
+)]
+#[must_use = "the unbound cross section must be split into its final-context and proof leases"]
+pub(super) struct RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
+    envelope: &'env ZkAmsMkheRnsNativeProofEnvelopeV1,
+    section: &'env [u8],
+    decoded: UnboundCrossFieldGlobalLookupSectionV1<'env>,
+}
+
+/// Move-only final-transcript binder for one exact envelope section.
+#[allow(
+    missing_copy_implementations,
+    reason = "the provisional final-context binding must be consumed once"
+)]
+#[must_use = "the pending cross section must be consumed by final-context binding"]
+pub(super) struct RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
+    envelope: &'env ZkAmsMkheRnsNativeProofEnvelopeV1,
+    section: &'env [u8],
+    decoded: UnboundCrossFieldGlobalLookupSectionV1<'env>,
+}
+
+/// Move-only sealed lease for the inner cross proof.
+///
+/// The lease has no raw accessor. Its only consuming transition performs the
+/// provisional inventory preflight while retaining this whole-section identity.
+#[allow(
+    missing_copy_implementations,
+    reason = "the exact envelope and proof identities must remain inseparable"
+)]
+#[must_use = "the sealed cross proof must be consumed by its q-mask inventory preflight"]
+pub(super) struct RnsNativeSealedCrossProofLeaseV1<'env> {
+    envelope: &'env ZkAmsMkheRnsNativeProofEnvelopeV1,
+    section: &'env [u8],
+    proof: &'env [u8],
+    proof_digest: [u8; 32],
+    codec_digest: [u8; 32],
+}
+
+/// Unforgeable purpose token passed only to the inventory module.
+#[allow(
+    missing_copy_implementations,
+    reason = "the sealed lease must return for one exact final identity check"
+)]
+pub(super) struct RnsNativeSealedCrossProofInventoryPermitV1<'env> {
+    lease: RnsNativeSealedCrossProofLeaseV1<'env>,
+}
+
+/// Move-only, final-context-bound wrapper over the exact envelope section.
+#[allow(
+    missing_copy_implementations,
+    reason = "the bound section must be consumed with its sealed inventory lease"
+)]
+#[must_use = "the bound cross section must be consumed by inventory authentication"]
+pub(super) struct RnsNativeBoundCrossFieldGlobalLookupV1<'env> {
+    envelope: &'env ZkAmsMkheRnsNativeProofEnvelopeV1,
+    section: &'env [u8],
+    typed: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'env>,
+    codec_digest: [u8; 32],
+}
+
+impl<'env> RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
+    /// Split the single parsed owner into the pending final-context binder and
+    /// the sealed proof lease. Neither child grants proof authority.
+    pub(super) fn split_pre_qpcs_v1(
+        self,
+    ) -> (
+        RnsNativePendingCrossFieldGlobalLookupContextV1<'env>,
+        RnsNativeSealedCrossProofLeaseV1<'env>,
+    ) {
+        let proof = self.decoded.proof;
+        let proof_digest = self.decoded.proof_digest;
+        let codec_digest = self.decoded.codec_digest;
+        (
+            RnsNativePendingCrossFieldGlobalLookupContextV1 {
+                envelope: self.envelope,
+                section: self.section,
+                decoded: self.decoded,
+            },
+            RnsNativeSealedCrossProofLeaseV1 {
+                envelope: self.envelope,
+                section: self.section,
+                proof,
+                proof_digest,
+                codec_digest,
+            },
+        )
+    }
+}
+
+impl<'env> RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
+    /// Consume the pending owner and bind its stored 288 context bytes to the
+    /// final transcript without parsing or hashing the section again.
+    pub(super) fn bind_final_context_v1(
+        self,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+    ) -> Result<RnsNativeBoundCrossFieldGlobalLookupV1<'env>, ZkAmsMkheRnsNativeSectionCodecErrorV1>
+    {
+        let codec_digest = self.decoded.codec_digest;
+        let typed = self.decoded.bind_final_context_v1(transcript)?;
+        Ok(RnsNativeBoundCrossFieldGlobalLookupV1 {
+            envelope: self.envelope,
+            section: self.section,
+            typed,
+            codec_digest,
+        })
+    }
+}
+
+impl<'env> RnsNativeSealedCrossProofLeaseV1<'env> {
+    /// Consume the sealed section identity into the one-pass inner inventory
+    /// preflight. Raw proof bytes never leave this purpose-specific transition.
+    pub(super) fn preflight_q_mask_inventory_v1(
+        self,
+    ) -> Result<RnsNativePreQpcsQMaskInventoryPreflightV1<'env>, RnsNativeCrossFieldInventoryErrorV1>
+    {
+        let proof = self.proof;
+        let issuer = RnsNativePreQpcsCrossProofLeaseIssuerV1::from_sealed_envelope_v1(
+            RnsNativeSealedCrossProofInventoryPermitV1 { lease: self },
+            proof,
+        );
+        RnsNativePreQpcsQMaskInventoryPreflightV1::preflight_v1(
+            RnsNativePreQpcsCrossProofLeaseV1::from_production_issuer_v1(issuer),
+        )
+    }
+}
+
+/// Parse and hash the exact envelope-owned cross section once, before qPCS.
+///
+/// # Errors
+///
+/// Rejects every section cap, static context, geometry, order, alias, proof,
+/// codec, descriptor, or envelope-identity mismatch.
+#[allow(
+    dead_code,
+    reason = "the source contract is implemented before the final claimed-qPCS carrier consumes it"
+)]
+pub(super) fn preflight_rns_native_cross_field_global_lookup_from_envelope_v1(
+    envelope: &ZkAmsMkheRnsNativeProofEnvelopeV1,
+) -> Result<
+    RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'_>,
+    ZkAmsMkheRnsNativeSectionCodecErrorV1,
+> {
+    let kind = ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup;
+    let section = envelope.section(kind);
+    let descriptor = envelope
+        .descriptors()
+        .get(CROSS_LOOKUP_ENVELOPE_SECTION_INDEX_V1)
+        .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidCount)?;
+    if descriptor.kind() != kind
+        || descriptor.max_bytes() != kind.max_bytes()
+        || usize::try_from(descriptor.encoded_bytes()).ok() != Some(section.len())
+        || descriptor.section_digest() == [0; 32]
+    {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::Integrity);
+    }
+    let decoded = decode_unbound_cross_field_global_lookup_v1(section)?;
+    if decoded.header.profile_manifest_digest != envelope.profile_manifest_digest()
+        || decoded.header.topology_digest != envelope.topology_digest()
+        || decoded.header.release_candidate_digest != envelope.release_candidate_digest()
+    {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
+    }
+    Ok(RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1 {
+        envelope,
+        section,
+        decoded,
+    })
+}
+
+/// Consume the final-context-bound section and the unforgeable inventory
+/// permit, requiring exact Envelope, whole-section, and inner-proof identity.
+/// No section or proof hash is recomputed here.
+pub(super) fn authenticate_bound_cross_field_global_lookup_for_inventory_v1<'env>(
+    bound: RnsNativeBoundCrossFieldGlobalLookupV1<'env>,
+    permit: RnsNativeSealedCrossProofInventoryPermitV1<'env>,
+) -> Result<
+    ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'env>,
+    ZkAmsMkheRnsNativeSectionCodecErrorV1,
+> {
+    let seal = permit.lease;
+    let live_section = bound
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup);
+    let proof_end = bound
+        .section
+        .len()
+        .checked_sub(CODEC_DIGEST_BYTES_V1)
+        .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)?;
+    let exact_proof = bound
+        .section
+        .get(CROSS_LOOKUP_PROOF_OFFSET_V1..proof_end)
+        .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)?;
+    let exact_codec_digest: [u8; 32] = bound
+        .section
+        .get(proof_end..)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(ZkAmsMkheRnsNativeSectionCodecErrorV1::InvalidEncoding)?;
+    let same_identity = core::ptr::eq(bound.envelope, seal.envelope)
+        && core::ptr::eq(bound.section.as_ptr(), seal.section.as_ptr())
+        && bound.section.len() == seal.section.len()
+        && bound.section == seal.section
+        && core::ptr::eq(bound.section.as_ptr(), live_section.as_ptr())
+        && bound.section.len() == live_section.len()
+        && bound.section == live_section
+        && core::ptr::eq(bound.typed.proof.as_ptr(), seal.proof.as_ptr())
+        && bound.typed.proof.len() == seal.proof.len()
+        && bound.typed.proof == seal.proof
+        && core::ptr::eq(exact_proof.as_ptr(), seal.proof.as_ptr())
+        && exact_proof.len() == seal.proof.len()
+        && exact_proof == seal.proof
+        && bound.typed.proof_digest == seal.proof_digest
+        && bound.codec_digest == seal.codec_digest
+        && bound.codec_digest == exact_codec_digest;
+    if !same_identity {
+        return Err(ZkAmsMkheRnsNativeSectionCodecErrorV1::ContextMismatch);
+    }
+    Ok(bound.typed)
 }
 
 /// Borrowed, typed forty-limb zero-padding proof section.

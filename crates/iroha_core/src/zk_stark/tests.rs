@@ -150,6 +150,26 @@ fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
     }
 }
 #[test]
+fn generic_binding_verifying_key_rejects_domain_above_exact_root_cap() {
+    let circuit_id = "stark/fri/sha256-goldilocks:binding-root-cap-test";
+    let payload = StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.to_owned(),
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        fold_arity: 2,
+        queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+    };
+    let error = validate_stark_fri_canonical_verifying_key_payload(&payload, circuit_id, "test")
+        .expect_err("oversized generic Binding verifier key must fail admission");
+    assert!(
+        error.contains("exact trace-root reconstruction limit"),
+        "unexpected generic Binding verifier-key error: {error}"
+    );
+}
+#[test]
 fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
     let valid = StarkFriParamsV1 {
         version: 1,
@@ -254,6 +274,224 @@ fn synthesized_envelope_verifies_sha256() {
     )
     .expect("ok");
     assert!(verify_stark_fri_envelope(&bytes));
+}
+#[test]
+fn binding_air_rejects_fixed_coefficient_cancellation_rows() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-fixed-coefficient-cancellation".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x61; 32];
+    let one = Fq::one();
+    let two = Fq::from_canonical_u64(2).expect("canonical two");
+    let rows = (0..domain)
+        .map(|index| {
+            let expected = stark_air_row(index, &public_digest).expect("build binding AIR row");
+            let mut forged = expected.clone();
+            forged[0] = Fq::from_canonical_u64(forged[0])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            forged[1] = Fq::from_canonical_u64(forged[1])
+                .expect("canonical row coordinate")
+                .sub(two)
+                .0;
+            forged[2] = Fq::from_canonical_u64(forged[2])
+                .expect("canonical row coordinate")
+                .add(one)
+                .0;
+            assert_ne!(forged, expected);
+            forged
+        })
+        .collect::<Vec<_>>();
+
+    // The former fixed coefficients accepted this non-zero residue vector:
+    // 3 * 1 + 5 * (-2) + 7 * 1 = 0 in the proof field.
+    let legacy_collision = Fq::from_canonical_u64(3)
+        .expect("canonical three")
+        .sub(Fq::from_canonical_u64(5).expect("canonical five").mul(two))
+        .add(Fq::from_canonical_u64(7).expect("canonical seven"));
+    assert_eq!(legacy_collision, Fq::zero());
+    assert_eq!(
+        stark_air_composition_value(0, domain, &public_digest, &rows[0], &rows[1]),
+        None,
+        "a sampled forged row must fail the verifier-owned coordinate check"
+    );
+
+    let bytes = prove_stark_fri_zero_composition_air_envelope_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-FIXED-COEFFICIENT-CANCELLATION".to_owned(),
+        "stark/fri/custom-binding-air-fixed-coefficient-cancellation:test".to_owned(),
+        public_digest,
+        rows,
+    )
+    .expect("explicit-row prover constructs the forged cancellation envelope");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "generic binding AIR verifier must reject every sampled forged row"
+    );
+}
+#[test]
+fn binding_air_rejects_unsampled_row_via_exact_trace_root() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-unsampled-row".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x62; 32];
+    let circuit_id = "stark/fri/custom-binding-air-unsampled-row:test";
+    let canonical_rows = (0..domain)
+        .map(|index| stark_air_row(index, &public_digest).expect("build canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let expected_root = stark_binding_air_trace_root(&params, &public_digest, domain)
+        .expect("reconstruct canonical Binding AIR trace root");
+    assert_eq!(
+        stark_air_trace_root_from_rows_v1(&params, &canonical_rows),
+        Some(expected_root),
+        "streaming reconstruction must match the ordinary Merkle builder"
+    );
+
+    for bad_index in 0..domain {
+        let mut forged_rows = canonical_rows.clone();
+        forged_rows[bad_index][0] = Fq::from_canonical_u64(forged_rows[bad_index][0])
+            .expect("canonical Binding row index")
+            .add(Fq::one())
+            .0;
+        let bytes = prove_stark_fri_zero_composition_air_envelope_bytes(
+            params.clone(),
+            "IROHA-TEST-BINDING-AIR-UNSAMPLED-ROW".to_owned(),
+            circuit_id.to_owned(),
+            public_digest,
+            forged_rows.clone(),
+        )
+        .expect("explicit-row prover constructs the sparse forged envelope");
+        let envelope: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&bytes).expect("decode sparse forged envelope");
+        let air = envelope.proof.air.as_ref().expect("AIR section");
+        let bad_row_is_opened = air.openings.iter().any(|opening| {
+            let index = usize::try_from(opening.index).expect("opening index fits usize");
+            index == bad_index || (index + 1) % domain == bad_index
+        });
+        if bad_row_is_opened {
+            continue;
+        }
+
+        assert_ne!(air.trace_root, expected_root);
+        assert!(air.openings.iter().all(|opening| {
+            let index = usize::try_from(opening.index).expect("opening index fits usize");
+            stark_air_composition_value(
+                index,
+                domain,
+                &public_digest,
+                &opening.row,
+                &opening.next_row,
+            ) == Some(Fq::zero())
+        }));
+        let composition_values = vec![0; domain];
+        assert!(
+            verify_stark_fri_air_envelope_from_rows_and_composition_values(
+                &bytes,
+                circuit_id,
+                &public_digest,
+                &forged_rows,
+                &composition_values,
+            ),
+            "all commitments, FRI folds, and sampled explicit rows remain valid"
+        );
+        assert!(
+            !verify_stark_fri_envelope(&bytes),
+            "generic Binding must reject the unsampled row through exact trace-root equality"
+        );
+        return;
+    }
+    panic!("failed to place the forged row outside every sampled row and successor");
+}
+#[test]
+fn generic_binding_provers_reject_domain_above_exact_root_cap() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-prover-root-cap".to_owned(),
+    };
+    let circuit_id = "stark/fri/custom-binding-air-prover-root-cap:test";
+    let public_digest = [0x63; 32];
+    let error = prove_stark_fri_air_envelope_bytes(
+        params.clone(),
+        "IROHA-TEST-BINDING-AIR-PROVER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+    )
+    .expect_err("canonical generic Binding prover must reject an oversized domain");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+    let error = prove_stark_fri_zero_composition_air_envelope_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-PROVER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+        Vec::new(),
+    )
+    .expect_err("explicit-row generic Binding prover must reject an oversized domain");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+}
+#[test]
+fn generic_binding_verifier_rejects_domain_above_exact_root_cap() {
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2 + 1,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag: "iroha:test:binding-air-verifier-root-cap".to_owned(),
+    };
+    let domain = 1_usize << usize::from(params.n_log2);
+    let public_digest = [0x64; 32];
+    let circuit_id = "stark/fri/custom-binding-air-verifier-root-cap:test";
+    let rows = (0..domain)
+        .map(|index| stark_air_row(index, &public_digest).expect("build canonical Binding AIR row"))
+        .collect::<Vec<_>>();
+    let composition_values = vec![0; domain];
+    let bytes = prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
+        params,
+        "IROHA-TEST-BINDING-AIR-VERIFIER-ROOT-CAP".to_owned(),
+        circuit_id.to_owned(),
+        public_digest,
+        rows.clone(),
+        composition_values.clone(),
+    )
+    .expect("Explicit context retains the native domain limit");
+    assert!(
+        verify_stark_fri_air_envelope_from_rows_and_composition_values(
+            &bytes,
+            circuit_id,
+            &public_digest,
+            &rows,
+            &composition_values,
+        )
+    );
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "generic Binding verification must reject before oversized root reconstruction"
+    );
 }
 #[test]
 fn public_generic_air_provers_reject_bfv_full_bootstrap_circuit_aliases() {

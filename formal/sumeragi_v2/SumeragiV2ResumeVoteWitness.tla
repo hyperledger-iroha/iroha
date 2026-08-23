@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2ResumeVoteWitness ----
-EXTENDS SumeragiV2
+EXTENDS SumeragiV2Inductive
 
 (***************************************************************************
 Bounded TLC witness for recovery of an exact locked Commit intent.

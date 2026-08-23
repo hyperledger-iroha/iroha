@@ -21,6 +21,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from norito_fixture_frame import (
+    SIGNED_TRANSACTION_SCHEMA,
+    TRANSACTION_PAYLOAD_SCHEMA,
+    decode_canonical_norito_frame,
+    iroha_hash_hex,
+    signed_transaction_entrypoint_hash_hex,
+    signed_transaction_payload,
+)
+
 
 DEFAULT_CANONICAL = Path("fixtures/norito_rpc/transaction_fixtures.manifest.json")
 DEFAULT_TARGETS: Mapping[str, Path] = {
@@ -51,6 +64,18 @@ MANIFEST_FIXTURE_FIELDS = frozenset(
     }
 )
 NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
+TRANSACTION_PAYLOAD_FIELDS = (
+    "domain",
+    "authority",
+    "creation_time_ms",
+    "instructions",
+    "time_to_live_ms",
+    "nonce",
+    "fee_payment",
+    "admission_intent",
+    "metadata",
+    "attachments",
+)
 
 
 @dataclass(frozen=True)
@@ -212,12 +237,6 @@ def _decode_canonical_base64(value: str, context: str) -> bytes:
     return decoded
 
 
-def _iroha_hash(data: bytes) -> str:
-    digest = bytearray(hashlib.blake2b(data, digest_size=32).digest())
-    digest[-1] |= 1
-    return digest.hex()
-
-
 def _compact_length(value: int) -> bytes:
     output = bytearray()
     remaining = value
@@ -255,17 +274,95 @@ def _read_field(data: bytes, offset: int, context: str) -> tuple[bytes, int]:
     return data[payload_offset:end], end
 
 
-def _signed_transaction_payload(data: bytes) -> bytes:
-    _, offset = _read_field(data, 0, "SignedTransaction.signature")
-    payload, offset = _read_field(data, offset, "SignedTransaction.payload")
-    _, offset = _read_field(data, offset, "SignedTransaction.multisig_signatures")
+def _read_exact_fields(
+    data: bytes, names: Sequence[str], context: str
+) -> Mapping[str, bytes]:
+    """Read one exact ordered adaptive-Norito struct without fallback fields."""
+
+    fields: Dict[str, bytes] = {}
+    offset = 0
+    for name in names:
+        if offset == len(data):
+            raise ValueError(f"{context} is missing required field {name}")
+        value, offset = _read_field(data, offset, f"{context}.{name}")
+        fields[name] = value
     if offset != len(data):
-        raise ValueError("SignedTransaction has trailing or legacy envelope fields")
-    return payload
+        raise ValueError(f"{context} has trailing or legacy fields")
+    return fields
+
+
+def _read_option(data: bytes, context: str, expected_size: Optional[int]) -> Optional[bytes]:
+    """Read the one canonical adaptive-Norito Option representation."""
+
+    if data == b"\x00":
+        return None
+    if not data or data[0] != 1:
+        raise ValueError(f"{context} has an invalid Option tag")
+    value, offset = _read_field(data, 1, f"{context}.value")
+    if offset != len(data):
+        raise ValueError(f"{context} has trailing Option bytes")
+    if expected_size is not None and len(value) != expected_size:
+        raise ValueError(f"{context} has the wrong fixed-width value")
+    return value
+
+
+def _validate_fee_payment(data: bytes, context: str) -> None:
+    """Require the current fee-payer record, including its gas-limit field."""
+
+    if len(data) < 4:
+        raise ValueError(f"{context} has a truncated payer tag")
+    payer = int.from_bytes(data[:4], "little")
+    payment, offset = _read_field(data, 4, f"{context}.value")
+    if offset != len(data):
+        raise ValueError(f"{context} has trailing payer bytes")
+    if payer == 0:
+        fields = _read_exact_fields(
+            payment,
+            ("charge_limits", "gas_limit"),
+            f"{context}.authority",
+        )
+    elif payer == 1:
+        fields = _read_exact_fields(
+            payment,
+            ("program_id", "program_revision", "charge_limits", "gas_limit"),
+            f"{context}.sponsor",
+        )
+        if len(fields["program_revision"]) != 8:
+            raise ValueError(f"{context}.sponsor.program_revision must be u64")
+    else:
+        raise ValueError(f"{context} has an unknown payer tag {payer}")
+    gas_limit = _read_option(fields["gas_limit"], f"{context}.gas_limit", 8)
+    if gas_limit is not None and int.from_bytes(gas_limit, "little") == 0:
+        raise ValueError(f"{context}.gas_limit must be non-zero")
+
+
+def _transaction_payload_fields(data: bytes, context: str) -> Mapping[str, bytes]:
+    """Decode the exact current TransactionPayload field sequence."""
+
+    fields = _read_exact_fields(data, TRANSACTION_PAYLOAD_FIELDS, context)
+    if len(fields["creation_time_ms"]) != 8:
+        raise ValueError(f"{context}.creation_time_ms must be u64")
+    executable = fields["instructions"]
+    if len(executable) < 4 or int.from_bytes(executable[:4], "little") not in range(5):
+        raise ValueError(f"{context}.instructions has an unknown executable tag")
+    ttl = _read_option(fields["time_to_live_ms"], f"{context}.time_to_live_ms", 8)
+    if ttl is None or int.from_bytes(ttl, "little") == 0:
+        raise ValueError(f"{context}.time_to_live_ms must be signature-bound and non-zero")
+    nonce = _read_option(fields["nonce"], f"{context}.nonce", 4)
+    if nonce is not None and int.from_bytes(nonce, "little") == 0:
+        raise ValueError(f"{context}.nonce must be non-zero when present")
+    _validate_fee_payment(fields["fee_payment"], f"{context}.fee_payment")
+    admission = fields["admission_intent"]
+    if len(admission) != 4 or int.from_bytes(admission, "little") not in (0, 1):
+        raise ValueError(f"{context}.admission_intent has an unknown tag")
+    if len(fields["metadata"]) < 8:
+        raise ValueError(f"{context}.metadata has a truncated entry count")
+    _read_option(fields["attachments"], f"{context}.attachments", None)
+    return fields
 
 
 def _transaction_payload_network_id(data: bytes, context: str) -> bytes:
-    domain, _ = _read_field(data, 0, f"{context}.domain")
+    domain = _transaction_payload_fields(data, context)["domain"]
     if len(domain) < 4:
         raise ValueError(f"{context} has a truncated transaction domain")
     tag = int.from_bytes(domain[:4], "little")
@@ -285,11 +382,6 @@ def _require_transaction_network_id(
     expected = bytes.fromhex(network_id[5:69])
     if _transaction_payload_network_id(payload, context) != expected:
         raise ValueError(f"{context} network_id does not match its manifest")
-
-
-def _signed_transaction_hash(data: bytes) -> str:
-    payload = _signed_transaction_payload(data)
-    return _iroha_hash(b"\x00\x00\x00\x00" + _compact_length(len(payload)) + payload)
 
 
 def load_manifest(path: Path) -> ManifestSnapshot:
@@ -336,63 +428,78 @@ def load_manifest(path: Path) -> ManifestSnapshot:
                 f"[error] duplicate signed_hash {digest.signed_hash!r} in {path}: "
                 f"{signed_hashes[digest.signed_hash]!r} and {digest.name!r}"
             )
-        decoded_payload = _decode_canonical_base64(
+        payload_frame = _decode_canonical_base64(
             digest.payload_base64, f"{path}:{digest.name}.payload_base64"
         )
-        decoded_signed = _decode_canonical_base64(
+        signed_frame = _decode_canonical_base64(
             digest.signed_base64, f"{path}:{digest.name}.signed_base64"
         )
         try:
+            decoded_payload = decode_canonical_norito_frame(
+                payload_frame,
+                f"{path}:{digest.name}.payload",
+                expected_schema=TRANSACTION_PAYLOAD_SCHEMA,
+            )
+            decoded_signed = decode_canonical_norito_frame(
+                signed_frame,
+                f"{path}:{digest.name}.signed",
+                expected_schema=SIGNED_TRANSACTION_SCHEMA,
+            )
+            embedded_payload = signed_transaction_payload(decoded_signed)
+            if embedded_payload != decoded_payload:
+                raise ValueError(
+                    f"{path}:{digest.name} signed transaction contains a different payload"
+                )
             _require_transaction_network_id(
                 decoded_payload,
                 digest.network_id,
                 f"{path}:{digest.name}.payload",
             )
             _require_transaction_network_id(
-                _signed_transaction_payload(decoded_signed),
+                embedded_payload,
                 digest.network_id,
                 f"{path}:{digest.name}.signed_payload",
             )
         except ValueError as exc:
             raise SystemExit(f"[error] {exc}") from exc
-        if len(decoded_payload) != digest.encoded_len:
+        if len(payload_frame) != digest.encoded_len:
             raise SystemExit(
                 f"[error] {path}:{digest.name} encoded_len mismatch: "
-                f"manifest={digest.encoded_len} decoded={len(decoded_payload)}"
+                f"manifest={digest.encoded_len} decoded={len(payload_frame)}"
             )
-        if len(decoded_signed) != digest.signed_len:
+        if len(signed_frame) != digest.signed_len:
             raise SystemExit(
                 f"[error] {path}:{digest.name} signed_len mismatch: "
-                f"manifest={digest.signed_len} decoded={len(decoded_signed)}"
+                f"manifest={digest.signed_len} decoded={len(signed_frame)}"
             )
-        computed_payload_hash = _iroha_hash(decoded_payload)
+        computed_payload_hash = iroha_hash_hex(payload_frame)
         if computed_payload_hash != digest.payload_hash:
             raise SystemExit(
                 f"[error] {path}:{digest.name} payload_hash mismatch: "
                 f"manifest={digest.payload_hash} computed={computed_payload_hash}"
             )
-        computed_signed_hash = _signed_transaction_hash(decoded_signed)
+        computed_signed_hash = signed_transaction_entrypoint_hash_hex(decoded_signed)
         if computed_signed_hash != digest.signed_hash:
             raise SystemExit(
                 f"[error] {path}:{digest.name} signed_hash mismatch: "
                 f"manifest={digest.signed_hash} computed={computed_signed_hash}"
             )
-        if decoded_payload in payload_bytes:
+        if payload_frame in payload_bytes:
             raise SystemExit(
                 f"[error] duplicate payload bytes in {path}: "
-                f"{payload_bytes[decoded_payload]!r} and {digest.name!r}"
+                f"{payload_bytes[payload_frame]!r} and {digest.name!r}"
             )
-        if decoded_signed in signed_bytes:
+        if signed_frame in signed_bytes:
             raise SystemExit(
                 f"[error] duplicate signed bytes in {path}: "
-                f"{signed_bytes[decoded_signed]!r} and {digest.name!r}"
+                f"{signed_bytes[signed_frame]!r} and {digest.name!r}"
             )
         fixtures[digest.name] = digest
         encoded_files[digest.encoded_file] = digest.name
         payload_hashes[digest.payload_hash] = digest.name
         signed_hashes[digest.signed_hash] = digest.name
-        payload_bytes[decoded_payload] = digest.name
-        signed_bytes[decoded_signed] = digest.name
+        payload_bytes[payload_frame] = digest.name
+        signed_bytes[signed_frame] = digest.name
     fingerprint = _fingerprint_manifest(payload)
     age_hours = (
         dt.datetime.now(dt.timezone.utc) - _stat_mtime(path)

@@ -209,7 +209,7 @@ macro_rules! admit_lane_reply {
 """,
     "direct_frame": """
 macro_rules! direct_frame {
-    ($origin:expr, $target:expr, $priority:expr, $payload:expr) => {
+    ($origin:expr, $target:expr, $priority:expr, $payload:expr $(,)?) => {
         RelayMessage::new(
             $origin,
             RelayTarget::Direct(($target).clone()),

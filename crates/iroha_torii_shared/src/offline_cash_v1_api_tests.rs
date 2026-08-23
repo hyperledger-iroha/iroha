@@ -100,7 +100,7 @@ fn payment(request: &OfflineCashPaymentRequestV1) -> OfflineCashPaymentV1 {
     let statement = OfflineCashTransferStatementV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,
         release_id: request.release_id,
-        network_id: request.network_id.clone(),
+        network_id: request.network_id,
         asset: request.asset.clone(),
         scale: request.scale,
         amount: request.amount,
@@ -150,10 +150,10 @@ fn acknowledgement(
     }
 }
 
-fn assert_size_error(error: KagemushaValidationError, actual: usize, max: usize) {
+fn assert_size_error(error: &KagemushaValidationError, actual: usize, max: usize) {
     assert!(
         matches!(
-            &error,
+            error,
             KagemushaValidationError::EncodedSizeExceeded {
                 actual: rejected_actual,
                 max: rejected_max,
@@ -203,7 +203,7 @@ fn public_boundary_pre_caps_every_message_before_decode() {
     let request = request();
     let payment = payment(&request);
     assert_size_error(
-        decode_offline_cash_payment_request_v1(&vec![
+        &decode_offline_cash_payment_request_v1(&vec![
             0;
             OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1 + 1
         ])
@@ -212,13 +212,13 @@ fn public_boundary_pre_caps_every_message_before_decode() {
         OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
     );
     assert_size_error(
-        decode_offline_cash_payment_v1(&vec![0; OFFLINE_CASH_PAYMENT_MAX_BYTES_V1 + 1], &request)
+        &decode_offline_cash_payment_v1(&vec![0; OFFLINE_CASH_PAYMENT_MAX_BYTES_V1 + 1], &request)
             .expect_err("oversized payment must fail"),
         OFFLINE_CASH_PAYMENT_MAX_BYTES_V1 + 1,
         OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
     );
     assert_size_error(
-        decode_offline_cash_acknowledgement_v1(
+        &decode_offline_cash_acknowledgement_v1(
             &vec![0; OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1 + 1],
             &request,
             &payment,

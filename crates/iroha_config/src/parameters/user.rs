@@ -11786,7 +11786,9 @@ impl Nexus {
             }
         })
     }
-    fn parse_optional_positive_u64(value: Option<u64>) -> Result<Option<NonZeroU64>, ()> {
+    fn parse_optional_positive_u64(
+        value: Option<u64>,
+    ) -> core::result::Result<Option<NonZeroU64>, ()> {
         value.map_or(Ok(None), |value| NonZeroU64::new(value).map(Some).ok_or(()))
     }
     #[allow(clippy::too_many_lines)]
@@ -35436,9 +35438,12 @@ publish_delay_seconds = 17
         inrou_enabled: Option<bool>,
         bounded_egress: bool,
     ) -> Table {
+        use std::fmt::Write as _;
+
         let mut source = "production_mode = true\n".to_owned();
         if let Some(enabled) = inrou_enabled {
-            source.push_str(&format!(
+            write!(
+                source,
                 r#"
 [inrou]
 enabled = {enabled}
@@ -35454,17 +35459,18 @@ max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
 "#,
-            ));
+            )
+            .expect("writing to an owned string cannot fail");
         }
         if bounded_egress {
             source.push_str(
-                r#"
+                r"
 [egress]
 default_allow = false
 allowed_hosts = []
 rate_per_minute = 60
 max_bytes_per_minute = 1048576
-"#,
+",
             );
         }
         let mut table = table_with_soracloud_runtime(&source);

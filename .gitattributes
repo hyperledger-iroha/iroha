@@ -9,3 +9,4 @@ crates/kotodama_lang/src/ir/fixtures/v1/** -whitespace
 crates/kotodama_lang/src/ir/test_sources/** -whitespace
 crates/kotodama_lang/src/semantic/fixtures/v1/** -whitespace
 crates/kotodama_lang/src/semantic/test_sources/** -whitespace
+crates/kotodama_lang/src/session/fixtures/** -whitespace

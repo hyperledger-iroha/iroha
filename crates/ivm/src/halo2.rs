@@ -1141,7 +1141,8 @@ impl Secp256k1MulCircuit {
         let pt = Option::<k256::AffinePoint>::from(k256::AffinePoint::from_encoded_point(&pt_enc))
             .ok_or("secp256k1 point not on curve")?;
         use ff::PrimeField;
-        let scalar = Scalar::from_repr(self.scalar.into()).unwrap();
+        let scalar = Option::<Scalar>::from(Scalar::from_repr(self.scalar.into()))
+            .ok_or("secp256k1 scalar decode failed")?;
         let expected = (ProjectivePoint::from(pt) * scalar)
             .to_affine()
             .to_encoded_point(false);
@@ -1455,11 +1456,22 @@ impl AllocCircuit {
     /// Verify that the allocation obeys alignment and bounds rules.
     pub fn verify(&self) -> Result<(), &'static str> {
         use crate::memory::Memory;
-        let aligned = (self.size + 7) & !7;
-        let new_alloc = self.heap_alloc_before + aligned;
+        let aligned = self
+            .size
+            .checked_add(7)
+            .map(|size| size & !7)
+            .ok_or("allocation size overflow")?;
+        let new_alloc = self
+            .heap_alloc_before
+            .checked_add(aligned)
+            .ok_or("heap allocation overflow")?;
+        ensure_equal_bool(self.heap_limit_before <= Memory::HEAP_MAX_SIZE, true)?;
         ensure_equal_bool(new_alloc <= self.heap_limit_before, true)?;
         ensure_equal_u64(self.heap_alloc_after, new_alloc)?;
-        ensure_equal_u64(self.addr, Memory::HEAP_START + self.heap_alloc_before)?;
+        let addr = Memory::HEAP_START
+            .checked_add(self.heap_alloc_before)
+            .ok_or("heap address overflow")?;
+        ensure_equal_u64(self.addr, addr)?;
         ensure_equal_bool(self.heap_alloc_after <= Memory::HEAP_MAX_SIZE, true)
     }
 }

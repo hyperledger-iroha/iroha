@@ -43,6 +43,21 @@ pub(super) enum ReadyLifecycleBroadcastCarrierV1 {
     RecoveredRefanout,
 }
 
+/// Classification of one exact Broadcast row admitted to the current
+/// scheduler census.
+///
+/// Unlike [`ReadyLifecycleBroadcastCarrierV1`], this seal may describe a
+/// direct output that the caller's exact reducer-fence observation will wake
+/// during the same planning transaction. Recovered refanout remains
+/// Ready-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SchedulableLifecycleBroadcastCarrierV1 {
+    /// An ordinary runtime output remains owned by generic output settlement.
+    RetainedDirectOutput(SchedulableRetainedDirectBroadcastAttestationV1),
+    /// A typed recovered Sign successor owns one dedicated refanout transaction.
+    RecoveredRefanout,
+}
+
 /// Registry seal for one Ready direct Broadcast which scheduling may observe
 /// but must never claim through a recovered-refanout or fresh-I/O path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +70,26 @@ impl ReadyRetainedDirectBroadcastAttestationV1 {
     /// scheduler input.
     pub(super) fn matches_ready_record(self, record: &super::LifecycleRecord) -> bool {
         record.state == super::LifecycleState::Ready
+            && record.work_class == LifecycleWorkClass::Broadcast
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+                == Some((self.address.slot, self.digest))
+    }
+}
+
+/// Registry seal for one exact direct Broadcast in the current scheduler
+/// census, including its pre-planning Ready or reducer-fence Waiting state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SchedulableRetainedDirectBroadcastAttestationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    state: super::LifecycleState,
+}
+impl SchedulableRetainedDirectBroadcastAttestationV1 {
+    /// Rejoin the seal to the unchanged row before minting a scheduler input.
+    pub(super) fn matches_schedulable_record(self, record: &super::LifecycleRecord) -> bool {
+        record.state == self.state
             && record.work_class == LifecycleWorkClass::Broadcast
             && record.owner == self.address.owner
             && record.ordinal == self.address.ordinal
@@ -285,6 +320,112 @@ impl ConcreteLifecycleWorkRegistry {
             | ConcreteLifecycleWorkKind::DurableStoreBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateBody(_)
             | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_)
+            | ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_)
+            | ConcreteLifecycleWorkKind::DurableCertifiedServe(_)
+            | ConcreteLifecycleWorkKind::DurableProducerTurn(_) => Err(RegistryError::CorruptWork),
+        }
+    }
+
+    /// Classify one exact Broadcast admitted to the current scheduler census.
+    ///
+    /// Ready rows retain the existing closed carrier classification. The sole
+    /// additional state is a direct output Waiting on the exact context-scoped
+    /// reducer fence supplied by the caller; that wait must be absent from the
+    /// Ready index and strictly older than the observed generation. A recovered
+    /// Broadcast can never borrow this direct-output wake path.
+    pub(super) fn attest_schedulable_lifecycle_broadcast_carrier(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+        fence: Option<crate::sumeragi::v2::LifecycleReducerFenceObservationV1>,
+    ) -> Result<SchedulableLifecycleBroadcastCarrierV1, RegistryError> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(RegistryError::CorruptWork);
+        }
+        let record = coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(RegistryError::Missing)?;
+        if record.work_class != LifecycleWorkClass::Broadcast {
+            return Err(RegistryError::CorruptWork);
+        }
+        match record.state {
+            super::LifecycleState::Ready => {
+                if !coordinator.ready_index.contains(&ordinal) {
+                    return Err(RegistryError::CorruptWork);
+                }
+                return self
+                    .attest_ready_lifecycle_broadcast_carrier(coordinator, ordinal)
+                    .map(|carrier| match carrier {
+                        ReadyLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) => {
+                            SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(
+                                SchedulableRetainedDirectBroadcastAttestationV1 {
+                                    address: attestation.address,
+                                    digest: attestation.digest,
+                                    state: record.state,
+                                },
+                            )
+                        }
+                        ReadyLifecycleBroadcastCarrierV1::RecoveredRefanout => {
+                            SchedulableLifecycleBroadcastCarrierV1::RecoveredRefanout
+                        }
+                    });
+            }
+            super::LifecycleState::Waiting(wait)
+                if fence.is_some_and(|fence| {
+                    !coordinator.ready_index.contains(&ordinal)
+                        && fence.source()
+                            == super::projection::reducer_fence_wait_source(
+                                coordinator.active_context,
+                            )
+                        && wait.source() == fence.source()
+                        && wait.observed_generation() < fence.generation()
+                        && coordinator.observed_generation.get(&wait.source())
+                            == Some(&wait.observed_generation())
+                }) => {}
+            super::LifecycleState::Waiting(_)
+            | super::LifecycleState::Claimed(_)
+            | super::LifecycleState::Terminal(_) => {
+                return Err(RegistryError::CorruptWork);
+            }
+        }
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
+                .ok_or(RegistryError::InvalidAdmissionShape)?;
+        let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
+            .ok_or(RegistryError::InvalidAddress)?;
+        let work = self.entries.get(&address).ok_or(RegistryError::Missing)?;
+        if work.digest != digest {
+            return Err(RegistryError::DigestMismatch);
+        }
+        match &work.kind {
+            ConcreteLifecycleWorkKind::PendingAdapter {
+                effect,
+                pending,
+                replay_authority: _,
+            } if lifecycle_output_row_matches(coordinator, address, work, effect, pending) => Ok(
+                SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(
+                    SchedulableRetainedDirectBroadcastAttestationV1 {
+                        address,
+                        digest,
+                        state: record.state,
+                    },
+                ),
+            ),
+            ConcreteLifecycleWorkKind::PendingAdapter { .. }
+            | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_)
+            | ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableStoreBody(_)
+            | ConcreteLifecycleWorkKind::DurableValidateBody(_)
+            | ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
+            | ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
             | ConcreteLifecycleWorkKind::DurableLiveWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_)
             | ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_)

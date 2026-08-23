@@ -14,10 +14,13 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     certified_fetch_dequeue_commit_requires_the_durable_token
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded
+    cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallible
+    lifecycle_decision_apply_scheduler_attestation_is_lineage_exact_and_io_bounded
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    lifecycle_decision_apply_terminal_settlement_is_lineage_exact_and_post_fsync_infallible
 );
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair

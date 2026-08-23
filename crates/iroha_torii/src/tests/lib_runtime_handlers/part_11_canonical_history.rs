@@ -1,3 +1,5 @@
+use nonzero_ext::nonzero;
+
 #[tokio::test]
 async fn ledger_headers_reports_missing_canonical_body() {
     let app = mk_app_state_for_tests();

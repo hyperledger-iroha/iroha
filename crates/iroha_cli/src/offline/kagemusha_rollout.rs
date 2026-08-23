@@ -392,16 +392,6 @@ fn decide_submission_journal(
     }
 }
 
-fn decide_canary_submission_journal(
-    observation: SubmissionJournalObservation,
-) -> std::result::Result<SubmissionJournalAction, SubmissionJournalDecisionError> {
-    match observation {
-        SubmissionJournalObservation::Absent => Ok(SubmissionJournalAction::Publish),
-        SubmissionJournalObservation::Matching => Ok(SubmissionJournalAction::Resume),
-        SubmissionJournalObservation::Mismatched => Err(SubmissionJournalDecisionError::Mismatch),
-    }
-}
-
 fn require_matching_submission_journal(observation: SubmissionJournalObservation) -> Result<()> {
     match observation {
         SubmissionJournalObservation::Matching => Ok(()),
@@ -2665,8 +2655,6 @@ struct FinalizedActivationEvidence {
     block_bytes: Vec<u8>,
     proofs: Vec<BridgeFinalityProof>,
     carrier_height: NonZeroU64,
-    transaction_details_response_norito: KagemushaExactBytesDigestV1,
-    transaction_details_trigger_completion_count: u32,
 }
 
 struct FinalizedCanaryEvidence {
@@ -2830,10 +2818,6 @@ fn collect_finalized_activation_evidence(
     let details = client
         .get_successful_transaction_details(transaction.hash_as_entrypoint())
         .map_err(|error| eyre!("failed to fetch exact committed activation: {error}"))?;
-    let transaction_details_response_norito = exact_canonical_digest(&details)?;
-    let transaction_details_trigger_completion_count =
-        u32::try_from(details.trigger_completions.len())
-            .wrap_err("transaction-details trigger completion count does not fit u32")?;
     let committed = details.transaction;
     if committed.merge_inclusion.is_some() {
         bail!("activation transaction must be an ordinary block entrypoint");
@@ -2938,8 +2922,6 @@ fn collect_finalized_activation_evidence(
         block_bytes,
         proofs,
         carrier_height,
-        transaction_details_response_norito,
-        transaction_details_trigger_completion_count,
     })
 }
 
@@ -3986,18 +3968,6 @@ mod tests {
         assert_eq!(
             decide_submission_journal(SubmissionJournalObservation::Absent, true),
             Err(SubmissionJournalDecisionError::Retrospective)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Absent),
-            Ok(SubmissionJournalAction::Publish)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Matching),
-            Ok(SubmissionJournalAction::Resume)
-        );
-        assert_eq!(
-            decide_canary_submission_journal(SubmissionJournalObservation::Mismatched),
-            Err(SubmissionJournalDecisionError::Mismatch)
         );
     }
 

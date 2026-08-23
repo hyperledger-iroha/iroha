@@ -7967,7 +7967,6 @@ mod tests {
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
     };
-    use iroha_telemetry::metrics::Collector;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     #[cfg(feature = "telemetry")]

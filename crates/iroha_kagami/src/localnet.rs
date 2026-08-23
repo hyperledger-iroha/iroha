@@ -4208,7 +4208,7 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             temporary_genesis_role_id.clone(),
             genesis_account_id.clone(),
         ),
-        |role, permission| role.add_permission(permission),
+        iroha_data_model::NewRole::add_permission,
     );
     builder = builder.append_instruction(Register::role(temporary_genesis_role));
     for ensure in ensure_aliases {

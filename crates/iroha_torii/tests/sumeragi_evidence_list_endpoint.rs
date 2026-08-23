@@ -7,7 +7,7 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{Evidence, SumeragiV2EquivocationEvidence},
+    sumeragi::consensus::Evidence,
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -15,7 +15,7 @@ use iroha_data_model::{
     NetworkId,
     block::{
         BlockHeader,
-        consensus::EvidenceRecord,
+        consensus::{EvidenceRecord, SumeragiV2EquivocationEvidence},
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,

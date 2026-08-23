@@ -1,6 +1,7 @@
-//! Validated runtime construction for SoraNet handshake configuration.
+//! Validated runtime construction for `SoraNet` handshake configuration.
 
 use std::{
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -51,18 +52,7 @@ pub(crate) fn runtime_from_handshake(
         puzzle,
         signed_ticket_public_key,
     } = pow;
-    for (name, capacity) in [
-        ("outbound_mint_capacity", outbound_mint_capacity),
-        ("inbound_verify_capacity", inbound_verify_capacity),
-    ] {
-        if capacity.get() > ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION {
-            return Err(Error::HandshakeSoranet(format!(
-                "invalid soranet puzzle work configuration: {name} {} exceeds the per-direction maximum {}",
-                capacity,
-                ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
-            )));
-        }
-    }
+    validate_puzzle_work_capacities(outbound_mint_capacity, inbound_verify_capacity)?;
     let puzzle_work_admission =
         process_wide_admission(outbound_mint_capacity, inbound_verify_capacity)
             .map_err(Error::HandshakeSoranet)?;
@@ -90,18 +80,7 @@ pub(crate) fn runtime_from_handshake(
             "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
         )));
     }
-    let signed_ticket_public_key = signed_ticket_public_key
-        .map(|key| {
-            let expected = MlDsaSuite::MlDsa44.public_key_len();
-            if key.len() != expected {
-                return Err(Error::HandshakeSoranet(format!(
-                    "invalid soranet signed_ticket_public_key_hex: expected {expected} bytes (ML-DSA-44), got {}",
-                    key.len()
-                )));
-            }
-            Ok(key)
-        })
-        .transpose()?;
+    let signed_ticket_public_key = validate_signed_ticket_public_key(signed_ticket_public_key)?;
     let revocation_limits =
         TicketRevocationStoreLimits::new(revocation_store_capacity, revocation_max_ttl).map_err(
             |err| {
@@ -148,4 +127,36 @@ pub(crate) fn runtime_from_handshake(
     )?
     .with_puzzle_work_admission(puzzle_work_admission);
     Ok(Arc::new(config))
+}
+
+fn validate_puzzle_work_capacities(
+    outbound_mint_capacity: NonZeroUsize,
+    inbound_verify_capacity: NonZeroUsize,
+) -> Result<(), Error> {
+    for (name, capacity) in [
+        ("outbound_mint_capacity", outbound_mint_capacity),
+        ("inbound_verify_capacity", inbound_verify_capacity),
+    ] {
+        if capacity.get() > ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION {
+            return Err(Error::HandshakeSoranet(format!(
+                "invalid soranet puzzle work configuration: {name} {capacity} exceeds the per-direction maximum {}",
+                ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_signed_ticket_public_key(key: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, Error> {
+    key.map(|key| {
+        let expected = MlDsaSuite::MlDsa44.public_key_len();
+        if key.len() != expected {
+            return Err(Error::HandshakeSoranet(format!(
+                "invalid soranet signed_ticket_public_key_hex: expected {expected} bytes (ML-DSA-44), got {}",
+                key.len()
+            )));
+        }
+        Ok(key)
+    })
+    .transpose()
 }

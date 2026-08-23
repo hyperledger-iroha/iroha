@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2TraceWitness ----
-EXTENDS SumeragiV2
+EXTENDS SumeragiV2Inductive
 
 (***************************************************************************
 Trace-generation entry point, not a proof module.

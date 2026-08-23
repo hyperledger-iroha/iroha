@@ -1,4 +1,8 @@
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the focused projection test keeps one shared authenticated genesis fixture across every binding and rejection assertion"
+)]
 fn runtime_effective_projection_binds_frozen_pops_and_rejects_observers() {
     let _registry_guard = instruction_registry_test_guard();
     iroha_genesis::init_instruction_registry();

@@ -1,5 +1,7 @@
 import type { CanonicalJsonRequestSignerInput } from "./canonical-request.js";
-import type { NetworkId } from "./index.js";
+import { NetworkId } from "./index.js";
+
+export { NetworkId };
 
 /** Wallet policy domain for exact Torii canonical-request message bytes. */
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG: "iroha:torii:canonical-request:v1";

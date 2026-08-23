@@ -23180,7 +23180,7 @@ pub mod tests {
     }
     #[test]
     fn queue_rejects_unregistered_authority_before_expensive_admission() {
-        let mut state = State::new(
+        let state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
@@ -25744,7 +25744,7 @@ pub mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus)
             .expect("apply authoritative legacy-default fixture");

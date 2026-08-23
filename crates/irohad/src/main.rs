@@ -6855,9 +6855,11 @@ mod snapshot_read_error_tests {
             vec![governed_lane],
         )
         .expect("single governed lane catalog");
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.lane_catalog = catalog.clone();
-        nexus.configured_lane_catalog = catalog;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            lane_catalog: catalog.clone(),
+            configured_lane_catalog: catalog,
+            ..Default::default()
+        };
         let error = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect_err("governed replay lane without a frozen manifest must reject startup");
         assert_eq!(error.reason(), GovernanceGuardReason::MissingManifest);
@@ -7924,10 +7926,6 @@ impl Iroha {
             lane_compliance.clone(),
         ));
         state.install_lane_compliance_engine(lane_compliance.clone());
-        #[cfg(feature = "telemetry")]
-        let mut lane_manifest_task = None;
-        #[cfg(not(feature = "telemetry"))]
-        let mut lane_manifest_task = None;
         // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
         // snapshot used by replay to the effective catalog, rather than rescanning mutable files
         // at a second startup boundary.
@@ -7950,25 +7948,25 @@ impl Iroha {
             );
         }
         #[cfg(feature = "telemetry")]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let telemetry_task = state.telemetry.clone();
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((
+            Some((
                 queue_task,
                 telemetry_task,
                 governance_task,
                 registry_cfg_task,
-            ));
-        }
+            ))
+        };
         #[cfg(not(feature = "telemetry"))]
-        {
+        let lane_manifest_task = {
             let queue_task = Arc::clone(&queue);
             let governance_task = Arc::clone(&governance_catalog);
             let registry_cfg_task = registry_cfg.clone();
-            lane_manifest_task = Some((queue_task, governance_task, registry_cfg_task));
-        }
+            Some((queue_task, governance_task, registry_cfg_task))
+        };
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
         // journal before the mandatory ordinary queue-plan journal can reinsert pending transactions.
@@ -11888,14 +11886,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("minimal config")
     }
     pub fn multilane_config_table() -> Table {
-        toml::from_str(&format!(
+        toml::from_str(
             r#"chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
 soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
 soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
-  {{ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }}
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
 [network]
 address = "addr:127.0.0.1:1337#8F78"
@@ -11913,13 +11911,13 @@ lane_count = 2
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
-metadata = {{}}
+metadata = {}
 [[nexus.lane_catalog]]
 index = 1
 alias = "zk"
-metadata = {{}}
+metadata = {}
 "#
-        ))
+        )
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
@@ -13361,6 +13359,7 @@ fn validate_qualification_seal_directory_separation(
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
 enum KagemushaCheckQualificationMode<'a> {
     None,
     CatalogSeal,
@@ -13379,6 +13378,7 @@ struct KagemushaCheckQualificationArtifacts {
     validator_seal: Option<iroha_data_model::offline::KagemushaV4ValidatorQualificationSealV1>,
 }
 
+#[cfg(test)]
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
@@ -13624,20 +13624,6 @@ fn load_configured_kagemusha_release_catalog(
     )
     .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
 }
-fn load_and_build_configured_kagemusha_catalog_qualification_seal(
-    config: &Config,
-) -> Result<
-    (
-        iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-        iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
-    ),
-    String,
-> {
-    let capture = load_and_build_configured_kagemusha_validator_qualification_capture(config)?;
-    let seal = capture.catalog_qualification_seal().clone();
-    Ok((capture.into_catalog(), seal))
-}
-
 fn load_and_build_configured_kagemusha_validator_qualification_capture(
     config: &Config,
 ) -> Result<
@@ -18252,7 +18238,8 @@ mod tests {
                 load_configured_kagemusha_release_catalog(&fixture.config)
                     .expect("an omitted release cache uses an empty catalog"),
             )
-            .expect_err("duplicate genesis registration must fail semantic execution");
+            .err()
+            .expect("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("genesis instruction execution failed"),

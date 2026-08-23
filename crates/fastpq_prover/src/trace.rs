@@ -2267,7 +2267,7 @@ mod tests {
             first_limbs
                 .iter()
                 .chain(&second_limbs)
-                .all(|limb| *limb <= u64::from(u32::MAX)),
+                .all(|limb| u32::try_from(*limb).is_ok()),
             "every digest limb must be injected exactly into Goldilocks"
         );
         assert_ne!(first_limbs, second_limbs);

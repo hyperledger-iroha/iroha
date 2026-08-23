@@ -39,7 +39,8 @@ use super::{
     },
     v2_effects::{ApplyTask, DurableApplyCompletion, EffectWorkId},
     v2_lifecycle_coordinator::{
-        RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
+        LifecycleDecisionApplyDispatchIdentityV1, LifecycleDecisionApplyDispatchKeyV1,
+        LifecycleDecisionApplyLineageV1,
     },
     v2_lifecycle_recovery::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, RecoveredAutonomousLifecycleStartup,
@@ -3166,44 +3167,66 @@ pub(crate) struct V2ApplyService {
     #[cfg(test)]
     test_failures: tests::FailureInjection,
 }
-/// Exact recovered Decision Apply material admitted by the lifecycle registry.
+/// Origin-specific authority retained by one lifecycle Decision Apply task.
+enum LifecycleDecisionApplyTaskLineageV1 {
+    Live { tag: EventTag },
+    Recovered { tag: EventTag },
+}
+
+/// Exact Decision Apply material admitted by the lifecycle registry.
 ///
 /// This move-only task is deliberately unrelated to reducer [`ApplyTask`]
 /// ownership. Its opaque dispatch identity is minted only by the closed
 /// recovered carrier and remains attached through worker execution and owner
 /// settlement.
-#[must_use = "a recovered Decision Apply task must enter its dedicated worker command"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1 {
-    dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
-    tag: EventTag,
+#[must_use = "a lifecycle Decision Apply task must enter its dedicated worker command"]
+pub(in crate::sumeragi) struct LifecycleDecisionApplyTaskV1 {
+    dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
+    lineage: LifecycleDecisionApplyTaskLineageV1,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
     validated_receipt: ValidatedBodyReceipt,
 }
-impl RecoveredDecisionApplyTaskV1 {
-    /// Bind the sole registry-minted dispatch identity to its closed carrier material.
-    pub(in crate::sumeragi) fn from_registry_projection(
-        dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+impl LifecycleDecisionApplyTaskV1 {
+    /// Bind a live registry identity and exact reducer tag to closed Apply material.
+    pub(in crate::sumeragi) fn from_live_registry_projection(
+        dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
         tag: EventTag,
         subject: wire::BlockSubject,
         certificate: wire::QuorumCertificate,
         validated_receipt: ValidatedBodyReceipt,
-    ) -> Self {
-        Self {
-            dispatch_identity,
-            tag,
-            subject,
-            certificate,
-            validated_receipt,
-        }
+    ) -> Option<Self> {
+        (dispatch_identity.key().lineage() == LifecycleDecisionApplyLineageV1::Live).then_some(
+            Self {
+                dispatch_identity,
+                lineage: LifecycleDecisionApplyTaskLineageV1::Live { tag },
+                subject,
+                certificate,
+                validated_receipt,
+            },
+        )
+    }
+    /// Bind one recovered registry identity to its unchanged cold carrier material.
+    pub(in crate::sumeragi) fn from_recovered_registry_projection(
+        dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: wire::QuorumCertificate,
+        validated_receipt: ValidatedBodyReceipt,
+    ) -> Option<Self> {
+        (dispatch_identity.key().lineage() == LifecycleDecisionApplyLineageV1::Recovered).then_some(
+            Self {
+                dispatch_identity,
+                lineage: LifecycleDecisionApplyTaskLineageV1::Recovered { tag },
+                subject,
+                certificate,
+                validated_receipt,
+            },
+        )
     }
     /// Return the closed queue key without exposing dispatch authority.
-    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
-    }
-    /// Return the exact reducer incarnation which owns this Apply.
-    pub(in crate::sumeragi) const fn tag(&self) -> EventTag {
-        self.tag
     }
     /// Return the exact decided subject.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
@@ -3217,20 +3240,62 @@ impl RecoveredDecisionApplyTaskV1 {
     pub(in crate::sumeragi) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
         &self.validated_receipt
     }
+    fn exact_lineage(&self) -> Option<LifecycleDecisionApplyLineageV1> {
+        let lineage = match self.lineage {
+            LifecycleDecisionApplyTaskLineageV1::Live { .. } => {
+                LifecycleDecisionApplyLineageV1::Live
+            }
+            LifecycleDecisionApplyTaskLineageV1::Recovered { .. } => {
+                LifecycleDecisionApplyLineageV1::Recovered
+            }
+        };
+        (self.dispatch_key().lineage() == lineage).then_some(lineage)
+    }
+    fn live_tag(&self) -> Option<EventTag> {
+        match self.lineage {
+            LifecycleDecisionApplyTaskLineageV1::Live { tag } => Some(tag),
+            LifecycleDecisionApplyTaskLineageV1::Recovered { .. } => None,
+        }
+    }
+    /// Return the exact reducer incarnation retained by either origin.
+    pub(in crate::sumeragi) const fn exact_tag(&self) -> EventTag {
+        match self.lineage {
+            LifecycleDecisionApplyTaskLineageV1::Live { tag }
+            | LifecycleDecisionApplyTaskLineageV1::Recovered { tag } => tag,
+        }
+    }
+    /// Change only the sealed task/key lineage for cross-lineage rejection tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_lineage_for_test(
+        mut self,
+        lineage: LifecycleDecisionApplyLineageV1,
+        live_tag: EventTag,
+    ) -> Self {
+        self.dispatch_identity = self.dispatch_identity.with_lineage_for_test(lineage);
+        self.lineage = match lineage {
+            LifecycleDecisionApplyLineageV1::Live => {
+                LifecycleDecisionApplyTaskLineageV1::Live { tag: live_tag }
+            }
+            LifecycleDecisionApplyLineageV1::Recovered => {
+                LifecycleDecisionApplyTaskLineageV1::Recovered { tag: live_tag }
+            }
+        };
+        self
+    }
 }
-/// Durable recovered Decision Apply result routed only to the lifecycle owner.
-#[must_use = "a recovered Decision Apply completion must be settled by its lifecycle owner"]
-pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1 {
-    dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+/// Durable lifecycle Decision Apply result routed only to the lifecycle owner.
+#[must_use = "a lifecycle Decision Apply completion must be settled by its lifecycle owner"]
+pub(in crate::sumeragi) struct LifecycleDecisionApplyCompletionV1 {
+    dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
     validated_receipt: ValidatedBodyReceipt,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
 }
-impl RecoveredDecisionApplyCompletionV1 {
+impl LifecycleDecisionApplyCompletionV1 {
     /// Return the immutable queue key retained from dispatch.
-    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
     }
     /// Return the exact decided subject retained from the registry carrier.
@@ -3254,54 +3319,136 @@ impl RecoveredDecisionApplyCompletionV1 {
         &self.artifact
     }
 }
-/// Dedicated worker result for one recovered Decision Apply dispatch.
+/// Dedicated worker result for one lifecycle Decision Apply dispatch.
 ///
 /// A missing merge sidecar remains a typed owner retry. Neither branch enters
 /// the reducer's generic Apply completion or deferral machinery.
-#[must_use = "a recovered Decision Apply worker result must return to its lifecycle owner"]
-pub(in crate::sumeragi) enum RecoveredDecisionApplyWorkerResultV1 {
+#[must_use = "a lifecycle Decision Apply worker result must return to its lifecycle owner"]
+pub(in crate::sumeragi) enum LifecycleDecisionApplyWorkerResultV1 {
     /// The exact decided block and finality artifact crossed every durable boundary.
-    Applied(RecoveredDecisionApplyCompletionV1),
+    Applied(LifecycleDecisionApplyCompletionV1),
     /// The exact task remains owned while its authenticated merge sidecar is unavailable.
     Deferred {
         /// Unchanged move-only task to be retained by the lifecycle owner.
-        task: RecoveredDecisionApplyTaskV1,
+        task: LifecycleDecisionApplyTaskV1,
         /// Exact missing merge-ledger reference.
         reference: CertifiedMergeLedgerReference,
     },
 }
-impl RecoveredDecisionApplyWorkerResultV1 {
+impl LifecycleDecisionApplyWorkerResultV1 {
     /// Return the immutable queue key common to both terminal and retry outcomes.
-    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         match self {
             Self::Applied(completion) => completion.dispatch_key(),
             Self::Deferred { task, .. } => task.dispatch_key(),
         }
     }
+    /// Build the exact structurally validated worker terminal for closed queue
+    /// and lifecycle-transaction tests without running State/Kura.
+    ///
+    /// Production has no access to this constructor; its only result path is
+    /// [`V2ApplyService::execute_lifecycle_decision_apply`].
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn applied_fixture(
+        context: &wire::HeightContext,
+        task: LifecycleDecisionApplyTaskV1,
+    ) -> Option<Self> {
+        if !task.dispatch_identity.matches_height_context(context)
+            || task.exact_lineage().is_none()
+            || task.subject() != task.certificate().subject
+            || task.certificate().execution_commitment
+                != task.validated_receipt().execution_commitment()
+        {
+            return None;
+        }
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            context.clone(),
+            task.subject(),
+            task.certificate().clone(),
+            vec![vec![0x5C]; context.roster.len()],
+        );
+        artifact.validate().ok()?;
+        let receipt = KuraV2CommitReceipt::for_test(&artifact);
+        Some(Self::Applied(LifecycleDecisionApplyCompletionV1 {
+            dispatch_identity: task.dispatch_identity,
+            subject: task.subject,
+            certificate: task.certificate,
+            validated_receipt: task.validated_receipt,
+            receipt,
+            artifact,
+        }))
+    }
 }
 #[derive(Clone, Copy)]
 enum ExactApplyTaskRef<'task> {
     Ordinary(&'task ApplyTask),
-    Recovered(&'task RecoveredDecisionApplyTaskV1),
+    LifecycleLive(&'task LifecycleDecisionApplyTaskV1),
+    LifecycleRecovered(&'task LifecycleDecisionApplyTaskV1),
 }
 impl<'task> ExactApplyTaskRef<'task> {
     const fn subject(self) -> wire::BlockSubject {
         match self {
             Self::Ordinary(task) => task.subject(),
-            Self::Recovered(task) => task.subject(),
+            Self::LifecycleLive(task) | Self::LifecycleRecovered(task) => task.subject(),
         }
     }
     const fn certificate(self) -> &'task wire::QuorumCertificate {
         match self {
             Self::Ordinary(task) => task.certificate(),
-            Self::Recovered(task) => task.certificate(),
+            Self::LifecycleLive(task) | Self::LifecycleRecovered(task) => task.certificate(),
         }
     }
     const fn validated_receipt(self) -> &'task ValidatedBodyReceipt {
         match self {
             Self::Ordinary(task) => task.validated_receipt(),
-            Self::Recovered(task) => task.validated_receipt(),
+            Self::LifecycleLive(task) | Self::LifecycleRecovered(task) => task.validated_receipt(),
         }
+    }
+}
+/// Closed pre-Kura refinement owned only by a live lifecycle Apply carrier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LiveLifecycleApplicationProjectionV1 {
+    tag: EventTag,
+    dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    context: wire::HeightContext,
+    subject: wire::BlockSubject,
+    certificate: wire::QuorumCertificate,
+    validated_receipt: ValidatedBodyReceipt,
+    proposal_block_hash: HashOf<BlockHeader>,
+    canonical_proposal_wire_hash: Hash,
+    artifact: wire::finality::V2FinalityArtifact,
+}
+impl LiveLifecycleApplicationProjectionV1 {
+    fn from_task(
+        context: &wire::HeightContext,
+        task: &LifecycleDecisionApplyTaskV1,
+        proposal_block_hash: HashOf<BlockHeader>,
+        canonical_proposal_wire_hash: Hash,
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Option<Self> {
+        let tag = task.live_tag()?;
+        (task.exact_lineage() == Some(LifecycleDecisionApplyLineageV1::Live)
+            && tag.height() == context.height
+            && task.dispatch_identity.matches_height_context(context)
+            && task.subject() == task.certificate().subject
+            && task.certificate().execution_commitment
+                == task.validated_receipt().execution_commitment()
+            && task.validated_receipt().durable().context_id() == context.id()
+            && task.validated_receipt().durable().subject() == task.subject()
+            && artifact.height_context == *context
+            && artifact.subject == task.subject()
+            && artifact.commit_qc == *task.certificate())
+        .then(|| Self {
+            tag,
+            dispatch_key: task.dispatch_key(),
+            context: context.clone(),
+            subject: task.subject(),
+            certificate: task.certificate().clone(),
+            validated_receipt: task.validated_receipt().clone(),
+            proposal_block_hash,
+            canonical_proposal_wire_hash,
+            artifact: artifact.clone(),
+        })
     }
 }
 struct ExactApplyExecutionMaterial {
@@ -3321,16 +3468,37 @@ struct ExactApplyExecutionMaterial {
     artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
     state_height_after: usize,
     ordinary_projection: Option<ProductionApplicationTraceProjection>,
+    live_lifecycle_projection: Option<LiveLifecycleApplicationProjectionV1>,
 }
 impl ExactApplyExecutionMaterial {
-    fn exactly_matches_recovered_task(&self, task: &RecoveredDecisionApplyTaskV1) -> bool {
+    fn exactly_matches_lifecycle_task(&self, task: &LifecycleDecisionApplyTaskV1) -> bool {
         let certificate = task.certificate();
         let durable = task.validated_receipt().durable();
         let artifact = &self.artifact;
         let Ok(context_height) = usize::try_from(self.context.height) else {
             return false;
         };
+        let lineage_projection_is_exact = match task.exact_lineage() {
+            Some(LifecycleDecisionApplyLineageV1::Live) => {
+                let expected = LiveLifecycleApplicationProjectionV1::from_task(
+                    &self.context,
+                    task,
+                    self.proposal_block_hash,
+                    self.canonical_proposal_wire_hash,
+                    artifact,
+                );
+                matches!(
+                    (self.live_lifecycle_projection.as_ref(), expected.as_ref()),
+                    (Some(actual), Some(expected)) if actual == expected
+                )
+            }
+            Some(LifecycleDecisionApplyLineageV1::Recovered) => {
+                self.live_lifecycle_projection.is_none()
+            }
+            None => false,
+        };
         self.ordinary_projection.is_none()
+            && lineage_projection_is_exact
             && task.dispatch_identity.matches_height_context(&self.context)
             && task.dispatch_key().lifecycle_ordinal() != 0
             && certificate.phase == wire::GlobalPhase::Commit
@@ -3698,40 +3866,43 @@ impl V2ApplyService {
         };
         self.finish_durable_apply_completion_against(evidence, prospective_application)
     }
-    /// Execute one registry-owned recovered Decision Apply task.
+    /// Execute one registry-owned lifecycle Decision Apply task.
     ///
     /// The task and its dispatch identity are consumed together. A retryable
     /// merge-sidecar miss returns the unchanged task to the lifecycle owner;
     /// every successful result retains the same opaque dispatch identity.
-    pub(in crate::sumeragi) fn execute_recovered_decision_apply(
+    pub(in crate::sumeragi) fn execute_lifecycle_decision_apply(
         &self,
         context: &wire::HeightContext,
         body_store: &mut V2BodyStore,
-        task: RecoveredDecisionApplyTaskV1,
-    ) -> Result<RecoveredDecisionApplyWorkerResultV1, V2ApplyError> {
+        task: LifecycleDecisionApplyTaskV1,
+    ) -> Result<LifecycleDecisionApplyWorkerResultV1, V2ApplyError> {
         if !task.dispatch_identity.matches_height_context(context) {
             return Err(V2ApplyError::TaskMismatch);
         }
-        let material = match self.execute_exact_apply(
-            context,
-            body_store,
-            ExactApplyTaskRef::Recovered(&task),
-        ) {
+        let exact_task = match task.exact_lineage() {
+            Some(LifecycleDecisionApplyLineageV1::Live) => ExactApplyTaskRef::LifecycleLive(&task),
+            Some(LifecycleDecisionApplyLineageV1::Recovered) => {
+                ExactApplyTaskRef::LifecycleRecovered(&task)
+            }
+            None => return Err(V2ApplyError::TaskMismatch),
+        };
+        let material = match self.execute_exact_apply(context, body_store, exact_task) {
             Ok(material) => material,
             Err(V2ApplyError::MissingCertifiedMergeSidecar { reference }) => {
-                return Ok(RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference });
+                return Ok(LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference });
             }
             Err(error) => return Err(error),
         };
         debug_assert!(material.ordinary_projection.is_none());
-        if !material.exactly_matches_recovered_task(&task) {
+        if !material.exactly_matches_lifecycle_task(&task) {
             return Err(V2ApplyError::committed_recovery_required(
-                "recovered Decision Apply evidence",
-                &"native recovered application identity changed after durable application",
+                "lifecycle Decision Apply evidence",
+                &"native lifecycle application identity changed after durable application",
             ));
         }
-        Ok(RecoveredDecisionApplyWorkerResultV1::Applied(
-            RecoveredDecisionApplyCompletionV1 {
+        Ok(LifecycleDecisionApplyWorkerResultV1::Applied(
+            LifecycleDecisionApplyCompletionV1 {
                 dispatch_identity: task.dispatch_identity,
                 subject: task.subject,
                 certificate: task.certificate,
@@ -3789,7 +3960,7 @@ impl V2ApplyService {
             .map_err(V2ApplyError::FinalityCryptography)?;
         let artifact = verified_artifact.artifact();
         artifact.validate_for_header(&body.header())?;
-        let ordinary_projection = match task {
+        let (ordinary_projection, live_lifecycle_projection) = match task {
             ExactApplyTaskRef::Ordinary(task) => {
                 let prospective_application = prospective_application_refinement_projection(
                     context,
@@ -3813,9 +3984,22 @@ impl V2ApplyService {
                             .to_owned(),
                     )
                 })?;
-                Some(checked_application.into_projection())
+                (Some(checked_application.into_projection()), None)
             }
-            ExactApplyTaskRef::Recovered(_) => None,
+            ExactApplyTaskRef::LifecycleLive(task) => (
+                None,
+                Some(
+                    LiveLifecycleApplicationProjectionV1::from_task(
+                        context,
+                        task,
+                        proposal_block_hash,
+                        canonical_proposal_wire_hash,
+                        artifact,
+                    )
+                    .ok_or(V2ApplyError::TaskMismatch)?,
+                ),
+            ),
+            ExactApplyTaskRef::LifecycleRecovered(_) => (None, None),
         };
         let height = usize::try_from(context.height).map_err(|_| V2ApplyError::HeightOverflow)?;
         let height = NonZeroUsize::new(height).ok_or(V2ApplyError::HeightOverflow)?;
@@ -4026,6 +4210,7 @@ impl V2ApplyService {
             artifact_hash,
             state_height_after: self.state.committed_height(),
             ordinary_projection,
+            live_lifecycle_projection,
         })
     }
     fn finish_durable_apply_completion_against(

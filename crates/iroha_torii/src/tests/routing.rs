@@ -27,6 +27,7 @@ mod tests {
     };
     use iroha_telemetry::metrics::{
         Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
+        NexusStatus,
     };
     use std::{
         io::Cursor,
@@ -557,13 +558,9 @@ mod tests {
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-        let response = super::handle_v1_sumeragi_status(
-            axum::extract::State(state),
-            None,
-            false,
-        )
-        .await
-        .expect("status handler");
+        let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, false)
+            .await
+            .expect("status handler");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
     #[tokio::test]

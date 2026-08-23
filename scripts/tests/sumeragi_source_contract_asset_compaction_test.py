@@ -14,11 +14,11 @@ ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 EXPECTED_CASE_COUNT = 50
 BASELINE_RUST_LINES = 5_779
-MAX_POSTIMAGE_RUST_LINES = 3_637
-MINIMUM_NET_REDUCTION = 2_142
-EXPECTED_ASSET_LENGTH = 423_241
-EXPECTED_ASSET_SHA256 = "88bcc6dfceb09bffc06c1a171d6e31cf4696b0e23f1e5f5fc1abd10f9405933d"
-EXPECTED_CASE_IDS_SHA256 = "d60bdcb825544cd7fa42f654a27b8515a94fd0dbd589da502f06f6282eb9a2c2"
+MAX_POSTIMAGE_RUST_LINES = 3_641
+MINIMUM_NET_REDUCTION = 2_138
+EXPECTED_ASSET_LENGTH = 466_108
+EXPECTED_ASSET_SHA256 = "da728945fc0a86eb648a3b29b2a45bf116f21562dbb5907e76acdadcf918c9ec"
+EXPECTED_CASE_IDS_SHA256 = "c3f73d112d37828df1ab8c29af1c06b901e5284f1072aca80b9eb21d4c4f4131"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -29,10 +29,10 @@ HOST_PREIMAGE_SHA256 = {
 }
 HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d4d138c169a399e3082ff4098369a1a74069fb72552b7411a59a6ed4a268ad87",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "6587335988686d8dfdf4f8709b1fc847352c9a0c6f3a49968a8c7bee72c92b4f",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "cafb63f1161f2cd95185b4c46ccb6bd7eb09cd0afee0f5c07afa894c39ad4678",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "bc57cf6e598cf680a57ac43295e7efbd5dc44cd036199144a3e325f4fe3b8fa6",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "629e49030c1953b6545b21a0ae6ca40d22724198c7816b4e3a05cf53b6a12d79",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "75c4bc31584841cf39396c80b93b19e7b10ad4a256e7523ca8ec9a147dad2742",
 }
 
 MIGRATED_TESTS = {

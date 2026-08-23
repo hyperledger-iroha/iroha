@@ -897,6 +897,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps canonical, alternate-layout, malformed, and ambient-flag capability admission checks in one protocol fixture"
+    )]
     fn capability_literal_validation_rejects_context_free_faults() {
         let valid_handle = AssetHandle {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([

@@ -1,6 +1,6 @@
 # Iroha ZK Cryptographic Audit
 
-Date: 2026-07-30
+Date: 2026-08-23
 
 This report audits Iroha-owned zero-knowledge verifier code and proof-bearing runtime
 integrations. Vendored Halo2, curve, hash, encoding, and arithmetic libraries are
@@ -200,6 +200,54 @@ Recommendation: keep production backend identifiers narrow and explicit, for exa
 `halo2/ipa/pallas`; continue rejecting KZG/Groth16/SRS/PTAU-style labels in registry
 and runtime dispatch.
 
+### ZK-AUDIT-05: Fixed binding-AIR residual weights admitted a public kernel
+
+Severity: High for generic native STARK metadata binding.
+
+Status: Remediated. The generic binding AIR previously compressed twelve row
+residuals with the public fixed coefficients `3, 5, ..., 25`. A malicious prover
+could add the non-zero residual vector `(1, -2, 1)` to both opened rows while
+preserving a zero composition value because `3 - 2·5 + 7 = 0` and the analogous
+next-row coefficients also cancel.
+
+The verifier now compares every coordinate of each transcript-sampled current
+and next row with the verifier-owned deterministic binding row. This closes the
+fixed all-row kernel without reconstructing an attacker-selected `2^24` trace
+during verification. The regression
+`binding_air_rejects_fixed_coefficient_cancellation_rows` constructs the former
+collision and requires the public verifier to reject it.
+
+### ZK-AUDIT-06: FASTPQ accepted alternate Goldilocks representatives
+
+Severity: Medium; proof malleability and canonical-wire boundary failure.
+
+Status: Remediated. FASTPQ proof fields are serialized as `u64` or 32-byte
+field containers, while field arithmetic and Poseidon reduce modulo the
+Goldilocks prime. The verifier could therefore treat a Merkle sibling encoded as
+`p` as the same field value as canonical zero.
+
+After resource limits, and before semantic or transcript work, verification now
+rejects every noncanonical proof-carried field scalar, Merkle sibling, AIR/FRI
+opening, Poseidon root, and permission-field hash. Opaque public hash bytes are
+not misclassified as field elements. Public and container-completeness
+regressions pin the preflight and the `value < p` 32-byte decoder rule.
+
+### ZK-AUDIT-07: BN254 radix-2 transforms omitted input bit reversal
+
+Severity: High for BN254 FFT/LDE correctness.
+
+Status: Remediated in the CPU, CUDA, and Metal paths. Their iterative
+decimation-in-time butterflies consumed coefficient-order input without first
+applying the required bit-reversal permutation, so even a degree-one polynomial
+produced the wrong evaluation vector. GPU parity could not expose the error
+because its CPU reference implemented the same ordering bug.
+
+All three transforms now bit-reverse after canonical-to-Montgomery conversion
+and coset scaling, before the butterfly stages. CPU regressions compare FFT and
+coset-LDE output with independent direct Horner evaluation; Metal parity reuses
+that tested oracle, and the CUDA benchmark reference follows the corrected
+ordering. Hardware qualification remains part of release evidence.
+
 ## Dependency Assumptions
 
 - SHA-256 and Blake2 are collision resistant and implemented correctly.
@@ -242,7 +290,9 @@ backend enablement and maximum envelope/proof sizes before dispatch.
 The native STARK verifier uses Goldilocks modulus `2^64 - 2^32 + 1`, rejects
 noncanonical field elements, validates verifier parameters, verifies Merkle openings,
 derives Fiat-Shamir query indices from bound transcript material, checks FRI folds,
-and binds AIR trace/composition/public digests.
+and binds AIR trace/composition/public digests. Generic binding-AIR verification
+checks every coordinate of each sampled current/next row against the
+verifier-owned row instead of compressing residuals with public fixed weights.
 
 The ZK-ACE ledger path instead carries
 `PrivacyProofEnvelopeV1::ZkAcePqAuthorizationV0`. Its public input is
@@ -309,7 +359,9 @@ backend/circuit/VK-hash metadata, proof registration, and guardrailed dispatch.
 FASTPQ `verify_with_limits()` checks protocol/parameter versions, batch consistency,
 proof size/shape, trace commitment, expected public I/O, nonzero LDE domain, transcript
 challenges, lookup/AIR coefficients, sampled query indices, Merkle paths, AIR row
-widths, next-row openings, FRI roots, folded values, and query chains.
+widths, next-row openings, FRI roots, folded values, and query chains. A bounded
+preflight first rejects noncanonical representations in every proof-carried
+Goldilocks scalar and field container.
 
 AXT/FASTPQ binding checks canonical binding normalization, dataspace, manifest root,
 payload size, batch parameter, batch public dataspace, concrete execution batch,

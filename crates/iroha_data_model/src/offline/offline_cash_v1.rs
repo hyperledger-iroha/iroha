@@ -925,7 +925,7 @@ mod tests {
         let statement = OfflineCashTransferStatementV1 {
             version: OFFLINE_CASH_WIRE_VERSION_V1,
             release_id: request.release_id,
-            network_id: request.network_id.clone(),
+            network_id: request.network_id,
             asset: request.asset.clone(),
             scale: request.scale,
             amount: request.amount,

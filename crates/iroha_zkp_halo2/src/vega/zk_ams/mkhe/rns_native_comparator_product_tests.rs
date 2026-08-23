@@ -557,10 +557,16 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         parent.matches("mod rns_native_claimed_successor;").count(),
         1
     );
-    assert!(!parent.contains("mod rns_native_cross_field_rlwe_direct;"));
+    assert_eq!(
+        parent
+            .matches("mod rns_native_cross_field_rlwe_direct;")
+            .count(),
+        1
+    );
+    assert!(!parent.contains("pub mod rns_native_cross_field_rlwe_direct"));
     assert!(!parent.contains("pub use rns_native_comparator_product"));
     let claimed_facade = include_str!("rns_native_claimed_successor.rs");
-    assert!(!claimed_facade.contains("from_direct_claim_v1"));
+    assert!(claimed_facade.contains("from_direct_claim_v1"));
     assert!(!claimed_facade.contains("pub(super) fn new"));
     let composite = include_str!("rns_native_composite_verifier.rs");
     assert!(composite.contains("StageUnavailable"));

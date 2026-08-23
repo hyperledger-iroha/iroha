@@ -49,6 +49,10 @@ swift = (root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift")
 transport = (root / "IrohaSwift/Sources/IrohaSwift/KagemushaPeerTransport.swift").read_text(encoding="utf-8")
 swift_qr_tests = (root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaQRStreamTests.swift").read_text(encoding="utf-8")
 swift_nfc_tests = (root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaNFCTests.swift").read_text(encoding="utf-8")
+kotlin_prover = (root / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt").read_text(encoding="utf-8")
+kotlin_transport = (root / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaPeerTransport.kt").read_text(encoding="utf-8")
+java_prover = (root / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java").read_text(encoding="utf-8")
+java_transport = (root / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaPeerTransport.java").read_text(encoding="utf-8")
 
 def rust_integer(name: str) -> int:
     match = re.search(rf"\b{name}\s*:\s*[^=]+\s*=\s*([0-9_* ]+)\s*;", rust)
@@ -116,6 +120,30 @@ for needle in (
 for prefix in ("PKK2R.", "PKK2P.", "PKK2A."):
     if f'= "{prefix}"' not in transport or len(prefix.encode("ascii")) != 6:
         raise SystemExit(f"missing canonical six-byte peer prefix: {prefix}")
+
+mobile_text_contracts = (
+    (
+        "Kotlin",
+        kotlin_prover,
+        kotlin_transport,
+        "const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024",
+        "(MAX_PEER_TEXT_ENVELOPE_BYTES - 6) * 3 / 4",
+        "archive.size <= KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES",
+    ),
+    (
+        "Java",
+        java_prover,
+        java_transport,
+        "public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;",
+        "(MAX_PEER_TEXT_ENVELOPE_BYTES - 6) * 3 / 4;",
+        "archive.length > KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES",
+    ),
+)
+for sdk, prover_source, transport_source, envelope, archive, enforcement in mobile_text_contracts:
+    if envelope not in prover_source or archive not in prover_source:
+        raise SystemExit(f"{sdk} direct-text transport bounds differ from 12 KiB / 9,211 bytes")
+    if transport_source.count(enforcement) != 2:
+        raise SystemExit(f"{sdk} direct-text encode/decode archive enforcement is incomplete")
 
 for source, transport_name, needle in (
     (swift_qr_tests, "QR", '("payment-v4-peer-hop-1", 12_896, 65),'),

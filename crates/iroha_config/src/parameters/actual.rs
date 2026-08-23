@@ -1310,8 +1310,10 @@ impl fmt::Debug for SoranetVpn {
 #[cfg(test)]
 #[test]
 fn soranet_vpn_debug_redacts_helper_ticket_secret() {
-    let mut vpn = SoranetVpn::default();
-    vpn.helper_ticket_secret = Some([0xA5; 32]);
+    let vpn = SoranetVpn {
+        helper_ticket_secret: Some([0xA5; 32]),
+        ..SoranetVpn::default()
+    };
     let rendered = format!("{vpn:?}");
     assert!(rendered.contains("helper_ticket_secret: Some([REDACTED])"));
     assert!(!rendered.contains("[165, 165, 165"));

@@ -2073,6 +2073,10 @@ impl KagemushaV4ActivationFinalityReceiptV1 {
     ///
     /// Returns [`KagemushaPromotionReceiptValidationError`] on the first
     /// schema, expectation, seal, transaction, block, or finality mismatch.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the activation verifier keeps every external identity and finality binding in one auditable path"
+    )]
     pub fn verify(
         &self,
         expectations: &KagemushaV4ActivationReceiptExpectationsV1,
@@ -2902,6 +2906,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the receipt fixture assembles the complete signed governance, validator, transaction, and finality chain"
+    )]
     fn roundtrip_receipt() -> KagemushaV4ActivationFinalityReceiptV1 {
         let (binding, bodies, seals, _) = qualification_fixture();
         let runtime = &bodies[0].runtime_effective_config;

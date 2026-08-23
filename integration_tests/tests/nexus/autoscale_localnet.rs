@@ -5417,7 +5417,7 @@ fn validate_autonomous_merge_execution(
                 && reservation.routing_plan_digest == routing_plan.digest()
                 && reservation.coordinator_leg.route.lane_id == origin.lane_id
                 && reservation.coordinator_leg.route.dataspace_id == origin.dataspace_id
-                && Hash::from(reservation.signed_transaction_hash)
+                && Hash::from(reservation.entrypoint_hash)
                     == descriptor.accepted_transaction_hashes[index],
             "autonomous reservation key {index} differs from its exact transaction, route, or origin proposal"
         );

@@ -1,6 +1,6 @@
 #[test]
 fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_write() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(nonzero!(1_usize));
+    let (_temp_dir, config) = unwrapped_kura_storage_fixture(nonzero!(1_usize));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
@@ -83,7 +83,7 @@ fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_wr
 }
 #[test]
 fn live_evicted_read_rejects_same_header_equal_length_da_substitution() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let canonical = Arc::clone(&blocks[1]);
@@ -258,7 +258,7 @@ fn store_existing_block_rejects_same_header_wire_substitution_without_index_effe
 #[cfg(unix)]
 #[test]
 fn evicted_existing_block_rejects_correlated_retained_wire_substitution_without_effects() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
@@ -349,7 +349,7 @@ fn evicted_existing_block_rejects_correlated_retained_wire_substitution_without_
 #[cfg(unix)]
 #[test]
 fn evicted_existing_exact_block_requires_finality_without_effects() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let blocks = store_dummy_block_arcs(&kura, 4);
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
@@ -414,7 +414,7 @@ fn evicted_existing_exact_block_requires_finality_without_effects() {
 #[cfg(unix)]
 #[test]
 fn hash_only_existing_block_rejects_correlated_unsigned_retained_wire_without_effects() {
-    let (temp_dir, config, kura) = kura_root_fixture(nonzero!(1_usize));
+    let (temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
     let canonical = store_dummy_block_arcs(&kura, 1)
         .pop()
         .expect("canonical block");
@@ -626,7 +626,7 @@ fn cache_block_body_rejects_length_mismatch() {
 }
 #[test]
 fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
-    let (temp_dir, config) =
+    let (_temp_dir, config) =
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block, block_hash) = {
@@ -776,7 +776,7 @@ fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
 }
 #[test]
 fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
-    let (temp_dir, config) =
+    let (_temp_dir, config) =
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
@@ -818,7 +818,7 @@ fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
 }
 #[test]
 fn strict_init_removes_malformed_sidecar_with_matching_length() {
-    let (temp_dir, config) =
+    let (_temp_dir, config) =
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
@@ -877,7 +877,7 @@ fn strict_init_removes_malformed_sidecar_with_matching_length() {
 }
 #[test]
 fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
-    let (temp_dir, config) =
+    let (_temp_dir, config) =
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (canonical_hash, conflicting_hash, da_path) = {
@@ -1784,10 +1784,6 @@ fn unwrapped_kura_fixture() -> DefaultKuraFixture {
     (temp_dir, config, kura)
 }
 
-fn unwrapped_inline_kura_fixture() -> (TempDir, Arc<Kura>) {
-    unwrapped_inline_kura_fixture_with_fsync(FsyncMode::Batched)
-}
-
 fn unwrapped_inline_kura_fixture_with_fsync(fsync_mode: FsyncMode) -> (TempDir, Arc<Kura>) {
     let temp_dir = TempDir::new().unwrap();
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -2320,7 +2316,7 @@ fn durable_lane_payload_availability_for_kura(
 }
 #[test]
 fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2418,7 +2414,7 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
 }
 #[test]
 fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let dataspace_id = lane_config.entry(lane_id).expect("lane entry").dataspace_id;
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2468,7 +2464,7 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
 }
 #[test]
 fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -2607,7 +2603,7 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);

@@ -5,7 +5,9 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
 import { crc64Xz } from "./crc64Xz.js";
-import { networkIdBytes } from "./networkId.js";
+import { NetworkId, networkIdBytes } from "./networkId.js";
+
+export { NetworkId };
 
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");

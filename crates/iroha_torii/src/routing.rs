@@ -3960,11 +3960,10 @@ pub async fn handle_list_proofs(
         })?
     };
     let bytes = body.len() as u64;
-    let resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs", "ok", bytes, start.elapsed())
     });
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 /// GET /v1/zk/proofs/count — return count for filters
 pub async fn handle_count_proofs(
@@ -4076,11 +4075,10 @@ pub async fn handle_count_proofs(
         norito_internal_error(e)
     })?;
     let bytes = body.len() as u64;
-    let resp = application_json_response(body);
     telemetry.with_metrics(|tel| {
         tel.observe_torii_proof_request("v1/zk/proofs/count", "ok", bytes, start.elapsed())
     });
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
@@ -11708,8 +11706,7 @@ pub async fn handle_get_contract_code(
             "failed to serialize the complete contract manifest: {error}"
         )))
     })?;
-    let mut resp = application_json_response(body);
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 #[cfg(test)]
 mod contract_manifest_response_tests {
@@ -14725,8 +14722,7 @@ pub async fn handle_get_contract_code_bytes(
     );
     let body = norito::json::to_vec(&obj)
         .map_err(|error| conversion_error(format!("failed to serialize code bytes: {error}")))?;
-    let mut resp = application_json_response(body);
-    Ok(resp)
+    Ok(application_json_response(body))
 }
 fn explicit_contract_entrypoint(raw: &str) -> Result<&str> {
     let entrypoint = raw.trim();
@@ -15444,7 +15440,11 @@ mod asset_transfer_request_tests {
         network_id: NetworkId,
         creation_time_ms: u64,
         transaction_ttl_ms: u64,
-    ) -> (AssetTransferRequestDto, HashOf<SignedTransaction>) {
+    ) -> (
+        AssetTransferRequestDto,
+        HashOf<SignedTransaction>,
+        HashOf<TransactionEntrypoint>,
+    ) {
         use base64::Engine as _;
         let chain_id = ChainId::from("asset-transfer-test");
         let mut request = fixture_request(authority_keypair);
@@ -15467,11 +15467,15 @@ mod asset_transfer_request_tests {
         request.public_key_hex = Some(hex::encode(authority_keypair.public_key().to_bytes().1));
         request.signature_base64 =
             Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
-        (request, transaction.hash())
+        (
+            request,
+            transaction.hash(),
+            transaction.hash_as_entrypoint(),
+        )
     }
     fn mark_asset_transfer_committed(
         state: &CoreState,
-        transaction_hash: HashOf<SignedTransaction>,
+        transaction_hash: HashOf<TransactionEntrypoint>,
         height: u64,
     ) {
         let height = height.max(1);
@@ -15922,7 +15926,7 @@ mod asset_transfer_request_tests {
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x43);
         let now_ms = current_time_millis();
-        let (request, transaction_hash) =
+        let (request, transaction_hash, _) =
             signed_fixture_request(&authority_keypair, *state.network_id_ref(), now_ms, 60_000);
         let first = submit_asset_transfer_request(
             Arc::clone(&chain_id),
@@ -15976,7 +15980,7 @@ mod asset_transfer_request_tests {
     routing_test! { async concurrent_exact_replays_converge_on_one_queue_entry
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x46);
-        let (request, transaction_hash) = signed_fixture_request(
+        let (request, transaction_hash, _) = signed_fixture_request(
             &authority_keypair,
             *state.network_id_ref(),
             current_time_millis(),
@@ -16022,13 +16026,13 @@ mod asset_transfer_request_tests {
         let (state, queue, chain_id, telemetry) = submission_components();
         let now_ms = current_time_millis();
         let creation_time_ms = now_ms.saturating_sub(ASSET_TRANSFER_MAX_TTL_MS + 1);
-        let (request, transaction_hash) = signed_fixture_request(
+        let (request, transaction_hash, transaction_entrypoint_hash) = signed_fixture_request(
             &fixture_keypair(0x44),
             *state.network_id_ref(),
             creation_time_ms,
             ASSET_TRANSFER_MAX_TTL_MS,
         );
-        mark_asset_transfer_committed(state.as_ref(), transaction_hash, 1);
+        mark_asset_transfer_committed(state.as_ref(), transaction_entrypoint_hash, 1);
         let replay = submit_asset_transfer_request(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -16047,7 +16051,7 @@ mod asset_transfer_request_tests {
         assert_eq!(replay_status.resolved_from, "state");
         assert_eq!(replay.receipt.status, "applied");
         assert_eq!(queue.active_len(), 0);
-        let (unknown_request, unknown_hash) = signed_fixture_request(
+        let (unknown_request, unknown_hash, _) = signed_fixture_request(
             &fixture_keypair(0x45),
             *state.network_id_ref(),
             creation_time_ms,
@@ -17057,8 +17061,7 @@ pub(crate) async fn handle_post_bridge_proof_submit(
                 true,
             ),
         };
-        let mut response = application_json_response(body);
-        Ok((response, charge_prepare_egress))
+        Ok((application_json_response(body), charge_prepare_egress))
     })
     .await
 }
@@ -17299,8 +17302,7 @@ pub(crate) async fn handle_post_bridge_message_submit(
                 true,
             ),
         };
-        let mut response = application_json_response(body);
-        Ok((response, charge_prepare_egress))
+        Ok((application_json_response(body), charge_prepare_egress))
     })
     .await
 }
@@ -42953,8 +42955,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = application_json_response(body);
-        Ok(resp)
+        Ok(application_json_response(body))
     } else {
         // 404-like empty JSON (stable shape)
         let payload = crate::json_object(vec![
@@ -42972,8 +42973,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
             ))
         })?;
-        let mut resp = application_json_response(body);
-        Ok(resp)
+        Ok(application_json_response(body))
     }
 }
 /// GET /v1/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
@@ -53420,8 +53420,7 @@ pub async fn handle_v1_accounts_onboard_plan(
             context: "account onboarding plan receipt",
             source: Box::new(error),
         })?;
-    let mut response = application_json_response(body);
-    Ok(response)
+    Ok(application_json_response(body))
 }
 /// Revalidate and atomically submit a stateless sponsored onboarding receipt.
 #[iroha_futures::telemetry_future]

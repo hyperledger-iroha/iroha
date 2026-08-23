@@ -17245,7 +17245,7 @@ mod tests {
             overwrite: false,
         }
         .run()
-        .expect(expectation);
+        .expect(&expectation);
         (dir, output)
     }
     fn service_fixture(temp_name: &str, template: InitTemplate) -> (PathBuf, InitOutput) {
@@ -17272,8 +17272,24 @@ mod tests {
             overwrite: false,
         }
         .run()
-        .expect(expectation);
+        .expect(&expectation);
         (dir, output)
+    }
+    fn app_scaffold_args(
+        output_dir: PathBuf,
+        app_name: &str,
+        template: AppInitTemplate,
+    ) -> AppInitArgs {
+        AppInitArgs {
+            output_dir,
+            app_name: app_name.to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
     }
     fn single_api_fixture(temp_name: &str) -> (PathBuf, AppInitOutput) {
         app_fixture(temp_name, AppInitTemplate::SingleApi)
@@ -22589,6 +22605,8 @@ mod tests {
                 .iter()
                 .any(|handler| handler.route_path.as_deref() == Some("/auth/health"))
         );
+        let frontend_app =
+            fs::read_to_string(dir.join("frontend/src/App.vue")).expect("read frontend app");
         assert!(
             frontend_app
                 .contains("const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? \"/api\";")

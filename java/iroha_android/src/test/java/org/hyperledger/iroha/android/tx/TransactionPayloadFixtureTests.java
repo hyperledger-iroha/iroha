@@ -24,6 +24,8 @@ import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
@@ -31,6 +33,8 @@ public final class TransactionPayloadFixtureTests {
   private static final String SAMPLE_AUTHORITY = sampleAuthority((byte) 0x11);
   private static final String TEST_NETWORK_ID =
       "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+  private static final String TRANSACTION_PAYLOAD_TYPE =
+      "iroha_data_model::transaction::signed::model::TransactionPayload";
 
   @Test
   public void validatePayloadFixtures() throws Exception {
@@ -353,9 +357,10 @@ public final class TransactionPayloadFixtureTests {
         assert allInstructionsWire(payload)
             : name + ": instruction fixtures must use wire payloads";
       }
-      final String actualPayloadBase64 = Base64.getEncoder().encodeToString(payloadBytes);
-      assert fixture.payloadBase64().equals(actualPayloadBase64)
-          : name + ": payload_base64 mismatch";
+      final byte[] payloadFrame = Base64.getDecoder().decode(fixture.payloadBase64());
+      final byte[] framedPayload =
+          decodeCanonicalFrame(name + ".payload", payloadFrame, TRANSACTION_PAYLOAD_TYPE);
+      assert Arrays.equals(framedPayload, payloadBytes) : name + ": payload_base64 mismatch";
       final TransactionPayload decoded = adapter.decodeTransaction(payloadBytes);
       assertPayloadEquals(name, payload, decoded);
     }
@@ -471,6 +476,29 @@ public final class TransactionPayloadFixtureTests {
     return true;
   }
 
+  private static byte[] decodeCanonicalFrame(
+      final String name, final byte[] frame, final String typeName) {
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(frame, SchemaHash.hash16(typeName));
+    if (decoded.header().compression() != NoritoHeader.COMPRESSION_NONE) {
+      throw new IllegalStateException(name + ": compressed fixture frames are not canonical");
+    }
+    if (decoded.header().flags() != NoritoHeader.COMPACT_LEN) {
+      throw new IllegalStateException(name + ": fixture frame does not use exact canonical flags");
+    }
+    if (frame.length != NoritoHeader.HEADER_LENGTH + decoded.header().payloadLength()) {
+      throw new IllegalStateException(name + ": fixture frame does not use exact zero padding");
+    }
+    decoded.header().validateChecksum(decoded.payload());
+    try {
+      NoritoHeader.decode(decoded.payload(), null);
+      throw new IllegalStateException(name + ": bare fixture payload was accepted as a frame");
+    } catch (final IllegalArgumentException expected) {
+      // The SDK codec consumes inner bytes, but fixture transport always requires this frame.
+    }
+    return decoded.payload();
+  }
+
   private static Map<String, Object> ttlFixture(
       final Object topLevelTtl, final Object payloadTtl) {
     final Map<String, Object> payload = new LinkedHashMap<>();
@@ -511,6 +539,7 @@ public final class TransactionPayloadFixtureTests {
   private static Map<String, Object> authorityFeePayment() {
     final Map<String, Object> value = new LinkedHashMap<>();
     value.put("charge_limits", Collections.emptyList());
+    value.put("gas_limit", null);
     final Map<String, Object> payment = new LinkedHashMap<>();
     payment.put("payer", "authority");
     payment.put("value", value);

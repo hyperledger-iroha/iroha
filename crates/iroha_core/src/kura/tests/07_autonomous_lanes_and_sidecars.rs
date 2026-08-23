@@ -778,7 +778,7 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_entry = lane_config.entry(LaneId::new(1)).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
@@ -924,7 +924,7 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
 }
 #[test]
 fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1039,7 +1039,7 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
 }
 #[test]
 fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1100,7 +1100,7 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
 }
 #[test]
 fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1521,7 +1521,7 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
 }
 #[test]
 fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1577,7 +1577,7 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
 }
 #[test]
 fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane_id = LaneId::new(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1703,7 +1703,7 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
 }
 #[test]
 fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, mut hint_free) =
@@ -1748,7 +1748,7 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
 }
 #[test]
 fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
-    let (temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
+    let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, mut hint_free) =

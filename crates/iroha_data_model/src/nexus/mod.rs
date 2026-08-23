@@ -1306,6 +1306,10 @@ fn ensure_lane_config_json_fields(
 }
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for LaneConfig {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the strict LaneConfig decoder keeps its complete required-field and rejection policy in one auditable implementation"
+    )]
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
@@ -2674,6 +2678,10 @@ mod tests {
         assert!(!restricted.is_autoscale_managed_elastic());
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the inheritance audit checks every identity, reserved-metadata, and operator field boundary together"
+    )]
     fn autoscale_profile_inheritance_ignores_identity_and_reserved_metadata_only() {
         let mut base = LaneConfig {
             id: LaneId::new(2),

@@ -2227,6 +2227,23 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     }
 }
 impl RecoveredDecisionFetchStoreProjectionV1 {
+    /// Rejoin exact already-sealed constituents for staged-address regressions.
+    #[cfg(test)]
+    pub(super) fn for_staged_address_test(
+        verified: &VerifiedHeightContext,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        body: RecoveredDecisionFetchStoreBodyAuthorityV1,
+        candidate: CandidateAdmission,
+    ) -> Option<Self> {
+        let projection = Self {
+            effect,
+            pending,
+            body,
+            candidate,
+        };
+        projection.is_exact(verified).then_some(projection)
+    }
     /// Revalidate the closed Store candidate against its exact body and height.
     pub(super) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
         let context = projection::lifecycle_context(verified.context());

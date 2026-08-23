@@ -1244,6 +1244,21 @@ class ProductionFixture:
 
 
 class IosCandidateEvidenceTest(unittest.TestCase):
+    def test_private_json_zero_length_write_fails_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            output = root / "signed-evidence.json"
+            writer = mock.Mock(side_effect=[0, OSError("write loop continued")])
+            with (
+                mock.patch.object(evidence_lib.os, "write", writer),
+                self.assertRaisesRegex(evidence_lib.EvidenceError, "written durably"),
+            ):
+                evidence_lib.write_private_json(output, {"schema": "test"})
+            self.assertEqual(writer.call_count, 1)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
     def test_apple_2026_attestation_auth_data_accepts_at_without_ed(self) -> None:
         """Accept Apple's published App Attest authData flag contract."""
 
