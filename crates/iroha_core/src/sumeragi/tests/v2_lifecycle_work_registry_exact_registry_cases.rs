@@ -1,6 +1,4 @@
-use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-};
+use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_work_registry_source_for_test;
 #[test]
 fn exact_install_borrow_and_take_are_one_shot() {
     let work = concrete(effect(1), 91);

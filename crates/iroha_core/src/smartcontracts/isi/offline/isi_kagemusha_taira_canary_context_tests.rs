@@ -85,10 +85,7 @@ mod taira_canary_context_tests {
         .with_instructions([RecordKagemushaTairaCanaryV4::new(first.permit.clone())])
         .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .sign(canary_key.private_key());
-        assert_eq!(
-            identity(&queue_plan).expect("classify QueuePlan canary"),
-            None
-        );
+        assert_eq!(identity(&queue_plan), None);
         crate::state::seed_committed_transaction_context(
             &mut transaction,
             &TransactionEntrypoint::External(queue_plan),

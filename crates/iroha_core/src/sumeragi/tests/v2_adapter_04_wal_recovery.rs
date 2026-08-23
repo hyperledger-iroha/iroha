@@ -1,6 +1,3 @@
-use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-};
 #[test]
 fn quorum_forming_local_timeout_flattens_to_certificate_only() {
     let directory = TempDir::new().expect("temporary directory");
@@ -2524,21 +2521,18 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         DecisionBodyMarkerFixture::DurableOnly,
     );
     let (context_id, height, block_hash) = match startup.effects.as_slice() {
-        [AdapterEffect::FetchBody {
-            tag,
-            round,
-            subject,
-            ..
-        }] => {
-            (round.context_id, tag.height(), subject.block_hash)
-        }
+        [
+            AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                ..
+            },
+        ] => (round.context_id, tag.height(), subject.block_hash),
         _ => panic!("durable Decision must replay one certified Fetch"),
     };
-    let expected = crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
-        context_id,
-        height,
-        block_hash,
-    );
+    let expected =
+        crate::sumeragi::v2_recovery::PendingKuraApply::for_test(context_id, height, block_hash);
     let pending = startup
         .bind_pending_kura_apply(expected)
         .unwrap_or_else(|(error, _)| panic!("bind durable-only pending Decision: {error}"))

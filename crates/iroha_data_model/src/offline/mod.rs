@@ -5253,7 +5253,6 @@ mod kagemusha_v4_artifact_contract_tests {
             staged_at_unix_ms: 1_700_000_000_000,
             release_record_norito: exact_receipt_bytes(&release_record_norito),
             device_attestation_policy: fixture
-                .receipt
                 .promotion_reservation
                 .body
                 .device_attestation_policy

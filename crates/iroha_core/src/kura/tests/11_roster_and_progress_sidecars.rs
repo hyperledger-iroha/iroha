@@ -298,7 +298,7 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
 fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
     use std::os::unix::fs::symlink;
     for substitution in ["data", "index", "directory"] {
-        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
         let root = kura.store_root();
         let sidecar_dir = root.join(format!("progress-{substitution}"));
@@ -355,7 +355,7 @@ fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
 #[cfg(unix)]
 fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
     use std::os::unix::fs::symlink;
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let sidecar_dir = kura.store_root().join("progress-directory-binding");
     fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
@@ -401,7 +401,7 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
 }
 fn absent_progress_namespace_requires_every_directory_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
-        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
         let sidecar_dir = kura
             .store_root()
@@ -423,7 +423,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
             "absent namespace must fail closed at the {label} barrier"
         );
     }
-    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let sidecar_dir = kura
         .store_root()
@@ -448,7 +448,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
 #[cfg(unix)]
 fn progress_prepend_directory_failure_retries_without_corruption() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
-        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
         let sidecar_dir = kura
@@ -2111,7 +2111,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
 }
 fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
     for include_current_receipt in [false, true] {
-        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
+        let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
         let lane_id = LaneId::from(1);
         let lane_entry = lane_config.entry(lane_id).expect("lane entry");

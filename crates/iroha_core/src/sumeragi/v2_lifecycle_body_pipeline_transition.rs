@@ -1728,19 +1728,6 @@ pub(super) struct LiveValidateApplyPublicationError<'coordinator, 'registry, 'ad
     _staged: LifecycleCoordinator,
     _failure: LiveValidateApplyPublicationFailure<'registry, 'adapter>,
 }
-impl LiveValidateApplyPublicationError<'_, '_, '_> {
-    /// Describe the fail-stop boundary without exposing any retained authority.
-    pub(super) fn reason(&self) -> String {
-        match &self._failure {
-            LiveValidateApplyPublicationFailure::Registry(error) => {
-                format!("registry preflight: {}", error.reason())
-            }
-            LiveValidateApplyPublicationFailure::Ledger { _error: error, .. } => {
-                format!("LedgerV1 publication: {error}")
-            }
-        }
-    }
-}
 /// Fully reduced Validate-to-report copy retaining every sealed authority cut.
 ///
 /// The report candidate was projected while nested inside the exact adapter

@@ -23,7 +23,7 @@ use crate::{
         store::LiveQueryStore,
     },
     queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
-    state::{World, WorldReadOnly},
+    state::World,
     sumeragi::{
         v2_body_store::{
             BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
@@ -75,7 +75,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
 };
-use mv::storage::StorageReadOnly;
 use sorafs_manifest::XorQuantity;
 use std::{
     borrow::Cow,

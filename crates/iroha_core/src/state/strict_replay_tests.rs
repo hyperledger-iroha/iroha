@@ -1,5 +1,5 @@
 //! Production-path tests for strict Sumeragi-v2 Kura replay.
-use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
+use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World};
 use crate::sumeragi::v2_core::{EventTag, Generation};
 use crate::{
     governance::manifest::LaneManifestRegistry,
@@ -29,7 +29,6 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::TransactionBuilder,
 };
-use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::{
     collections::BTreeSet,

@@ -523,7 +523,7 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
 }
 #[test]
 fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+    let (_temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let canonical = store_dummy_block_arcs(&kura, 1)
         .pop()
         .expect("store canonical prefix block");
@@ -587,7 +587,7 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
 #[test]
 fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallback() {
     for mutation in ["corrupt", "non-file"] {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+        let (temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
         store_dummy_block_arcs(&kura, 1);
         assert_eq!(kura.blocks_count(), 1);
         assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
@@ -616,7 +616,7 @@ fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallba
 #[test]
 fn exact_durable_count_rejects_partial_index_and_hash_entries() {
     for journal in [INDEX_FILE_NAME, HASHES_FILE_NAME] {
-    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
+        let (temp_dir, _config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
         store_dummy_block_arcs(&kura, 1);
         let path = primary_blocks_dir(&temp_dir).join(journal);
         std::fs::OpenOptions::new()
@@ -1699,7 +1699,7 @@ fn prune_intent_tampering_fails_closed() {
 }
 #[test]
 fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", BLOCKS_IN_MEMORY);
+    let (_temp_dir, config) = kura_storage_fixture("tempdir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let mut blocks = DummyBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
@@ -1770,7 +1770,8 @@ fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
 }
 #[test]
 fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
-    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let block2_hash = blocks[1].hash();
@@ -2151,7 +2152,8 @@ fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
 #[test]
 fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
     for corrupt_checkpoint in [false, true] {
-        let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+        let (_temp_dir, config) =
+            kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
         {
             let (kura, _) =
                 Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
@@ -2197,7 +2199,8 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
 }
 #[test]
 fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     let blocks = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
@@ -2231,7 +2234,8 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
 }
 #[test]
 fn kura_init_rejects_mismatched_retained_commit_manifest() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
@@ -2259,7 +2263,8 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
 }
 #[test]
 fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
@@ -2287,7 +2292,8 @@ fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
 }
 #[test]
 fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
@@ -2308,7 +2314,8 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
 }
 #[test]
 fn kura_init_prunes_commit_manifests_above_recovered_tip() {
-    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
+    let (_temp_dir, config) =
+        kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);

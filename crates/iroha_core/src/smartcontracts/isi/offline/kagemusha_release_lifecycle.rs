@@ -980,7 +980,8 @@ mod tests {
         let release_record_norito =
             KagemushaExactBytesDigestV1::from_bytes(b"release-record").expect("release identity");
         let device_attestation_policy =
-            default_offline_device_attestation_policy().expect("built-in attestation policy");
+            super::super::isi::default_offline_device_attestation_policy()
+                .expect("built-in attestation policy");
         let device_attestation_policy_norito = KagemushaExactBytesDigestV1::from_bytes(
             &norito::encode_canonical(&device_attestation_policy)
                 .expect("canonical retained attestation policy"),
@@ -1073,7 +1074,7 @@ mod tests {
         );
 
         assert_eq!(
-            redemption_policy(&world, &binding).expect("terminal redemption policy"),
+            redemption_policy(&world.view(), &binding).expect("terminal redemption policy"),
             expected_policy,
         );
     }

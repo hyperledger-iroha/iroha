@@ -209,13 +209,7 @@ pub(super) struct PreparedLiveValidateApplyRegistryPublication<'registry, 'adapt
 pub(super) struct LiveValidateApplyRegistryPublicationError<'registry, 'adapter> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidateApplyPublication<'adapter>,
-    reason: &'static str,
-}
-impl LiveValidateApplyRegistryPublicationError<'_, '_> {
-    /// Return the closed preflight stage which rejected the publication.
-    pub(super) const fn reason(&self) -> &'static str {
-        self.reason
-    }
+    _reason: &'static str,
 }
 /// Pre-fsync live registry publication using the recovered-WAL exclusive
 /// detached-parent/child-vacancy reservation.
@@ -972,7 +966,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: "registry coordinates",
+                _reason: "registry coordinates",
             });
         }
         let receipt = receipt.expect("validated Apply preflight retains its durable body");
@@ -985,7 +979,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 return Err(LiveValidateApplyRegistryPublicationError {
                     _registry: registry,
                     _adapter: adapter,
-                    reason: "adapter work projection",
+                    _reason: "adapter work projection",
                 });
             }
         };
@@ -993,7 +987,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: "projected registry work",
+                _reason: "projected registry work",
             });
         }
         let child_address = child_address.expect("exact Apply coordinates retain one child");
@@ -1016,7 +1010,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: "missing prepared registry work",
+                _reason: "missing prepared registry work",
             });
         };
         let work =
@@ -1035,7 +1029,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                     return Err(LiveValidateApplyRegistryPublicationError {
                         _registry: registry,
                         _adapter: adapter,
-                        reason: "typed Validate-to-Apply carrier",
+                        _reason: "typed Validate-to-Apply carrier",
                     });
                 }
             };

@@ -1360,8 +1360,8 @@ pub mod isi {
         Ok(policy)
     }
     #[cfg(test)]
-    fn default_offline_device_attestation_policy() -> Result<OfflineDeviceAttestationPolicy, Error>
-    {
+    pub(super) fn default_offline_device_attestation_policy()
+    -> Result<OfflineDeviceAttestationPolicy, Error> {
         Ok(OfflineDeviceAttestationPolicy {
             version: 1,
             trusted_roots: vec![
