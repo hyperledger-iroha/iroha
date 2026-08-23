@@ -15750,7 +15750,7 @@ mod tests {
         };
     }
     macro_rules! direct_frame {
-        ($origin:expr, $target:expr, $priority:expr, $payload:expr) => {
+        ($origin:expr, $target:expr, $priority:expr, $payload:expr $(,)?) => {
             RelayMessage::new(
                 $origin,
                 RelayTarget::Direct(($target).clone()),
@@ -15866,7 +15866,7 @@ mod tests {
     }
     type TestPeerReceivers<T> = crate::peer::handles::TestPeerHandleReceivers<WireMessage<T>>;
     fn random_peer_id() -> PeerId {
-        random_peer_id()
+        PeerId::from(KeyPair::random().public_key().clone())
     }
     fn test_peer(address: SocketAddr) -> Peer {
         Peer::new(address, KeyPair::random().public_key().clone())
@@ -17945,7 +17945,11 @@ mod tests {
             .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint ticket")
             .expect("ticket bytes");
-        let ticket_bytes = minted.ticket.expect("ticket bytes present");
+        let ticket_bytes = minted
+            .frames
+            .into_iter()
+            .next()
+            .expect("ticket frame present");
         let ticket =
             iroha_crypto::soranet::pow::Ticket::parse(&ticket_bytes).expect("parse minted ticket");
         let signed = iroha_crypto::soranet::pow::SignedTicket::sign(
