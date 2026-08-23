@@ -36,7 +36,6 @@ impl ProductionLifecycleOwnerV1 {
     ) -> Result<Self, &'static str> {
         let lifecycle_ordinal = self
             .registry
-            .registry()
             .exact_recovered_decision_apply_ready_ordinal(&self.coordinator)
             .ok_or(
                 "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier",

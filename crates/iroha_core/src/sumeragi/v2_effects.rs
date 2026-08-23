@@ -2776,11 +2776,6 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
-    /// Return whether live pacemaker clocks crossed their one-shot activation.
-    /// Synthetic test runtimes are permanently unarmed unless they override it.
-    fn live_clocks_are_armed(&self) -> bool {
-        false
-    }
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -3088,10 +3083,6 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
-    fn live_clocks_are_armed(&self) -> bool {
-        self.lifecycle_live_clocks_are_armed()
-    }
-
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -8110,10 +8101,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.pending_tip_recovery_last_result = Some(result);
         self.pending_tip_recovery_attempts
     }
-    /// Number of serialized interrupted-tip recovery attempts made so far.
-    pub(crate) const fn pending_tip_recovery_attempts(&self) -> u64 {
-        self.pending_tip_recovery_attempts
-    }
     /// Begin the asynchronous durable-store → deterministic-validation chain
     /// for a locally built proposal.
     #[allow(clippy::too_many_lines)]
@@ -10267,56 +10254,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         result?;
         Ok(())
-    }
-    fn ensure_pending_tip_recovery_effect_is_local(
-        &self,
-        effect: &AdapterEffect,
-    ) -> Result<(), EffectExecutorError> {
-        let local_only_error = || {
-            EffectExecutorError::Contract(
-                "interrupted-tip recovery attempted a non-local consensus effect before finality"
-                    .to_owned(),
-            )
-        };
-        match effect {
-            AdapterEffect::FetchBody { round, subject, .. } => self
-                .recovered_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::StoreBody { round, subject, .. } => self
-                .durable_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::ValidateBody { round, subject, .. } => self
-                .validated_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Apply {
-                subject,
-                certificate,
-                ..
-            } => self
-                .pending_tip_recovery
-                .as_ref()
-                .filter(|evidence| {
-                    evidence.commit_qc() == certificate
-                        && evidence.commit_subject() == *subject
-                        && self
-                            .validated_bodies
-                            .get(&(evidence.durable_round(), evidence.durable_subject()))
-                            == Some(evidence.validated_receipt())
-                })
-                .map(|_| ())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Sign { .. }
-            | AdapterEffect::Broadcast(_)
-            | AdapterEffect::EnterView { .. }
-            | AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => Err(local_only_error()),
-        }
     }
     #[cfg(test)]
     fn bind_body_pipeline_owner(
@@ -13681,6 +13618,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         error
     }
 }
+// Keep the reviewed direct-consumer wrappers compile-checked without adding a
+// runtime call beside the cleanup-aware production path.
+const _: fn(
+    &mut V2EffectExecutor,
+    Vec<AdapterEffect>,
+    &mut super::v2_worker::ProductionV2Services,
+) -> Result<usize, EffectExecutorError> =
+    V2EffectExecutor::consume_effects::<super::v2_worker::ProductionV2Services>;
+const _: fn(
+    &mut V2EffectExecutor,
+    Vec<AdapterEffect>,
+    &mut super::v2_worker::ProductionV2Services,
+) -> Result<usize, EffectExecutorError> =
+    V2EffectExecutor::consume_pacemaker_effects::<super::v2_worker::ProductionV2Services>;
 /// Outcome of one runtime/executor scheduling step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EffectExecutorStep {

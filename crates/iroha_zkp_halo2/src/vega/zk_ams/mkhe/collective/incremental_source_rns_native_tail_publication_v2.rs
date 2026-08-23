@@ -26,7 +26,10 @@
     reason = "private source-only tail publication contract awaits the live V1/Phase-23 owner"
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use super::super::super::{
     ZkAmsMkheErrorV1,
@@ -767,7 +770,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn publish_next_record_from_v1_callback_v2(
+    fn publish_next_record_from_v1_callback_v2(
         &mut self,
         prepared_publication: RnsNativePreparedTailRecordPublicationV2,
         workspace: RnsNativeCiphertextTailWorkspaceOwnerV2,
@@ -1130,7 +1133,7 @@ where
             return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
         }
 
-        let mut callback_failure = None;
+        let callback_failure = Cell::new(None);
         let RnsNativeTailPublicationLifecycleV2 {
             key_tail,
             basis_lifecycle,
@@ -1154,9 +1157,9 @@ where
                         match RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2() {
                             Ok(workspace) => workspace,
                             Err(_) => {
-                                callback_failure = Some(RnsNativeV1TailCallbackFailureV2::Tail(
+                                callback_failure.set(Some(RnsNativeV1TailCallbackFailureV2::Tail(
                                     RnsNativeTailPublicationErrorV2::Basis,
-                                ));
+                                )));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
                         };
@@ -1166,19 +1169,21 @@ where
                         ) {
                             Ok(prepared) => prepared,
                             Err(error) => {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error));
+                                callback_failure
+                                    .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
                         };
                     let sink = match prepare_sink() {
                         Ok(sink) => sink,
                         Err(error) => {
-                            callback_failure =
-                                Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error));
+                            callback_failure.set(Some(
+                                RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
+                            ));
                             return Err(error);
                         }
                     };
+                    let callback_failure = &callback_failure;
                     Ok(
                         move |publisher: &mut P,
                               canonical_plaintext: &[[u8; 32]],
@@ -1193,8 +1198,9 @@ where
                                 error_one,
                                 encryption_nonce,
                             ) {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error));
+                                callback_failure.set(Some(
+                                    RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
+                                ));
                                 return Err(error);
                             }
                             if let Err(error) = publish_next_record_from_v1_callback_parts_v2(
@@ -1214,8 +1220,8 @@ where
                                 error_one,
                                 encryption_nonce,
                             ) {
-                                callback_failure =
-                                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error));
+                                callback_failure
+                                    .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
                                 return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
                             }
                             Ok(())
@@ -1225,10 +1231,10 @@ where
             );
 
         let manifest = match encryption_result {
-            Ok(manifest) if callback_failure.is_none() => manifest,
+            Ok(manifest) if callback_failure.get().is_none() => manifest,
             Ok(_) => return Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned),
             Err(encryption_error) => {
-                return Err(match callback_failure {
+                return Err(match callback_failure.get() {
                     Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error)) => {
                         RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)
                     }
