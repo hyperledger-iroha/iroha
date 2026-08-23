@@ -1466,6 +1466,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
         &mut services,
         runtime,
         std::sync::Arc::clone(&output_guard),
+        0,
         2,
     );
     crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
@@ -3971,6 +3972,7 @@ fn ready_validate_apply_actor_global_child_fixture(
         &mut services,
         runtime,
         std::sync::Arc::clone(&output_guard),
+        0,
         2,
     );
     let live_started_at = std::time::Instant::now();

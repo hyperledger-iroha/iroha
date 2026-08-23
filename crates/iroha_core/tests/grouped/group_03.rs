@@ -8,6 +8,7 @@ mod implicit_account_receive;
 mod ivm_admission_unknown_syscall;
 #[path = "../ivm_codec_helpers.rs"]
 mod ivm_codec_helpers;
+#[cfg(feature = "iroha-core-tests")]
 #[path = "../ivm_corehost_axt.rs"]
 mod ivm_corehost_axt;
 #[path = "../ivm_corehost_domain.rs"]

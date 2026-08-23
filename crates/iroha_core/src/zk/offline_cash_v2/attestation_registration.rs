@@ -1214,8 +1214,8 @@ fn leaf_allows_digital_signature(
     Ok(key_usage.critical && key_usage.value.digital_signature())
 }
 
-fn exact_android_attestation_extension<'certificate, 'der>(
-    certificate: &'certificate X509Certificate<'der>,
+fn exact_android_attestation_extension<'der>(
+    certificate: &X509Certificate<'der>,
 ) -> Result<&'der [u8], NativeRegistrationErrorV2> {
     let mut extensions = certificate
         .extensions()

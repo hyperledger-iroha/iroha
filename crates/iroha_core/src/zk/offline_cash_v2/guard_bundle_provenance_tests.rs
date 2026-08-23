@@ -6,7 +6,7 @@ use halo2_proofs::halo2curves::{
     group::prime::PrimeCurveAffine as _,
     pasta::{EpAffine, EqAffine, Fp, Fq},
 };
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use super::super::{
     registered_platform_p256_circuit_source::assemble_unverified_registered_platform_p256_circuit_candidates_v2,

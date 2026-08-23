@@ -5,6 +5,11 @@ Last updated: 2026-08-23
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Merged-candidate compile recovery
+
+- Type the two large Halo2 tail-publication ledger equations explicitly so the
+  normal lint policy accepts their values without wrapping or lint overrides.
+
 ## ZK algorithm release qualification
 
 - Keep FASTPQ ledger qualification blocked until its proof boundary uses a
