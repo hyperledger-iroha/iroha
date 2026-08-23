@@ -233,10 +233,12 @@ production_mode = true
 enabled = true
 max_concurrent_vms = 1
 backends = ["portable_vm"]
-portable_vm_acceleration = "hvf"
+portable_vm_acceleration = "kvm"
 # Dedicated, non-login QEMU identity. Operators must reserve these ids on the host.
 portable_vm_uid = 60001
 portable_vm_gid = 60001
+# Set to the non-zero group id that owns /dev/kvm on the qualified Linux host.
+portable_vm_supplementary_gids = []
 # Root-owned (0755 or stricter), non-writable control root for per-VM QMP sockets.
 portable_vm_control_dir = "/var/run/iroha-inrou"
 max_cpu_millis = 1000

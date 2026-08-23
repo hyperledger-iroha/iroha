@@ -20,16 +20,16 @@ Completed history lives in [`status.md`](./status.md).
   `scripts/taira_devnet.py up --full-doctor --inrou-canary-dir ...` four-peer
   path, including the dedicated `iroha3d_taira` daemon, fixed-FD runtime signer
   custody, canonical storage overlay, native SoraFS preseed, all-peer MCP
-  checks, and typed canary-before-doctor ordering. Use the checked PortableVM/HVF
+  checks, and typed canary-before-doctor ordering. Use the checked PortableVM/KVM
   profile: one VM, 1,000 CPU millis, 1 GiB memory, and 10 GiB storage per
   hosting validator.
-- Archive PortableVM/HVF startup preflight, immutable capability adverts,
+- Archive PortableVM/KVM startup preflight, immutable capability adverts,
   hosted-HTTP canary results, and capability-loss withdrawal and placement-reconciliation
   evidence together with deployment-specific metrics and alerts.
 - Qualify QEMU under a validator-independent unprivileged identity and an
-  OS-enforced service sandbox. Replace the reserve-and-release loopback port
-  handoff with supervisor-owned forwarding or QMP-attested ownership so host
-  health cannot depend on a transient unowned port.
+  OS-enforced service sandbox. Archive the private-QMP peer attestation,
+  ephemeral host-forward discovery, supervisor-owned forwarding, and ordered
+  proxy/VM/control-directory teardown evidence from the qualified Linux host.
 
 ## SoraNet first-release security qualification
 

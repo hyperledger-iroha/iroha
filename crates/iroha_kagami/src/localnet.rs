@@ -351,6 +351,33 @@ const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN: &[u8] =
 const TAIRA_RUNTIME_SIGNER_COMPILED_POLICY: &[u8] = b"algorithm=ed25519;credential=inherited-fd-198-consumed-after-load;descriptor=stable-owner-euid-regular-mode-0600-nlink-1-size-71;key=canonical-private-multihash-plus-newline;handle=software://taira/inrou/<lowercase-raw-public-key-hex>;authority=account-id(public-key);transactions=exact-authority-payload;provenance=canonical-soracloud-v1-domain-version-purpose-preimage;qualification=active-nontest;";
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_DIRECTORY: &str = "taira-runtime-signers";
+const TAIRA_INROU_PORTABLE_VM_UID: i64 = 60_001;
+const TAIRA_INROU_PORTABLE_VM_GID: i64 = 60_001;
+const TAIRA_INROU_PORTABLE_VM_CONTROL_DIR: &str = "/var/run/iroha-inrou";
+
+fn taira_inrou_kvm_supplementary_gid(kvm_gid: u32) -> Option<i64> {
+    let kvm_gid = i64::from(kvm_gid);
+    (kvm_gid != 0 && kvm_gid != TAIRA_INROU_PORTABLE_VM_GID).then_some(kvm_gid)
+}
+
+fn taira_inrou_portable_vm_supplementary_gids() -> Vec<i64> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+
+        let Ok(metadata) = fs::symlink_metadata("/dev/kvm") else {
+            return Vec::new();
+        };
+        if !metadata.file_type().is_char_device() {
+            return Vec::new();
+        }
+        return taira_inrou_kvm_supplementary_gid(metadata.gid())
+            .into_iter()
+            .collect();
+    }
+    #[cfg(not(target_os = "linux"))]
+    Vec::new()
+}
 
 fn taira_runtime_signer_policy_digest() -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -2311,7 +2338,28 @@ fn render_peer_config(
         );
         inrou.insert(
             "portable_vm_acceleration".into(),
-            Value::String("hvf".to_owned()),
+            Value::String("kvm".to_owned()),
+        );
+        inrou.insert(
+            "portable_vm_uid".into(),
+            Value::Integer(TAIRA_INROU_PORTABLE_VM_UID),
+        );
+        inrou.insert(
+            "portable_vm_gid".into(),
+            Value::Integer(TAIRA_INROU_PORTABLE_VM_GID),
+        );
+        inrou.insert(
+            "portable_vm_supplementary_gids".into(),
+            Value::Array(
+                taira_inrou_portable_vm_supplementary_gids()
+                    .into_iter()
+                    .map(Value::Integer)
+                    .collect(),
+            ),
+        );
+        inrou.insert(
+            "portable_vm_control_dir".into(),
+            Value::String(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR.to_owned()),
         );
         inrou.insert("max_cpu_millis".into(), Value::Integer(1_000));
         inrou.insert("max_memory_bytes".into(), Value::Integer(1_073_741_824));
@@ -5475,7 +5523,21 @@ mod tests {
             assert_eq!(inrou.max_storage_bytes.get(), 10_737_418_240);
             assert_eq!(
                 inrou.portable_vm_acceleration,
-                actual::SoracloudRuntimePortableVmAcceleration::Hvf
+                actual::SoracloudRuntimePortableVmAcceleration::Kvm
+            );
+            assert_eq!(inrou.portable_vm_uid.map(|value| value.get()), Some(60_001));
+            assert_eq!(inrou.portable_vm_gid.map(|value| value.get()), Some(60_001));
+            assert_eq!(
+                inrou
+                    .portable_vm_supplementary_gids
+                    .iter()
+                    .map(|value| i64::from(value.get()))
+                    .collect::<Vec<_>>(),
+                taira_inrou_portable_vm_supplementary_gids()
+            );
+            assert_eq!(
+                inrou.portable_vm_control_dir.as_deref(),
+                Some(Path::new(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR))
             );
 
             let key_path = taira_runtime_signer_key_path(temp.path(), peer_index);
@@ -5500,6 +5562,13 @@ mod tests {
             assert!(!start_script.contains(key_record.trim_end()));
         }
         assert_eq!(authorities.len(), usize::from(TAIRA_TESTNET_PEERS));
+    }
+
+    #[test]
+    fn taira_kvm_group_never_grants_root_or_repeats_the_primary_gid() {
+        assert_eq!(taira_inrou_kvm_supplementary_gid(0), None);
+        assert_eq!(taira_inrou_kvm_supplementary_gid(60_001), None);
+        assert_eq!(taira_inrou_kvm_supplementary_gid(108), Some(108));
     }
 
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {

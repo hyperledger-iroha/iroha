@@ -42,7 +42,9 @@ python3 scripts/taira_devnet.py down
 
 Teardown returns success only after every managed PID file and matching peer
 process is gone. If that cannot be proved, the bundle is retained for diagnosis
-and the command fails instead of deleting its ownership evidence.
+and the command fails instead of deleting its ownership evidence. An already
+absent signer directory is treated as deleted; a present partial, substituted,
+or unexpectedly populated signer directory still fails closed.
 
 Run the broader public-product route diagnostic only when that is the purpose
 of the deployment:
@@ -55,13 +57,22 @@ python3 scripts/taira_devnet.py up \
 
 The owner-held canary directory must be outside the disposable devnet tree and
 contain `container_manifest.json`, `service_manifest.json`, and `bundle.tgz`.
-Before startup, `up` creates the canonical Inrou stage and uses `sorafs-node`
-to preseed both staged payloads into every validator's disjoint store. After
-signed finality and four-peer MCP checks, it runs the Inrou canary and only then
-the broad doctor. `--full-doctor` without this exact canary input fails before
+This product-route path requires a qualified Linux/KVM host with the dedicated
+QEMU identity, the non-root group that owns `/dev/kvm`, and the root-owned QMP
+control directory from the generated config. Kagami carries a safe, non-zero
+`/dev/kvm` group into `portable_vm_supplementary_gids` when that device is
+present during generation; the runtime rechecks access after dropping to the
+exact QEMU identity before advertising the host.
+
+Before startup, `up` creates the canonical Inrou stage and uses `sorafs-node` to
+preseed both staged payloads into every validator's disjoint store. After signed
+finality and four-peer MCP checks, it runs the Inrou canary and only then the
+broad doctor. `--full-doctor` without this exact canary input fails before
 building binaries or replacing a running cohort. The `sorafs-node` build and
 Inrou CLI surface preflight occur only for this explicit opt-in path; ordinary
-throwaway deployments do not pay for unused product-route tooling.
+throwaway deployments do not pay for unused product-route tooling. When KVM is
+unavailable, the runtime manager withdraws the local Inrou host capability while
+the consensus-only disposable cohort remains usable.
 
 Use already-built binaries when iterating on orchestration:
 

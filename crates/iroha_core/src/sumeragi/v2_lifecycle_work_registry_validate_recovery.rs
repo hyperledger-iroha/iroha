@@ -1075,7 +1075,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 reason,
             });
         }
-        let adapter = match adapter.prepare_registry_work(
+        let mut adapter = match adapter.prepare_registry_work(
             LiveValidateApplyWorkProjectionPermit::new(admission_candidate),
             &receipt,
         ) {
@@ -1095,13 +1095,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
             });
         }
-        let PreparedReadyDurableValidateExecution {
-            registry,
-            address: parent_address,
-            outcome_kind: _,
-            lease: _,
-            validated_catalog_authority: _,
-        } = registry;
+        let parent_address = registry.address;
         let detached_parent = registry
             .registry
             .entries
@@ -1120,7 +1114,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: "missing prepared registry work",
+                reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
             });
         };
         let work =
@@ -1139,7 +1133,8 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                     return Err(LiveValidateApplyRegistryPublicationError {
                         _registry: registry,
                         _adapter: adapter,
-                        reason: "typed Validate-to-Apply carrier",
+                        reason:
+                            LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
                     });
                 }
             };

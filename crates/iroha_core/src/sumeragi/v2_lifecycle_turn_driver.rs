@@ -5,8 +5,8 @@ use super::super::{
 };
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
-    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
-    LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
+    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
     SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
@@ -176,6 +176,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleDecisionApplyCompletionDeferred
             | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
             | Self::LifecycleValidateSuccessorCapacityPending { .. }
             | Self::LifecycleValidateSuccessorFencePending { .. }

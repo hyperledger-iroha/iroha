@@ -26,6 +26,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use std::{
+    ffi::OsStr,
     fmt,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
@@ -33,8 +34,16 @@ use std::{
         fd::{FromRawFd as _, RawFd},
         unix::fs::MetadataExt as _,
     },
+    path::Path,
     sync::Arc,
 };
+
+fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
+    matches!(
+        argument.to_str(),
+        Some("--check-config" | "--help" | "-h" | "--version" | "-V")
+    )
+}
 
 /// Fixed inherited descriptor containing the Taira runtime signer key.
 pub const TAIRA_RUNTIME_SIGNER_FD_V1: RawFd = 198;
@@ -63,6 +72,9 @@ pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
 /// Exact effective SoraFS component cap derived for first-release Taira.
 pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
 
+const TAIRA_INROU_PORTABLE_VM_UID_V1: u32 = 60_001;
+const TAIRA_INROU_PORTABLE_VM_GID_V1: u32 = 60_001;
+const TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1: &str = "/var/run/iroha-inrou";
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.taira.runtime-signer.compiled-policy.digest.v1\0";
@@ -119,8 +131,18 @@ fn validate_taira_launcher_profile_v1(
     {
         return Err("Taira launcher requires only the PortableVM backend".to_owned());
     }
-    if inrou.portable_vm_acceleration != SoracloudRuntimePortableVmAcceleration::Hvf {
-        return Err("Taira launcher requires PortableVM HVF acceleration".to_owned());
+    if inrou.portable_vm_acceleration != SoracloudRuntimePortableVmAcceleration::Kvm {
+        return Err("Taira launcher requires PortableVM KVM acceleration".to_owned());
+    }
+    if inrou.portable_vm_uid.map(|value| value.get()) != Some(TAIRA_INROU_PORTABLE_VM_UID_V1)
+        || inrou.portable_vm_gid.map(|value| value.get()) != Some(TAIRA_INROU_PORTABLE_VM_GID_V1)
+        || inrou.portable_vm_control_dir.as_deref()
+            != Some(Path::new(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1))
+    {
+        return Err(
+            "Taira launcher requires the compiled PortableVM uid, gid, and QMP control directory"
+                .to_owned(),
+        );
     }
     if inrou.max_concurrent_vms.get() != 1
         || inrou.max_cpu_millis.get() != 1_000
@@ -500,11 +522,11 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 
 /// Run the Taira daemon with the exact signer inherited at descriptor 198.
 ///
-/// `--check-config` remains offline and therefore does not read the descriptor.
-/// Every node-starting invocation resolves the one configured signer through
-/// [`crate::run_with_runtime_provider_registry`].
+/// Config validation, help, and version introspection remain offline and do not
+/// read the descriptor. Every node-starting invocation resolves the one
+/// configured signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry() {
-    if std::env::args_os().any(|argument| argument == "--check-config") {
+    if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
         if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
             eprintln!("{report:?}");
             std::process::exit(1);
@@ -541,6 +563,7 @@ mod tests {
         fs,
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+        path::PathBuf,
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
@@ -548,7 +571,11 @@ mod tests {
         runtime.production_mode = true;
         runtime.inrou.enabled = true;
         runtime.inrou.backends = BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm]);
-        runtime.inrou.portable_vm_acceleration = SoracloudRuntimePortableVmAcceleration::Hvf;
+        runtime.inrou.portable_vm_acceleration = SoracloudRuntimePortableVmAcceleration::Kvm;
+        runtime.inrou.portable_vm_uid = NonZeroU32::new(TAIRA_INROU_PORTABLE_VM_UID_V1);
+        runtime.inrou.portable_vm_gid = NonZeroU32::new(TAIRA_INROU_PORTABLE_VM_GID_V1);
+        runtime.inrou.portable_vm_control_dir =
+            Some(PathBuf::from(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1));
         runtime.inrou.max_concurrent_vms = NonZeroU16::new(1).expect("nonzero capacity");
         runtime.inrou.max_cpu_millis = NonZeroU32::new(1_000).expect("nonzero CPU budget");
         runtime.inrou.max_memory_bytes =
@@ -556,6 +583,16 @@ mod tests {
         runtime.inrou.max_storage_bytes =
             NonZeroU64::new(10_737_418_240).expect("nonzero storage budget");
         runtime
+    }
+
+    #[test]
+    fn offline_introspection_never_requires_the_runtime_signer() {
+        for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
+            assert!(invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
+        for argument in ["--config", "--sora", "--genesis-manifest-json"] {
+            assert!(!invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
     }
 
     #[test]
@@ -586,6 +623,18 @@ mod tests {
                 TAIRA_VALIDATOR_COUNT_V1 - 1,
                 TAIRA_VALIDATOR_COUNT_V1,
                 &runtime,
+            )
+            .is_err()
+        );
+        let mut wrong_identity = runtime.clone();
+        wrong_identity.inrou.portable_vm_uid = NonZeroU32::new(60_002);
+        assert!(
+            validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                &wrong_identity,
             )
             .is_err()
         );

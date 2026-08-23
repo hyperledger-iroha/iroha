@@ -1720,7 +1720,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
             )?;
-            return Ok(None);
+            return Ok(());
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -1817,8 +1817,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )?;
-        Ok(None)
+        )
     }
 }
 

@@ -116,6 +116,8 @@ use sorafs_car::{
 use sorafs_node::store::{StorageBackend, StoredManifest};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
@@ -135,8 +137,6 @@ use std::{
     thread,
     time::Duration,
 };
-#[cfg(target_os = "linux")]
-use std::os::unix::net::UnixStream;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 #[path = "soracloud_runtime/remote_stream_token_auth.rs"]
@@ -891,7 +891,15 @@ fn ensure_portable_vm_backend_available(
             #[cfg(not(target_os = "linux"))]
             eyre::bail!("PortableVM acceleration `kvm` is only supported on Linux");
             #[cfg(target_os = "linux")]
-            ensure_kvm_device_available()?;
+            {
+                ensure_kvm_device_available()?;
+                attest_inrou_kvm_under_child_identity(
+                    &setpriv,
+                    &qemu,
+                    &child_identity,
+                    SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT,
+                )?;
+            }
         }
         iroha_config::parameters::actual::SoracloudRuntimePortableVmAcceleration::Hvf => {
             #[cfg(not(target_os = "macos"))]
@@ -936,7 +944,7 @@ fn ensure_portable_vm_backend_available(
     })?;
     Ok(())
 }
-fn ensure_configured_inrou_backends_available(
+fn validate_configured_inrou_backend_selection(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
 ) -> eyre::Result<()> {
     if !config.enabled {
@@ -951,6 +959,15 @@ fn ensure_configured_inrou_backends_available(
             .contains(&SoraInrouRuntimeBackendV1::PortableVm)
     {
         eyre::bail!("Inrou V1 runtime startup accepts only the `portable_vm` backend");
+    }
+    Ok(())
+}
+fn ensure_configured_inrou_backends_available(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
+) -> eyre::Result<()> {
+    validate_configured_inrou_backend_selection(config)?;
+    if !config.enabled {
+        return Ok(());
     }
     ensure_portable_vm_backend_available(config)
         .wrap_err("preflight configured PortableVM backend")?;
@@ -4543,8 +4560,8 @@ impl SoracloudRuntimeManager {
                 );
             }
         }
-        ensure_configured_inrou_backends_available(&self.config.inrou)
-            .wrap_err("validate immutable Inrou startup capability")?;
+        validate_configured_inrou_backend_selection(&self.config.inrou)
+            .wrap_err("validate immutable Inrou backend selection")?;
         remote_stream_token_auth::ensure_startup_binding(
             self.remote_stream_token_operator.as_ref(),
             self.state.network_id_ref(),
@@ -5567,29 +5584,33 @@ impl SoracloudRuntimeManager {
                                 &guard.listen_base_url,
                                 guard.cache_key.healthcheck_path.as_deref(),
                             );
-                            let (health_status, last_error) = match health {
-                                Ok(()) => (SoraServiceHealthStatusV1::Healthy, None),
-                                Err(error) => (
-                                    SoraServiceHealthStatusV1::Degraded,
-                                    Some(runtime_error_summary(&error)),
-                                ),
-                            };
-                            let accounted_egress_bytes = current_accounted_egress_bytes
-                                .unwrap_or(revision_lease_accounting_offset_bytes);
-                            replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
-                                &PathBuf::from(&replica_plan.materialization_dir),
-                                service_name,
-                                service_version,
-                                process_generation,
-                                replica_slot,
-                                health_status,
-                                Some(&guard.listen_base_url),
-                                guard.pid(),
-                                accounted_egress_bytes,
-                                last_error,
-                            )?);
-                            replica_accounted_egress_bytes.push(accounted_egress_bytes);
-                            continue;
+                            if guard.port_forward_is_running() {
+                                let (health_status, last_error) = match health {
+                                    Ok(()) => (SoraServiceHealthStatusV1::Healthy, None),
+                                    Err(error) => (
+                                        SoraServiceHealthStatusV1::Degraded,
+                                        Some(runtime_error_summary(&error)),
+                                    ),
+                                };
+                                let accounted_egress_bytes = current_accounted_egress_bytes
+                                    .unwrap_or(revision_lease_accounting_offset_bytes);
+                                replica_runtime_states.push(
+                                    persist_hosted_http_replica_runtime_state(
+                                        &PathBuf::from(&replica_plan.materialization_dir),
+                                        service_name,
+                                        service_version,
+                                        process_generation,
+                                        replica_slot,
+                                        health_status,
+                                        Some(&guard.listen_base_url),
+                                        guard.pid(),
+                                        accounted_egress_bytes,
+                                        last_error,
+                                    )?,
+                                );
+                                replica_accounted_egress_bytes.push(accounted_egress_bytes);
+                                continue;
+                            }
                         }
                         let accounted_egress_bytes = current_accounted_egress_bytes
                             .unwrap_or(revision_lease_accounting_offset_bytes);
@@ -5958,7 +5979,11 @@ impl SoracloudRuntimeManager {
             profile.machine_type,
             self.config.inrou.portable_vm_acceleration.as_qemu_name()
         );
+        let qmp_control = create_inrou_qmp_control(&child_identity)
+            .wrap_err("create dedicated Inrou QMP control")?;
         let mut command = build_inrou_portable_vm_command(&setpriv, &qemu, &child_identity)?;
+        append_inrou_qmp_endpoint(&mut command, &qmp_control.socket_path)
+            .wrap_err("attach dedicated Inrou QMP endpoint")?;
         command
             .arg("-object")
             .arg(format!(
@@ -6039,6 +6064,30 @@ impl SoracloudRuntimeManager {
         };
         let mut log_drains = attach_inrou_runtime_log_drains(&mut child, stdout_log, stderr_log)
             .wrap_err("attach bounded Inrou PortableVm log drains")?;
+        let backend = match query_inrou_qmp_host_forward(
+            &mut child,
+            &qmp_control,
+            &child_identity,
+            guest_port,
+        ) {
+            Ok(backend) => backend,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                join_inrou_log_drains(&mut log_drains);
+                return Err(error).wrap_err("attest Inrou PortableVm host forward");
+            }
+        };
+        let mut port_forward =
+            match PortableVmLoopbackProxy::start(network_plan.public_listener, backend) {
+                Ok(port_forward) => port_forward,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    join_inrou_log_drains(&mut log_drains);
+                    return Err(error).wrap_err("start supervisor-owned Inrou port forward");
+                }
+            };
         let started_at = std::time::Instant::now();
         let startup_grace = self
             .config
@@ -6052,6 +6101,7 @@ impl SoracloudRuntimeManager {
             let child_status = match child.try_wait() {
                 Ok(status) => status,
                 Err(error) => {
+                    port_forward.stop();
                     let _ = child.kill();
                     let _ = child.wait();
                     join_inrou_log_drains(&mut log_drains);
@@ -6059,6 +6109,8 @@ impl SoracloudRuntimeManager {
                 }
             };
             if let Some(status) = child_status {
+                port_forward.stop();
+                let _ = child.wait();
                 join_inrou_log_drains(&mut log_drains);
                 let stderr = stderr_log_excerpt(&stderr_log_path);
                 let console = stderr_log_excerpt(&stdout_log_path);
@@ -6088,6 +6140,8 @@ impl SoracloudRuntimeManager {
                         network_plan.listen_base_url,
                         egress_accounting_offset_bytes,
                         stderr_log_path,
+                        port_forward,
+                        qmp_control,
                     ));
                 }
                 Err(error) if started_at.elapsed() < startup_grace => {
@@ -6095,6 +6149,7 @@ impl SoracloudRuntimeManager {
                     thread::sleep(Duration::from_millis(250));
                 }
                 Err(error) => {
+                    port_forward.stop();
                     let _ = child.kill();
                     let _ = child.wait();
                     join_inrou_log_drains(&mut log_drains);
@@ -13245,6 +13300,8 @@ impl HostedHttpWorker {
         listen_base_url: String,
         egress_accounting_offset_bytes: u64,
         stderr_log_path: PathBuf,
+        port_forward: PortableVmLoopbackProxy,
+        qmp_control: PortableVmQmpControl,
     ) -> Self {
         Self {
             cache_key,
@@ -13253,15 +13310,27 @@ impl HostedHttpWorker {
             listen_base_url,
             egress_accounting_offset_bytes,
             stderr_log_path,
-            port_forward: None,
-            qmp_control: None,
+            port_forward: Some(port_forward),
+            qmp_control: Some(qmp_control),
         }
     }
     fn pid(&self) -> Option<u32> {
         Some(self.child.id())
     }
     fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
-        self.child.try_wait()
+        let status = self.child.try_wait()?;
+        if status.is_none() && !self.port_forward_is_running() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "supervisor-owned Inrou loopback proxy exited",
+            ));
+        }
+        Ok(status)
+    }
+    fn port_forward_is_running(&self) -> bool {
+        self.port_forward
+            .as_ref()
+            .is_some_and(PortableVmLoopbackProxy::is_running)
     }
     fn accounted_egress_bytes(&self) -> Option<u64> {
         if self.cache_key.runtime != SoraContainerRuntimeV1::Inrou {
@@ -13271,9 +13340,13 @@ impl HostedHttpWorker {
     }
     fn stop(&mut self) {
         let _ = &self.stderr_log_path;
+        if let Some(mut port_forward) = self.port_forward.take() {
+            port_forward.stop();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         join_inrou_log_drains(&mut self.log_drains);
+        drop(self.qmp_control.take());
     }
 }
 impl Drop for HostedHttpWorker {
@@ -14683,8 +14756,7 @@ impl PortableVmLoopbackProxy {
                                 .name("inrou-port-session".to_owned())
                                 .spawn(move || {
                                     proxy_portable_vm_connection(client, backend, session_stop);
-                                })
-                            {
+                                }) {
                                 Ok(session) => sessions.push(session),
                                 Err(error) => {
                                     iroha_logger::warn!(
@@ -14694,7 +14766,7 @@ impl PortableVmLoopbackProxy {
                                 }
                             }
                         }
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        Err(error) if portable_vm_proxy_accept_error_is_transient(error.kind()) => {
                             thread::sleep(Duration::from_millis(10));
                         }
                         Err(error) => {
@@ -14717,6 +14789,14 @@ impl PortableVmLoopbackProxy {
         })
     }
 
+    fn is_running(&self) -> bool {
+        !self.stop.load(AtomicOrdering::Acquire)
+            && self
+                .worker
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished())
+    }
+
     fn stop(&mut self) {
         if self.stop.swap(true, AtomicOrdering::AcqRel) {
             return;
@@ -14726,6 +14806,12 @@ impl PortableVmLoopbackProxy {
             let _ = worker.join();
         }
     }
+}
+fn portable_vm_proxy_accept_error_is_transient(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
+    )
 }
 impl Drop for PortableVmLoopbackProxy {
     fn drop(&mut self) {
@@ -14778,8 +14864,7 @@ fn proxy_portable_vm_direction(
     session_stop: &AtomicBool,
 ) {
     let mut buffer = [0_u8; 16 * 1024];
-    while !global_stop.load(AtomicOrdering::Acquire)
-        && !session_stop.load(AtomicOrdering::Acquire)
+    while !global_stop.load(AtomicOrdering::Acquire) && !session_stop.load(AtomicOrdering::Acquire)
     {
         match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -14958,6 +15043,14 @@ fn qemu_option_path(path: &Path) -> eyre::Result<String> {
         .to_str()
         .ok_or_else(|| eyre::eyre!("QEMU option path is not valid UTF-8: {}", path.display()))?;
     Ok(path.replace(',', ",,"))
+}
+#[cfg(any(target_os = "linux", test))]
+fn append_inrou_qmp_endpoint(command: &mut Command, socket_path: &Path) -> eyre::Result<()> {
+    let socket_path = qemu_option_path(socket_path)?;
+    command
+        .arg("-qmp")
+        .arg(format!("unix:{socket_path},server=on,wait=off"));
+    Ok(())
 }
 #[cfg(target_os = "linux")]
 fn build_inrou_bootstrap_seed(
@@ -15505,6 +15598,192 @@ fn build_inrou_portable_vm_command(
     sanitize_host_command_environment(&mut command);
     command.args(inrou_setpriv_qemu_arguments(qemu, identity)?);
     Ok(command)
+}
+#[cfg(target_os = "linux")]
+fn inrou_kvm_probe_qemu_arguments() -> [&'static str; 16] {
+    [
+        "-machine",
+        "none",
+        "-accel",
+        "kvm",
+        "-nodefaults",
+        "-display",
+        "none",
+        "-monitor",
+        "none",
+        "-serial",
+        "none",
+        "-S",
+        "-qmp",
+        "stdio",
+        "-no-reboot",
+        "-no-shutdown",
+    ]
+}
+#[cfg(target_os = "linux")]
+fn attest_inrou_kvm_under_child_identity(
+    setpriv: &Path,
+    qemu: &Path,
+    identity: &PortableVmChildIdentity,
+    timeout: Duration,
+) -> eyre::Result<()> {
+    if timeout.is_zero() {
+        eyre::bail!("Inrou KVM child-identity attestation deadline must be positive");
+    }
+    let mut command = build_inrou_portable_vm_command(setpriv, qemu, identity)?;
+    command
+        .args(inrou_kvm_probe_qemu_arguments())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().wrap_err_with(|| {
+        format!(
+            "spawn KVM attestation through {} as uid {} gid {} with supplementary gids {:?}",
+            setpriv.display(),
+            identity.uid,
+            identity.gid,
+            identity.supplementary_gids,
+        )
+    })?;
+    let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let (Some(mut stdin), Some(stdout), Some(stderr)) = pipes else {
+        let _ = child.kill();
+        let _ = child.wait();
+        eyre::bail!("KVM child-identity attestation did not expose all configured pipes");
+    };
+    let stdout_drain = match thread::Builder::new()
+        .name("inrou-kvm-probe-stdout".to_owned())
+        .spawn(move || {
+            drain_host_command_stdout_bounded(stdout, SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES)
+        }) {
+        Ok(drain) => drain,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error).wrap_err("spawn bounded Inrou KVM probe stdout drain");
+        }
+    };
+    let stderr_drain = match thread::Builder::new()
+        .name("inrou-kvm-probe-stderr".to_owned())
+        .spawn(move || {
+            drain_host_command_stdout_bounded(stderr, SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES)
+        }) {
+        Ok(drain) => drain,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_drain.join();
+            return Err(error).wrap_err("spawn bounded Inrou KVM probe stderr drain");
+        }
+    };
+    const QMP_PROBE: &[u8] = b"{\"execute\":\"qmp_capabilities\",\"id\":\"inrou-kvm-probe-capabilities\"}\n{\"execute\":\"quit\",\"id\":\"inrou-kvm-probe-quit\"}\n";
+    let qmp_write_error = stdin
+        .write_all(QMP_PROBE)
+        .and_then(|()| stdin.flush())
+        .err();
+    drop(stdin);
+    let started_at = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started_at.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let kill_error = child.kill().err();
+                let wait_error = child.wait().err();
+                let _ = stdout_drain.join();
+                let _ = stderr_drain.join();
+                eyre::bail!(
+                    "KVM attestation through {} as uid {} gid {} with supplementary gids {:?} exceeded its {:?} deadline{}{}{}",
+                    qemu.display(),
+                    identity.uid,
+                    identity.gid,
+                    identity.supplementary_gids,
+                    timeout,
+                    qmp_write_error
+                        .as_ref()
+                        .map_or_else(String::new, |error| format!(
+                            "; writing the QMP probe failed: {error}"
+                        )),
+                    kill_error.map_or_else(String::new, |error| format!(
+                        "; terminating the probe failed: {error}"
+                    )),
+                    wait_error.map_or_else(String::new, |error| format!(
+                        "; reaping the probe failed: {error}"
+                    )),
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_drain.join();
+                let _ = stderr_drain.join();
+                return Err(error).wrap_err("poll Inrou KVM child-identity attestation");
+            }
+        }
+    };
+    let stdout_result = stdout_drain.join();
+    let stderr_result = stderr_drain.join();
+    let stdout_result =
+        stdout_result.map_err(|_| eyre::eyre!("Inrou KVM probe stdout drain panicked"))?;
+    let stderr_result =
+        stderr_result.map_err(|_| eyre::eyre!("Inrou KVM probe stderr drain panicked"))?;
+    let (stdout, stdout_truncated) =
+        stdout_result.wrap_err("drain bounded Inrou KVM probe stdout")?;
+    let (stderr, stderr_truncated) =
+        stderr_result.wrap_err("drain bounded Inrou KVM probe stderr")?;
+    if stdout_truncated || stderr_truncated {
+        eyre::bail!(
+            "Inrou KVM child-identity attestation exceeded its {}-byte output limit",
+            SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES,
+        );
+    }
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let stderr = stderr.trim();
+        eyre::bail!(
+            "KVM attestation through {} failed with status {} as uid {} gid {} with supplementary gids {:?}{}{}",
+            qemu.display(),
+            status,
+            identity.uid,
+            identity.gid,
+            identity.supplementary_gids,
+            qmp_write_error
+                .as_ref()
+                .map_or_else(String::new, |error| format!(
+                    "; writing the QMP probe failed: {error}"
+                )),
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            },
+        );
+    }
+    if let Some(error) = qmp_write_error {
+        return Err(error).wrap_err("write bounded Inrou KVM probe QMP commands");
+    }
+    let mut reader = io::BufReader::new(stdout.as_slice());
+    let greeting = read_inrou_qmp_message(&mut reader)
+        .wrap_err("read Inrou KVM child-identity probe QMP greeting")?;
+    if greeting
+        .get("QMP")
+        .and_then(norito::json::Value::as_object)
+        .is_none()
+    {
+        eyre::bail!("Inrou KVM child-identity probe omitted its QMP greeting");
+    }
+    let capabilities =
+        read_inrou_qmp_command_response(&mut reader, "inrou-kvm-probe-capabilities")?;
+    if !capabilities.is_object() {
+        eyre::bail!("Inrou KVM child-identity probe capabilities response must be an object");
+    }
+    let quit = read_inrou_qmp_command_response(&mut reader, "inrou-kvm-probe-quit")?;
+    if !quit.is_object() {
+        eyre::bail!("Inrou KVM child-identity probe quit response must be an object");
+    }
+    Ok(())
 }
 #[cfg(target_os = "linux")]
 fn run_inrou_qemu_command_capture_stdout_bounded(
@@ -16657,9 +16936,7 @@ impl Drop for PortableVmQmpControl {
     }
 }
 #[cfg(target_os = "linux")]
-fn read_inrou_qmp_message(
-    reader: &mut impl io::BufRead,
-) -> eyre::Result<norito::json::Value> {
+fn read_inrou_qmp_message(reader: &mut impl io::BufRead) -> eyre::Result<norito::json::Value> {
     let mut line = Vec::new();
     loop {
         let available = reader.fill_buf().wrap_err("read Inrou QMP response")?;
@@ -16749,9 +17026,7 @@ fn parse_inrou_qmp_usernet_forward(
     Ok(forwards[0])
 }
 #[cfg(target_os = "linux")]
-fn validate_inrou_qmp_socket(
-    control: &PortableVmQmpControl,
-) -> eyre::Result<fs::Metadata> {
+fn validate_inrou_qmp_socket(control: &PortableVmQmpControl) -> eyre::Result<fs::Metadata> {
     use std::os::unix::fs::FileTypeExt as _;
 
     if InrouMaterializationDirectoryIdentity::inspect(&control.directory)?
@@ -16821,7 +17096,11 @@ fn query_inrou_qmp_host_forward(
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut reader = io::BufReader::new(stream);
     let greeting = read_inrou_qmp_message(&mut reader)?;
-    if greeting.get("QMP").and_then(norito::json::Value::as_object).is_none() {
+    if greeting
+        .get("QMP")
+        .and_then(norito::json::Value::as_object)
+        .is_none()
+    {
         eyre::bail!("Inrou QMP endpoint did not send a canonical greeting");
     }
     reader
@@ -24388,12 +24667,17 @@ mod tests {
         );
     }
     #[test]
-    fn enabled_inrou_backend_preflight_rejects_an_empty_allowlist() {
+    fn enabled_inrou_backend_selection_requires_only_portable_vm() {
         let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
         config.enabled = true;
-        let error = ensure_configured_inrou_backends_available(&config)
+        let error = validate_configured_inrou_backend_selection(&config)
             .expect_err("enabled Inrou hosting must name an exact backend");
         assert!(error.to_string().contains("nonempty backend allowlist"));
+        config
+            .backends
+            .insert(SoraInrouRuntimeBackendV1::PortableVm);
+        validate_configured_inrou_backend_selection(&config)
+            .expect("PortableVm is the exact Inrou V1 backend selection");
     }
     #[test]
     fn inrou_archive_limits_use_the_tighter_bundle_cache_bound() {
@@ -28986,6 +29270,85 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn inrou_qmp_usernet_parser_requires_one_exact_loopback_forward() -> Result<()> {
+        let valid = "TCP[HOST_FORWARD] 12 127.0.0.1 45123 10.0.2.15 8080 0 0";
+        assert_eq!(
+            parse_inrou_qmp_usernet_forward(valid, 8080)?,
+            "127.0.0.1:45123".parse::<SocketAddr>()?
+        );
+
+        for invalid in [
+            "TCP[HOST_FORWARD] 12 0.0.0.0 45123 10.0.2.15 8080 0 0",
+            "TCP[HOST_FORWARD] 12 127.0.0.1 0 10.0.2.15 8080 0 0",
+            "TCP[HOST_FORWARD] 12 127.0.0.1 45123 10.0.2.15 8081 0 0",
+            "TCP[HOST_FORWARD] 12 127.0.0.1 45123 10.0.2.15 8080 0 0\nTCP[HOST_FORWARD] 13 127.0.0.1 45124 10.0.2.15 8080 0 0",
+        ] {
+            parse_inrou_qmp_usernet_forward(invalid, 8080)
+                .expect_err("QMP must attest one exact process-owned host forward");
+        }
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_loopback_proxy_forwards_and_stops() -> Result<()> {
+        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let backend_address = backend.local_addr()?;
+        let backend_worker = thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = backend.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+            let mut request = [0_u8; 4];
+            stream.read_exact(&mut request)?;
+            if request != *b"ping" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "proxy backend received the wrong request",
+                ));
+            }
+            stream.write_all(b"pong")
+        });
+
+        let public_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let public_address = public_listener.local_addr()?;
+        let mut proxy = PortableVmLoopbackProxy::start(public_listener, backend_address)?;
+        assert!(proxy.is_running(), "new proxy worker must report live");
+        let mut client = TcpStream::connect_timeout(&public_address, Duration::from_secs(2))?;
+        client.set_read_timeout(Some(Duration::from_secs(2)))?;
+        client.set_write_timeout(Some(Duration::from_secs(2)))?;
+        client.write_all(b"ping")?;
+        let mut response = [0_u8; 4];
+        client.read_exact(&mut response)?;
+        assert_eq!(&response, b"pong");
+        drop(client);
+        backend_worker
+            .join()
+            .expect("proxy backend worker must not panic")?;
+
+        proxy.stop();
+        assert!(!proxy.is_running(), "stopped proxy must report unavailable");
+        assert!(
+            TcpStream::connect_timeout(&public_address, Duration::from_millis(100)).is_err(),
+            "stopped proxy must release its supervisor-owned listener"
+        );
+        Ok(())
+    }
+    #[test]
+    fn portable_vm_proxy_retries_only_transient_accept_errors() {
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(portable_vm_proxy_accept_error_is_transient(kind));
+        }
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::InvalidInput,
+            io::ErrorKind::Other,
+        ] {
+            assert!(!portable_vm_proxy_accept_error_is_transient(kind));
+        }
+    }
+    #[test]
     fn hosted_http_probe_without_healthcheck_requires_a_live_listener() -> Result<()> {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let base_url = format!("http://{}", listener.local_addr()?);
@@ -29105,24 +29468,77 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn inrou_portable_vm_command_disables_user_config_and_enables_platform_sandbox() {
+    fn inrou_qmp_command_uses_private_server_without_waiting() -> Result<()> {
         let mut command = Command::new("qemu-system-test");
-        harden_inrou_portable_vm_command(&mut command);
+        append_inrou_qmp_endpoint(&mut command, Path::new("/run/inrou/vm,1/qmp.sock"))?;
         let args = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        #[cfg(target_os = "linux")]
+        assert_eq!(
+            args,
+            ["-qmp", "unix:/run/inrou/vm,,1/qmp.sock,server=on,wait=off"]
+        );
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_portable_vm_command_drops_privileges_and_enables_sandbox() -> Result<()> {
+        let identity = PortableVmChildIdentity {
+            uid: 60_001,
+            gid: 60_002,
+            supplementary_gids: vec![44, 45],
+            control_dir: PathBuf::from("/run/iroha-inrou"),
+        };
+        let args = inrou_setpriv_qemu_arguments(Path::new("/usr/bin/qemu-system-test"), &identity)?;
         assert_eq!(
             args,
             [
+                "--reuid",
+                "60001",
+                "--regid",
+                "60002",
+                "--groups",
+                "44,45",
+                "--bounding-set=-all",
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--no-new-privs",
+                "--",
+                "/usr/bin/qemu-system-test",
                 "-no-user-config",
                 "-sandbox",
-                SORACLOUD_INROU_QEMU_SANDBOX_POLICY
+                SORACLOUD_INROU_QEMU_SANDBOX_POLICY,
+                "-run-with",
+                "exit-with-parent=on",
             ]
         );
-        #[cfg(not(target_os = "linux"))]
-        assert_eq!(args, ["-no-user-config"]);
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inrou_kvm_probe_initializes_kvm_before_qmp_success() {
+        assert_eq!(
+            inrou_kvm_probe_qemu_arguments(),
+            [
+                "-machine",
+                "none",
+                "-accel",
+                "kvm",
+                "-nodefaults",
+                "-display",
+                "none",
+                "-monitor",
+                "none",
+                "-serial",
+                "none",
+                "-S",
+                "-qmp",
+                "stdio",
+                "-no-reboot",
+                "-no-shutdown",
+            ]
+        );
     }
     #[cfg(not(windows))]
     #[test]
