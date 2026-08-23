@@ -18,7 +18,9 @@ use core::{convert::Infallible, fmt};
 
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
 use sha2::{Digest as _, Sha256};
-use zeroize::{Zeroize, Zeroizing};
+#[cfg(test)]
+use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use super::{
     OFFLINE_CASH_EXACT_COMPONENT_RAW_SESSION_BYTES_V2,

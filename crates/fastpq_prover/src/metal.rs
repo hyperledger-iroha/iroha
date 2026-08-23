@@ -54,8 +54,9 @@ use fastpq_isi::poseidon::STATE_WIDTH;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 use metal::{
-    Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoderRef, ComputePipelineState, Device,
-    Library, MTLCommandBufferStatus, MTLDeviceLocation, MTLResourceOptions, MTLSize, NSRange,
+    Buffer, CommandBuffer, CommandQueue, CompileOptions, ComputeCommandEncoderRef,
+    ComputePipelineState, Device, Library, MTLCommandBufferStatus, MTLDeviceLocation,
+    MTLLanguageVersion, MTLResourceOptions, MTLSize, NSRange,
 };
 use norito::json::{self, Value};
 use smallvec::SmallVec;
@@ -120,6 +121,12 @@ const DISCRETE_QUEUE_FANOUT: usize = 2;
 const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
+// Metal's bytes-no-copy API requires both ends of the wrapped region to be
+// page-aligned. A 16 KiB region satisfies both 4 KiB Intel and 16 KiB Apple
+// Silicon macOS page sizes.
+const METAL_BUFFER_PAGE_BYTES: usize = 16 * 1024;
+const METAL_BUFFER_PAGE_WORDS: usize = METAL_BUFFER_PAGE_BYTES / mem::size_of::<u64>();
+const GOLDILOCKS_TWO_ADICITY: u32 = 32;
 const DEFAULT_MAX_COMMAND_BUFFERS: usize = 4;
 const COLUMN_STAGING_PIPE_DEPTH: usize = 2;
 const ADAPTIVE_TARGET_MS: f64 = 2.0;
@@ -168,7 +175,7 @@ static DISPATCH_TRACE_ENV: OnceLock<bool> = OnceLock::new();
 /// Return `GpuError::Unsupported` when Metal is unavailable; otherwise load
 /// the BN254 Poseidon word-batch pipeline used by FASTPQ transcript hashing.
 pub(crate) fn bn254_status() -> MetalResult<()> {
-    if Device::system_default().is_none() {
+    if select_metal_device().is_none() {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     }
     let ctx = bn254_poseidon_context()?;
@@ -200,6 +207,7 @@ impl<'a> PendingBn254Fft<'a> {
     }
 }
 pub fn bn254_fft_columns(columns: &mut [Vec<u64>], log_size: u32) -> MetalResult<()> {
+    bn254_validate_log(log_size)?;
     if columns.is_empty() {
         return Ok(());
     }
@@ -210,6 +218,7 @@ pub(crate) fn bn254_fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
 ) -> MetalResult<PendingBn254Fft<'a>> {
+    bn254_validate_log(log_size)?;
     if columns.is_empty() {
         return Ok(PendingBn254Fft::empty());
     }
@@ -246,6 +255,7 @@ pub fn bn254_lde_columns(
     blowup_log: u32,
     coset: [u64; BN254_LIMBS],
 ) -> MetalResult<Option<Vec<Vec<u64>>>> {
+    let _ = bn254_lde_domain_lengths(trace_log, blowup_log)?;
     if coeffs.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -282,6 +292,7 @@ pub(crate) fn bn254_lde_columns_async(
     blowup_log: u32,
     coset: [u64; BN254_LIMBS],
 ) -> MetalResult<PendingBn254Lde> {
+    let _ = bn254_lde_domain_lengths(trace_log, blowup_log)?;
     if coeffs.is_empty() {
         return Ok(PendingBn254Lde::empty());
     }
@@ -299,7 +310,7 @@ fn dispatch_bn254_fft_columns<'a>(
             "BN254 FFT requires at least one coefficient",
         ));
     }
-    let expected = 1usize << log_size;
+    let expected = bn254_domain_len(log_size)?;
     if element_extent != expected {
         return Err(GpuError::InvalidInput(
             "BN254 FFT columns must match the requested log size",
@@ -339,7 +350,7 @@ fn dispatch_bn254_fft_columns<'a>(
         let width = usize::try_from(batch_columns).expect("batch column count fits usize");
         let range = start..start + width;
         let mut buffer = flatten_with_stats(&columns[range.clone()], ColumnStagingPhase::Fft);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (queue, queue_index) = context.queues.select(column_count_u32, batch_index);
         let (threadgroups, threadgroup) =
             bn254_threadgroup_geometry(&context.bn254_fft, column_len_u64);
@@ -388,34 +399,18 @@ fn dispatch_bn254_lde_columns(
     blowup_log: u32,
     coset: [u64; BN254_LIMBS],
 ) -> MetalResult<PendingLde> {
-    if blowup_log == 0 {
-        return Err(GpuError::InvalidInput(
-            "BN254 LDE requires a positive blowup factor",
-        ));
-    }
-    if trace_log == 0 {
-        return Err(GpuError::InvalidInput(
-            "BN254 LDE requires a trace log greater than zero",
-        ));
-    }
+    let (expected_trace, eval_log, eval_len) = bn254_lde_domain_lengths(trace_log, blowup_log)?;
     let trace_extent = bn254_column_extent(coeffs)?;
     if trace_extent == 0 {
         return Err(GpuError::InvalidInput(
             "BN254 LDE requires at least one coefficient",
         ));
     }
-    let expected_trace = 1usize << trace_log;
     if trace_extent != expected_trace {
         return Err(GpuError::InvalidInput(
             "BN254 LDE coefficients must match the trace log size",
         ));
     }
-    let eval_log = trace_log
-        .checked_add(blowup_log)
-        .ok_or(GpuError::InvalidInput(
-            "BN254 LDE log size exceeds 32-bit representation",
-        ))?;
-    let eval_len = 1usize << eval_log;
     let context = metal_context()?;
     let stage_twiddle_buffer = context.bn254_lde_twiddle_buffer(trace_log, blowup_log)?;
     let mut coeff_buffer = flatten_with_stats(coeffs, ColumnStagingPhase::Lde);
@@ -430,12 +425,12 @@ fn dispatch_bn254_lde_columns(
         ))?;
     let mut eval_buffer = PooledBuffer::zeroed(eval_limbs);
     let host_stats = zero_timer.map(|start| LdeHostStats {
-        zero_fill_bytes: eval_buffer.as_slice().len() * mem::size_of::<u64>(),
+        zero_fill_bytes: eval_buffer.len().saturating_mul(mem::size_of::<u64>()),
         zero_fill_ms: elapsed_ms(start.elapsed()),
         queue_delta: None,
     });
-    let coeff_metal = shared_buffer(&context.device, coeff_buffer.as_mut_slice());
-    let eval_metal = shared_buffer(&context.device, eval_buffer.as_mut_slice());
+    let coeff_metal = shared_pooled_buffer(&context.device, &mut coeff_buffer);
+    let eval_metal = shared_pooled_buffer(&context.device, &mut eval_buffer);
     let coset_scalar = bn254_scalar_from_canonical_limbs(&coset)?;
     let coset_limbs = bn254_scalar_to_canonical_limbs(&coset_scalar);
     let coset_buffer = upload_bn254_coset(&context.device, &coset_limbs)?;
@@ -1483,7 +1478,7 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Poseidon,
         threadgroup_cap: Some(POSEIDON_THREADGROUP_CAPACITY),
         tile_stage_cap: None,
-        notes: "High-occupancy Poseidon2 permutation over STATE_WIDTH=3 words. \
+        notes: "High-occupancy dense-MDS Poseidon permutation over STATE_WIDTH=3 words. \
                 Threadgroups cache the round constants/MDS matrix in threadgroup memory, \
                 each lane walks multiple states (tunable via FASTPQ_METAL_POSEIDON_BATCH) \
                 with unrolled rounds, and FASTPQ_METAL_POSEIDON_LANES pins the launch width \
@@ -1642,7 +1637,7 @@ impl ColumnBatchTicket {
         if record_wait {
             record_staging_wait(ColumnStagingPhase::Fft, wait_start.elapsed());
         }
-        restore_range(columns, range, buffer.as_slice(), extent);
+        restore_range(columns, range, &buffer, extent);
         Ok(())
     }
 }
@@ -1665,7 +1660,7 @@ impl PoseidonBatchTicket {
         if record_wait {
             record_staging_wait(ColumnStagingPhase::Poseidon, wait_start.elapsed());
         }
-        states[range].copy_from_slice(buffer.as_slice());
+        buffer.copy_to_slice(&mut states[range]);
         Ok(())
     }
 }
@@ -1696,8 +1691,8 @@ impl PoseidonHashTicket {
         if record_wait {
             record_staging_wait(ColumnStagingPhase::Poseidon, wait_start.elapsed());
         }
-        for (index, chunk) in states.as_slice().chunks_exact(STATE_WIDTH).enumerate() {
-            result[column_offset + index] = chunk[0];
+        for index in 0..states.len() / STATE_WIDTH {
+            result[column_offset + index] = states.word(index * STATE_WIDTH);
         }
         Ok(())
     }
@@ -1711,7 +1706,7 @@ pub(crate) struct PendingColumns<'a> {
     columns: &'a mut [Vec<u64>],
     extent: usize,
     pending_batches: Vec<ColumnBatchTicket>,
-    _twiddle_buffer: Buffer,
+    _twiddle_buffer: Option<Buffer>,
     completed: bool,
 }
 impl<'a> PendingColumns<'a> {
@@ -1725,8 +1720,17 @@ impl<'a> PendingColumns<'a> {
             columns,
             extent,
             pending_batches,
-            _twiddle_buffer: twiddle_buffer,
+            _twiddle_buffer: Some(twiddle_buffer),
             completed: false,
+        }
+    }
+    fn identity(columns: &'a mut [Vec<u64>], extent: usize) -> Self {
+        Self {
+            columns,
+            extent,
+            pending_batches: Vec::new(),
+            _twiddle_buffer: None,
+            completed: true,
         }
     }
     /// Wait for the GPU kernel to finish and restore the column slices.
@@ -1815,9 +1819,19 @@ impl PendingLde {
         let tickets = mem::take(&mut self.tickets);
         wait_for_tickets(tickets)?;
         let mut result = Vec::with_capacity(self.column_count);
-        let chunk_len = self.eval_len.saturating_mul(self.limbs_per_elem);
-        for chunk in self.eval_buffer.as_slice().chunks(chunk_len) {
-            result.push(chunk.to_vec());
+        let chunk_len =
+            self.eval_len
+                .checked_mul(self.limbs_per_elem)
+                .ok_or(GpuError::InvalidInput(
+                    "Metal LDE output chunk length exceeds platform limits",
+                ))?;
+        for column in 0..self.column_count {
+            let mut chunk = vec![0; chunk_len];
+            let offset = column.checked_mul(chunk_len).ok_or(GpuError::InvalidInput(
+                "Metal LDE output offset exceeds platform limits",
+            ))?;
+            self.eval_buffer.copy_range_to_slice(offset, &mut chunk);
+            result.push(chunk);
         }
         if let Some(stats) = self.host_stats.take() {
             record_lde_stats(stats);
@@ -2085,7 +2099,19 @@ impl TwiddleCache {
             buffers: HashMap::new(),
         }
     }
-    fn resolve(&mut self, device: &Device, log_len: u32, root: u64, inverse: bool) -> Buffer {
+    fn resolve(
+        &mut self,
+        device: &Device,
+        log_len: u32,
+        root: u64,
+        inverse: bool,
+    ) -> MetalResult<Buffer> {
+        if log_len == 0 {
+            return Err(GpuError::InvalidInput(
+                "Metal twiddle buffers require a non-zero domain log",
+            ));
+        }
+        let _ = goldilocks_domain_len(log_len)?;
         let key = TwiddleCacheKey {
             log_len,
             root,
@@ -2093,13 +2119,17 @@ impl TwiddleCache {
         };
         if let Some(entry) = self.buffers.get(&key) {
             record_twiddle_cache_sample(entry.build_cost_ms, true);
-            return entry.buffer.clone();
+            return Ok(entry.buffer.clone());
         }
         let started = Instant::now();
         let stage_twiddles = compute_stage_twiddles(log_len, root, inverse);
+        let byte_len =
+            u64::try_from(mem::size_of_val(stage_twiddles.as_slice())).map_err(|_| {
+                GpuError::InvalidInput("Metal twiddle buffer length exceeds 64-bit representation")
+            })?;
         let buffer = device.new_buffer_with_data(
             stage_twiddles.as_ptr().cast::<c_void>(),
-            (stage_twiddles.len() * mem::size_of::<u64>()) as u64,
+            byte_len,
             MTLResourceOptions::StorageModeShared,
         );
         let build_cost_ms = elapsed_ms(started.elapsed());
@@ -2111,7 +2141,7 @@ impl TwiddleCache {
             },
         );
         record_twiddle_cache_sample(build_cost_ms, false);
-        buffer
+        Ok(buffer)
     }
 }
 struct MetalPipelines {
@@ -2151,7 +2181,7 @@ fn bn254_poseidon_context() -> MetalResult<&'static Bn254PoseidonMetalPipelines>
     }
 }
 impl MetalPipelines {
-    fn stage_twiddle_buffer(&self, log_len: u32, root: u64, inverse: bool) -> Buffer {
+    fn stage_twiddle_buffer(&self, log_len: u32, root: u64, inverse: bool) -> MetalResult<Buffer> {
         let mut cache = self
             .twiddle_cache
             .lock()
@@ -2204,12 +2234,14 @@ fn pipeline_limits(pipeline: &ComputePipelineState) -> PipelineLimits {
 /// `stage * (n/2) + offset`. Each twiddle must be four `u64` limbs in BN254
 /// Montgomery form derived from the CPU domain to preserve parity.
 pub(crate) fn upload_bn254_twiddles(device: &Device, twiddles: &[u64]) -> MetalResult<Buffer> {
-    if twiddles.len() % 4 != 0 {
+    if twiddles.is_empty() || twiddles.len() % 4 != 0 {
         return Err(GpuError::InvalidInput(
-            "BN254 twiddle buffer must be a multiple of 4 limbs",
+            "BN254 twiddle buffer must contain a non-zero multiple of 4 limbs",
         ));
     }
-    let byte_len = (twiddles.len() * mem::size_of::<u64>()) as u64;
+    let byte_len = u64::try_from(mem::size_of_val(twiddles)).map_err(|_| {
+        GpuError::InvalidInput("BN254 twiddle buffer length exceeds 64-bit representation")
+    })?;
     let buffer = device.new_buffer_with_data(
         twiddles.as_ptr().cast::<c_void>(),
         byte_len,
@@ -2239,13 +2271,12 @@ pub(crate) fn validate_bn254_twiddles_shape(
     log_size: u32,
     twiddles: &[[u64; 4]],
 ) -> MetalResult<()> {
-    if log_size == 0 {
-        return Err(GpuError::InvalidInput(
-            "BN254 twiddles require log_size > 0",
-        ));
-    }
-    let n = 1usize << log_size;
-    let expected = (log_size as usize) * (n / 2);
+    let n = bn254_domain_len(log_size)?;
+    let expected = (log_size as usize)
+        .checked_mul(n / 2)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 twiddle count exceeds platform limits",
+        ))?;
     if twiddles.len() != expected {
         return Err(GpuError::InvalidInput(
             "BN254 twiddles shape mismatch for stage-major layout",
@@ -2255,24 +2286,32 @@ pub(crate) fn validate_bn254_twiddles_shape(
 }
 /// Expected twiddle count for BN254 FFT (radix-2) given `log_size`.
 pub(crate) fn bn254_fft_twiddle_len(log_size: u32) -> MetalResult<usize> {
-    if log_size == 0 {
-        return Err(GpuError::InvalidInput("BN254 FFT requires log_size > 0"));
-    }
-    let n = 1usize << log_size;
-    Ok((log_size as usize) * (n / 2))
+    let n = bn254_domain_len(log_size)?;
+    (log_size as usize)
+        .checked_mul(n / 2)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 twiddle count exceeds platform limits",
+        ))
 }
 /// Expected twiddle count for BN254 LDE (radix-2) given trace/eval logs.
 pub(crate) fn bn254_lde_twiddle_len(trace_log: u32, blowup_log: u32) -> MetalResult<usize> {
-    if trace_log == 0 {
-        return Err(GpuError::InvalidInput("BN254 LDE requires trace_log > 0"));
+    if blowup_log == 0 {
+        return Err(GpuError::InvalidInput(
+            "BN254 LDE requires a positive blowup factor",
+        ));
     }
+    bn254_validate_log(trace_log)?;
     let eval_log = trace_log
         .checked_add(blowup_log)
         .ok_or(GpuError::InvalidInput(
             "BN254 LDE log size exceeds 32-bit representation",
         ))?;
-    let eval_len = 1usize << eval_log;
-    Ok((eval_log as usize) * (eval_len / 2))
+    let eval_len = bn254_domain_len(eval_log)?;
+    (eval_log as usize)
+        .checked_mul(eval_len / 2)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 LDE twiddle count exceeds platform limits",
+        ))
 }
 /// Upload a BN254 coset element (4 Montgomery limbs) for LDE kernels.
 pub(crate) fn upload_bn254_coset(device: &Device, coset: &[u64]) -> MetalResult<Buffer> {
@@ -2281,7 +2320,9 @@ pub(crate) fn upload_bn254_coset(device: &Device, coset: &[u64]) -> MetalResult<
             "BN254 coset must contain exactly 4 limbs",
         ));
     }
-    let byte_len = (coset.len() * mem::size_of::<u64>()) as u64;
+    let byte_len = u64::try_from(mem::size_of_val(coset)).map_err(|_| {
+        GpuError::InvalidInput("BN254 coset buffer length exceeds 64-bit representation")
+    })?;
     let buffer = device.new_buffer_with_data(
         coset.as_ptr().cast::<c_void>(),
         byte_len,
@@ -2331,17 +2372,65 @@ fn register_metal_device_hints(device: &Device) {
     ));
 }
 fn load_metal_library(device: &Device) -> MetalResult<Library> {
-    let library_path =
-        resolve_metal_library_path().ok_or_else(|| GpuError::Unsupported(GpuBackend::Metal))?;
+    if let Some(library_path) = resolve_metal_library_path() {
+        return device
+            .new_library_with_file(&library_path)
+            .map_err(|err| GpuError::Execution {
+                backend: GpuBackend::Metal,
+                message: format!("failed to load Metal library {}: {err}", library_path),
+            });
+    }
+    debug!(
+        target: "fastpq::metal",
+        "offline fastpq.metallib unavailable; compiling embedded Metal source"
+    );
+    compile_embedded_metal_library(device)
+}
+fn compile_embedded_metal_library(device: &Device) -> MetalResult<Library> {
+    let options = CompileOptions::new();
+    options.set_language_version(MTLLanguageVersion::V3_0);
+    options.set_fast_math_enabled(false);
     device
-        .new_library_with_file(&library_path)
+        .new_library_with_source(&embedded_metal_library_source(), &options)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Metal,
-            message: format!("failed to load Metal library: {err}"),
+            message: format!("failed to compile embedded Metal library: {err}"),
         })
 }
+fn embedded_metal_library_source() -> String {
+    const PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n";
+    const PARAMS: &str = include_str!("../metal/include/params.h");
+    const FIELD: &str = include_str!("../metal/kernels/field.metal");
+    const NTT: &str = include_str!("../metal/kernels/ntt_stage.metal");
+    const POSEIDON: &str = include_str!("../metal/kernels/poseidon2.metal");
+    const BN254: &str = include_str!("../metal/kernels/bn254.metal");
+
+    let mut source = String::with_capacity(
+        PRELUDE.len() + PARAMS.len() + FIELD.len() + NTT.len() + POSEIDON.len() + BN254.len(),
+    );
+    source.push_str(PRELUDE);
+    source.push_str(PARAMS);
+    source.push('\n');
+    source.push_str(FIELD);
+    source.push('\n');
+    append_embedded_translation_unit(&mut source, NTT);
+    append_embedded_translation_unit(&mut source, POSEIDON);
+    append_embedded_translation_unit(&mut source, BN254);
+    source
+}
+fn append_embedded_translation_unit(destination: &mut String, translation_unit: &str) {
+    for line in translation_unit.lines() {
+        // Quoted includes are repository-local files already embedded above.
+        // System includes remain in the source for the runtime compiler.
+        if line.trim_start().starts_with("#include \"") {
+            continue;
+        }
+        destination.push_str(line);
+        destination.push('\n');
+    }
+}
 fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
-    let Some(device) = Device::system_default() else {
+    let Some(device) = select_metal_device() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     };
     register_metal_device_hints(&device);
@@ -2362,7 +2451,7 @@ fn build_bn254_poseidon_context() -> MetalResult<Bn254PoseidonMetalPipelines> {
     })
 }
 fn build_metal_context() -> MetalResult<MetalPipelines> {
-    let Some(device) = Device::system_default() else {
+    let Some(device) = select_metal_device() else {
         return Err(GpuError::Unsupported(GpuBackend::Metal));
     };
     register_metal_device_hints(&device);
@@ -2424,19 +2513,29 @@ fn build_metal_context() -> MetalResult<MetalPipelines> {
     })
 }
 fn resolve_metal_library_path() -> Option<String> {
-    debug_env_var("FASTPQ_METAL_LIB")
-        .and_then(|path| {
-            if !path.is_empty() && Path::new(&path).exists() {
-                Some(path)
-            } else {
-                None
-            }
-        })
+    resolve_metal_library_path_candidates(
+        debug_env_var("FASTPQ_METAL_LIB"),
+        option_env!("FASTPQ_METAL_LIB"),
+    )
+}
+fn resolve_metal_library_path_candidates(
+    runtime_override: Option<String>,
+    build_path: Option<&str>,
+) -> Option<String> {
+    runtime_override
+        .filter(|path| !path.is_empty())
         .or_else(|| {
-            option_env!("FASTPQ_METAL_LIB")
-                .filter(|path| !path.is_empty() && Path::new(path).exists())
+            build_path
+                // Build-script paths live under Cargo's output directory and may
+                // disappear when a binary is packaged or moved. Unlike an explicit
+                // runtime override, a stale embedded path should use the source
+                // fallback instead of making otherwise valid Metal hardware unusable.
+                .filter(|path| !path.is_empty() && Path::new(path).is_file())
                 .map(str::to_owned)
         })
+}
+fn select_metal_device() -> Option<Device> {
+    Device::system_default().or_else(|| Device::all().into_iter().next())
 }
 fn resolve_queue_policy(device: &Device) -> QueuePolicy {
     let fanout_override = queue_fanout_override();
@@ -2588,6 +2687,7 @@ fn default_queue_column_threshold(fanout: usize) -> u32 {
 }
 #[allow(dead_code)] // Metal FFT entry point is unused when CUDA-only builds run tests
 pub fn fft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
+    let _ = goldilocks_domain_len(log_size)?;
     if columns.is_empty() {
         return Ok(());
     }
@@ -2607,9 +2707,12 @@ fn dispatch_fft_columns<'a>(
     root: u64,
     inverse: bool,
 ) -> MetalResult<PendingColumns<'a>> {
-    let extent = 1usize << log_size;
+    let extent = goldilocks_domain_len(log_size)?;
     if columns.iter().any(|column| column.len() != extent) {
         return Err(GpuError::InvalidInput("columns must share length"));
+    }
+    if columns.is_empty() || log_size == 0 {
+        return Ok(PendingColumns::identity(columns, extent));
     }
     let column_len = u64::try_from(extent)
         .map_err(|_| GpuError::InvalidInput("column length exceeds u64::MAX"))?;
@@ -2618,7 +2721,7 @@ fn dispatch_fft_columns<'a>(
     let context = metal_context()?;
     let limits = pipeline_limits(&context.fft);
     let tuning = metal_config::fft_tuning(log_size, limits.exec_width, limits.max_threads);
-    let twiddle_buffer = context.stage_twiddle_buffer(log_size, root, inverse);
+    let twiddle_buffer = context.stage_twiddle_buffer(log_size, root, inverse)?;
     let base_args = FftArgs {
         column_len,
         log_len: log_size,
@@ -2647,7 +2750,7 @@ fn dispatch_fft_columns<'a>(
         let width = usize::try_from(batch_columns).expect("batch column count fits usize");
         let range = start..start + width;
         let mut buffer = flatten_with_stats(&columns[range.clone()], ColumnStagingPhase::Fft);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (queue, queue_index) = context.queues.select(queue_total_columns, batch_index);
         let mut args = base_args;
         args.column_count = batch_columns;
@@ -2981,6 +3084,7 @@ fn submit_post_tile_dispatch(
 }
 #[allow(dead_code)] // Metal IFFT entry point is unused in non-macOS test environments
 pub fn ifft_columns(columns: &mut [Vec<u64>], log_size: u32, root: u64) -> MetalResult<()> {
+    let _ = goldilocks_domain_len(log_size)?;
     if columns.is_empty() {
         return Ok(());
     }
@@ -2996,6 +3100,7 @@ pub(crate) fn ifft_columns_async<'a>(
 }
 /// Returns the resolved FFT tuning (threadgroup lanes/tile stages) for the current Metal device.
 pub fn fft_tuning_snapshot(log_size: u32) -> MetalResult<metal_config::FftTuning> {
+    let _ = goldilocks_domain_len(log_size)?;
     let context = metal_context()?;
     let limits = pipeline_limits(&context.fft);
     Ok(metal_config::fft_tuning(
@@ -3021,6 +3126,7 @@ pub fn lde_columns(
     lde_root: u64,
     coset: u64,
 ) -> MetalResult<Option<Vec<Vec<u64>>>> {
+    let _ = goldilocks_lde_domain_lengths(trace_log, blowup_log)?;
     if coeffs.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -3034,18 +3140,12 @@ pub(crate) fn lde_columns_async(
     lde_root: u64,
     coset: u64,
 ) -> MetalResult<PendingLde> {
-    let trace_len = 1usize << trace_log;
+    let (trace_len, eval_log, eval_len) = goldilocks_lde_domain_lengths(trace_log, blowup_log)?;
     if coeffs.iter().any(|column| column.len() != trace_len) {
         return Err(GpuError::InvalidInput(
             "coefficient columns must share length",
         ));
     }
-    let eval_log = trace_log
-        .checked_add(blowup_log)
-        .ok_or(GpuError::InvalidInput(
-            "lde log size exceeds 32-bit representation",
-        ))?;
-    let eval_len = 1usize << eval_log;
     let trace_len_u64 = u64::try_from(trace_len)
         .map_err(|_| GpuError::InvalidInput("trace length exceeds u64::MAX"))?;
     let eval_len_u64 = u64::try_from(eval_len)
@@ -3057,21 +3157,27 @@ pub(crate) fn lde_columns_async(
     let stats_enabled = LDE_STATS_ENABLED.load(Ordering::Acquire);
     let queue_before = snapshot_queue_depth_stats();
     let zero_timer = stats_enabled.then(|| Instant::now());
-    let mut eval_buffer = PooledBuffer::zeroed(coeffs.len() * eval_len);
+    let eval_elements = coeffs
+        .len()
+        .checked_mul(eval_len)
+        .ok_or(GpuError::InvalidInput(
+            "LDE output length exceeds platform limits",
+        ))?;
+    let mut eval_buffer = PooledBuffer::zeroed(eval_elements);
     let queue_after = snapshot_queue_depth_stats();
     let queue_delta = match (queue_before, queue_after) {
         (Some(before), Some(after)) => Some(after.delta_since(&before)),
         _ => None,
     };
     let host_stats = zero_timer.map(|start| LdeHostStats {
-        zero_fill_bytes: eval_buffer.as_slice().len() * mem::size_of::<u64>(),
+        zero_fill_bytes: eval_buffer.len().saturating_mul(mem::size_of::<u64>()),
         zero_fill_ms: elapsed_ms(start.elapsed()),
         queue_delta,
     });
     let context = metal_context()?;
-    let coeff_metal = shared_buffer(&context.device, coeff_buffer.as_mut_slice());
-    let eval_metal = shared_buffer(&context.device, eval_buffer.as_mut_slice());
-    let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, lde_root, false);
+    let coeff_metal = shared_pooled_buffer(&context.device, &mut coeff_buffer);
+    let eval_metal = shared_pooled_buffer(&context.device, &mut eval_buffer);
+    let stage_twiddle_buffer = context.stage_twiddle_buffer(eval_log, lde_root, false)?;
     let limits = pipeline_limits(&context.lde);
     let tuning = metal_config::fft_tuning(eval_log, limits.exec_width, limits.max_threads);
     let local_stage_limit = lde_tile_stage_limit(eval_log);
@@ -3194,7 +3300,7 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
         let element_range = poseidon_element_range(offset, count)?;
         let mut buffer =
             clone_slice_with_stats(&states[element_range.clone()], ColumnStagingPhase::Poseidon);
-        let metal_buffer = shared_buffer(&context.device, buffer.as_mut_slice());
+        let metal_buffer = shared_pooled_buffer(&context.device, &mut buffer);
         let (threadgroups, threadgroup, logical_threads, states_per_lane) =
             poseidon_dispatch_geometry(count, tuning, &limits);
         let args = PoseidonArgs {
@@ -3289,15 +3395,20 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
             &payloads[payload_range.clone()],
             ColumnStagingPhase::Poseidon,
         );
-        let payload_buffer = shared_buffer(&context.device, payload_chunk.as_mut_slice());
+        let payload_buffer = shared_pooled_buffer(&context.device, &mut payload_chunk);
         let count_usize = usize::try_from(count)
             .map_err(|_| GpuError::InvalidInput("poseidon batch count exceeds usize bounds"))?;
-        let mut state_chunk = PooledBuffer::zeroed(count_usize * STATE_WIDTH);
-        let state_buffer = shared_buffer(&context.device, state_chunk.as_mut_slice());
-        let mut slice_chunk = batch
+        let state_words = count_usize
+            .checked_mul(STATE_WIDTH)
+            .ok_or(GpuError::InvalidInput(
+                "poseidon state buffer length exceeds platform limits",
+            ))?;
+        let mut state_chunk = PooledBuffer::zeroed(state_words);
+        let state_buffer = shared_pooled_buffer(&context.device, &mut state_chunk);
+        let slice_chunk = batch
             .rebased_slices(column_offset, count_usize)
             .ok_or_else(|| GpuError::InvalidInput("poseidon descriptor rebasing failed"))?;
-        let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+        let slice_buffer = copied_buffer(&context.device, &slice_chunk)?;
         let (threadgroups, threadgroup, logical_threads, states_per_lane) =
             poseidon_dispatch_geometry(count, tuning, &limits);
         let args = PoseidonArgs {
@@ -3372,9 +3483,9 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
         .map_err(|_| GpuError::InvalidInput("poseidon row column count exceeds u32::MAX"))?;
     let context = metal_context()?;
     let mut column_chunk = flatten_with_stats(columns, ColumnStagingPhase::Poseidon);
-    let column_buffer = shared_buffer(&context.device, column_chunk.as_mut_slice());
+    let column_buffer = shared_pooled_buffer(&context.device, &mut column_chunk);
     let mut result = PooledBuffer::zeroed(row_len);
-    let result_buffer = shared_buffer(&context.device, result.as_mut_slice());
+    let result_buffer = shared_pooled_buffer(&context.device, &mut result);
     let limits = pipeline_limits(&context.poseidon_hash_rows);
     let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     // Row hashing absorbs values one at a time with sponge padding. Keep each
@@ -3448,7 +3559,7 @@ pub fn poseidon_hash_rows(columns: &[Vec<u64>]) -> MetalResult<Vec<u64>> {
     for (ticket, evidence) in tickets {
         wait_for_ticket(ticket).map_err(|error| evidence.contextualize_error(error))?;
     }
-    Ok(result.as_slice().to_vec())
+    Ok(result.to_vec())
 }
 pub fn bn254_poseidon_hash_words(
     words: &[u64],
@@ -3482,9 +3593,8 @@ impl PendingBn254PoseidonWords {
     /// Wait for the dispatch and collect canonical BN254 digest bytes.
     pub(crate) fn wait(mut self) -> MetalResult<Vec<[u8; 32]>> {
         self.finish()?;
-        Ok(self
-            .output
-            .as_slice()
+        let output = self.output.to_vec();
+        Ok(output
             .chunks_exact(BN254_LIMBS)
             .map(bn254_limbs_to_bytes)
             .collect())
@@ -3568,13 +3678,13 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     let params = bn254_poseidon_width3_params();
     let staged_words = if words.is_empty() { &[0u64][..] } else { words };
     let mut word_chunk = PooledBuffer::from_slice(staged_words);
-    let word_buffer = shared_buffer(&context.device, word_chunk.as_mut_slice());
-    let mut slice_chunk = metal_slices;
-    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
+    let word_buffer = shared_pooled_buffer(&context.device, &mut word_chunk);
+    let slice_chunk = metal_slices;
+    let slice_buffer = copied_buffer(&context.device, &slice_chunk)?;
     let mut round_constants = PooledBuffer::from_slice(&params.round_constants);
-    let round_buffer = shared_buffer(&context.device, round_constants.as_mut_slice());
+    let round_buffer = shared_pooled_buffer(&context.device, &mut round_constants);
     let mut mds = PooledBuffer::from_slice(&params.mds);
-    let mds_buffer = shared_buffer(&context.device, mds.as_mut_slice());
+    let mds_buffer = shared_pooled_buffer(&context.device, &mut mds);
     let output_len = slices
         .len()
         .checked_mul(BN254_LIMBS)
@@ -3582,7 +3692,7 @@ pub(crate) fn bn254_poseidon_hash_words_async(
             "BN254 Poseidon output length overflows",
         ))?;
     let mut output = PooledBuffer::zeroed(output_len);
-    let output_buffer = shared_buffer(&context.device, output.as_mut_slice());
+    let output_buffer = shared_pooled_buffer(&context.device, &mut output);
     let limits = pipeline_limits(&context.bn254_poseidon_hash);
     let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
@@ -3670,7 +3780,8 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     let context = metal_context()?;
     let column_count = u32::try_from(batch.columns())
         .map_err(|_| GpuError::InvalidInput("poseidon column count exceeds u32::MAX"))?;
-    let parent_count = u32::try_from((batch.columns() + 1) / 2)
+    let parent_count_usize = batch.columns().div_ceil(2);
+    let parent_count = u32::try_from(parent_count_usize)
         .map_err(|_| GpuError::InvalidInput("poseidon parent count exceeds u32::MAX"))?;
     let block_count = u32::try_from(batch.block_count())
         .map_err(|_| GpuError::InvalidInput("poseidon block count exceeds u32::MAX"))?;
@@ -3682,13 +3793,20 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
         poseidon_dispatch_geometry(column_count, tuning, &limits);
     let mut payload_chunk = clone_slice_with_stats(batch.payloads(), ColumnStagingPhase::Poseidon);
-    let payload_buffer = shared_buffer(&context.device, payload_chunk.as_mut_slice());
-    let mut slice_chunk = batch
+    let payload_buffer = shared_pooled_buffer(&context.device, &mut payload_chunk);
+    let slice_chunk = batch
         .rebased_slices(0, batch.columns())
         .ok_or_else(|| GpuError::InvalidInput("poseidon descriptor rebasing failed"))?;
-    let slice_buffer = shared_buffer(&context.device, slice_chunk.as_mut_slice());
-    let mut hash_chunk = PooledBuffer::zeroed(batch.columns() + parent_count as usize);
-    let hash_buffer = shared_buffer(&context.device, hash_chunk.as_mut_slice());
+    let slice_buffer = copied_buffer(&context.device, &slice_chunk)?;
+    let hash_words =
+        batch
+            .columns()
+            .checked_add(parent_count_usize)
+            .ok_or(GpuError::InvalidInput(
+                "poseidon fused output length exceeds platform limits",
+            ))?;
+    let mut hash_chunk = PooledBuffer::zeroed(hash_words);
+    let hash_buffer = shared_pooled_buffer(&context.device, &mut hash_chunk);
     let args = PoseidonFusedArgs {
         state_count: column_count,
         states_per_lane,
@@ -3767,22 +3885,62 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
         },
     )?;
     wait_for_ticket(parent_ticket)?;
-    Ok(hash_chunk.as_slice().to_vec())
+    Ok(hash_chunk.to_vec())
 }
-fn shared_buffer<T>(device: &Device, data: &mut [T]) -> Buffer {
-    let byte_len = u64::try_from(mem::size_of_val(data))
-        .expect("Metal shared buffer length must fit into u64");
+struct MetalBufferBackingRetention {
+    backing: Mutex<Option<Arc<PooledBufferBacking>>>,
+}
+impl MetalBufferBackingRetention {
+    fn new(backing: Arc<PooledBufferBacking>) -> Self {
+        Self {
+            backing: Mutex::new(Some(backing)),
+        }
+    }
+    fn release(&self) {
+        match self.backing.lock() {
+            Ok(mut backing) => {
+                let _ = backing.take();
+            }
+            Err(poisoned) => {
+                let _ = poisoned.into_inner().take();
+            }
+        }
+    }
+}
+fn shared_pooled_buffer(device: &Device, data: &mut PooledBuffer) -> Buffer {
+    let (data_ptr, byte_len) = data.metal_region();
+    let retention = Arc::new(MetalBufferBackingRetention::new(data.backing()));
+    let completion_retention = Arc::clone(&retention);
+    let deallocator = ConcreteBlock::new(move |_: *const c_void, _: u64| {
+        completion_retention.release();
+    })
+    .copy();
     let buffer = device.new_buffer_with_bytes_no_copy(
-        data.as_mut_ptr().cast(),
+        data_ptr,
         byte_len,
         MTLResourceOptions::StorageModeShared,
-        None,
+        Some(&deallocator),
     );
     buffer.did_modify_range(NSRange {
         location: 0,
         length: byte_len,
     });
     buffer
+}
+fn copied_buffer<T>(device: &Device, data: &[T]) -> MetalResult<Buffer> {
+    let byte_len = u64::try_from(mem::size_of_val(data)).map_err(|_| {
+        GpuError::InvalidInput("Metal copied buffer length exceeds 64-bit representation")
+    })?;
+    if byte_len == 0 {
+        return Err(GpuError::InvalidInput(
+            "Metal copied buffers require at least one byte",
+        ));
+    }
+    Ok(device.new_buffer_with_data(
+        data.as_ptr().cast(),
+        byte_len,
+        MTLResourceOptions::StorageModeShared,
+    ))
 }
 fn submit_compute<F>(
     queue: &CommandQueue,
@@ -3997,7 +4155,6 @@ fn wait_for_ticket(mut ticket: DispatchTicket) -> MetalResult<()> {
             if let Some(label) = trace_label {
                 trace_dispatch_end_label(Some(label), duration.unwrap_or_default(), false);
             }
-            ticket.permit.complete();
             return Err(GpuError::Execution {
                 backend: GpuBackend::Metal,
                 message: format!("command buffer timed out after {METAL_COMMAND_TIMEOUT:?}"),
@@ -4177,36 +4334,50 @@ fn parse_lde_batch_override(raw: &str) -> Result<u32, &'static str> {
     }
     Ok(value)
 }
-fn acquire_buffer(min_capacity: usize) -> Vec<u64> {
-    if min_capacity == 0 {
-        return Vec::new();
+#[repr(C, align(16384))]
+struct MetalBufferPage {
+    words: [u64; METAL_BUFFER_PAGE_WORDS],
+}
+impl MetalBufferPage {
+    fn zeroed() -> Self {
+        Self {
+            words: [0; METAL_BUFFER_PAGE_WORDS],
+        }
     }
-    buffer_pool()
+}
+fn metal_buffer_page_count(word_len: usize) -> usize {
+    word_len.div_ceil(METAL_BUFFER_PAGE_WORDS).max(1)
+}
+fn acquire_buffer(word_len: usize) -> Vec<MetalBufferPage> {
+    let page_count = metal_buffer_page_count(word_len);
+    let mut pages = buffer_pool()
         .lock()
         .expect("buffer pool poisoned")
-        .take(min_capacity)
+        .take(page_count);
+    pages.resize_with(page_count, MetalBufferPage::zeroed);
+    pages
 }
 #[derive(Default)]
 struct BufferPool {
-    spare: Vec<Vec<u64>>,
+    spare: Vec<Vec<MetalBufferPage>>,
 }
 impl BufferPool {
-    fn take(&mut self, min_capacity: usize) -> Vec<u64> {
+    fn take(&mut self, min_pages: usize) -> Vec<MetalBufferPage> {
         let mut candidate = None;
         let mut best_capacity = usize::MAX;
         for (idx, buffer) in self.spare.iter().enumerate() {
             let capacity = buffer.capacity();
-            if capacity >= min_capacity && capacity < best_capacity {
+            if capacity >= min_pages && capacity < best_capacity {
                 candidate = Some(idx);
                 best_capacity = capacity;
             }
         }
         match candidate {
             Some(idx) => self.spare.swap_remove(idx),
-            None => Vec::with_capacity(min_capacity),
+            None => Vec::with_capacity(min_pages),
         }
     }
-    fn recycle(&mut self, mut buffer: Vec<u64>) {
+    fn recycle(&mut self, mut buffer: Vec<MetalBufferPage>) {
         if buffer.capacity() == 0 {
             return;
         }
@@ -4222,49 +4393,139 @@ impl BufferPool {
         self.spare.len()
     }
 }
-struct PooledBuffer {
-    data: Vec<u64>,
+struct PooledBufferBacking {
+    pages: Vec<MetalBufferPage>,
+    logical_len: usize,
 }
-impl PooledBuffer {
-    fn from_columns(columns: &[Vec<u64>]) -> Self {
-        let len = columns.first().map_or(0, Vec::len);
-        let total_len = len.saturating_mul(columns.len());
-        let mut data = acquire_buffer(total_len);
-        data.clear();
-        for column in columns {
-            data.extend_from_slice(column);
-        }
-        Self { data }
-    }
-    fn from_slice(elements: &[u64]) -> Self {
-        let mut data = acquire_buffer(elements.len());
-        data.clear();
-        data.extend_from_slice(elements);
-        Self { data }
-    }
-    fn zeroed(len: usize) -> Self {
-        let mut data = acquire_buffer(len);
-        data.resize(len, 0);
-        Self { data }
-    }
-    fn as_slice(&self) -> &[u64] {
-        &self.data
-    }
-    fn as_mut_slice(&mut self) -> &mut [u64] {
-        self.data.as_mut_slice()
-    }
-}
-impl Drop for PooledBuffer {
+impl Drop for PooledBufferBacking {
     fn drop(&mut self) {
-        if self.data.capacity() == 0 {
-            self.data.clear();
+        let pages = mem::take(&mut self.pages);
+        if pages.capacity() == 0 {
             return;
         }
-        let buffer = mem::take(&mut self.data);
-        buffer_pool()
-            .lock()
-            .expect("buffer pool poisoned")
-            .recycle(buffer);
+        if let Ok(mut pool) = buffer_pool().lock() {
+            pool.recycle(pages);
+        }
+    }
+}
+struct PooledBuffer {
+    backing: Arc<PooledBufferBacking>,
+}
+impl PooledBuffer {
+    fn from_pages(pages: Vec<MetalBufferPage>, logical_len: usize) -> Self {
+        Self {
+            backing: Arc::new(PooledBufferBacking { pages, logical_len }),
+        }
+    }
+    fn from_columns(columns: &[Vec<u64>]) -> Self {
+        let total_len = columns.iter().fold(0usize, |total, column| {
+            total
+                .checked_add(column.len())
+                .expect("pooled column buffer length overflow")
+        });
+        let mut buffer = Self::zeroed(total_len);
+        let mut offset = 0usize;
+        for column in columns {
+            buffer.copy_from_slice_at(offset, column);
+            offset += column.len();
+        }
+        buffer
+    }
+    fn from_slice(elements: &[u64]) -> Self {
+        let mut buffer = Self::zeroed(elements.len());
+        buffer.copy_from_slice_at(0, elements);
+        buffer
+    }
+    fn zeroed(len: usize) -> Self {
+        Self::from_pages(acquire_buffer(len), len)
+    }
+    fn len(&self) -> usize {
+        self.backing.logical_len
+    }
+    fn copy_from_slice_at(&mut self, offset: usize, source: &[u64]) {
+        let backing = Arc::get_mut(&mut self.backing)
+            .expect("pooled buffer cannot be mutated after Metal retains its backing");
+        let end = offset
+            .checked_add(source.len())
+            .expect("pooled buffer write range overflow");
+        assert!(
+            end <= backing.logical_len,
+            "pooled buffer write out of bounds"
+        );
+        let mut source_offset = 0usize;
+        let mut target_offset = offset;
+        while source_offset < source.len() {
+            let page_index = target_offset / METAL_BUFFER_PAGE_WORDS;
+            let page_offset = target_offset % METAL_BUFFER_PAGE_WORDS;
+            let copy_len =
+                (source.len() - source_offset).min(METAL_BUFFER_PAGE_WORDS - page_offset);
+            backing.pages[page_index].words[page_offset..page_offset + copy_len]
+                .copy_from_slice(&source[source_offset..source_offset + copy_len]);
+            source_offset += copy_len;
+            target_offset += copy_len;
+        }
+    }
+    fn copy_range_to_slice(&self, offset: usize, destination: &mut [u64]) {
+        let end = offset
+            .checked_add(destination.len())
+            .expect("pooled buffer read range overflow");
+        assert!(
+            end <= self.backing.logical_len,
+            "pooled buffer read out of bounds"
+        );
+        let mut destination_offset = 0usize;
+        let mut source_offset = offset;
+        while destination_offset < destination.len() {
+            let page_index = source_offset / METAL_BUFFER_PAGE_WORDS;
+            let page_offset = source_offset % METAL_BUFFER_PAGE_WORDS;
+            let copy_len =
+                (destination.len() - destination_offset).min(METAL_BUFFER_PAGE_WORDS - page_offset);
+            destination[destination_offset..destination_offset + copy_len].copy_from_slice(
+                &self.backing.pages[page_index].words[page_offset..page_offset + copy_len],
+            );
+            destination_offset += copy_len;
+            source_offset += copy_len;
+        }
+    }
+    fn copy_to_slice(&self, destination: &mut [u64]) {
+        assert_eq!(
+            destination.len(),
+            self.backing.logical_len,
+            "pooled buffer destination length mismatch"
+        );
+        self.copy_range_to_slice(0, destination);
+    }
+    fn to_vec(&self) -> Vec<u64> {
+        let mut words = vec![0; self.backing.logical_len];
+        self.copy_to_slice(&mut words);
+        words
+    }
+    fn word(&self, index: usize) -> u64 {
+        assert!(
+            index < self.backing.logical_len,
+            "pooled buffer read out of bounds"
+        );
+        let page_index = index / METAL_BUFFER_PAGE_WORDS;
+        let page_offset = index % METAL_BUFFER_PAGE_WORDS;
+        self.backing.pages[page_index].words[page_offset]
+    }
+    fn metal_region(&mut self) -> (*const c_void, u64) {
+        let backing = Arc::get_mut(&mut self.backing)
+            .expect("pooled buffer cannot be shared with Metal more than once");
+        let byte_len = backing
+            .pages
+            .len()
+            .checked_mul(mem::size_of::<MetalBufferPage>())
+            .and_then(|len| u64::try_from(len).ok())
+            .expect("Metal shared buffer length must fit into u64");
+        (backing.pages.as_mut_ptr().cast(), byte_len)
+    }
+    fn backing(&self) -> Arc<PooledBufferBacking> {
+        Arc::clone(&self.backing)
+    }
+    #[cfg(test)]
+    fn weak_backing_for_tests(&self) -> std::sync::Weak<PooledBufferBacking> {
+        Arc::downgrade(&self.backing)
     }
 }
 struct CommandSemaphoreState {
@@ -4499,7 +4760,10 @@ impl CommandSemaphore {
         true
     }
     fn release(&self) {
-        let mut guard = self.state.lock().expect("command semaphore poisoned");
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *guard == 0 {
             return;
         }
@@ -4560,7 +4824,13 @@ impl CommandPermit {
 }
 impl Drop for CommandPermit {
     fn drop(&mut self) {
-        self.complete();
+        // A committed command buffer owns a completion-handler clone. Releasing its permit here
+        // would let a timed-out or partially submitted batch exceed the configured in-flight cap
+        // while Metal is still executing it. Unlaunched permits have no callback and must be
+        // returned immediately.
+        if !self.completion.is_launched() {
+            self.complete();
+        }
     }
 }
 struct CommandPermitCompletion {
@@ -4586,6 +4856,9 @@ impl CommandPermitCompletion {
         {
             record_queue_launch(self.queue_index);
         }
+    }
+    fn is_launched(&self) -> bool {
+        self.launched.load(Ordering::Acquire)
     }
     fn complete(&self) {
         if self.launched.swap(false, Ordering::AcqRel) {
@@ -4811,15 +5084,17 @@ fn trace_dispatch_end_label(label: Option<String>, duration: Duration, success: 
         "Metal kernel completed"
     );
 }
-fn restore_range(columns: &mut [Vec<u64>], range: Range<usize>, buffer: &[u64], extent: usize) {
+fn restore_range(
+    columns: &mut [Vec<u64>],
+    range: Range<usize>,
+    buffer: &PooledBuffer,
+    extent: usize,
+) {
     if range.is_empty() {
         return;
     }
-    restore(&mut columns[range], buffer, extent);
-}
-fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
-    for (column, chunk) in columns.iter_mut().zip(buffer.chunks_exact(extent)) {
-        column.copy_from_slice(chunk);
+    for (batch_offset, column) in columns[range].iter_mut().enumerate() {
+        buffer.copy_range_to_slice(batch_offset * extent, column);
     }
 }
 fn bn254_two_adicity() -> u32 {
@@ -4837,6 +5112,55 @@ fn bn254_validate_log(log_size: u32) -> MetalResult<()> {
         ));
     }
     Ok(())
+}
+fn bn254_domain_len(log_size: u32) -> MetalResult<usize> {
+    bn254_validate_log(log_size)?;
+    1usize.checked_shl(log_size).ok_or(GpuError::InvalidInput(
+        "BN254 domain length exceeds platform limits",
+    ))
+}
+fn bn254_lde_domain_lengths(trace_log: u32, blowup_log: u32) -> MetalResult<(usize, u32, usize)> {
+    if blowup_log == 0 {
+        return Err(GpuError::InvalidInput(
+            "BN254 LDE requires a positive blowup factor",
+        ));
+    }
+    let trace_len = bn254_domain_len(trace_log)?;
+    let eval_log = trace_log
+        .checked_add(blowup_log)
+        .ok_or(GpuError::InvalidInput(
+            "BN254 LDE log size exceeds 32-bit representation",
+        ))?;
+    let eval_len = bn254_domain_len(eval_log)?;
+    Ok((trace_len, eval_log, eval_len))
+}
+fn goldilocks_domain_len(log_size: u32) -> MetalResult<usize> {
+    if log_size > GOLDILOCKS_TWO_ADICITY {
+        return Err(GpuError::InvalidInput(
+            "Goldilocks domain log exceeds two-adicity",
+        ));
+    }
+    1usize.checked_shl(log_size).ok_or(GpuError::InvalidInput(
+        "Goldilocks domain length exceeds platform limits",
+    ))
+}
+fn goldilocks_lde_domain_lengths(
+    trace_log: u32,
+    blowup_log: u32,
+) -> MetalResult<(usize, u32, usize)> {
+    if blowup_log == 0 {
+        return Err(GpuError::InvalidInput(
+            "LDE requires a positive blowup factor",
+        ));
+    }
+    let trace_len = goldilocks_domain_len(trace_log)?;
+    let eval_log = trace_log
+        .checked_add(blowup_log)
+        .ok_or(GpuError::InvalidInput(
+            "LDE log size exceeds 32-bit representation",
+        ))?;
+    let eval_len = goldilocks_domain_len(eval_log)?;
+    Ok((trace_len, eval_log, eval_len))
 }
 fn bn254_scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = value.to_bytes();
@@ -4864,10 +5188,15 @@ fn bn254_limbs_slice_to_scalar(slice: &[u64]) -> MetalResult<Bn254Scalar> {
     bn254_scalar_from_canonical_limbs(&limbs)
 }
 fn bn254_stage_twiddles_scalars(log_size: u32) -> MetalResult<Vec<Bn254Scalar>> {
-    bn254_validate_log(log_size)?;
-    let n = 1usize << log_size;
+    let n = bn254_domain_len(log_size)?;
     let stage_span = n / 2;
-    let mut twiddles = vec![Bn254Scalar::zero(); (log_size as usize) * stage_span];
+    let twiddle_count =
+        (log_size as usize)
+            .checked_mul(stage_span)
+            .ok_or(GpuError::InvalidInput(
+                "BN254 twiddle count exceeds platform limits",
+            ))?;
+    let mut twiddles = vec![Bn254Scalar::zero(); twiddle_count];
     let max_log = bn254_two_adicity();
     let mut omega = Bn254Scalar::from(Bn254Fr::ROOT_OF_UNITY);
     let exponent = 1u64 << (max_log - log_size);
@@ -5102,6 +5431,14 @@ mod bn254_helper_tests {
         assert!(matches!(err, GpuError::InvalidInput(_)));
     }
     #[test]
+    fn upload_bn254_twiddles_rejects_an_empty_metal_buffer() {
+        let Some(device) = Device::system_default() else {
+            return;
+        };
+        let err = upload_bn254_twiddles(&device, &[]).expect_err("expected empty rejection");
+        assert!(matches!(err, GpuError::InvalidInput(_)));
+    }
+    #[test]
     fn flatten_bn254_twiddles_concatenates_limbs() {
         let inputs = [[1u64, 2, 3, 4], [5, 6, 7, 8]];
         let flat = super::flatten_bn254_twiddles(&inputs);
@@ -5130,6 +5467,22 @@ mod bn254_helper_tests {
         assert!(super::bn254_fft_twiddle_len(0).is_err());
         assert_eq!(super::bn254_lde_twiddle_len(2, 1).unwrap(), 12);
         assert!(super::bn254_lde_twiddle_len(0, 1).is_err());
+        assert!(super::bn254_lde_twiddle_len(2, 0).is_err());
+    }
+    #[test]
+    fn bn254_twiddle_len_helpers_reject_oversized_logs_without_panicking() {
+        assert!(matches!(
+            super::bn254_fft_twiddle_len(u32::MAX),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            super::bn254_lde_twiddle_len(u32::MAX, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            super::bn254_lde_twiddle_len(1, u32::MAX),
+            Err(GpuError::InvalidInput(_))
+        ));
     }
     #[test]
     fn stage_bn254_twiddles_rejects_zero_log() {
@@ -5173,6 +5526,186 @@ mod tests {
     use iroha_crypto::Hash;
     use std::{thread, time::Duration};
     const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
+    const REQUIRED_PIPELINES: &[&str] = &[
+        POSEIDON_PERMUTE_KERNEL,
+        POSEIDON_HASH_KERNEL,
+        POSEIDON_HASH_ROWS_KERNEL,
+        POSEIDON_TRACE_FUSED_KERNEL,
+        POSEIDON_TRACE_PARENTS_KERNEL,
+        FFT_KERNEL,
+        LDE_KERNEL,
+        POST_TILE_KERNEL,
+        BN254_FFT_KERNEL,
+        BN254_LDE_KERNEL,
+        BN254_POSEIDON_HASH_KERNEL,
+    ];
+    #[test]
+    fn embedded_metal_source_is_self_contained() {
+        let source = embedded_metal_library_source();
+        assert!(
+            !source
+                .lines()
+                .any(|line| line.trim_start().starts_with("#include \"")),
+            "runtime Metal source must not depend on repository-relative includes"
+        );
+        for name in REQUIRED_PIPELINES {
+            assert!(
+                source.contains(&format!("kernel void {name}")),
+                "runtime Metal source is missing {name}"
+            );
+        }
+    }
+    #[test]
+    fn metal_library_resolution_fails_closed_only_for_explicit_override() {
+        let missing = "/definitely/missing/fastpq.metallib";
+        assert_eq!(
+            resolve_metal_library_path_candidates(Some(missing.to_owned()), None).as_deref(),
+            Some(missing),
+            "an invalid explicit override must reach the loader and report an error"
+        );
+        assert_eq!(
+            resolve_metal_library_path_candidates(None, Some(missing)),
+            None,
+            "a stale build-time path must select embedded source fallback"
+        );
+    }
+    #[test]
+    fn embedded_metal_source_builds_every_required_pipeline() {
+        let Some(device) = select_metal_device() else {
+            return;
+        };
+        let library = compile_embedded_metal_library(&device)
+            .expect("embedded Metal source should compile on a visible device");
+        for name in REQUIRED_PIPELINES {
+            load_pipeline(&device, &library, name)
+                .unwrap_or_else(|error| panic!("embedded Metal pipeline {name} failed: {error}"));
+        }
+    }
+    #[test]
+    fn zero_log_goldilocks_fft_and_ifft_are_identity_without_dispatch() {
+        let original = vec![vec![3], vec![7]];
+        let mut columns = original.clone();
+        fft_columns_async(&mut columns, 0, 1)
+            .expect("length-one FFT should be accepted")
+            .wait()
+            .expect("identity FFT wait should succeed");
+        assert_eq!(columns, original);
+
+        ifft_columns_async(&mut columns, 0, 1)
+            .expect("length-one IFFT should be accepted")
+            .wait()
+            .expect("identity IFFT wait should succeed");
+        assert_eq!(columns, original);
+    }
+    #[test]
+    fn oversized_metal_domain_logs_return_invalid_input_before_device_setup() {
+        let mut columns = vec![vec![1]];
+        assert!(matches!(
+            fft_columns_async(&mut columns, u32::MAX, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ifft_columns_async(&mut columns, u32::MAX, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            fft_tuning_snapshot(u32::MAX),
+            Err(GpuError::InvalidInput(_))
+        ));
+
+        let coeffs = vec![vec![1]];
+        assert!(matches!(
+            lde_columns_async(&coeffs, u32::MAX, 1, 1, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            lde_columns_async(&coeffs, 0, u32::MAX, 1, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+
+        let mut bn254_columns = vec![vec![0; BN254_LIMBS]];
+        assert!(matches!(
+            bn254_fft_columns_async(&mut bn254_columns, u32::MAX),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            bn254_lde_columns_async(&bn254_columns, u32::MAX, 1, [0; BN254_LIMBS]),
+            Err(GpuError::InvalidInput(_))
+        ));
+    }
+    #[test]
+    fn empty_metal_inputs_still_validate_domain_parameters() {
+        let mut columns = Vec::<Vec<u64>>::new();
+        assert!(matches!(
+            fft_columns(&mut columns, u32::MAX, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            ifft_columns(&mut columns, u32::MAX, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            lde_columns(&columns, u32::MAX, 1, 1, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            lde_columns(&columns, 0, 0, 1, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+
+        assert!(matches!(
+            bn254_fft_columns(&mut columns, u32::MAX),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            bn254_fft_columns_async(&mut columns, 0),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            bn254_lde_columns(&columns, 1, 0, [0; BN254_LIMBS]),
+            Err(GpuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            bn254_lde_columns_async(&columns, u32::MAX, 1, [0; BN254_LIMBS]),
+            Err(GpuError::InvalidInput(_))
+        ));
+    }
+    #[test]
+    fn valid_empty_metal_inputs_complete_without_device_setup() {
+        let mut columns = Vec::<Vec<u64>>::new();
+        fft_columns(&mut columns, 0, 1).expect("empty Goldilocks FFT should be a no-op");
+        ifft_columns(&mut columns, 0, 1).expect("empty Goldilocks IFFT should be a no-op");
+        assert_eq!(
+            lde_columns(&columns, 0, 1, 1, 1).expect("empty Goldilocks LDE should succeed"),
+            Some(Vec::new())
+        );
+
+        bn254_fft_columns(&mut columns, 1).expect("empty BN254 FFT should be a no-op");
+        bn254_fft_columns_async(&mut columns, 1)
+            .expect("empty BN254 async FFT should be accepted")
+            .wait()
+            .expect("empty BN254 async FFT wait should succeed");
+        assert_eq!(
+            bn254_lde_columns(&columns, 1, 1, [0; BN254_LIMBS])
+                .expect("empty BN254 LDE should succeed"),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            bn254_lde_columns_async(&columns, 1, 1, [0; BN254_LIMBS])
+                .expect("empty BN254 async LDE should be accepted")
+                .wait()
+                .expect("empty BN254 async LDE wait should succeed"),
+            Some(Vec::new())
+        );
+    }
+    #[test]
+    fn goldilocks_lde_rejects_zero_blowup_before_device_setup() {
+        let coeffs = vec![vec![1, 2]];
+        assert!(matches!(
+            lde_columns_async(&coeffs, 1, 0, 1, 1),
+            Err(GpuError::InvalidInput(_))
+        ));
+    }
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
         (0..column_count)
@@ -5533,21 +6066,139 @@ mod tests {
         }
     }
     #[test]
-    fn buffer_pool_recycles_vectors() {
+    fn buffer_pool_recycles_aligned_page_vectors() {
         let mut pool = BufferPool::default();
         assert_eq!(pool.len_for_tests(), 0);
-        let buffer = pool.take(16);
-        assert!(buffer.capacity() >= 16);
+        let buffer = pool.take(2);
+        assert!(buffer.capacity() >= 2);
         pool.recycle(buffer);
         assert_eq!(pool.len_for_tests(), 1);
-        let buffer = pool.take(8);
-        assert!(buffer.capacity() >= 8);
+        let buffer = pool.take(1);
+        assert!(buffer.capacity() >= 1);
         assert_eq!(pool.len_for_tests(), 0);
     }
     #[test]
     fn pooled_buffer_zeroed_is_preinitialized() {
         let buffer = PooledBuffer::zeroed(4);
-        assert_eq!(buffer.as_slice(), &[0, 0, 0, 0]);
+        assert_eq!(buffer.to_vec(), [0, 0, 0, 0]);
+    }
+    #[test]
+    fn pooled_buffer_copy_roundtrips_across_page_boundaries() {
+        let words = (0..METAL_BUFFER_PAGE_WORDS + 3)
+            .map(|index| index as u64)
+            .collect::<Vec<_>>();
+        let buffer = PooledBuffer::from_slice(&words);
+        assert_eq!(buffer.to_vec(), words);
+
+        let mut boundary = [0; 4];
+        buffer.copy_range_to_slice(METAL_BUFFER_PAGE_WORDS - 2, &mut boundary);
+        assert_eq!(
+            boundary,
+            [
+                (METAL_BUFFER_PAGE_WORDS - 2) as u64,
+                (METAL_BUFFER_PAGE_WORDS - 1) as u64,
+                METAL_BUFFER_PAGE_WORDS as u64,
+                (METAL_BUFFER_PAGE_WORDS + 1) as u64,
+            ]
+        );
+    }
+    #[test]
+    fn pooled_buffer_region_is_page_aligned_and_page_rounded() {
+        assert_eq!(mem::align_of::<MetalBufferPage>(), METAL_BUFFER_PAGE_BYTES);
+        assert_eq!(mem::size_of::<MetalBufferPage>(), METAL_BUFFER_PAGE_BYTES);
+        for logical_words in [
+            0,
+            1,
+            METAL_BUFFER_PAGE_WORDS - 1,
+            METAL_BUFFER_PAGE_WORDS,
+            METAL_BUFFER_PAGE_WORDS + 1,
+        ] {
+            let mut buffer = PooledBuffer::zeroed(logical_words);
+            let (pointer, byte_len) = buffer.metal_region();
+            assert_eq!(pointer as usize % METAL_BUFFER_PAGE_BYTES, 0);
+            assert_eq!(byte_len as usize % METAL_BUFFER_PAGE_BYTES, 0);
+            assert!(byte_len as usize >= logical_words * mem::size_of::<u64>());
+            assert_eq!(
+                byte_len as usize,
+                metal_buffer_page_count(logical_words) * METAL_BUFFER_PAGE_BYTES
+            );
+        }
+    }
+    #[test]
+    fn aligned_pooled_buffer_can_back_a_metal_buffer_until_deallocation() {
+        let Some(device) = select_metal_device() else {
+            return;
+        };
+        let mut buffer = PooledBuffer::from_slice(&[1, 2, 3, 4]);
+        let weak_backing = buffer.weak_backing_for_tests();
+        let metal_buffer = shared_pooled_buffer(&device, &mut buffer);
+
+        drop(buffer);
+        assert!(weak_backing.upgrade().is_some());
+        drop(metal_buffer);
+        for _ in 0..64 {
+            if weak_backing.upgrade().is_none() {
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(
+            weak_backing.upgrade().is_none(),
+            "Metal buffer deallocation must release its aligned backing"
+        );
+    }
+    #[test]
+    fn partial_batch_abort_retains_each_backing_until_metal_deallocation() {
+        let buffers = [PooledBuffer::zeroed(4), PooledBuffer::zeroed(8)];
+        let weak_backings = buffers
+            .iter()
+            .map(PooledBuffer::weak_backing_for_tests)
+            .collect::<Vec<_>>();
+        let retentions = buffers
+            .iter()
+            .map(|buffer| MetalBufferBackingRetention::new(buffer.backing()))
+            .collect::<Vec<_>>();
+
+        drop(buffers);
+        assert!(
+            weak_backings
+                .iter()
+                .all(|backing| backing.upgrade().is_some())
+        );
+
+        retentions[0].release();
+        assert!(weak_backings[0].upgrade().is_none());
+        assert!(weak_backings[1].upgrade().is_some());
+        retentions[1].release();
+        assert!(weak_backings[1].upgrade().is_none());
+    }
+    #[test]
+    fn callback_release_paths_recover_poisoned_locks() {
+        let buffer = PooledBuffer::zeroed(4);
+        let weak_backing = buffer.weak_backing_for_tests();
+        let retention = MetalBufferBackingRetention::new(buffer.backing());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = retention.backing.lock().expect("retention lock");
+            panic!("poison retention lock for callback regression");
+        }));
+        assert!(poisoned.is_err());
+        drop(buffer);
+        retention.release();
+        assert!(weak_backing.upgrade().is_none());
+
+        let semaphore = CommandSemaphore::new(1);
+        *semaphore.state.lock().expect("semaphore lock") = 1;
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = semaphore.state.lock().expect("semaphore lock");
+            panic!("poison semaphore lock for callback regression");
+        }));
+        assert!(poisoned.is_err());
+        semaphore.release();
+        let in_flight = *semaphore
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(in_flight, 0);
     }
     #[test]
     fn queue_stats_capture_overlap() {
@@ -5582,6 +6233,36 @@ mod tests {
         super::enable_queue_depth_stats(false);
         assert_eq!(stats.dispatch_count, 1);
         assert_eq!(stats.queues[0].dispatch_count, 1);
+    }
+    #[test]
+    fn launched_permit_drop_defers_release_to_completion_handler() {
+        let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
+        assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
+        let completion = Arc::new(super::CommandPermitCompletion::new(semaphore, 0));
+        let mut permit = super::CommandPermit {
+            completion: Arc::clone(&completion),
+        };
+        permit.mark_launched();
+
+        drop(permit);
+        assert_eq!(
+            semaphore.in_flight_for_tests(),
+            1,
+            "a timed-out/dropped launched ticket must keep its permit"
+        );
+        completion.complete();
+        assert_eq!(semaphore.in_flight_for_tests(), 0);
+    }
+    #[test]
+    fn unlaunched_permit_drop_releases_immediately() {
+        let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
+        assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
+        let permit = super::CommandPermit {
+            completion: Arc::new(super::CommandPermitCompletion::new(semaphore, 0)),
+        };
+
+        drop(permit);
+        assert_eq!(semaphore.in_flight_for_tests(), 0);
     }
     #[test]
     fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {

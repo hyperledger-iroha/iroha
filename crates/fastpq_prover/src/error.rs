@@ -61,6 +61,16 @@ pub enum Error {
     /// Lookup grand-product does not match the recomputed accumulator.
     #[error("lookup grand product mismatch")]
     LookupGrandProductMismatch,
+    /// Lookup selector and witness columns have different lengths.
+    #[error(
+        "lookup selector/witness column length mismatch: selector has {selector_len} values, witness has {witness_len}"
+    )]
+    LookupColumnLengthMismatch {
+        /// Number of selector evaluations supplied by the caller.
+        selector_len: usize,
+        /// Number of witness evaluations supplied by the caller.
+        witness_len: usize,
+    },
     /// AIR trace Merkle root mismatch detected during verification.
     #[error("AIR trace root mismatch")]
     AirTraceRootMismatch,
@@ -129,6 +139,34 @@ pub enum Error {
         /// Round exhibiting the mismatch.
         round: usize,
     },
+    /// The configured reduction limit cannot expose a complete terminal FRI layer.
+    #[error(
+        "FRI reduction limit {max_reductions} leaves {remaining} values; terminal layer must contain at most {arity}"
+    )]
+    FriReductionLimit {
+        /// Maximum reductions admitted by the parameter set.
+        max_reductions: u32,
+        /// Values remaining after exhausting the reduction limit.
+        remaining: usize,
+        /// Maximum complete terminal layer size.
+        arity: usize,
+    },
+    /// The claimed terminal degree bound is not smaller than its evaluation domain.
+    #[error(
+        "FRI terminal degree bound {degree_bound} is not smaller than terminal domain length {domain_len}"
+    )]
+    FriTerminalDegreeBound {
+        /// Exclusive polynomial degree bound after all reductions.
+        degree_bound: usize,
+        /// Number of terminal-domain evaluations.
+        domain_len: usize,
+    },
+    /// Authenticated terminal evaluations do not satisfy the claimed degree bound.
+    #[error("FRI terminal polynomial is not below exclusive degree bound {degree_bound}")]
+    FriTerminalDegreeMismatch {
+        /// Exclusive polynomial degree bound after all reductions.
+        degree_bound: usize,
+    },
     /// Query count mismatch between proof and verifier transcript.
     #[error("query count mismatch: expected {expected}, got {actual}")]
     QueryCountMismatch {
@@ -172,6 +210,24 @@ pub enum Error {
     TraceLengthOverflow {
         /// Number of rows encountered during proving.
         rows: usize,
+    },
+    /// The padded trace does not fit the selected parameter set's trace domain.
+    #[error(
+        "trace requires {padded_rows} padded rows for {rows} transitions, exceeding parameter capacity {max_rows}"
+    )]
+    TraceDomainCapacityExceeded {
+        /// Number of transition rows supplied by the caller.
+        rows: usize,
+        /// Power-of-two trace length required after mandatory padding.
+        padded_rows: usize,
+        /// Maximum trace length admitted by the selected parameter set.
+        max_rows: usize,
+    },
+    /// A caller-supplied trace does not use the canonical padded column shape.
+    #[error("invalid FASTPQ trace shape: {details}")]
+    InvalidTraceShape {
+        /// Human-readable description of the malformed shape.
+        details: String,
     },
     /// Query index exceeded the 32-bit representation limit.
     #[error("query index {index} exceeds 32-bit bound")]

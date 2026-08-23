@@ -146,6 +146,7 @@ def test_paired_public_identity_file_passes(tmp_path: pathlib.Path) -> None:
 @pytest.mark.parametrize(
     ("configured", "drifted"),
     [
+        ("[torii.mcp]", "[torii.disabled_mcp]"),
         ("enabled = true", "enabled = 1"),
         ('profile = "writer"', 'profile = "read_only"'),
         ("expose_operator_routes = false", "expose_operator_routes = true"),

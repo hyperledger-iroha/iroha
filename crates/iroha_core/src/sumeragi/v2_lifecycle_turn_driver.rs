@@ -1,7 +1,8 @@
 //! Unified lifecycle ownership for one outer Completion or Ingress turn.
 
 use super::super::{
-    ingress_position::FairIngressQueueCutError, selector::CertifiedServeExactDequeueErrorV1,
+    ingress_position::FairIngressQueueCutError,
+    selector::{CertifiedServeExactDequeueErrorV1, LifecycleIngressSelectorError},
 };
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{

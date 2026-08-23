@@ -207,6 +207,13 @@ struct CachedProofEntry {
     valid: bool,
     status: &'static str,
 }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum AxtProofAdmission {
+    // TODO: Admit this path only after the exact source roots and transaction
+    // set are authenticated by an authoritative finalized/QC-backed source-state anchor.
+    StandaloneUnanchored,
+    AuthenticatedHandle,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AxtIssuerKeyBinding {
     manifest_root: [u8; 32],
@@ -6338,8 +6345,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         dsid: DataSpaceId,
         proof: &ProofBlob,
         policy: AxtPolicyEntry,
+        admission: AxtProofAdmission,
     ) -> Result<(), ivm::VMError> {
         self.clear_axt_reject();
+        if admission == AxtProofAdmission::StandaloneUnanchored {
+            self.note_axt_proof_cache_event(AXT_PROOF_CACHE_REJECT);
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                "standalone FASTPQ proof admission is unavailable until AXT_VERIFY_DS_PROOF binds the source roots and transaction set to an authoritative finalized source-state anchor",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
         let current_slot = Some(policy.current_slot);
         let expected_manifest = Some(policy.manifest_root);
         self.reset_axt_proof_cache_for_slot(current_slot);
@@ -6358,6 +6376,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Some(dsid),
                 Some(policy.target_lane),
                 "empty proof payload",
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
             );
             return Err(ivm::VMError::NoritoInvalid);
         }
@@ -9203,9 +9233,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             ivm::VMError::PermissionDenied
         })?;
-        self.reset_axt_proof_cache_for_slot(Some(policy.current_slot));
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
+            self.reset_axt_proof_cache_for_slot(Some(policy.current_slot));
             let gas = Self::axt_verify_gas(0);
             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
             let state = Arc::make_mut(self.axt_state.as_mut().expect("axt_state checked above"));
@@ -9231,7 +9261,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             ivm::VMError::NoritoInvalid
         })?;
         axt::validate_proof_blob(&proof)?;
-        self.validate_axt_proof(dsid, &proof, policy)?;
+        self.validate_axt_proof(
+            dsid,
+            &proof,
+            policy,
+            AxtProofAdmission::StandaloneUnanchored,
+        )?;
         Ok(gas)
     }
     fn authenticate_axt_handle_usage(
@@ -9608,6 +9643,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         target_lane: LaneId,
         proof: Option<&ProofBlob>,
     ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
+        if proof.is_some_and(|proof| {
+            crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload)
+        }) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(intent.asset_dsid),
+                Some(target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         axt::resolve_handle_amount(intent, proof).map_err(|err| {
             let (reason, detail) = match err {
                 axt::HandleAmountResolutionError::MissingAmount => (
@@ -9841,6 +9890,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             consumed_by_proof.consume(proof_group_index, commitment);
         }
         for group in consumed_by_proof.into_groups() {
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&group.proof.payload) {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    format!(
+                        "final FASTPQ proof exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    ),
+                );
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
                 .map_err(|_| {
                 self.record_axt_reject(
@@ -10203,7 +10264,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     );
                     ivm::VMError::PermissionDenied
                 })?;
-            self.validate_axt_proof(usage.intent.asset_dsid, blob, policy)?;
+            self.validate_axt_proof(
+                usage.intent.asset_dsid,
+                blob,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            )?;
         }
         if let Some(blob) = selected_proof.as_ref() {
             self.validate_axt_remote_spend_commitment(&usage, blob)?;
@@ -13741,7 +13807,7 @@ seiyaku PrivilegedBinding {
         );
     }
     #[test]
-    fn axt_verify_ds_proof_enforces_manifest_root() {
+    fn axt_verify_ds_proof_rejects_unanchored_fastpq_without_state_or_cache_mutation() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(3);
         let manifest_root = [0xAB; 32];
@@ -13756,56 +13822,56 @@ seiyaku PrivilegedBinding {
             .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
+        host.cache_proof_entry(
+            dsid,
+            [0x44; 32],
+            Some(50),
+            Some(5),
+            Some(manifest_root),
+            true,
+            AXT_PROOF_CACHE_HIT,
+        );
+        let proofs_before = host
+            .axt_state
+            .as_ref()
+            .expect("active AXT envelope")
+            .proofs()
+            .clone();
+        let cache_before = Arc::clone(&host.axt_proof_cache);
+        let cache_slot_before = host.axt_proof_cache_slot;
         let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         vm.set_register(10, ds_ptr);
-        let mismatched_envelope = axt::AxtProofEnvelope {
-            dsid,
-            manifest_root: [0xFE; 32],
-            da_commitment: None,
-            proof: vec![0x01, 0x02, 0x03],
-            fastpq_binding: None,
-            committed_amount: None,
-            amount_commitment: None,
-        };
-        let mismatched_proof = ProofBlob {
-            payload: norito::to_bytes(&mismatched_envelope).expect("encode mismatched envelope"),
-            expiry_slot: Some(20),
-        };
-        let proof_bytes = norito_blob(&mismatched_proof);
-        let decoded: ProofBlob =
-            norito::decode_from_bytes(&proof_bytes).expect("decode proof blob");
-        assert_eq!(decoded.payload, mismatched_proof.payload);
+        let proof = proof_blob_for(dsid, manifest_root, b"unanchored-standalone", 20);
+        let proof_bytes = norito_blob(&proof);
         let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
-        let proof_tlv = vm
-            .memory
-            .validate_tlv(proof_ptr)
-            .expect("proof TLV should decode");
-        assert!(
-            norito::decode_from_bytes::<ProofBlob>(proof_tlv.payload).is_ok(),
-            "proof payload must decode"
-        );
-        vm.set_register(11, proof_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm);
-        assert!(
-            matches!(res, Err(VMError::PermissionDenied)),
-            "manifest root mismatch must be rejected, got {res:?}"
-        );
-        assert!(host.axt_proof_cache.is_empty(), "cache must stay empty");
-        let aligned_proof = proof_blob_for(dsid, manifest_root, b"aligned-proof", 20);
-        let aligned_proof_bytes = norito_blob(&aligned_proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &aligned_proof_bytes);
         vm.set_register(11, proof_ptr);
         assert_eq!(
             host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(aligned_proof_bytes.len()))
+            Err(VMError::PermissionDenied),
+            "a valid caller-carried FASTPQ proof must not become standalone authorization"
         );
-        let entry = host
-            .axt_proof_cache
-            .get(&dsid)
-            .expect("cache populated on accept");
-        let expected_digest = CoreHost::axt_proof_cache_digest(&aligned_proof);
-        assert_eq!(entry.digest, expected_digest);
-        assert_eq!(entry.manifest_root, Some(manifest_root));
+        assert_eq!(
+            host.axt_state
+                .as_ref()
+                .expect("active AXT envelope")
+                .proofs(),
+            &proofs_before,
+            "an unanchored proof must not be recorded"
+        );
+        assert_eq!(
+            host.axt_proof_cache.as_ref(),
+            cache_before.as_ref(),
+            "an unanchored proof must not alter the verified-proof cache"
+        );
+        assert_eq!(host.axt_proof_cache_slot, cache_slot_before);
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert_eq!(reject.dataspace, Some(dsid));
+        assert!(
+            reject
+                .detail
+                .contains("authoritative finalized source-state anchor")
+        );
     }
 
     #[test]
@@ -13853,8 +13919,32 @@ seiyaku PrivilegedBinding {
         assert!(
             reject
                 .detail
-                .contains("requires a witnessed transfer claim")
+                .contains("authoritative finalized source-state anchor")
         );
+    }
+
+    #[test]
+    fn axt_proof_validation_rejects_oversized_payload_before_decode() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(104);
+        let manifest_root = [0xA4; 32];
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let mut host = CoreHost::new(ALICE_ID.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
+        let proof = ProofBlob {
+            payload: vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: Some(20),
+        };
+
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Err(VMError::NoritoInvalid)
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(reject.detail.contains("decode limit"));
     }
 
     #[test]
@@ -13873,16 +13963,17 @@ seiyaku PrivilegedBinding {
             .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
-        vm.set_register(10, ds_ptr);
-
         let live_proof = proof_blob_for(dsid, manifest_root, b"outer-expiry-alias", 20);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&live_proof));
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
         assert!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-                .is_ok(),
-            "live proof must populate the cache"
+            host.validate_axt_proof(
+                dsid,
+                &live_proof,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            )
+            .is_ok(),
+            "an authenticated handle proof must populate the cache"
         );
         assert!(host.axt_proof_cache.contains_key(&dsid));
 
@@ -13890,14 +13981,13 @@ seiyaku PrivilegedBinding {
             payload: live_proof.payload.clone(),
             expiry_slot: Some(4),
         };
-        let expired_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&expired_alias),
-        );
-        vm.set_register(11, expired_ptr);
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            host.validate_axt_proof(
+                dsid,
+                &expired_alias,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            ),
             Err(VMError::PermissionDenied),
             "an expired outer expiry must not alias a cached live payload"
         );
@@ -13912,14 +14002,13 @@ seiyaku PrivilegedBinding {
             payload: live_proof.payload.clone(),
             expiry_slot: Some(200),
         };
-        let extended_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&extended_alias),
-        );
-        vm.set_register(11, extended_ptr);
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            host.validate_axt_proof(
+                dsid,
+                &extended_alias,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            ),
             Err(VMError::PermissionDenied),
             "a longer outer expiry must not alias a cached proof payload"
         );
@@ -13929,11 +14018,14 @@ seiyaku PrivilegedBinding {
             host.axt_proof_cache.contains_key(&dsid),
             "an unauthenticated longer expiry must not evict the valid cache entry"
         );
-
-        vm.set_register(11, proof_ptr);
         assert!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
-                .is_ok(),
+            host.validate_axt_proof(
+                dsid,
+                &live_proof,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            )
+            .is_ok(),
             "the original live proof must remain reusable after alias rejection"
         );
         assert_eq!(
@@ -13998,15 +14090,11 @@ seiyaku PrivilegedBinding {
             .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         let proof = proof_blob_for(dsid, manifest_root, b"raw-expiry", 11);
-        let proof_bytes = norito_blob(&proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
-        vm.set_register(10, ds_ptr);
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Ok(())
         );
         let recorded = host
             .axt_state
@@ -14034,15 +14122,11 @@ seiyaku PrivilegedBinding {
             .expect("canonical policy snapshot");
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
-        vm.set_register(10, ds_ptr);
         let proof = proof_blob_for(dsid, manifest_root, b"cache-slot", 30);
-        let proof_bytes = norito_blob(&proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Ok(())
         );
         let entry = host.axt_proof_cache.get(&dsid).expect("cache populated");
         assert_eq!(entry.verified_slot, current_slot);
@@ -14051,9 +14135,10 @@ seiyaku PrivilegedBinding {
         if let Some(snapshot) = host.axt_policy_snapshot.as_mut() {
             snapshot.entries[0].policy.current_slot = current_slot;
         }
+        let policy = host.policy_entry_for(dsid).expect("updated policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(proof_bytes.len())),
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Ok(()),
             "slot change should re-verify and refresh cache"
         );
         let entry = host
@@ -14066,12 +14151,15 @@ seiyaku PrivilegedBinding {
             snapshot.entries[0].policy.manifest_root = new_manifest_root;
         }
         let new_proof = proof_blob_for(dsid, new_manifest_root, b"cache-rotated-root", 30);
-        let new_proof_bytes = norito_blob(&new_proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &new_proof_bytes);
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("rotated policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(new_proof_bytes.len())),
+            host.validate_axt_proof(
+                dsid,
+                &new_proof,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            ),
+            Ok(()),
             "manifest rotation must invalidate prior cache entry"
         );
         let entry = host
@@ -14408,15 +14496,11 @@ seiyaku PrivilegedBinding {
         host.set_telemetry(telemetry.clone());
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
-        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
-        vm.set_register(10, ds_ptr);
         let proof = proof_blob_for(dsid, manifest_root, b"telemetry-cache", 30);
-        let proof_bytes = norito_blob(&proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(proof_bytes.len()))
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Ok(())
         );
         let snapshot = telemetry.axt_proof_cache_status_snapshot();
         assert_eq!(snapshot.len(), 1);
@@ -14437,13 +14521,15 @@ seiyaku PrivilegedBinding {
         assert_eq!(cleared.verified_slot, 9);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
         let rotated_proof = proof_blob_for(dsid, rotated_root, b"telemetry-cache-rotated", 40);
-        let rotated_proof_bytes = norito_blob(&rotated_proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &rotated_proof_bytes);
-        vm.set_register(11, proof_ptr);
-        vm.set_register(10, ds_ptr);
+        let policy = host.policy_entry_for(dsid).expect("rotated policy entry");
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(rotated_proof_bytes.len()))
+            host.validate_axt_proof(
+                dsid,
+                &rotated_proof,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            ),
+            Ok(())
         );
         let refreshed_snapshot = telemetry.axt_proof_cache_status_snapshot();
         assert_eq!(refreshed_snapshot.len(), 1);
@@ -14667,27 +14753,29 @@ seiyaku PrivilegedBinding {
         let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
         vm.set_register(10, ds_ptr);
         let expired_proof = proof_blob_for(dsid, manifest_root, b"expired-proof", 10);
-        let proof_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&expired_proof),
-        );
-        vm.set_register(11, proof_ptr);
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
         assert!(
             matches!(
-                host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+                host.validate_axt_proof(
+                    dsid,
+                    &expired_proof,
+                    policy,
+                    AxtProofAdmission::AuthenticatedHandle,
+                ),
                 Err(VMError::PermissionDenied)
             ),
             "expired proof must be rejected"
         );
         assert!(host.axt_proof_cache.is_empty());
         let live_proof = proof_blob_for(dsid, manifest_root, b"live-proof", 50);
-        let live_proof_bytes = norito_blob(&live_proof);
-        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &live_proof_bytes);
-        vm.set_register(11, proof_ptr);
         assert_eq!(
-            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-            Ok(CoreHost::axt_verify_gas(live_proof_bytes.len()))
+            host.validate_axt_proof(
+                dsid,
+                &live_proof,
+                policy,
+                AxtProofAdmission::AuthenticatedHandle,
+            ),
+            Ok(())
         );
         assert!(host.axt_proof_cache.contains_key(&dsid));
         vm.set_register(11, 0);
@@ -14828,7 +14916,10 @@ seiyaku PrivilegedBinding {
         host.axt_state = Some(Arc::new(axt::HostAxtState::new(descriptor, binding)));
         let proof = proof_blob_for(dsid, manifest_root, b"cache-snapshot", 30);
         let policy = host.policy_entry_for(dsid).expect("policy entry");
-        assert_eq!(host.validate_axt_proof(dsid, &proof, policy), Ok(()));
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Ok(())
+        );
         let snapshot = host.axt_proof_cache_snapshot();
         assert_eq!(snapshot.len(), 1);
         let entry = &snapshot[0];

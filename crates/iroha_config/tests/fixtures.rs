@@ -1531,6 +1531,8 @@ fn full_config_parses_fine() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taira_config_enables_untrusted_cid_hosting() {
+    const TAIRA_VALIDATOR_COUNT: i64 = 4;
+
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -1748,14 +1750,13 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|sumeragi| sumeragi.get("queues"))
         .and_then(TomlValue::as_table)
         .expect("sumeragi.queues should be configured");
-    const TAIRA_VALIDATOR_COUNT: i64 = 4;
     let authenticated_non_validator_sources = queues
         .get("authenticated_non_validator_sources")
         .and_then(TomlValue::as_integer)
         .expect("Taira should configure authenticated non-validator ingress sources");
     assert_eq!(
         authenticated_non_validator_sources, 2,
-        "Taira should reserve two independent authenticated non-validator ingress lanes"
+        "Taira should reserve two independent authenticated non-validator ingress source partitions"
     );
     let body_bytes = queues
         .get("body_bytes")

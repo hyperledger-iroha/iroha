@@ -8,7 +8,7 @@ mod strict_verifying_key_preparation_tests {
             IVM_EXECUTION_V1_CIRCUIT_ID,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            [0x41; 32],
+            ivm_execution_public_inputs_schema_hash(),
             [0x42; 32],
         );
         record.gas_schedule_id = Some("halo2_default".to_owned());
@@ -44,7 +44,7 @@ mod strict_verifying_key_preparation_tests {
             IVM_EXECUTION_V1_CIRCUIT_ID,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            [0x41; 32],
+            ivm_execution_public_inputs_schema_hash(),
             [0x42; 32],
         );
         record.vk_len =
@@ -52,6 +52,15 @@ mod strict_verifying_key_preparation_tests {
         let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
             .expect_err("an off-ledger key declaration must obey the backend container bound");
         assert!(error.contains("declared"), "unexpected error: {error}");
+    }
+    #[test]
+    fn record_preparation_rejects_noncanonical_halo2_schema_hash() {
+        let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "wrong-schema");
+        let mut record = portable_off_ledger_record();
+        record.public_inputs_schema_hash = iroha_crypto::Hash::new(b"noncanonical-schema").into();
+        let error = validate_and_prepare_verifying_key_record_v1(&id, &record)
+            .expect_err("a production Halo2 key must bind the circuit's canonical schema");
+        assert!(error.contains("schema hash"), "unexpected error: {error}");
     }
     #[test]
     fn record_preparation_rejects_oversized_stark_off_ledger_declaration() {

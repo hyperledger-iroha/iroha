@@ -1,13 +1,18 @@
-//! CUDA build helper for the FASTPQ prover.
+//! GPU build helper for the FASTPQ prover.
 //!
-//! The runtime kernels are generated via NVRTC/Metal in `gpu.rs`. This build
-//! script remains to support the static CUDA path when `fastpq-gpu` is enabled.
+//! Metal kernels are compiled into an offline library when the toolchain is
+//! available, with runtime source compilation retained as a fallback. This
+//! script also supports the static CUDA path when `fastpq-gpu` is enabled.
 // SPDX-License-Identifier: Apache-2.0
 use std::{
     env,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
+
+const METAL_TOOLCHAIN_DOWNLOAD_COMMAND: &str = "xcodebuild -downloadComponent MetalToolchain";
+const METAL_TOOLCHAIN_REMEDIATION: &str = "verify that `xcode-select -p` or `DEVELOPER_DIR` selects a full Xcode installation and accept any pending Xcode license, then run `xcodebuild -downloadComponent MetalToolchain` manually; set `FASTPQ_SKIP_GPU_BUILD=1` only to opt out and use runtime Metal source compilation";
+
 fn main() {
     println!("cargo:rerun-if-env-changed=FASTPQ_GPU");
     println!("cargo:rerun-if-env-changed=FASTPQ_SKIP_GPU_BUILD");
@@ -24,12 +29,17 @@ fn main() {
     let cuda_feature = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if fastpq_gpu_feature
-        && target_os == "macos"
-        && let Err(error) = compile_metal_shaders()
-    {
-        println!("cargo:warning={error}");
-        println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+    let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();
+    if fastpq_gpu_feature && target_os == "macos" {
+        if skip_gpu_build {
+            println!(
+                "cargo:warning=FASTPQ_SKIP_GPU_BUILD set; skipping offline Metal shader build and using runtime source compilation"
+            );
+            println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+        } else if let Err(error) = ensure_metal_toolchain().and_then(|()| compile_metal_shaders()) {
+            println!("cargo:warning={error}; falling back to runtime Metal source compilation");
+            println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
+        }
     }
     if !cuda_feature && !fastpq_gpu_feature {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
@@ -41,7 +51,7 @@ fn main() {
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
     }
-    if env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some() {
+    if skip_gpu_build {
         println!("cargo:warning=FASTPQ_SKIP_GPU_BUILD set; CUDA backend disabled.");
         println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
         return;
@@ -94,6 +104,77 @@ fn nvcc_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
+fn ensure_metal_toolchain() -> Result<(), String> {
+    let initial_error = match metal_toolchain_status() {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    println!(
+        "cargo:warning=FASTPQ Metal compiler/linker is unavailable ({initial_error}); running `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}`"
+    );
+    let status = Command::new("xcodebuild")
+        .args(["-downloadComponent", "MetalToolchain"])
+        .status()
+        .map_err(|error| {
+            metal_toolchain_bootstrap_error(&format!(
+                "failed to launch `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` after the initial health check failed ({initial_error}): {error}"
+            ))
+        })?;
+    if !status.success() {
+        return Err(metal_toolchain_bootstrap_error(&format!(
+            "`{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` exited with {status} after the initial health check failed ({initial_error})"
+        )));
+    }
+    // Clear xcrun's negative lookup cache before resolving the newly installed tools.
+    let cache_error = match Command::new("xcrun").arg("--kill-cache").status() {
+        Ok(status) if status.success() => None,
+        Ok(status) => Some(format!("`xcrun --kill-cache` exited with {status}")),
+        Err(error) => Some(format!("failed to launch `xcrun --kill-cache`: {error}")),
+    };
+    match metal_toolchain_status() {
+        Ok(()) => Ok(()),
+        Err(redetection_error) => {
+            let cache_context = cache_error
+                .map(|error| format!("; additionally, {error}"))
+                .unwrap_or_default();
+            Err(metal_toolchain_bootstrap_error(&format!(
+                "the download completed, but compiler/linker redetection failed: {redetection_error}{cache_context}"
+            )))
+        }
+    }
+}
+
+fn metal_toolchain_bootstrap_error(problem: &str) -> String {
+    format!("Metal Toolchain bootstrap failed: {problem}; {METAL_TOOLCHAIN_REMEDIATION}")
+}
+
+fn metal_toolchain_status() -> Result<(), String> {
+    let metal = find_xcrun_tool("metal")
+        .map_err(|error| format!("failed to locate the `metal` compiler: {error}"))?;
+    probe_metal_tool("metal", &metal)?;
+    let metallib = find_metallib_tool(&metal)?;
+    probe_metal_tool("metallib", &metallib)
+}
+
+fn probe_metal_tool(name: &str, path: &Path) -> Result<(), String> {
+    let output = Command::new(path).arg("-v").output().map_err(|error| {
+        format!(
+            "found `{name}` at {}, but could not execute it: {error}",
+            path.display()
+        )
+    })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` failed its `-v` probe with {}: {}",
+            path.display(),
+            output.status,
+            command_diagnostic(&output)
+        ))
+    }
+}
+
 fn compile_metal_shaders() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let kernels = [
@@ -115,6 +196,7 @@ fn compile_metal_shaders() -> Result<(), String> {
     let mut air_paths = Vec::new();
     for (name, source) in &kernels {
         let air_path = out_dir.join(format!("{name}.air"));
+        remove_stale_output("Metal AIR object", &air_path)?;
         let status = Command::new(&metal_exe)
             .arg("-std=metal3.0")
             .arg("-O3")
@@ -128,26 +210,26 @@ fn compile_metal_shaders() -> Result<(), String> {
             .arg("-o")
             .arg(&air_path)
             .output()
-            .map_err(|err| err.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "failed to launch Metal compiler `{}` for {}: {error}",
+                    metal_exe.display(),
+                    source.display()
+                )
+            })?;
         if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
             return Err(format!(
                 "failed to compile Metal shader {}: {}",
                 source.display(),
-                stderr.trim()
+                command_diagnostic(&status)
             ));
         }
+        ensure_nonempty_output("Metal AIR object", &air_path)?;
         air_paths.push(air_path);
     }
-    let metallib_exe = find_xcrun_tool("metallib").or_else(|_| {
-        let mut candidate = metal_exe.clone();
-        candidate.set_file_name("metallib");
-        candidate
-            .exists()
-            .then_some(candidate)
-            .ok_or_else(|| "failed to locate metallib binary".to_string())
-    })?;
-    let mut link_cmd = Command::new(metallib_exe);
+    let metallib_exe = find_metallib_tool(&metal_exe)?;
+    remove_stale_output("Metal library", &metallib_path)?;
+    let mut link_cmd = Command::new(&metallib_exe);
     for air in &air_paths {
         link_cmd.arg(air);
     }
@@ -155,11 +237,19 @@ fn compile_metal_shaders() -> Result<(), String> {
         .arg("-o")
         .arg(&metallib_path)
         .output()
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| {
+            format!(
+                "failed to launch Metal linker `{}`: {error}",
+                metallib_exe.display()
+            )
+        })?;
     if !link.status.success() {
-        let stderr = String::from_utf8_lossy(&link.stderr);
-        return Err(format!("failed to link Metal library: {}", stderr.trim()));
+        return Err(format!(
+            "failed to link Metal library: {}",
+            command_diagnostic(&link)
+        ));
     }
+    ensure_nonempty_output("Metal library", &metallib_path)?;
     println!(
         "cargo:rustc-env=FASTPQ_METAL_LIB={}",
         metallib_path.display()
@@ -167,30 +257,112 @@ fn compile_metal_shaders() -> Result<(), String> {
     println!("cargo:rustc-cfg=fastpq_metal_available");
     Ok(())
 }
+
+fn find_metallib_tool(metal: &Path) -> Result<PathBuf, String> {
+    find_xcrun_tool("metallib").or_else(|xcrun_error| {
+        let candidate = metal.with_file_name("metallib");
+        candidate.is_file().then_some(candidate.clone()).ok_or_else(|| {
+            format!(
+                "failed to locate the `metallib` linker ({xcrun_error}); sibling candidate is missing: {}",
+                candidate.display()
+            )
+        })
+    })
+}
+
 fn find_xcrun_tool(tool: &str) -> Result<PathBuf, String> {
-    find_xcrun_tool_with_args(&["-sdk", "macosx", "--find", tool])
-        .or_else(|_| find_xcrun_tool_with_args(&["--find", tool]))
+    find_xcrun_tool_with_args(&["-sdk", "macosx", "--find", tool]).or_else(|sdk_error| {
+        find_xcrun_tool_with_args(&["--find", tool]).map_err(|fallback_error| {
+            format!(
+                "SDK lookup failed ({sdk_error}); default lookup also failed ({fallback_error})"
+            )
+        })
+    })
 }
 fn find_xcrun_tool_with_args(args: &[&str]) -> Result<PathBuf, String> {
+    let invocation = format!("xcrun {}", args.join(" "));
     let output = Command::new("xcrun")
         .args(args)
         .output()
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| format!("failed to launch `{invocation}`: {error}"))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(stderr.trim().to_string());
+        return Err(format!(
+            "`{invocation}` exited with {}: {}",
+            output.status,
+            command_diagnostic(&output)
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let path = PathBuf::from(stdout.trim());
-    if path.exists() {
+    let reported_path = stdout.trim();
+    if reported_path.is_empty() {
+        return Err(format!("`{invocation}` returned an empty tool path"));
+    }
+    let path = PathBuf::from(reported_path);
+    if path.is_file() {
         Ok(path)
     } else {
         Err(format!(
-            "xcrun returned missing tool path: {}",
+            "`{invocation}` returned a missing or non-file tool path: {}",
             path.display()
         ))
     }
 }
+
+fn command_diagnostic(output: &Output) -> String {
+    let stderr = compact_output(&output.stderr);
+    let stdout = compact_output(&output.stdout);
+    match (stderr.is_empty(), stdout.is_empty()) {
+        (false, false) => format!("stderr: {stderr}; stdout: {stdout}"),
+        (false, true) => format!("stderr: {stderr}"),
+        (true, false) => format!("stdout: {stdout}"),
+        (true, true) => "no diagnostic output".to_owned(),
+    }
+}
+
+fn compact_output(bytes: &[u8]) -> String {
+    const MAX_DIAGNOSTIC_CHARS: usize = 2_000;
+
+    let compact = String::from_utf8_lossy(bytes)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.chars().count() > MAX_DIAGNOSTIC_CHARS {
+        format!(
+            "{}…",
+            compact
+                .chars()
+                .take(MAX_DIAGNOSTIC_CHARS)
+                .collect::<String>()
+        )
+    } else {
+        compact
+    }
+}
+
+fn ensure_nonempty_output(label: &str, path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("{label} was not produced at {}: {error}", path.display()))?;
+    if metadata.is_file() && metadata.len() > 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} at {} is not a non-empty regular file",
+            path.display()
+        ))
+    }
+}
+
+fn remove_stale_output(label: &str, path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove stale {label} at {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn locate_cuda_root() -> Option<PathBuf> {
     env::var_os("CUDA_HOME")
         .or_else(|| env::var_os("CUDA_PATH"))

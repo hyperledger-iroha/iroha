@@ -1494,6 +1494,20 @@ fn validation_fee_referendum_retains_locks_and_finalizes_after_missed_boundary()
         view.world()
             .governance_locks()
             .get(&referendum_id)
+            .is_some_and(|locks| locks.locks.contains_key(&operator)),
+        "the block-start sweep precedes the transaction that closes the referendum"
+    );
+    drop(view);
+
+    state
+        .block(block_header(window.upper + 4, 1_700_000_005_000))
+        .commit()
+        .expect("commit the first post-finalization unlock sweep");
+    let view = state.view();
+    assert!(
+        view.world()
+            .governance_locks()
+            .get(&referendum_id)
             .is_none_or(|locks| locks.locks.is_empty()),
         "closing the referendum must release its already-due retained locks"
     );

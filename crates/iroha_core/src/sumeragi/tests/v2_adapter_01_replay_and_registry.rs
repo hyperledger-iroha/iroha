@@ -326,6 +326,7 @@ fn wrong_view_local_proposal_completion_preserves_registry_without_becoming_acti
     let wrong_view =
         reducer::EventTag::new(current.height(), current.view() + 1, current.generation());
     assert!(adapter.active_subject.is_none());
+    let publications_before = adapter.status_publication_attempts;
 
     let outcome = adapter
         .local_proposal_ready(wrong_view, manifest.clone(), &durable, &validated)
@@ -352,6 +353,48 @@ fn wrong_view_local_proposal_completion_preserves_registry_without_becoming_acti
     assert!(
         adapter.active_subject.is_none(),
         "an ignored obsolete completion cannot replace the current active subject"
+    );
+    assert_eq!(
+        adapter.status_publication_attempts,
+        publications_before + 1,
+        "the stale subject must be rolled back before the only status publication"
+    );
+}
+#[test]
+fn rejected_nonleader_local_proposal_completion_restores_the_active_subject() {
+    let directory = TempDir::new().expect("temporary directory");
+    let context = context();
+    let leader = context.leader(0);
+    let nonleader = (leader + 1) % u32::try_from(context.roster.len()).expect("small roster");
+    let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("nonleader-safety.wal"),
+        verified_genesis(context.clone()),
+        Some(nonleader),
+        reducer::Generation::new(1),
+        [0x23; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open nonleader");
+    assert!(startup.is_empty());
+    let proposal = proposal(&context, leader, subject(0x7e));
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let manifest = proposal.manifest;
+    let (durable, validated) = validated_receipts_for_manifest(&context, &manifest);
+    assert!(adapter.active_subject.is_none());
+
+    assert!(matches!(
+        adapter.local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated,),
+        Err(AdapterError::Reducer(
+            reducer::ReducerError::NotCurrentLeader
+        ))
+    ));
+    assert!(
+        adapter.active_subject.is_none(),
+        "a transactional reducer rejection cannot install the speculative subject"
     );
 }
 #[test]

@@ -163,13 +163,6 @@ pub fn fft_columns(
     root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
-    if columns.is_empty() {
-        return Ok(());
-    }
-    let len = columns[0].len();
-    if columns.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput("columns must share length"));
-    }
     fft_columns_async(columns, log_size, root, backend)?.wait()
 }
 /// Initiate an FFT dispatch and return a guard that completes on [`ColumnDispatch::wait`].
@@ -179,15 +172,12 @@ pub fn fft_columns_async<'a>(
     root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
+    let shape = preflight_fft_columns(columns, log_size)?;
     if columns.is_empty() {
         return Ok(ColumnDispatch::ready());
     }
-    let len = columns[0].len();
-    if columns.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput("columns must share length"));
-    }
     match backend {
-        GpuBackend::Cuda => fft_cuda_async(columns, log_size, root),
+        GpuBackend::Cuda => fft_cuda_async(columns, log_size, root, shape),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
             metal::fft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
@@ -202,13 +192,6 @@ pub fn ifft_columns(
     root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
-    if columns.is_empty() {
-        return Ok(());
-    }
-    let len = columns[0].len();
-    if columns.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput("columns must share length"));
-    }
     ifft_columns_async(columns, log_size, root, backend)?.wait()
 }
 /// Initiate an IFFT dispatch, returning a pending guard.
@@ -218,15 +201,12 @@ pub fn ifft_columns_async<'a>(
     root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
+    let shape = preflight_fft_columns(columns, log_size)?;
     if columns.is_empty() {
         return Ok(ColumnDispatch::ready());
     }
-    let len = columns[0].len();
-    if columns.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput("columns must share length"));
-    }
     match backend {
-        GpuBackend::Cuda => ifft_cuda_async(columns, log_size, root),
+        GpuBackend::Cuda => ifft_cuda_async(columns, log_size, root, shape),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
             metal::ifft_columns_async(columns, log_size, root).map(ColumnDispatch::metal)
@@ -243,15 +223,6 @@ pub fn lde_columns(
     coset: u64,
     backend: GpuBackend,
 ) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
-    if coeffs.is_empty() {
-        return Ok(Some(Vec::new()));
-    }
-    let len = coeffs[0].len();
-    if coeffs.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput(
-            "coefficient columns must share length",
-        ));
-    }
     lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset, backend)?.wait()
 }
 /// Initiate an LDE evaluation and return a pending guard.
@@ -263,17 +234,12 @@ pub fn lde_columns_async(
     coset: u64,
     backend: GpuBackend,
 ) -> Result<LdeDispatch, GpuError> {
+    let shape = preflight_lde_columns(coeffs, trace_log, blowup_log)?;
     if coeffs.is_empty() {
         return Ok(LdeDispatch::ready(Some(Vec::new())));
     }
-    let len = coeffs[0].len();
-    if coeffs.iter().any(|column| column.len() != len) {
-        return Err(GpuError::InvalidInput(
-            "coefficient columns must share length",
-        ));
-    }
     match backend {
-        GpuBackend::Cuda => lde_cuda_async(coeffs, trace_log, blowup_log, lde_root, coset),
+        GpuBackend::Cuda => lde_cuda_async(coeffs, trace_log, blowup_log, lde_root, coset, shape),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
             metal::lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset)
@@ -282,14 +248,106 @@ pub fn lde_columns_async(
         other => Err(GpuError::Unsupported(other)),
     }
 }
+#[derive(Clone, Copy)]
+struct DenseColumnShape {
+    extent: usize,
+    total_len: usize,
+}
+#[derive(Clone, Copy)]
+struct LdeColumnShape {
+    coefficients: DenseColumnShape,
+    eval_len: usize,
+    eval_total_len: usize,
+}
+fn checked_extent(log_size: u32, error: &'static str) -> Result<usize, GpuError> {
+    1usize
+        .checked_shl(log_size)
+        .ok_or(GpuError::InvalidInput(error))
+}
+fn checked_cardinality(
+    column_count: usize,
+    extent: usize,
+    error: &'static str,
+) -> Result<usize, GpuError> {
+    column_count
+        .checked_mul(extent)
+        .ok_or(GpuError::InvalidInput(error))
+}
+fn validate_dense_columns(
+    columns: &[Vec<u64>],
+    extent: usize,
+    shared_length_error: &'static str,
+    requested_extent_error: &'static str,
+    cardinality_error: &'static str,
+) -> Result<DenseColumnShape, GpuError> {
+    if let Some(first) = columns.first() {
+        if columns.iter().any(|column| column.len() != first.len()) {
+            return Err(GpuError::InvalidInput(shared_length_error));
+        }
+        if first.len() != extent {
+            return Err(GpuError::InvalidInput(requested_extent_error));
+        }
+    }
+    let total_len = checked_cardinality(columns.len(), extent, cardinality_error)?;
+    Ok(DenseColumnShape { extent, total_len })
+}
+fn preflight_fft_columns(
+    columns: &[Vec<u64>],
+    log_size: u32,
+) -> Result<DenseColumnShape, GpuError> {
+    let extent = checked_extent(log_size, "FFT log size exceeds host address width")?;
+    validate_dense_columns(
+        columns,
+        extent,
+        "columns must share length",
+        "column length does not match requested FFT extent",
+        "FFT column cardinality exceeds host address width",
+    )
+}
+fn preflight_lde_columns(
+    coeffs: &[Vec<u64>],
+    trace_log: u32,
+    blowup_log: u32,
+) -> Result<LdeColumnShape, GpuError> {
+    if blowup_log == 0 {
+        return Err(GpuError::InvalidInput(
+            "LDE requires a positive blowup factor",
+        ));
+    }
+    let trace_len = checked_extent(trace_log, "LDE trace log size exceeds host address width")?;
+    let coefficients = validate_dense_columns(
+        coeffs,
+        trace_len,
+        "coefficient columns must share length",
+        "coefficient column length does not match requested trace extent",
+        "LDE coefficient cardinality exceeds host address width",
+    )?;
+    let eval_log = trace_log
+        .checked_add(blowup_log)
+        .ok_or(GpuError::InvalidInput("LDE trace and blowup logs overflow"))?;
+    let eval_len = checked_extent(
+        eval_log,
+        "LDE evaluation log size exceeds host address width",
+    )?;
+    let eval_total_len = checked_cardinality(
+        coeffs.len(),
+        eval_len,
+        "LDE evaluation cardinality exceeds host address width",
+    )?;
+    Ok(LdeColumnShape {
+        coefficients,
+        eval_len,
+        eval_total_len,
+    })
+}
 fn fft_cuda_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
     root: u64,
+    shape: DenseColumnShape,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
-    let extent = 1usize << log_size;
     let column_count = columns.len();
-    let mut buffer = flatten(columns);
+    let mut buffer = flatten(columns, shape.total_len);
     let pending = fastpq_cuda::fastpq_fft_submit(&mut buffer, column_count, log_size, root)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
@@ -297,7 +355,7 @@ fn fft_cuda_async<'a>(
         })?;
     Ok(ColumnDispatch::cuda(PendingCudaColumns {
         columns,
-        extent,
+        extent: shape.extent,
         buffer,
         pending,
     }))
@@ -306,10 +364,10 @@ fn ifft_cuda_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
     root: u64,
+    shape: DenseColumnShape,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
-    let extent = 1usize << log_size;
     let column_count = columns.len();
-    let mut buffer = flatten(columns);
+    let mut buffer = flatten(columns, shape.total_len);
     let pending = fastpq_cuda::fastpq_ifft_submit(&mut buffer, column_count, log_size, root)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
@@ -317,7 +375,7 @@ fn ifft_cuda_async<'a>(
         })?;
     Ok(ColumnDispatch::cuda(PendingCudaColumns {
         columns,
-        extent,
+        extent: shape.extent,
         buffer,
         pending,
     }))
@@ -328,10 +386,10 @@ fn lde_cuda_async(
     blowup_log: u32,
     lde_root: u64,
     coset: u64,
+    shape: LdeColumnShape,
 ) -> Result<LdeDispatch, GpuError> {
-    let coeff_buffer = flatten(coeffs);
-    let eval_len = 1usize << (trace_log + blowup_log);
-    let mut eval_buffer = vec![0u64; coeffs.len() * eval_len];
+    let coeff_buffer = flatten(coeffs, shape.coefficients.total_len);
+    let mut eval_buffer = vec![0u64; shape.eval_total_len];
     let pending = fastpq_cuda::fastpq_lde_submit(
         &coeff_buffer,
         coeffs.len(),
@@ -346,17 +404,17 @@ fn lde_cuda_async(
         message: err.to_string(),
     })?;
     Ok(LdeDispatch::cuda(PendingCudaLde {
-        eval_len,
+        eval_len: shape.eval_len,
         eval_buffer,
         pending,
     }))
 }
-fn flatten(columns: &[Vec<u64>]) -> Vec<u64> {
-    let len = columns.first().map_or(0, Vec::len);
-    let mut buffer = Vec::with_capacity(columns.len() * len);
+fn flatten(columns: &[Vec<u64>], total_len: usize) -> Vec<u64> {
+    let mut buffer = Vec::with_capacity(total_len);
     for column in columns {
         buffer.extend_from_slice(column);
     }
+    debug_assert_eq!(buffer.len(), total_len);
     buffer
 }
 fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
@@ -477,7 +535,10 @@ fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u
 }
 #[cfg(test)]
 mod tests {
-    use super::{ColumnDispatch, GpuBackend, GpuError, LdeDispatch};
+    use super::{
+        ColumnDispatch, GpuBackend, GpuError, LdeDispatch, checked_cardinality, fft_columns_async,
+        ifft_columns_async, lde_columns_async,
+    };
     #[test]
     fn column_dispatch_ready_waits() {
         assert!(ColumnDispatch::ready().wait().is_ok());
@@ -501,6 +562,83 @@ mod tests {
                 backend: GpuBackend::Cuda,
                 ..
             }
+        ));
+    }
+    #[test]
+    fn fft_preflight_rejects_oversized_logs_before_backend_selection() {
+        let mut fft = vec![vec![0u64]];
+        assert!(matches!(
+            fft_columns_async(&mut fft, usize::BITS, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "FFT log size exceeds host address width"
+            ))
+        ));
+
+        let mut ifft = vec![vec![0u64]];
+        assert!(matches!(
+            ifft_columns_async(&mut ifft, usize::BITS, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "FFT log size exceeds host address width"
+            ))
+        ));
+    }
+    #[test]
+    fn lde_preflight_rejects_log_addition_overflow_before_backend_selection() {
+        let coeffs = vec![vec![0u64; 2]];
+        assert!(matches!(
+            lde_columns_async(&coeffs, 1, u32::MAX, 1, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput("LDE trace and blowup logs overflow"))
+        ));
+    }
+    #[test]
+    fn lde_preflight_rejects_zero_blowup_for_empty_and_nonempty_inputs() {
+        let empty = Vec::<Vec<u64>>::new();
+        assert!(matches!(
+            lde_columns_async(&empty, 1, 0, 1, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "LDE requires a positive blowup factor"
+            ))
+        ));
+
+        let coeffs = vec![vec![0u64; 2]];
+        assert!(matches!(
+            lde_columns_async(&coeffs, 1, 0, 1, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "LDE requires a positive blowup factor"
+            ))
+        ));
+    }
+    #[test]
+    fn transform_preflight_rejects_mismatched_requested_extents() {
+        let mut fft = vec![vec![0u64; 2]];
+        assert!(matches!(
+            fft_columns_async(&mut fft, 2, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "column length does not match requested FFT extent"
+            ))
+        ));
+
+        let mut ifft = vec![vec![0u64; 2]];
+        assert!(matches!(
+            ifft_columns_async(&mut ifft, 2, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "column length does not match requested FFT extent"
+            ))
+        ));
+
+        let coeffs = vec![vec![0u64; 2]];
+        assert!(matches!(
+            lde_columns_async(&coeffs, 2, 1, 1, 1, GpuBackend::OpenCl),
+            Err(GpuError::InvalidInput(
+                "coefficient column length does not match requested trace extent"
+            ))
+        ));
+    }
+    #[test]
+    fn transform_preflight_rejects_overflowing_cardinality() {
+        assert!(matches!(
+            checked_cardinality(usize::MAX, 2, "cardinality overflow"),
+            Err(GpuError::InvalidInput("cardinality overflow"))
         ));
     }
 }

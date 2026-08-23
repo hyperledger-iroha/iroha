@@ -8445,14 +8445,14 @@ impl GovernanceStageRecord {
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct GovernancePipeline {
+    /// Ordered stage records.
+    #[norito(default)]
+    pub stages: Vec<GovernanceStageRecord>,
     /// Parliament quorum policy pinned when the proposal entered the pipeline.
     ///
     /// Ballot execution must not consult mutable live configuration for this value.
     #[norito(default)]
     pub parliament_quorum_bps: u16,
-    /// Ordered stage records.
-    #[norito(default)]
-    pub stages: Vec<GovernanceStageRecord>,
 }
 impl GovernancePipeline {
     /// Construct a pipeline seeded with configured stage SLAs.
@@ -26887,8 +26887,9 @@ impl State {
                 });
                 // Validation-fee tallying is caller-independent of the execution height and is
                 // always anchored to the inclusive referendum end. Keep its exact retained locks
-                // escrowed if the first post-window finalization block was missed; the block that
-                // eventually closes the referendum will make these already-due locks releasable.
+                // escrowed if the first post-window finalization block was missed. Once a later
+                // transaction closes the referendum, the next block-start sweep releases these
+                // already-due locks.
                 let retain_open_validation_fee_locks = validation_fee_custody.is_some()
                     && stx
                         .world
@@ -46026,7 +46027,7 @@ impl<'state> StateBlock<'state> {
             &mut self.fastpq_transcripts,
             pending,
         );
-        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
+        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Drain the accumulated transfer transcripts recorded while executing this block.
@@ -46034,7 +46035,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
     ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
         crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut self.fastpq_transcripts);
-        crate::sumeragi::witness::apply_fastpq_transcript_digests(&self.fastpq_transcripts);
+        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Cache the transaction set hash for FASTPQ public inputs.

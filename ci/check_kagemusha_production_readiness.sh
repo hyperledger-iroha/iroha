@@ -2587,6 +2587,7 @@ def validate_kagami_verification_report(
     policy_sha256: str,
     promotion_record_sha256: str,
     qualification_receipt_sha256: str,
+    internal_validation_receipt_sha256: str,
     ios_candidate_sha256: str,
 ) -> None:
     """Authenticate the complete machine report emitted by the pinned verifier."""
@@ -2597,6 +2598,7 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "internal_validation_receipt_sha256",
         "authenticated_source_seal_projection_sha256",
         "reviewed_cargo_binary_sha256",
         "reviewed_rustc_binary_sha256",
@@ -2626,6 +2628,11 @@ def validate_kagami_verification_report(
         raise ValueError("Kagami reconstructed a different promotion record")
     if report.get("qualification_receipt_sha256") != qualification_receipt_sha256:
         raise ValueError("Kagami verified a different recursive qualification receipt")
+    if (
+        report.get("internal_validation_receipt_sha256")
+        != internal_validation_receipt_sha256
+    ):
+        raise ValueError("Kagami verified a different internal-validation receipt")
     if report.get("candidate_sha256") != ios_candidate_sha256:
         raise ValueError(
             "signed physical-iOS candidate differs from Kagami's reconstructed candidate"
@@ -2635,6 +2642,7 @@ def validate_kagami_verification_report(
         "candidate_sha256",
         "qualification_receipt_sha256",
         "qualified_candidate_sha256",
+        "internal_validation_receipt_sha256",
         "authenticated_source_seal_projection_sha256",
         "reviewed_cargo_binary_sha256",
         "reviewed_rustc_binary_sha256",
@@ -4467,6 +4475,7 @@ def promotion_errors() -> list[str]:
         ios_candidate_sha256: str | None = None
         promotion_record_sha256: str | None = None
         qualification_receipt_sha256: str | None = None
+        internal_validation_receipt_sha256: str | None = None
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
@@ -4662,6 +4671,8 @@ def promotion_errors() -> list[str]:
                 )
                 if name == "promotion-record-v4.norito":
                     promotion_record_sha256 = hashlib.sha256(payload).hexdigest()
+                elif name == "internal-validation-receipt-v1.norito":
+                    internal_validation_receipt_sha256 = hashlib.sha256(payload).hexdigest()
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
         evidence_bytes: bytes | None = None
@@ -4741,6 +4752,7 @@ def promotion_errors() -> list[str]:
                 ios_candidate_sha256 is None
                 or promotion_record_sha256 is None
                 or qualification_receipt_sha256 is None
+                or internal_validation_receipt_sha256 is None
             ):
                 errors.append(
                     f"{directory.name}: authenticated verification inputs are incomplete"
@@ -4772,6 +4784,7 @@ def promotion_errors() -> list[str]:
                         policy_sha256=policy_sha256,
                         promotion_record_sha256=promotion_record_sha256,
                         qualification_receipt_sha256=qualification_receipt_sha256,
+                        internal_validation_receipt_sha256=internal_validation_receipt_sha256,
                         ios_candidate_sha256=ios_candidate_sha256,
                     )
                 except (UnicodeError, ValueError, json.JSONDecodeError) as error:

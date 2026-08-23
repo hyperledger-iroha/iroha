@@ -1,10 +1,13 @@
-use std::{cmp::min, collections::HashSet, fmt::Write as _};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastpq_isi::{
-    params::{CANONICAL_PARAMETER_SETS, GOLDILOCKS_FP2, POSEIDON2_SHA3, StarkParameterSet},
+    params::{
+        CANONICAL_PARAMETER_SETS, GOLDILOCKS_BASE, POSEIDON_GOLDILOCKS_X7_BLAKE2B,
+        StarkParameterSet,
+    },
     poseidon::{FIELD_MODULUS, PoseidonSponge},
 };
+use std::{cmp::min, collections::HashSet, fmt::Write as _};
 const DOMAIN_TAG: &str = "fastpq:v1:domain_roots";
 const PACKED_LIMB_BYTES: usize = 7;
 const GOLDILOCKS_TWO_ADICITY: u32 = 32;
@@ -180,8 +183,8 @@ fn should_emit(
     }
 }
 fn render_field_descriptor(set: &StarkParameterSet) -> String {
-    if set.field == GOLDILOCKS_FP2 {
-        "GOLDILOCKS_FP2".to_string()
+    if set.field == GOLDILOCKS_BASE {
+        "GOLDILOCKS_BASE".to_string()
     } else {
         format!(
             "FieldDescriptor {{ name: \"{}\", modulus_decimal: \"{}\", extension_degree: {} }}",
@@ -190,8 +193,8 @@ fn render_field_descriptor(set: &StarkParameterSet) -> String {
     }
 }
 fn render_hash_descriptor(set: &StarkParameterSet) -> String {
-    if set.hash == POSEIDON2_SHA3 {
-        "POSEIDON2_SHA3".to_string()
+    if set.hash == POSEIDON_GOLDILOCKS_X7_BLAKE2B {
+        "POSEIDON_GOLDILOCKS_X7_BLAKE2B".to_string()
     } else {
         format!(
             "HashDescriptor {{ trace_commitment: \"{}\", transcript: \"{}\" }}",

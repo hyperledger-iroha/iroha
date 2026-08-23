@@ -98,7 +98,7 @@ use super::{
         LifecycleDecisionApplyAdapterFinalityV1, LiveProposalIntentWalSignHandoffV1,
         PreparedLifecycleDecisionApplyAdapterCompletionV1,
         RecoveredLifecycleNextVoteBodyAuthorityV1, RecoveredLifecycleNextVoteBodyLookupV1,
-        SignRequest,
+        SignRequest, VerifiedHeightContext,
     },
     v2_body_store::{
         BodyStoreCompletion, DurableBodyReceipt, V2BodyStore, V2BodyStoreInstanceIdentity,
@@ -109,7 +109,7 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1,
+        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
         LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
         LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
@@ -133,9 +133,10 @@ use super::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
         NetworkIngressError, PendingRuntimeEffectBinding, RecoveredDurableValidateRetryFrontierV1,
-        RetiredBodyPipelineCompletions, RuntimeCandidateAdmissionDisposition, RuntimeClockError,
-        RuntimeEffectOwnership, RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner,
-        RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
+        RetiredBodyPipelineCompletions, RuntimeCandidateAdmissionDisposition,
+        RuntimeCandidateSemanticStatement, RuntimeClockError, RuntimeEffectOwnership,
+        RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
         production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
@@ -2576,6 +2577,11 @@ type DurableDecision = (
     wire::BlockSubject,
     wire::ExecutionCommitment,
 );
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingRunnerDecisionCleanup {
+    decision: DurableDecision,
+    owner_tag: EventTag,
+}
 /// Exact executor-retained owner for one live lifecycle Apply corridor.
 ///
 /// This is deliberately not generic pending work: the registry and bounded

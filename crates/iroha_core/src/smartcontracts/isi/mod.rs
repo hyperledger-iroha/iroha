@@ -937,8 +937,8 @@ mod tests {
         nexus::{
             AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
             DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, VerifiedLaneRelayRecord,
-            lane_relay_fastpq_claim_digest,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+            ProofBlob, VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
         },
         permission,
     };
@@ -1508,6 +1508,7 @@ mod tests {
         LaneDataspaceMismatch,
         UnknownDataspaceId,
         EmptyProofPayload,
+        OversizedProofPayload,
         MalformedProofEnvelope,
         ProofManifestRootMismatch,
         ProofDataspaceMismatch,
@@ -1569,6 +1570,10 @@ mod tests {
                 Case::EmptyProofPayload => (
                     "empty proof payload must be rejected",
                     &["proof payload is empty"],
+                ),
+                Case::OversizedProofPayload => (
+                    "oversized proof payload must be rejected before decode",
+                    &["proof payload exceeds", "decode limit"],
                 ),
                 Case::MalformedProofEnvelope => (
                     "malformed proof envelope must be rejected",
@@ -1720,6 +1725,7 @@ mod tests {
                 Case::MalformedExistingState => b"register-lane-relay-malformed-existing",
                 Case::ConflictingExistingState => b"register-lane-relay-conflicting-existing",
                 Case::EmptyProofPayload
+                | Case::OversizedProofPayload
                 | Case::MalformedProofEnvelope
                 | Case::EffectProofBeforeProofVerification => {
                     unreachable!("raw proof cases do not use a proof seed")
@@ -1792,6 +1798,10 @@ mod tests {
                 payload: Vec::new(),
                 expiry_slot: Some(state_transaction.block_height() + 10),
             }),
+            Case::OversizedProofPayload => Some(ProofBlob {
+                payload: vec![0xA5; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+                expiry_slot: Some(state_transaction.block_height() + 10),
+            }),
             Case::MalformedProofEnvelope => Some(ProofBlob {
                 payload: vec![0xFF, 0x00, 0xFE],
                 expiry_slot: Some(state_transaction.block_height() + 10),
@@ -1815,9 +1825,12 @@ mod tests {
             _ => [0x42; 32],
         };
         let proof_digest = match (&initial_proof_blob, case) {
-            (Some(proof_blob), Case::EmptyProofPayload | Case::MalformedProofEnvelope) => {
-                iroha_crypto::Hash::new(&proof_blob.payload)
-            }
+            (
+                Some(proof_blob),
+                Case::EmptyProofPayload
+                | Case::OversizedProofPayload
+                | Case::MalformedProofEnvelope,
+            ) => iroha_crypto::Hash::new(&proof_blob.payload),
             (_, Case::MismatchedFastpqDigest) => {
                 iroha_crypto::Hash::new(b"wrong-axt-proof-payload")
             }
@@ -1917,6 +1930,7 @@ mod tests {
 
         envelope = match case {
             Case::EmptyProofPayload
+            | Case::OversizedProofPayload
             | Case::MalformedProofEnvelope
             | Case::MismatchedFastpqDigest
             | Case::EffectProofBeforeProofVerification => envelope,
@@ -2113,6 +2127,8 @@ mod tests {
         register_verified_lane_relay_rejects_unknown_dataspace_id => UnknownDataspaceId;
         #[test]
         register_verified_lane_relay_rejects_empty_proof_payload => EmptyProofPayload;
+        #[test]
+        register_verified_lane_relay_rejects_oversized_proof_payload => OversizedProofPayload;
         #[test]
         register_verified_lane_relay_rejects_malformed_proof_envelope => MalformedProofEnvelope;
         #[test]

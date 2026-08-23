@@ -411,8 +411,8 @@ inline Bn254 bn254_pow5(Bn254 value) {
     return bn254_montgomery_mul(fourth, value);
 }
 
-inline Bn254 bn254_load_limb_value(device const ulong *limbs, uint index) {
-    uint base = index * 4U;
+inline Bn254 bn254_load_limb_value(device const ulong *limbs, ulong index) {
+    ulong base = index * 4UL;
     return bn254_from_limbs(ulong4(
         limbs[base],
         limbs[base + 1U],
@@ -420,8 +420,8 @@ inline Bn254 bn254_load_limb_value(device const ulong *limbs, uint index) {
         limbs[base + 3U]));
 }
 
-inline void bn254_store_limb_value(device ulong *limbs, uint index, Bn254 value) {
-    uint base = index * 4U;
+inline void bn254_store_limb_value(device ulong *limbs, ulong index, Bn254 value) {
+    ulong base = index * 4UL;
     limbs[base] = value.limbs.x;
     limbs[base + 1U] = value.limbs.y;
     limbs[base + 2U] = value.limbs.z;
@@ -515,13 +515,14 @@ inline Bn254 bn254_poseidon_hash_slice(
     thread Bn254 state[3] = {bn254_zero(), bn254_zero(), bn254_zero()};
     uint cursor = 0U;
     while (cursor + 1U < slice.len) {
-        Bn254 first = bn254_from_u64(words[slice.offset + cursor]);
-        Bn254 second = bn254_from_u64(words[slice.offset + cursor + 1U]);
+        ulong word_index = (ulong)slice.offset + (ulong)cursor;
+        Bn254 first = bn254_from_u64(words[word_index]);
+        Bn254 second = bn254_from_u64(words[word_index + 1UL]);
         bn254_poseidon_absorb_pair(state, first, second, round_constants, mds);
         cursor += 2U;
     }
     if (cursor < slice.len) {
-        Bn254 first = bn254_from_u64(words[slice.offset + cursor]);
+        Bn254 first = bn254_from_u64(words[(ulong)slice.offset + (ulong)cursor]);
         bn254_poseidon_absorb_pair(state, first, bn254_one(), round_constants, mds);
     } else {
         bn254_poseidon_absorb_pair(state, bn254_one(), bn254_zero(), round_constants, mds);
@@ -543,10 +544,10 @@ kernel void bn254_poseidon_hash_words(
     }
     uint states_per_lane = max(args.states_per_lane, 1U);
     uint processed = 0U;
-    uint start = grid_pos.x * states_per_lane;
+    ulong start = (ulong)grid_pos.x * (ulong)states_per_lane;
     while (processed < states_per_lane) {
-        uint index = start + processed;
-        if (index >= args.batch_count) {
+        ulong index = start + (ulong)processed;
+        if (index >= (ulong)args.batch_count) {
             break;
         }
         Bn254 digest = bn254_poseidon_hash_slice(words, slices[index], round_constants, mds);

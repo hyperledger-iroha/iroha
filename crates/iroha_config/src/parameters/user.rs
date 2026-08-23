@@ -13469,7 +13469,7 @@ impl SoracloudRuntimeCacheBudgets {
 const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
 const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
 /// User-level Inrou PortableVM configuration and resource ceilings.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrou {
     /// Whether this validator advertises and materializes local Inrou workloads.
@@ -31999,7 +31999,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
-        Emitter, LaneId, NexusFees, NonZeroU32, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
     };
     use crate::parameters::{
         actual, defaults,
@@ -35455,7 +35455,7 @@ publish_delay_seconds = 17
         if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r#"
+                r"
 [inrou]
 enabled = {enabled}
 portable_vm_uid = 70000
@@ -35465,7 +35465,7 @@ max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-"#,
+",
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -35571,13 +35571,13 @@ max_bytes_per_minute = 1048576
     fn soracloud_runtime_portable_vm_requires_dedicated_identity() {
         let result =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+                r"
 [inrou]
 enabled = true
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
             )));
         assert!(
             result.is_err(),
@@ -35594,14 +35594,14 @@ max_storage_bytes = 10737418240
         ] {
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 {identity_fields}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ));
             assert!(
@@ -35614,7 +35614,7 @@ max_storage_bytes = 10737418240
     fn soracloud_runtime_release_gate_rejects_enabled_inrou_at_fixed_corridor_boundaries() {
         let runtime =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+                r"
 [inrou]
 enabled = true
 portable_vm_uid = 65536
@@ -35622,7 +35622,7 @@ portable_vm_gid = 524287
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
             )));
         assert!(
             runtime.is_err(),
@@ -35640,7 +35640,7 @@ max_storage_bytes = 10737418240
         ] {
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35649,7 +35649,7 @@ portable_vm_gid = 70001
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ));
             assert!(
@@ -35662,7 +35662,7 @@ max_storage_bytes = 10737418240
     fn soracloud_runtime_nonproduction_also_rejects_enabled_inrou() {
         let result =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+                r"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
@@ -35670,7 +35670,7 @@ portable_vm_gid = 70001
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
             )));
         assert!(result.is_err());
     }

@@ -4914,6 +4914,19 @@ pub(crate) mod valid {
                                   policy_slot: u64,
                                   min_expiry_slot: Option<u64>|
              -> Result<usize, BlockValidationError> {
+                if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+                    return Err(make_axt_error_with(
+                        AxtRejectReason::Proof,
+                        &format!(
+                            "proof payload exceeds the {}-byte decode limit",
+                            fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                        ),
+                        Some(dsid),
+                        Some(policy.target_lane),
+                        None,
+                        None,
+                    ));
+                }
                 let cache_key = (proof.expiry_slot, Hash::new(&proof.payload));
                 let cached_index = verified_proof_buckets.get(&cache_key).and_then(|bucket| {
                     bucket
@@ -24332,8 +24345,9 @@ mod commit {
             AxtEnvelopeRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
             AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope,
             AxtProofFragment, AxtRemoteSpendClaimV1, AxtReplayRecord, AxtTouchFragment,
-            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ManifestVersion, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
+            AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,
+            MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ManifestVersion, ProofBlob, RemoteSpendIntent,
+            SpendOp, TouchManifest, UniversalAccountId,
         };
         use iroha_data_model::{DomainId, Registrable};
         use iroha_primitives::time::TimeSource;
@@ -26585,6 +26599,41 @@ mod commit {
                 AxtRejectReason::Proof,
                 "not an AXT proof envelope",
             );
+        }
+        #[test]
+        fn axt_validation_rejects_oversized_proof_before_decode() {
+            let mut state = axt_validation_state();
+            let dsid = DataSpaceId::new(22);
+            let lane = LaneId::new(9);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x45; 32],
+                target_lane: lane,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 2,
+            };
+            state.set_axt_policy(dsid, policy);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let envelope = AxtEnvelopeRecord {
+                binding: binding_for_descriptor(&descriptor),
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: Vec::new(),
+                commit_height: 1,
+            };
+
+            expect_axt_envelope_error(&state, envelope, AxtRejectReason::Proof, "decode limit");
         }
         #[test]
         fn axt_validation_rejects_extended_proof_expiry() {

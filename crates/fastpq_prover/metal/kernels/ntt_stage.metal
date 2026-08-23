@@ -352,8 +352,8 @@ kernel void fastpq_fft_columns(
     uint3 threadgroup_pos [[ threadgroup_position_in_grid ]],
     uint3 thread_pos [[ thread_position_in_threadgroup ]]
 ) {
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
     uint lane = thread_pos.x;
@@ -419,8 +419,8 @@ kernel void fastpq_lde_columns(
     uint3 threadgroup_pos [[ threadgroup_position_in_grid ]],
     uint3 thread_pos [[ thread_position_in_threadgroup ]]
 ) {
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
 
@@ -494,8 +494,8 @@ kernel void fastpq_fft_post_tiling(
     if (args.stage_start >= args.log_len) {
         return;
     }
-    uint column_idx = threadgroup_pos.x + args.column_offset;
-    if (column_idx >= args.column_count) {
+    ulong column_idx = (ulong)threadgroup_pos.x + (ulong)args.column_offset;
+    if (column_idx >= (ulong)args.column_count) {
         return;
     }
     uint lane = thread_pos.x;

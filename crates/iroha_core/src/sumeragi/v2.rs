@@ -9505,6 +9505,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// Whether reducer transitions may publish current-height global status;
     /// recovered startup keeps this closed until lifecycle activation.
     status_publication_enabled: bool,
+    #[cfg(test)]
+    status_publication_attempts: usize,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -9923,6 +9925,8 @@ impl SumeragiV2Adapter {
             reducer_fence_generation: 0,
             replay_complete: false,
             status_publication_enabled: publish_initial_status,
+            #[cfg(test)]
+            status_publication_attempts: 0,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -11976,22 +11980,29 @@ impl SumeragiV2Adapter {
         self.registry = staged_registry;
         let previous_active_subject = self.active_subject;
         self.active_subject = Some((round, subject));
-        let result = self.step_with_completion_evidence(
+        let result = self.step_with_completion_evidence_and_status(
             reducer::Event::LocalProposalReady {
                 tag,
                 manifest: core_manifest,
             },
             Some(completion_evidence),
+            false,
         );
-        if let Ok(outcome) = &result {
-            let retain = outcome.disposition() == reducer::StepDisposition::Applied
-                || (outcome.disposition()
-                    == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-                    && outcome.deferred_admission_ordinal().is_some());
-            if !retain {
-                self.active_subject = previous_active_subject;
+        match &result {
+            Ok(outcome) => {
+                let retain = outcome.disposition() == reducer::StepDisposition::Applied
+                    || (outcome.disposition()
+                        == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                        && outcome.deferred_admission_ordinal().is_some());
+                if !retain {
+                    self.active_subject = previous_active_subject;
+                }
+                // Publish after deciding whether this completion owns the active
+                // subject. In particular, the no-effect stale path must not expose a
+                // provisional subject to the monotone external progress clock.
                 self.publish_status()?;
             }
+            Err(_) => self.active_subject = previous_active_subject,
         }
         result
     }
@@ -16284,6 +16295,14 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
     ) -> Result<AdapterOutcome, AdapterError> {
+        self.step_with_completion_evidence_and_status(event, completion_evidence, true)
+    }
+    fn step_with_completion_evidence_and_status(
+        &mut self,
+        event: reducer::Event,
+        completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        publish_status: bool,
+    ) -> Result<AdapterOutcome, AdapterError> {
         let priority = match &event {
             reducer::Event::ResumeAfterReplay { .. }
             | reducer::Event::LocalProposalReady { .. }
@@ -16302,8 +16321,16 @@ impl SumeragiV2Adapter {
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
-        self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
-            .map(|result| result.outcome)
+        self.step_with_defer_policy(
+            event,
+            false,
+            priority,
+            None,
+            completion_evidence,
+            None,
+            publish_status,
+        )
+        .map(|result| result.outcome)
     }
     #[cfg(test)]
     fn step_authenticated_ingress(
@@ -16338,6 +16365,7 @@ impl SumeragiV2Adapter {
             admission,
             None,
             authenticated_wire_identity,
+            true,
         )
     }
     fn step_with_defer_policy(
@@ -16348,6 +16376,7 @@ impl SumeragiV2Adapter {
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
         authenticated_wire_identity: Option<Arc<[u8]>>,
+        publish_status: bool,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
@@ -16366,7 +16395,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16415,7 +16446,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16483,7 +16516,9 @@ impl SumeragiV2Adapter {
             {
                 self.record_ingress_delivery(admission);
             }
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
                     disposition,
@@ -16533,7 +16568,9 @@ impl SumeragiV2Adapter {
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
-        self.publish_status()?;
+        if publish_status {
+            self.publish_status()?;
+        }
         self.log_body_progress(&queued, disposition, effects.len());
         Ok(DeferPolicyOutcome {
             outcome: AdapterOutcome {
@@ -17532,6 +17569,10 @@ impl SumeragiV2Adapter {
         Ok(None)
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
+        #[cfg(test)]
+        {
+            self.status_publication_attempts = self.status_publication_attempts.saturating_add(1);
+        }
         let status = self.status()?;
         if self.status_publication_enabled {
             super::status::set_v2_status(status);

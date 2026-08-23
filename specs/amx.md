@@ -15,12 +15,19 @@ Key guarantees:
 
 - Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.
 - DA samples that miss the budget are logged as missing availability evidence and the transaction remains queued for the next slot instead of silently stalling throughput.
-- AXT proof envelopes bind proof bytes to a dataspace, its active manifest root,
-  and the FastPQ V1 verifier metadata before the host caches the verification
-  result for the configured slot window.
+- Authenticated AXT proof envelopes bind proof bytes to a dataspace, its active
+  manifest root, and the FastPQ V1 verifier metadata before the host caches the
+  verification result for the configured slot window. Production
+  `AXT_VERIFY_DS_PROOF` rejects every non-null standalone proof until it can bind
+  the source roots and transaction set to authoritative finalized source state.
 - IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact authorization generation and next counter from the permanent per-dataspace ratchet, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
 - Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
 - Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
+- The issuer handle signature authenticates capability/asset identity but not
+  `RemoteSpendIntent`, proof bytes, or effective amount. Those facts still rely
+  on FASTPQ's roughly 32-bit binding ceiling, so handle-backed remote spend is
+  not release-qualified until the binding is at least 128 bits or an independent
+  finalized source-state statement authenticates the exact facts.
 - Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later). A block carries the deterministic post-state policy snapshot. Kura idempotently applies post-snapshot envelopes without advancing counters or cumulative charges a second time; only replay from genesis reconstructs the complete ledger, and a checkpoint restore requires its authenticated pre-snapshot ledger.
 - Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`active_handle_era`/`next_handle_counter`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
 
@@ -107,8 +114,8 @@ Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensio
 ### SDK sample: remote spend without token egress
 
 1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
-2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh an asset-specific handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends the exact signed `AssetDefinitionId` inside the remote dataspace (no bridge leg). The handle's issuer-signed asset must equal `RemoteSpendIntent.op.asset_definition_id`; budget enforcement uses that asset identity plus the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
+2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect. Do not use non-null `AXT_VERIFY_DS_PROOF` as proof of remote authorization; production CoreHost rejects that standalone path.
+3. Request or refresh an asset-specific handle and invoke `AXT_USE_ASSET_HANDLE` with the proof supplied inline plus a `RemoteSpendIntent` that spends the exact signed `AssetDefinitionId` inside the remote dataspace (no bridge leg). The handle's issuer-signed asset must equal `RemoteSpendIntent.op.asset_definition_id`; budget enforcement uses that asset identity plus the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above. This specialized path remains outside release qualification while its intent/amount binding is only roughly 32 bits.
 4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
 
 ## Operator Expectations
@@ -168,12 +175,12 @@ The canonical data-model types live in
 
 | Type / field | Contract |
 |--------------|----------|
-| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads are rejected. |
+| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads and payloads larger than 2 MiB are rejected before envelope decoding. |
 | `ProofBlob.expiry_slot` | Outer mirror of the proof-bound expiry. `None` is the authenticated no-expiry value; verifiers require an exact match before applying freshness policy. |
 | `AxtProofEnvelope.dsid` | Dataspace whose policy validates the proof. |
 | `AxtProofEnvelope.manifest_root` | Non-zero outer mirror of the exact 32-byte `axt_fastpq_manifest_root_v1` proof metadata and, where required by admission, the active Space Directory policy root. |
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
-| `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
+| `AxtProofEnvelope.proof` | Non-empty backend proof bytes, limited to 1 MiB before FastPQ payload decoding or verification. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
@@ -234,9 +241,9 @@ Hosts and block admission derive each expected commitment from the actual
 authenticated handle and require exact per-proof set consumption. Duplicate
 use of one claim, a proof claim with no corresponding handle, or replay under a
 different asset incarnation, era, sub-nonce, lane, dataspace, or descriptor
-fails closed. An empty
-set remains valid for standalone `VERIFY_DS_PROOF` but cannot authorize a
-handle. The asset definition must also exist in committed world state, and its
+fails closed. The raw verifier may validate an empty remote-spend claim set, but
+production CoreHost rejects every non-null standalone `VERIFY_DS_PROOF`; an
+empty set cannot authorize a handle. The asset definition must also exist in committed world state, and its
 current non-zero `AxtAssetIncarnationV1` must equal the issuer-signed context.
 Core derives the token from a dedicated V1 domain separator, the exact
 `NetworkId`, canonical asset-definition UUID, registration transaction's
@@ -296,7 +303,7 @@ matched proof transcript.
 - Bundle deterministic allowance proofs in the same UAID manifest update when cross-DS transfers touch regulated DSes.
 - Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
 - Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
-- Proof blobs (`ProofBlob`) MUST encode the complete V1 `AxtProofEnvelope { dsid, manifest_root, da_commitment, proof, fastpq_binding, committed_amount, amount_commitment }`; every nullable slot is encoded explicitly. Hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
+- Proof blobs (`ProofBlob`) MUST encode the complete V1 `AxtProofEnvelope { dsid, manifest_root, da_commitment, proof, fastpq_binding, committed_amount, amount_commitment }`; every nullable slot is encoded explicitly. Authenticated specialized consumers bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Non-null standalone `AXT_VERIFY_DS_PROOF` fails before proof recording or cache mutation. Expired or manifest-mismatched authenticated artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
 - Proof cache reuse is bounded by the configured `proof_cache_ttl_slots` and the proof's own expiry: verified proofs may stay hot across envelopes and later slots through that exact deterministic window, then expire automatically.
 
 ### Static read/write analyzer

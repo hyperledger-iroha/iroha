@@ -3426,7 +3426,7 @@ mod harness {
         };
         Err(format!(
             "{requested} requested but no GPU backend was detected (resolved mode={}, backend=\"{}\"). \
-Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_METAL_LIB points at a compiled metallib; rerun with --gpu-probe to capture the detection snapshot.",
+            Development/debug builds can set FASTPQ_DEBUG_METAL_ENUM=1 to inspect MTLDevice enumeration; FASTPQ_METAL_LIB is a debug-only override because missing build-time libraries use embedded source compilation. Rerun with --gpu-probe to capture the detection snapshot.",
             resolved_mode.as_str(),
             backend_label
         ))
@@ -3456,7 +3456,7 @@ Set FASTPQ_DEBUG_METAL_ENUM=1 to inspect Metal enumeration and ensure FASTPQ_MET
         eprintln!("  detected backend: {backend_label}");
         if let Some(path) = debug_env_var("FASTPQ_METAL_LIB") {
             if !path.is_empty() {
-                eprintln!("  FASTPQ_METAL_LIB override: {path}");
+                eprintln!("  FASTPQ_METAL_LIB debug override: {path}");
             }
         }
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

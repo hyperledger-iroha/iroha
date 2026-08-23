@@ -3034,6 +3034,7 @@ fn default_state_root() -> PathBuf {
     // environment select the persistence root, including for non-root capability deployments.
     PathBuf::from("/var/lib/sora-vpn-controller")
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_privileged_caller_identity(
     real_uid: u32,
     effective_uid: u32,
@@ -3053,6 +3054,7 @@ fn validate_privileged_caller_identity(
     }
     Ok(PrivilegedCaller { uid: real_uid })
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_privileged_executable_custody(
     owner_uid: u32,
     mode: u32,

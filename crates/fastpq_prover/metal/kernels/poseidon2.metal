@@ -49,11 +49,11 @@ inline ulong3 add_mod_vec(ulong3 lhs, ulong3 rhs) {
         add_mod(lhs.z, rhs.z));
 }
 
-inline ulong3 pow5_vec(ulong3 value) {
+inline ulong3 pow7_vec(ulong3 value) {
     return make_ulong3(
-        pow5(value.x),
-        pow5(value.y),
-        pow5(value.z));
+        pow7(value.x),
+        pow7(value.y),
+        pow7(value.z));
 }
 constant ulong ROUND_CONSTANTS[TOTAL_ROUNDS][STATE_WIDTH] = {
     {0x0355DEFB099BED96UL, 0xFCC55FB9681355E6UL, 0x931368D725F8720AUL},
@@ -165,7 +165,7 @@ inline void full_round_chunk(
 ) {
     ulong3 rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
-        chunk[i] = pow5_vec(add_mod_vec(chunk[i], rc));
+        chunk[i] = pow7_vec(add_mod_vec(chunk[i], rc));
         apply_mds(chunk[i], mds);
     }
 }
@@ -180,7 +180,7 @@ inline void partial_round_chunk(
     ulong3 rc = rounds[round_idx];
     for (ushort i = 0; i < count; ++i) {
         chunk[i] = add_mod_vec(chunk[i], rc);
-        chunk[i].x = pow5(chunk[i].x);
+        chunk[i].x = pow7(chunk[i].x);
         apply_mds(chunk[i], mds);
     }
 }
@@ -212,17 +212,17 @@ inline void permute_chunk(
 inline ushort load_state_chunk(
     thread ulong3 *chunk,
     ushort capacity,
-    uint start_state,
+    ulong start_state,
     uint total_states,
     device const ulong *states
 ) {
     ushort loaded = 0;
     for (; loaded < capacity; ++loaded) {
-        uint idx = start_state + loaded;
-        if (idx >= total_states) {
+        ulong idx = start_state + (ulong)loaded;
+        if (idx >= (ulong)total_states) {
             break;
         }
-        uint base = idx * STATE_WIDTH;
+        ulong base = idx * (ulong)STATE_WIDTH;
         chunk[loaded].x = states[base];
         chunk[loaded].y = states[base + 1];
         chunk[loaded].z = states[base + 2];
@@ -233,11 +233,11 @@ inline ushort load_state_chunk(
 inline void store_state_chunk(
     thread const ulong3 *chunk,
     ushort count,
-    uint start_state,
+    ulong start_state,
     device ulong *states
 ) {
     for (ushort i = 0; i < count; ++i) {
-        uint base = (start_state + i) * STATE_WIDTH;
+        ulong base = (start_state + (ulong)i) * (ulong)STATE_WIDTH;
         states[base] = chunk[i].x;
         states[base + 1] = chunk[i].y;
         states[base + 2] = chunk[i].z;
@@ -253,14 +253,14 @@ inline void zero_state_chunk(thread ulong3 *chunk, ushort count) {
 inline void absorb_block_chunk(
     thread ulong3 *chunk,
     ushort count,
-    uint start_state,
+    ulong start_state,
     uint block,
     device const PoseidonSlice *slices,
     device const ulong *payloads
 ) {
-    uint block_offset = block * POSEIDON_RATE;
+    ulong block_offset = (ulong)block * (ulong)POSEIDON_RATE;
     for (ushort i = 0; i < count; ++i) {
-        uint column = start_state + i;
+        ulong column = start_state + (ulong)i;
         PoseidonSlice slice = slices[column];
         ulong base = (ulong)slice.offset + block_offset;
         chunk[i].x = add_mod(chunk[i].x, payloads[base]);
@@ -319,13 +319,13 @@ kernel void poseidon_permute(device ulong *states [[ buffer(0) ]],
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
-    uint state_offset = grid_pos.x * states_per_lane;
+    ulong state_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
     thread ulong3 chunk[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
-        uint start_state = state_offset + processed;
-        if (start_state >= args.state_count) {
+        ulong start_state = state_offset + (ulong)processed;
+        if (start_state >= (ulong)args.state_count) {
             break;
         }
         uint remaining = states_per_lane - processed;
@@ -377,15 +377,15 @@ kernel void poseidon_hash_rows(device const ulong *columns [[ buffer(0) ]],
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
-    uint batch_offset = grid_pos.x * states_per_lane;
+    ulong batch_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
     thread ulong3 chunk[STATE_CHUNK];
     thread uint row_indices[STATE_CHUNK];
     thread ulong values[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
-        uint start_batch_row = batch_offset + processed;
-        if (start_batch_row >= args.batch_count) {
+        ulong start_batch_row = batch_offset + (ulong)processed;
+        if (start_batch_row >= (ulong)args.batch_count) {
             break;
         }
         uint remaining = states_per_lane - processed;
@@ -393,14 +393,15 @@ kernel void poseidon_hash_rows(device const ulong *columns [[ buffer(0) ]],
         ushort capacity = (ushort)desired;
         ushort loaded = 0;
         for (; loaded < capacity; ++loaded) {
-            uint batch_row = start_batch_row + loaded;
-            if (batch_row >= args.batch_count) {
+            ulong batch_row = start_batch_row + (ulong)loaded;
+            if (batch_row >= (ulong)args.batch_count) {
                 break;
             }
-            uint row_index = args.row_offset + batch_row;
-            if (row_index >= args.row_count) {
+            ulong row_index_wide = (ulong)args.row_offset + batch_row;
+            if (row_index_wide >= (ulong)args.row_count) {
                 break;
             }
+            uint row_index = (uint)row_index_wide;
             row_indices[loaded] = row_index;
             chunk[loaded] = make_ulong3(0, 0, 0);
         }
@@ -477,13 +478,13 @@ kernel void poseidon_hash_columns(device const ulong *payloads [[ buffer(0) ]],
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
-    uint state_offset = grid_pos.x * states_per_lane;
+    ulong state_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
     thread ulong3 chunk[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
-        uint start_state = state_offset + processed;
-        if (start_state >= args.state_count) {
+        ulong start_state = state_offset + (ulong)processed;
+        if (start_state >= (ulong)args.state_count) {
             break;
         }
         uint remaining = states_per_lane - processed;
@@ -491,8 +492,8 @@ kernel void poseidon_hash_columns(device const ulong *payloads [[ buffer(0) ]],
         ushort capacity = (ushort)desired;
         ushort loaded = 0;
         for (; loaded < capacity; ++loaded) {
-            uint idx = start_state + loaded;
-            if (idx >= args.state_count) {
+            ulong idx = start_state + (ulong)loaded;
+            if (idx >= (ulong)args.state_count) {
                 break;
             }
             chunk[loaded] = make_ulong3(0, 0, 0);
@@ -547,13 +548,13 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
     }
 
     uint states_per_lane = max(args.states_per_lane, 1u);
-    uint state_offset = grid_pos.x * states_per_lane;
+    ulong state_offset = (ulong)grid_pos.x * (ulong)states_per_lane;
     thread ulong3 chunk[STATE_CHUNK];
     uint processed = 0;
 
     while (processed < states_per_lane) {
-        uint start_state = state_offset + processed;
-        if (start_state >= args.state_count) {
+        ulong start_state = state_offset + (ulong)processed;
+        if (start_state >= (ulong)args.state_count) {
             break;
         }
         uint remaining = states_per_lane - processed;
@@ -561,8 +562,8 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
         ushort capacity = (ushort)desired;
         ushort loaded = 0;
         for (; loaded < capacity; ++loaded) {
-            uint idx = start_state + loaded;
-            if (idx >= args.state_count) {
+            ulong idx = start_state + (ulong)loaded;
+            if (idx >= (ulong)args.state_count) {
                 break;
             }
             chunk[loaded] = make_ulong3(0, 0, 0);
@@ -581,9 +582,9 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
             permute_chunk(chunk, loaded, shared_rounds, local_mds);
         }
         for (ushort i = 0; i < loaded; ++i) {
-            uint column = start_state + i;
+            ulong column = start_state + (ulong)i;
             ulong leaf = chunk[i].x;
-            out_hashes[args.leaf_offset + column] = leaf;
+            out_hashes[(ulong)args.leaf_offset + column] = leaf;
         }
         processed += loaded;
     }
@@ -594,7 +595,7 @@ kernel void poseidon_trace_parents(device ulong *out_hashes [[ buffer(0) ]],
                                    uint3 grid_pos [[ thread_position_in_grid ]],
                                    uint3 tg_pos [[ thread_position_in_threadgroup ]],
                                    uint3 tg_size [[ threads_per_threadgroup ]]) {
-    uint parent_count = (args.state_count + 1u) >> 1;
+    uint parent_count = (args.state_count >> 1) + (args.state_count & 1u);
     if (parent_count == 0) {
         return;
     }
@@ -644,7 +645,7 @@ kernel void poseidon_trace_parents(device ulong *out_hashes [[ buffer(0) ]],
             if (right_index >= args.state_count) {
                 right_index = left_index;
             }
-            ulong left = out_hashes[args.leaf_offset + left_index];
+            ulong left = out_hashes[(ulong)args.leaf_offset + (ulong)left_index];
             parent_indices[loaded] = parent_index;
             chunk[loaded] = make_ulong3(TRACE_NODE_DOMAIN_SEED, left, 0);
         }
@@ -658,13 +659,13 @@ kernel void poseidon_trace_parents(device ulong *out_hashes [[ buffer(0) ]],
             if (right_index >= args.state_count) {
                 right_index = parent_index << 1;
             }
-            ulong right = out_hashes[args.leaf_offset + right_index];
+            ulong right = out_hashes[(ulong)args.leaf_offset + (ulong)right_index];
             chunk[i].x = add_mod(chunk[i].x, right);
             chunk[i].y = add_mod(chunk[i].y, 1ul);
         }
         permute_chunk(chunk, loaded, shared_rounds, local_mds);
         for (ushort i = 0; i < loaded; ++i) {
-            out_hashes[args.parent_offset + parent_indices[i]] = chunk[i].x;
+            out_hashes[(ulong)args.parent_offset + (ulong)parent_indices[i]] = chunk[i].x;
         }
         processed += loaded;
     }

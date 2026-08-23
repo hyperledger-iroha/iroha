@@ -41,8 +41,6 @@ pub(in crate::sumeragi) use turn_driver::{
     ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
-use super::authority::lifecycle_ordinal_authorities_after_high_watermark;
-use super::selector::SelectedCertifiedBodyResponseOwnerV1;
 use super::{
     CertifiedFetchBodyPersistenceCompletionError, PreparedLifecycleIngressSelector,
     ProductionCompletionDispatchErrorV1, ProductionCompletionDispatchV1,
@@ -54,7 +52,10 @@ use super::{
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ReadyValidateSuccessorV1,
     RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
-    work_registry::LifecycleDecisionApplyTerminalPublicationErrorV1,
+    work_registry::{
+        LifecycleDecisionApplyTerminalPublicationErrorV1,
+        RecoveredLifecycleSignCancellationPublicationError,
+    },
 };
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]

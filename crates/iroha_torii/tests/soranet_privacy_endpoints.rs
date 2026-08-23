@@ -36,17 +36,14 @@ fn privacy_ingress_dtos_reject_unknown_fields() {
     let event = SoranetPrivacyEventV1 {
         timestamp_unix: 1,
         mode: SoranetPrivacyModeV1::Entry,
-        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(
-            SoranetPrivacyEventHandshakeSuccessV1 {
-                rtt_ms: None,
-                active_circuits_after: None,
-            },
-        ),
+        kind: SoranetPrivacyEventKindV1::HandshakeSuccess(SoranetPrivacyEventHandshakeSuccessV1 {
+            rtt_ms: None,
+            active_circuits_after: None,
+        }),
     };
-    let event_json = norito::json::to_string(
-        &norito::json::to_value(&event).expect("serialize privacy event"),
-    )
-    .expect("render privacy event");
+    let event_json =
+        norito::json::to_string(&norito::json::to_value(&event).expect("serialize privacy event"))
+            .expect("render privacy event");
     let event_dto = format!(r#"{{"event":{event_json},"unexpected":true}}"#);
     assert!(
         norito::json::from_str::<RecordSoranetPrivacyEventDto>(&event_dto).is_err(),
@@ -54,10 +51,9 @@ fn privacy_ingress_dtos_reject_unknown_fields() {
     );
 
     let share = SoranetPrivacyPrioShareV1::new([1; 32], 0, 60);
-    let share_json = norito::json::to_string(
-        &norito::json::to_value(&share).expect("serialize privacy share"),
-    )
-    .expect("render privacy share");
+    let share_json =
+        norito::json::to_string(&norito::json::to_value(&share).expect("serialize privacy share"))
+            .expect("render privacy share");
     let share_dto = format!(r#"{{"share":{share_json},"unexpected":true}}"#);
     assert!(
         norito::json::from_str::<RecordSoranetPrivacyShareDto>(&share_dto).is_err(),

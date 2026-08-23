@@ -1443,15 +1443,16 @@ pub async fn handle_gov_get_tally(
         None
     };
     let proposal = proposal_id.and_then(|id| world.governance_proposals().get(&id));
-    let is_validation_fee_referendum = proposal.is_some_and(|proposal| {
-        matches!(
+    let is_validation_fee_referendum =
+        proposal.is_some_and(|proposal| {
+            matches!(
             &proposal.kind,
             iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
                 | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
         )
-    });
-    if is_validation_fee_referendum {
-        let typed_proposal_id = hex::encode(proposal_id.expect("decoded proposal id"));
+        });
+    if let Some(validation_fee_proposal_id) = proposal_id.filter(|_| is_validation_fee_referendum) {
+        let typed_proposal_id = hex::encode(validation_fee_proposal_id);
         return Err(crate::routing::conversion_error(format!(
             "validation-fee referendum tally requires the typed \
              /v1/validation-fee/proposals/{typed_proposal_id} endpoint"
@@ -1496,62 +1497,66 @@ pub async fn handle_gov_get_tally(
         abstain = evidence.abstain;
     } else {
         match referendum.mode {
-        iroha_core::state::GovernanceReferendumMode::Plain => {
-            let tally_height = if referendum.status
-                == iroha_core::state::GovernanceReferendumStatus::Closed
-                || now_h > referendum.h_end
-            {
-                referendum.h_end
-            } else {
-                now_h
-            };
-            if let Some(locks) = world.governance_locks().get(&rid) {
-                let step = gov_cfg.conviction_step_blocks.max(1);
-                let max_c = gov_cfg.max_conviction;
-                for (_owner, rec) in locks.locks.iter() {
-                    if rec.expiry_height < tally_height {
-                        continue;
-                    }
-                    if rec.amount.scale() != 0 {
-                        return Err(crate::routing::conversion_error(
-                            "plain ballot lock amount must have scale zero".into(),
-                        ));
-                    }
-                    let units = rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
-                        crate::routing::conversion_error(
-                            "plain ballot lock amount exceeds u128 voting range".into(),
-                        )
-                    })?;
-                    let w = checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
-                    match rec.direction {
-                        0 => {
-                            approve = approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+            iroha_core::state::GovernanceReferendumMode::Plain => {
+                let tally_height = if referendum.status
+                    == iroha_core::state::GovernanceReferendumStatus::Closed
+                    || now_h > referendum.h_end
+                {
+                    referendum.h_end
+                } else {
+                    now_h
+                };
+                if let Some(locks) = world.governance_locks().get(&rid) {
+                    let step = gov_cfg.conviction_step_blocks.max(1);
+                    let max_c = gov_cfg.max_conviction;
+                    for (_owner, rec) in locks.locks.iter() {
+                        if rec.expiry_height < tally_height {
+                            continue;
                         }
-                        1 => {
-                            reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        if rec.amount.scale() != 0 {
+                            return Err(crate::routing::conversion_error(
+                                "plain ballot lock amount must have scale zero".into(),
+                            ));
                         }
-                        2 => {
-                            abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
-                        }
-                        direction => {
-                            return Err(crate::routing::conversion_error(format!(
-                                "plain ballot lock has invalid direction {direction}; \
+                        let units =
+                            rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
+                                crate::routing::conversion_error(
+                                    "plain ballot lock amount exceeds u128 voting range".into(),
+                                )
+                            })?;
+                        let w =
+                            checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
+                        match rec.direction {
+                            0 => {
+                                approve =
+                                    approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            1 => {
+                                reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            2 => {
+                                abstain =
+                                    abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
+                            }
+                            direction => {
+                                return Err(crate::routing::conversion_error(format!(
+                                    "plain ballot lock has invalid direction {direction}; \
                                  expected 0, 1, or 2"
-                            )));
+                                )));
+                            }
                         }
                     }
                 }
             }
-        }
-        iroha_core::state::GovernanceReferendumMode::Zk => {
-            if let Some(e) = world.elections().get(&rid) {
-                if e.finalized && e.tally.len() >= 2 {
-                    approve = e.tally[0] as u128;
-                    reject = e.tally[1] as u128;
-                    abstain = e.tally.get(2).copied().map_or(0, u128::from);
+            iroha_core::state::GovernanceReferendumMode::Zk => {
+                if let Some(e) = world.elections().get(&rid) {
+                    if e.finalized && e.tally.len() >= 2 {
+                        approve = e.tally[0] as u128;
+                        reject = e.tally[1] as u128;
+                        abstain = e.tally.get(2).copied().map_or(0, u128::from);
+                    }
                 }
             }
-        }
         }
     }
     Ok(JsonBody(TallyGetResponse {

@@ -50,8 +50,8 @@ constitution are not active until implemented and separately enacted.
 - An epoch council roster is immutable after its first successful persistence.
   Replaying the exact same roster is idempotent and cannot consume another
   service slot or extend a cooldown. A citizen cannot release the citizenship
-  bond while seated in the current council/body roster, retained by an active
-  proposal electorate, or holding an active referendum ballot.
+  bond while seated in a current or scheduled council/body roster, retained by
+  an active proposal electorate, or holding an active referendum ballot.
 - An enacted validation-fee policy is valid only when
   `effective_from_height = enacted_at_height + 120,960`; an earlier or later
   activation, or height overflow, is rejected. The proof-bearing current-policy

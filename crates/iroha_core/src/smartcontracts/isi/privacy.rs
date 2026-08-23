@@ -5804,8 +5804,6 @@ impl Execute for SubmitPrivacyProofV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "zk-stark")]
-    use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
     use crate::{
         kura::Kura,
         privacy_engines::{
@@ -5847,17 +5845,16 @@ mod tests {
             BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
             BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
-            PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
-            PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
-            PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
-            PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1,
-            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-            PrivacyPqMaspPoolBootstrapV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-            PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootPublicationV1,
-            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+            PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1,
+            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
+            PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
+            PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyProtocolIdV1, PrivacyRootPublicationV1, PrivacyRootV1,
+            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
             PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
             PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
@@ -6555,12 +6552,7 @@ mod tests {
         )
         .expect("canonical X.509 signed-CRL fixture")
     }
-    fn state_with_exact_zk_ace_activation() -> State {
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-        let activation = compiled_privacy_profile_v1(protocol_id)
-            .expect("compiled ZK-ACE profile")
-            .activation_record(active_lifecycle());
-        validate_compiled_privacy_activation_v1(&activation).expect("exact compiled activation");
+    fn state_without_zk_ace_activation() -> State {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -6571,10 +6563,7 @@ mod tests {
             None,
         )
         .build(&ALICE_ID);
-        let mut world = World::with([domain], [alice], [asset_definition]);
-        world
-            .privacy_activations
-            .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        let world = World::with([domain], [alice], [asset_definition]);
         let mut state = State::new_with_chain_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -8331,287 +8320,36 @@ mod tests {
     #[path = "zk_x509_governance_tests.rs"]
     mod zk_x509_governance_tests;
     #[test]
-    fn zk_ace_policy_governance_registers_rotates_revokes_and_is_failure_atomic() {
-        let state = state_with_exact_zk_ace_activation();
-        let header = test_header();
-        let header_hash = header.hash();
-        let mut block = state.block(header);
+    fn zk_ace_policy_governance_fails_closed_without_activation() {
+        let state = state_without_zk_ace_activation();
+        let mut block = state.block(test_header());
         let initial = valid_zk_ace_policy();
         let policy_key =
             PrivacyCommitmentKeyV1::zk_ace_policy(initial.policy_id).expect("policy key");
-        {
-            let mut transaction = block.transaction();
-            let error = RegisterPrivacyZkAcePolicyV1::new(initial.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("governance permission is mandatory");
-            assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
-            assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
-            assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
-        }
-        {
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            RegisterPrivacyZkAcePolicyV1::new(initial.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("exact compiled-profile policy registration");
-            assert_eq!(
-                load_privacy_zk_ace_policy_v1(
-                    initial.policy_id,
-                    &transaction.world.privacy_commitments,
-                )
-                .expect("registered policy"),
-                initial
-            );
-            transaction.apply();
-        }
-        {
-            let mut transaction = block.transaction();
-            let budget_before = transaction.privacy_budget_for_testing();
-            let error = RegisterPrivacyZkAcePolicyV1::new(initial.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("duplicate policy registration");
-            assert!(
-                smart_contract_parameter_message(&error).contains("already registered"),
-                "{error:?}"
-            );
-            assert_eq!(
-                transaction.privacy_budget_for_testing(),
-                budget_before,
-                "duplicate rejection must not reserve budget"
-            );
-        }
-        let rotated = zk_ace_policy(2, 0xA4, PrivacyZkAcePolicyLifecycleV1::Active);
-        {
-            let mut transaction = block.transaction();
-            RotatePrivacyZkAcePolicyV1::new(initial.record_digest, rotated.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("one-epoch policy rotation");
-            assert_eq!(
-                load_privacy_zk_ace_policy_v1(
-                    initial.policy_id,
-                    &transaction.world.privacy_commitments,
-                )
-                .expect("rotated policy"),
-                rotated
-            );
-            transaction.apply();
-        }
-        block
-            .commit()
-            .expect("commit ZK-ACE registration and rotation block");
-        let next_header = BlockHeader::new(
-            NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("non-zero height"),
-            Some(header_hash),
-            None,
-            None,
-            1_800_000_000_001,
-            0,
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let budget_before = transaction.privacy_budget_for_testing();
+        let error = RegisterPrivacyZkAcePolicyV1::new(initial)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("unavailable ZK-ACE profile must not admit policy state");
+        assert!(
+            smart_contract_parameter_message(&error).contains("not registered"),
+            "{error:?}"
         );
-        let mut block = state.block(next_header);
-        {
-            let mut transaction = block.transaction();
-            let budget_before = transaction.privacy_budget_for_testing();
-            let stale_successor = zk_ace_policy(3, 0xA5, PrivacyZkAcePolicyLifecycleV1::Active);
-            let error = RotatePrivacyZkAcePolicyV1::new(initial.record_digest, stale_successor)
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("stale expected-current digest");
-            assert!(
-                smart_contract_parameter_message(&error).contains("stale or substituted"),
-                "{error:?}"
-            );
-            assert_eq!(
-                transaction.privacy_budget_for_testing(),
-                budget_before,
-                "stale rotation must not reserve budget"
-            );
-            assert_eq!(
-                load_privacy_zk_ace_policy_v1(
-                    initial.policy_id,
-                    &transaction.world.privacy_commitments,
-                )
-                .expect("unchanged rotated policy"),
-                rotated
-            );
-        }
-        let revoked = zk_ace_policy(3, 0xA4, PrivacyZkAcePolicyLifecycleV1::Revoked);
-        {
-            let mut transaction = block.transaction();
-            RevokePrivacyZkAcePolicyV1::new(rotated.record_digest, revoked.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("one-epoch irreversible revocation");
-            assert_eq!(
-                load_privacy_zk_ace_policy_v1(
-                    initial.policy_id,
-                    &transaction.world.privacy_commitments,
-                )
-                .expect("revoked policy"),
-                revoked
-            );
-            transaction.apply();
-        }
-        {
-            let mut transaction = block.transaction();
-            let budget_before = transaction.privacy_budget_for_testing();
-            let post_terminal = zk_ace_policy(4, 0xA5, PrivacyZkAcePolicyLifecycleV1::Active);
-            let error = RotatePrivacyZkAcePolicyV1::new(revoked.record_digest, post_terminal)
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("revoked policy is terminal");
-            assert!(
-                smart_contract_parameter_message(&error).contains("not active"),
-                "{error:?}"
-            );
-            assert_eq!(
-                transaction.privacy_budget_for_testing(),
-                budget_before,
-                "terminal-policy rejection must not reserve budget"
-            );
-            assert_eq!(
-                load_privacy_zk_ace_policy_v1(
-                    initial.policy_id,
-                    &transaction.world.privacy_commitments,
-                )
-                .expect("terminal policy remains unchanged"),
-                revoked
-            );
-        }
+        assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
+        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn zk_ace_submit_atomically_transfers_and_records_replay_nullifier() {
-        let fixture: ZkAceRuntimeFixtureForTest = zk_ace_runtime_fixture_for_test();
-        let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &fixture.envelope.statement
-        else {
-            unreachable!("ZK-ACE runtime fixture")
-        };
-        let domain =
-            Domain::new(DomainId::try_new("privacy", "universal").expect("privacy domain"))
-                .build(&ALICE_ID);
-        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let source = Account::new(statement.source.clone()).build(&ALICE_ID);
-        let destination = Account::new(statement.destination.clone()).build(&ALICE_ID);
-        let asset_definition = AssetDefinition::numeric(
-            statement.asset_definition_id.clone(),
-            "zkace_runtime".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let policy = PrivacyZkAcePolicyRecordV1::new(
-            statement.policy_id,
-            statement.identity_commitment,
-            statement.policy_digest,
-            statement.authorization_epoch,
-            statement.asset_definition_id.clone(),
-            vec![statement.source.clone()],
-            PrivacyZkAcePolicyLifecycleV1::Active,
-        )
-        .expect("authoritative ZK-ACE runtime policy");
-        let policy_key =
-            PrivacyCommitmentKeyV1::zk_ace_policy(policy.policy_id).expect("ZK-ACE policy key");
-        let mut world = World::with([domain], [alice, source, destination], [asset_definition]);
-        world.privacy_activations.insert(
-            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0),
-            fixture.activation,
-        );
-        world.privacy_commitments.insert(
-            policy_key,
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 2)
-                .expect("ZK-ACE policy state record"),
-        );
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            TEST_CHAIN_ID.into(),
-            fixture.network_id,
-        );
-        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::prehashed(fixture.genesis_hash),
-        ));
-        let header = BlockHeader::new(
-            NonZeroU64::new(fixture.current_height).expect("non-zero ZK-ACE height"),
-            None,
-            None,
-            None,
-            fixture.block_timestamp_ms,
-            0,
-        );
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        let source_asset_id = iroha_data_model::asset::AssetId::new(
-            statement.asset_definition_id.clone(),
-            statement.source.clone(),
-        );
-        let destination_asset_id = iroha_data_model::asset::AssetId::new(
-            statement.asset_definition_id.clone(),
-            statement.destination.clone(),
-        );
-        iroha_data_model::prelude::Mint::asset_quantity(100_u32, source_asset_id.clone())
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("fund ZK-ACE source");
-        let instruction = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-        bind_submit_privacy_instruction(&mut transaction, &instruction);
-        instruction
-            .clone()
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("native ZK-ACE submit and state transition");
+    fn zk_ace_submit_has_no_activatable_compiled_profile() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         assert_eq!(
-            transaction
-                .world
-                .assets
-                .get(&source_asset_id)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(81_u32))
-        );
-        assert_eq!(
-            transaction
-                .world
-                .assets
-                .get(&destination_asset_id)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(19_u32))
-        );
-        let replay_key =
-            PrivacyNullifierKeyV1::zk_ace_replay(statement.policy_id, statement.replay_nullifier)
-                .expect("ZK-ACE replay key");
-        assert!(
-            transaction
-                .world
-                .privacy_nullifiers
-                .get(&replay_key)
-                .is_some()
-        );
-        let budget_after_success = transaction.privacy_budget_for_testing();
-        bind_submit_privacy_instruction(&mut transaction, &instruction);
-        let replay_error = instruction
-            .execute(&ALICE_ID, &mut transaction)
-            .expect_err("ZK-ACE replay must reject");
-        assert!(
-            smart_contract_parameter_message(&replay_error).contains("already consumed"),
-            "{replay_error:?}"
-        );
-        assert_eq!(
-            transaction.privacy_budget_for_testing(),
-            budget_after_success,
-            "replay rejection must not reserve budget"
-        );
-        assert_eq!(
-            transaction
-                .world
-                .assets
-                .get(&source_asset_id)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(81_u32)),
-            "replay rejection must not debit twice"
-        );
-        assert_eq!(
-            transaction
-                .world
-                .assets
-                .get(&destination_asset_id)
-                .map(|value| value.as_ref().clone()),
-            Some(Quantity::from(19_u32)),
-            "replay rejection must not credit twice"
+            compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
         );
     }
     #[test]
@@ -8877,70 +8615,26 @@ mod tests {
         );
     }
     #[test]
-    fn zk_ace_policy_governance_rejects_every_profile_substitution_without_mutation() {
-        let mutations: [(&str, fn(&mut PrivacyProtocolActivationRecordV1)); 8] = [
-            ("proof system", |record| {
-                record.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
-            }),
-            ("engine", |record| {
-                record.engine_id = PrivacyEngineIdV1::NativeJindo;
-            }),
-            ("parameter id", |record| record.parameter_id.0[0] ^= 1),
-            ("parameter digest", |record| {
-                record.parameter_digest.0[0] ^= 1;
-            }),
-            ("verifier digest", |record| record.verifier_digest.0[0] ^= 1),
-            ("statement schema", |record| {
-                record.statement_schema_digest.0[0] ^= 1;
-            }),
-            ("engine manifest", |record| {
-                record.engine_manifest_digest.0[0] ^= 1;
-            }),
-            ("protocol limits", |record| {
-                record.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-                    AnonymousPgcActivationLimitsV1 {
-                        max_anonymity_set_size: 16,
-                        max_recipient_count: 8,
-                    },
-                );
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let state = state_with_exact_zk_ace_activation();
-            let mut block = state.block(test_header());
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            let activation_key =
-                PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
-            let mut substituted = *transaction
-                .world
-                .privacy_activations
-                .get(&activation_key)
-                .expect("exact ZK-ACE activation");
-            mutate(&mut substituted);
+    fn zk_ace_policy_governance_has_no_compiled_activation_to_substitute() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
+        );
+        let state = state_without_zk_ace_activation();
+        let block = state.block(test_header());
+        let transaction = block.transaction();
+        assert!(
             transaction
                 .world
                 .privacy_activations
-                .insert(activation_key, substituted);
-            let budget_before = transaction.privacy_budget_for_testing();
-            let error = RegisterPrivacyZkAcePolicyV1::new(valid_zk_ace_policy())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("substituted activation must fail closed");
-            assert!(
-                matches!(error, Error::InvariantViolation(_)),
-                "profile substitution `{label}` returned {error:?}"
-            );
-            assert_eq!(
-                transaction.world.privacy_commitments.iter().count(),
-                0,
-                "profile substitution `{label}` created policy state"
-            );
-            assert_eq!(
-                transaction.privacy_budget_for_testing(),
-                budget_before,
-                "profile substitution `{label}` reserved budget"
-            );
-        }
+                .get(&PrivacyActivationKeyV1::new(protocol_id))
+                .is_none()
+        );
     }
     #[test]
     fn consensus_policy_schedule_rejects_bad_authority_timing_limits_and_overwrite() {

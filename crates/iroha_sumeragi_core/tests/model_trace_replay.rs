@@ -4,7 +4,10 @@
 //! `scripts/normalize_sumeragi_v2_tlc_trace.py`. The checked-in witness
 //! preserves every selected Core-enabled model action
 //! while this harness maps those actions onto the reducer's serialized
-//! event/effect API.
+//! event/effect API. The abstract body-fetch action refines through one
+//! production-only retransmission tick when its exact consumer is Set B;
+//! the harness checks that role, missing-body state, and empty effect frontier
+//! before opening fallback.
 //! The mapping is deliberately strict: malformed traces, invalid leaders,
 //! certificates without delivered quorum votes, and out-of-order durability
 //! boundaries are rejected before replay.
@@ -617,6 +620,7 @@ struct ProductionReplay {
     signatures: u64,
     backpressured: usize,
     reordered_deliveries: usize,
+    set_b_fallback_openings: usize,
     reports: Vec<(ValidatorId, EquivocationKind)>,
 }
 impl ProductionReplay {
@@ -643,6 +647,7 @@ impl ProductionReplay {
             signatures: 0,
             backpressured: 0,
             reordered_deliveries: 0,
+            set_b_fallback_openings: 0,
             reports: Vec::new(),
         }
     }
@@ -782,6 +787,16 @@ impl ProductionReplay {
             .any(|effect| matches!(effect, Effect::FetchBody { subject: value, .. } if *value == subject))
         {
             let view = self.nodes[node].reducer.current_tag().view();
+            let round = Round::new(self.context.height(), view);
+            assert_eq!(
+                self.nodes[node].reducer.body_state(round, subject),
+                BodyState::Missing,
+                "the abstract fetch may open fallback only for an exact missing body"
+            );
+            assert!(
+                self.nodes[node].pending.is_empty(),
+                "the refinement-only fallback tick requires an empty effect frontier"
+            );
             let index = u32::try_from(node).expect("four-node model index fits u32");
             assert_eq!(
                 Committee::project(&self.context, view)
@@ -794,6 +809,15 @@ impl ProductionReplay {
             assert_eq!(
                 self.dispatch(node, Event::RetransmitElapsed { tag }),
                 StepDisposition::Applied
+            );
+            self.set_b_fallback_openings = self
+                .set_b_fallback_openings
+                .checked_add(1)
+                .expect("bounded trace fallback count");
+            assert_eq!(
+                self.nodes[node].pending.len(),
+                1,
+                "Set B fallback must expose exactly the requested body fetch"
             );
         }
         let Effect::FetchBody {
@@ -808,6 +832,11 @@ impl ProductionReplay {
             unreachable!("pending predicate selected a fetch effect")
         };
         assert_eq!(fetched, subject);
+        assert_eq!(
+            round,
+            Round::new(tag.height(), tag.view()),
+            "the abstract fetch must consume the exact current production round"
+        );
         self.dispatch_deferred(
             node,
             DeferredEvent::Completion(Event::BodyAvailable {
@@ -1362,6 +1391,10 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
     assert!(
         replay.reordered_deliveries > 0,
         "TLC delivery order must differ from production enqueue order"
+    );
+    assert_eq!(
+        replay.set_b_fallback_openings, 1,
+        "the checked witness contains exactly one abstract Set B fetch refinement"
     );
     assert!(
         !replay.network.is_empty(),

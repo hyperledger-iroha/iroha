@@ -1601,7 +1601,7 @@ pub mod isi {
     }
     // Release activation installs a digest-qualified Eq/Ep pair atomically. Generic
     // registration or rotation can split that pair and strand issued notes.
-    fn ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(
+    fn ensure_generic_verifying_key_is_not_kagemusha_release_owned(
         id: &VerifyingKeyId,
         records: &[&VerifyingKeyRecord],
     ) -> Result<(), Error> {
@@ -1637,8 +1637,7 @@ pub mod isi {
             })
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "Kagemusha V4 release verifier records are owned by atomic release activation"
-                    .into(),
+                "Kagemusha release verifier records are owned by atomic release activation".into(),
             ));
         }
         Ok(())
@@ -2743,7 +2742,7 @@ pub mod isi {
             }
             let id = self.id().clone();
             let record = self.record().clone();
-            ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(&id, &[&record])?;
+            ensure_generic_verifying_key_is_not_kagemusha_release_owned(&id, &[&record])?;
             let id_backend = id.backend.as_str();
             ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &record.circuit_id)?;
             if matches!(record.status, ConfidentialStatus::Withdrawn) {
@@ -9322,25 +9321,22 @@ pub mod isi {
         let current_epoch = current_height
             .saturating_sub(1)
             .saturating_div(state_transaction.gov.parliament_term_blocks.max(1));
-        let has_current_or_scheduled_service =
-            state_transaction
+        let has_current_or_scheduled_service = state_transaction
+            .world
+            .council
+            .range(current_epoch..)
+            .any(|(_, council)| {
+                council.members.contains(owner) || council.alternates.contains(owner)
+            })
+            || state_transaction
                 .world
-                .council
-                .iter()
-                .any(|(epoch, council)| {
-                    *epoch >= current_epoch
-                        && (council.members.contains(owner) || council.alternates.contains(owner))
-                })
-                || state_transaction
-                    .world
-                    .parliament_bodies
-                    .iter()
-                    .any(|(epoch, bodies)| {
-                        *epoch >= current_epoch
-                            && bodies.rosters.values().any(|roster| {
-                                roster.members.contains(owner) || roster.alternates.contains(owner)
-                            })
-                    });
+                .parliament_bodies
+                .range(current_epoch..)
+                .any(|(_, bodies)| {
+                    bodies.rosters.values().any(|roster| {
+                        roster.members.contains(owner) || roster.alternates.contains(owner)
+                    })
+                });
         if has_current_or_scheduled_service {
             return Err(InstructionExecutionError::InvariantViolation(
                 "citizenship bond cannot be released during a current or scheduled parliament service epoch"
@@ -9912,7 +9908,7 @@ pub mod isi {
         old: &VerifyingKeyRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_generic_verifying_key_is_not_kagemusha_v4_release_owned(id, &[old, new])?;
+        ensure_generic_verifying_key_is_not_kagemusha_release_owned(id, &[old, new])?;
         if matches!(old.status, ConfidentialStatus::Withdrawn) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "cannot update withdrawn verifying key".into(),
@@ -16373,12 +16369,21 @@ pub mod isi {
                     .into());
                 }
             }
-            let proof_blob = self.proof_blob().clone();
+            let proof_blob = self.proof_blob();
             if proof_blob.payload.is_empty() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "verified lane relay proof payload is empty".into(),
                     ),
+                )
+                .into());
+            }
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof_blob.payload) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified lane relay proof payload exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    )),
                 )
                 .into());
             }
@@ -16727,11 +16732,17 @@ pub mod isi {
                     "verified fee sponsor vault allocation manifest root does not match the frozen AXT policy",
                 ));
             }
-            let proof_blob = self.proof_blob().clone();
+            let proof_blob = self.proof_blob();
             if proof_blob.payload.is_empty() {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation proof payload is empty",
                 ));
+            }
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof_blob.payload) {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "verified fee sponsor vault allocation proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                )));
             }
             if let Some(expiry_slot) = proof_blob.expiry_slot
                 && verified_at_height > expiry_slot
@@ -29840,33 +29851,55 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
                 ),
             );
-            verifying_keys::RegisterVerifyingKey {
-                id: lookalike_id.clone(),
-                record: record(TEST_HALO2_CIRCUIT_ID, 1),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("an unrelated lookalike id must remain available to generic management");
-            assert!(stx.world.verifying_keys.get(&lookalike_id).is_some());
+            let lookalike_record = record(TEST_HALO2_CIRCUIT_ID, 1);
+            ensure_generic_verifying_key_is_not_kagemusha_release_owned(
+                &lookalike_id,
+                &[&lookalike_record],
+            )
+            .expect("an unrelated lookalike id must not be classified as release-owned");
 
-            let old_record = record(
+            let legacy_release_record = record(
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 1,
             );
             stx.world
                 .verifying_keys
-                .insert(reserved_id.clone(), old_record.clone());
+                .insert(ordinary_id.clone(), legacy_release_record.clone());
             let replacement = record(
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 2,
             );
             let err = verifying_keys::UpdateVerifyingKey {
-                id: reserved_id.clone(),
+                id: ordinary_id.clone(),
                 record: replacement,
             }
             .expect_execute_err(
                 &ALICE_ID,
                 &mut stx,
-                "generic updates must not replace a release-qualified Kagemusha verifier",
+                "generic updates must not replace a Kagemusha release-circuit verifier",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(err),
+                "owned by atomic release activation"
+            );
+            assert_eq!(
+                stx.world.verifying_keys.get(&ordinary_id),
+                Some(&legacy_release_record)
+            );
+
+            let legacy_reserved_id_record = record(TEST_HALO2_CIRCUIT_ID, 1);
+            stx.world.verifying_keys.insert(
+                reserved_id.clone(),
+                legacy_reserved_id_record.clone(),
+            );
+            let err = verifying_keys::UpdateVerifyingKey {
+                id: reserved_id.clone(),
+                record: record(TEST_HALO2_CIRCUIT_ID, 2),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "generic updates must not replace a release-qualified Kagemusha id",
             );
             assert_contains!(
                 smart_contract_instruction_error_message(err),
@@ -29874,7 +29907,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_eq!(
                 stx.world.verifying_keys.get(&reserved_id),
-                Some(&old_record)
+                Some(&legacy_reserved_id_record)
             );
         });
         world_test!(register_vk_accepts_canonical_soracloud_bootstrap_record {

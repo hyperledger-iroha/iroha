@@ -936,6 +936,8 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     let headers = HeaderMap::new();
     let proposal_id = "ab".repeat(32);
     let maximum_selector = "a".repeat(128);
+    let network_id = format!("hash:{}#0000", "A".repeat(64));
+    let authority = "sorau-test-authority";
     let target_headers = norito::json!({
         "X-Iroha-Witness": (canonical_test_witness_header())
     });
@@ -975,13 +977,25 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
         .await
         .expect("canonical tally selector dispatches");
     let zk = with_target_headers(norito::json!({
-        "body": { "election_id": "election-1" }
+        "body": {
+            "network_id": (network_id.clone()),
+            "authority": authority,
+            "election_id": "election-1",
+            "backend": "halo2/ipa",
+            "envelope_b64": "AQ=="
+        }
     }));
     dispatch_iroha_gov_ballots_zk_v1(&app, &headers, zk.as_object().expect("ZK ballot arguments"))
         .await
         .expect("canonical ZK selector dispatches");
     let zk_proof = with_target_headers(norito::json!({
-        "election_id": (maximum_selector.clone())
+        "network_id": (network_id.clone()),
+        "authority": authority,
+        "election_id": (maximum_selector.clone()),
+        "ballot": {
+            "backend": "halo2/ipa",
+            "envelope_bytes": "AQ=="
+        }
     }));
     dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
         &app,
@@ -991,7 +1005,13 @@ async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
     .await
     .expect("canonical flat ZK proof selector dispatches");
     let plain = with_target_headers(norito::json!({
-        "referendum_id": "referendum-1"
+        "network_id": network_id,
+        "authority": authority,
+        "referendum_id": "referendum-1",
+        "owner": authority,
+        "amount": "100",
+        "duration_blocks": "600",
+        "direction": "Aye"
     }));
     dispatch_iroha_gov_ballots_plain(
         &app,
@@ -2130,15 +2150,29 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
     for (name, fields) in [
         (
             "iroha.gov.ballots.zk_v1",
-            &["network_id", "authority", "election_id"][..],
+            &[
+                "network_id",
+                "authority",
+                "election_id",
+                "backend",
+                "envelope_b64",
+            ][..],
         ),
         (
             "iroha.gov.ballots.zk_v1.ballot_proof",
-            &["network_id", "authority", "election_id"][..],
+            &["network_id", "authority", "election_id", "ballot"][..],
         ),
         (
             "iroha.gov.ballots.plain",
-            &["network_id", "authority", "referendum_id"][..],
+            &[
+                "network_id",
+                "authority",
+                "referendum_id",
+                "owner",
+                "amount",
+                "duration_blocks",
+                "direction",
+            ][..],
         ),
         ("iroha.gov.enact", &["proposal_id"][..]),
         ("iroha.gov.finalize", &["referendum_id", "proposal_id"][..]),
@@ -2190,6 +2224,17 @@ fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
             assert!(!description.contains("equal to X-Iroha-Account"));
         }
     }
+    let proof = tool_schema("iroha.gov.ballots.zk_v1.ballot_proof");
+    assert_required(
+        &proof,
+        &["properties", "ballot", "required"],
+        &["backend", "envelope_bytes"],
+    );
+    assert_required(
+        &proof,
+        &["properties", "body", "properties", "ballot", "required"],
+        &["backend", "envelope_bytes"],
+    );
 }
 #[test]
 fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {

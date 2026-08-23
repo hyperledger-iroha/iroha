@@ -10743,26 +10743,7 @@ impl Metrics {
             .with_label_values(&[mode_label])
             .set(i64::try_from(bucket.bucket_start_unix).unwrap_or(i64::MAX));
         if bucket.is_suppressed() {
-            let reason_label = bucket
-                .suppression_reason
-                .map_or("unknown", SoranetPrivacySuppressionReasonV1::as_label);
-            self.soranet_privacy_bucket_suppressed
-                .with_label_values(&[mode_label])
-                .set(1.0);
-            self.soranet_privacy_suppression_total
-                .with_label_values(&[mode_label, reason_label])
-                .inc();
-            self.soranet_privacy_active_circuits_avg
-                .with_label_values(&[mode_label])
-                .set(0.0);
-            self.soranet_privacy_active_circuits_max
-                .with_label_values(&[mode_label])
-                .set(0.0);
-            for percentile in ["p50", "p90", "p99"] {
-                self.soranet_privacy_rtt_millis
-                    .with_label_values(&[mode_label, percentile])
-                    .set(0.0);
-            }
+            self.record_suppressed_soranet_privacy_bucket(mode_label, bucket);
             return;
         }
         self.soranet_privacy_bucket_suppressed
@@ -10842,6 +10823,34 @@ impl Metrics {
                 .inc_by(gar_reports);
         }
     }
+
+    fn record_suppressed_soranet_privacy_bucket(
+        &self,
+        mode_label: &str,
+        bucket: &SoranetPrivacyBucketMetricsV1,
+    ) {
+        let reason_label = bucket
+            .suppression_reason
+            .map_or("unknown", SoranetPrivacySuppressionReasonV1::as_label);
+        self.soranet_privacy_bucket_suppressed
+            .with_label_values(&[mode_label])
+            .set(1.0);
+        self.soranet_privacy_suppression_total
+            .with_label_values(&[mode_label, reason_label])
+            .inc();
+        self.soranet_privacy_active_circuits_avg
+            .with_label_values(&[mode_label])
+            .set(0.0);
+        self.soranet_privacy_active_circuits_max
+            .with_label_values(&[mode_label])
+            .set(0.0);
+        for percentile in ["p50", "p90", "p99"] {
+            self.soranet_privacy_rtt_millis
+                .with_label_values(&[mode_label, percentile])
+                .set(0.0);
+        }
+    }
+
     /// Update the privacy collector enabled flag.
     pub fn set_soranet_privacy_collector_enabled(&self, enabled: bool) {
         self.soranet_privacy_collector_enabled

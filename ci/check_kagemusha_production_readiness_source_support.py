@@ -14,7 +14,19 @@ MODEL_VERIFIER_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_releas
 MODEL_VERIFIER_MODULE = "mod kagemusha_release_verifier;"
 MODEL_PROMOTION_RECEIPT_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_promotion_receipt.rs"
 MODEL_PROMOTION_RECEIPT_MODULE = "mod kagemusha_promotion_receipt;"
+<<<<<<< HEAD
+MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT = (
+    "crates/iroha_data_model/src/offline/kagemusha_internal_validation_receipt.rs"
+)
+MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE = (
+    "mod kagemusha_internal_validation_receipt;"
+)
+MODEL_CANARY_EVIDENCE_COMPONENT = (
+    "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
+)
+=======
 MODEL_CANARY_EVIDENCE_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_canary_evidence.rs"
+>>>>>>> origin/optimizations
 MODEL_CANARY_EVIDENCE_MODULE = "mod kagemusha_canary_evidence;"
 MODEL_CANARY_LIVENESS_COMPONENT = "crates/iroha_data_model/src/offline/kagemusha_post_canary_validator_liveness.rs"
 MODEL_CANARY_LIVENESS_MODULE = "mod kagemusha_post_canary_validator_liveness;"

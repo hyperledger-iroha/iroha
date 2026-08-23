@@ -43,9 +43,11 @@ artifact for the Rust IVM team, Swift bridge owners, and telemetry tooling.
   - e.g. `ivm::vector::metal_status()` -> {enabled, parity, last_error}.
 - Output benchmarking metrics (Merkle tree timings, CRC throughput) via
   telemetry hooks for `ci/xcode-swift-parity`.
-- Metal host now loads the compiled `fastpq.metallib`, dispatches FFT/IFFT/LDE
-  and Poseidon kernels, and falls back to the CPU implementation whenever the
-  metallib or device queue is unavailable.
+- Metal host prefers the compiled `fastpq.metallib`, but compiles the embedded
+  self-contained Metal source when that build artifact is absent. Device
+  discovery is independent of the library path; explicit invalid library
+  overrides and source/pipeline failures report concrete errors, while callers
+  retain deterministic CPU fallback policy where allowed.
 
 ### C FFI (`connect_norito_bridge`)
 - New struct `connect_norito_acceleration_config` (completed).

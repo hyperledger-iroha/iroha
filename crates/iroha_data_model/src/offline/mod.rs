@@ -4460,7 +4460,7 @@ mod kagemusha_v4_artifact_contract_tests {
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Vec<u8> {
         norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate(
+            &kagemusha_internal_validation_receipt::test_fixtures::signed_receipt_for_v4_candidate(
                 candidate,
                 finalized_manifest,
             ),
@@ -5307,7 +5307,7 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)
         );
         let mismatched_lock_receipt = norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::
+            &kagemusha_internal_validation_receipt::test_fixtures::
                 signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
                     &candidate,
                     &manifest,
@@ -5730,7 +5730,9 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 }
 #[cfg(all(test, feature = "transparent_api"))]
-pub(crate) use kagemusha_v4_artifact_contract_tests::lifecycle_enable_witness_wire_fixture;
+pub(crate) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnableWitnessV1 {
+    kagemusha_v4_artifact_contract_tests::lifecycle_enable_witness_wire_fixture()
+}
 include!("device_authority_p256_tests.rs");
 /// Derive the canonical public reference carried by a receiver payment request.
 ///

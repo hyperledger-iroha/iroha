@@ -4487,9 +4487,7 @@ impl RelayRuntime {
             {
                 return None;
             }
-            let Some((name, value)) = line.split_once(':') else {
-                return None;
-            };
+            let (name, value) = line.split_once(':')?;
             if name.is_empty()
                 || !name.bytes().all(|byte| {
                     byte.is_ascii_alphanumeric()

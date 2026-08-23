@@ -21,6 +21,8 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::nexus::AxtProofEnvelope;
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
     asset::id::AssetDefinitionId,
@@ -45,8 +47,6 @@ use iroha_data_model::{
     state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
-#[cfg(test)]
-use iroha_data_model::nexus::AxtProofEnvelope;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{
     json::Json,

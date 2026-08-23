@@ -15,7 +15,9 @@ fn load_minamoto_profile() -> actual::Root {
     let source = std::fs::read_to_string(&path).expect("read Minamoto validator profile");
     let mut table = toml::Table::from_str(&source).expect("parse Minamoto validator profile");
 
-    table.remove("private_key_file");
+    table
+        .remove("private_key_file")
+        .expect("Minamoto profile validator private-key file");
     table.insert(
         "private_key".into(),
         Value::String(
@@ -28,7 +30,9 @@ fn load_minamoto_profile() -> actual::Root {
             "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B".into(),
         ),
     );
-    table.remove("soranet_transport_private_key_file");
+    table
+        .remove("soranet_transport_private_key_file")
+        .expect("Minamoto profile transport private-key file");
     table.insert(
         "soranet_transport_private_key".into(),
         Value::String(
@@ -46,7 +50,9 @@ fn load_minamoto_profile() -> actual::Root {
             "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB".into(),
         ),
     );
-    streaming.remove("identity_private_key_file");
+    streaming
+        .remove("identity_private_key_file")
+        .expect("Minamoto profile streaming private-key file");
     streaming.insert(
         "identity_private_key".into(),
         Value::String(
@@ -58,7 +64,9 @@ fn load_minamoto_profile() -> actual::Root {
         .get_mut("genesis")
         .and_then(Value::as_table_mut)
         .expect("Minamoto profile genesis table");
-    genesis.remove("expected_hash_file");
+    genesis
+        .remove("expected_hash_file")
+        .expect("Minamoto profile expected-hash file");
     genesis.insert(
         "expected_hash".into(),
         Value::String(

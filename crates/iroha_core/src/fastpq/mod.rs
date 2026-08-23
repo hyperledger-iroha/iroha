@@ -86,18 +86,6 @@ impl FastpqPublicInputsTemplate {
         }
     }
 }
-pub(crate) fn configure_poseidon_digest_acceleration(cfg: &Fastpq) {
-    configure_poseidon_digest_acceleration_with_preflight(cfg, || {
-        #[cfg(feature = "fastpq-gpu")]
-        {
-            fastpq_prover::preflight_bn254_poseidon_word_batches()
-        }
-        #[cfg(not(feature = "fastpq-gpu"))]
-        {
-            false
-        }
-    });
-}
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
     match cfg.poseidon_mode {
         FastpqPoseidonMode::Cpu => false,
@@ -107,13 +95,8 @@ pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
 pub(crate) fn set_poseidon_digest_acceleration_enabled(enabled: bool) {
     DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
 }
-fn configure_poseidon_digest_acceleration_with_preflight(
-    cfg: &Fastpq,
-    preflight: impl FnOnce() -> bool,
-) -> bool {
-    let enabled = poseidon_digest_acceleration_configured(cfg) && preflight();
-    DIGEST_ACCELERATION_ENABLED.store(enabled, Ordering::Release);
-    enabled
+pub(crate) fn axt_proof_payload_exceeds_decode_limit(payload: &[u8]) -> bool {
+    payload.len() > fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
 }
 #[inline]
 fn poseidon_digest_acceleration_enabled() -> bool {
@@ -144,6 +127,22 @@ pub enum TranscriptBatchError {
     /// Execution witness does not carry precomputed FASTPQ batches.
     #[error("execution witness missing fastpq batches with public inputs")]
     MissingFastpqBatches,
+    /// Precomputed batches do not align one-for-one with transcript bundles.
+    #[error(
+        "execution witness FASTPQ batch cardinality mismatch: {bundle_count} bundles, {batch_count} batches"
+    )]
+    FastpqBatchCardinality {
+        /// Number of transcript bundles in the witness.
+        bundle_count: usize,
+        /// Number of precomputed batches in the witness.
+        batch_count: usize,
+    },
+    /// A precomputed batch does not prove the transcript bundle at the same position.
+    #[error("execution witness FASTPQ batch {batch_index} is not bound to its transcript bundle")]
+    FastpqBatchBinding {
+        /// Position of the malformed batch in the witness.
+        batch_index: usize,
+    },
 }
 /// Compute the canonical authority digest hashed by the host.
 #[must_use]
@@ -900,16 +899,56 @@ pub fn batches_from_exec_witness(
     witness: &ExecWitness,
 ) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
     if !witness.fastpq_batches.is_empty() {
-        return Ok(witness
+        let batches = witness
             .fastpq_batches
             .iter()
             .map(transition_batch_from_dto)
-            .collect());
+            .collect::<Vec<_>>();
+        validate_prebuilt_batch_bindings(&witness.fastpq_transcripts, &batches)?;
+        return Ok(batches);
     }
     if witness.fastpq_transcripts.is_empty() {
         return Ok(Vec::new());
     }
     Err(TranscriptBatchError::MissingFastpqBatches)
+}
+
+fn validate_prebuilt_batch_bindings(
+    bundles: &[TransferTranscriptBundle],
+    batches: &[TransitionBatch],
+) -> Result<(), TranscriptBatchError> {
+    // Transcript-free witnesses are a supported proof-only audit surface, so there is no outer
+    // bundle identity to validate in that form.
+    if bundles.is_empty() {
+        return Ok(());
+    }
+    if bundles.len() != batches.len() {
+        return Err(TranscriptBatchError::FastpqBatchCardinality {
+            bundle_count: bundles.len(),
+            batch_count: batches.len(),
+        });
+    }
+    for (batch_index, (bundle, batch)) in bundles.iter().zip(batches).enumerate() {
+        let expected = batch_from_transcript_bundle(
+            batch.parameter.clone(),
+            batch.public_inputs,
+            bundle.entry_hash,
+            &bundle.transcripts,
+        )?;
+        let required_metadata_matches = expected.metadata.iter().all(|(key, value)| {
+            batch
+                .metadata
+                .get(key)
+                .is_some_and(|actual| actual == value)
+        });
+        if batch.public_inputs != expected.public_inputs
+            || batch.transitions != expected.transitions
+            || !required_metadata_matches
+        {
+            return Err(TranscriptBatchError::FastpqBatchBinding { batch_index });
+        }
+    }
+    Ok(())
 }
 /// Convert transcript bundles into FASTPQ batches, preserving execution order.
 ///
@@ -1281,34 +1320,19 @@ mod tests {
     }
     #[test]
     fn digest_acceleration_respects_configured_modes() {
-        let _guard = DigestAccelerationGuard::new();
         let explicit_gpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Gpu);
         assert!(poseidon_digest_acceleration_configured(&explicit_gpu));
-        assert!(configure_poseidon_digest_acceleration_with_preflight(
-            &explicit_gpu,
-            || true
-        ));
-        assert!(poseidon_digest_acceleration_enabled());
-        set_poseidon_digest_acceleration_enabled(true);
-        assert!(!configure_poseidon_digest_acceleration_with_preflight(
-            &explicit_gpu,
-            || false
-        ));
-        assert!(!poseidon_digest_acceleration_enabled());
         let poseidon_cpu = fastpq_cfg(FastpqExecutionMode::Gpu, FastpqPoseidonMode::Cpu);
         assert!(!poseidon_digest_acceleration_configured(&poseidon_cpu));
-        assert!(!configure_poseidon_digest_acceleration_with_preflight(
-            &poseidon_cpu,
-            || true
-        ));
-        assert!(!poseidon_digest_acceleration_enabled());
+        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Cpu);
+        assert!(!poseidon_digest_acceleration_configured(&cpu));
     }
     #[test]
-    fn configure_digest_acceleration_keeps_cpu_mode_disabled() {
-        let _guard = DigestAccelerationGuard::new();
-        let cpu = fastpq_cfg(FastpqExecutionMode::Cpu, FastpqPoseidonMode::Cpu);
-        configure_poseidon_digest_acceleration(&cpu);
-        assert!(!poseidon_digest_acceleration_enabled());
+    fn axt_proof_payload_decode_limit_is_inclusive() {
+        let at_limit = vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES];
+        assert!(!axt_proof_payload_exceeds_decode_limit(&at_limit));
+        let over_limit = vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1];
+        assert!(axt_proof_payload_exceeds_decode_limit(&over_limit));
     }
     #[test]
     fn finalize_transfer_transcripts_fills_only_single_delta_digests() {
@@ -1531,6 +1555,59 @@ mod tests {
         assert_eq!(decode_le(&receiver_row.post_value), 43);
     }
     #[test]
+    fn batch_from_transcripts_rejects_empty_transcript_in_mixed_input() {
+        let mut empty = sample_transcript();
+        empty.deltas.clear();
+        empty.poseidon_preimage_digest = None;
+        let nonempty = sample_transcript();
+
+        let err = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&empty, &nonempty],
+        )
+        .expect_err("every present transcript must contain a delta");
+        assert!(matches!(
+            err,
+            TranscriptBatchError::TransferWitness {
+                source: fastpq_prover::Error::TransferInvariant { details },
+            } if details.contains("at least one delta")
+        ));
+    }
+    #[test]
+    fn batch_from_transcripts_rejects_invalid_supplied_digest_policy() {
+        let mut stale = sample_transcript();
+        stale.poseidon_preimage_digest = Some(Hash::prehashed([0xEE; Hash::LENGTH]));
+        let err = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&stale],
+        )
+        .expect_err("stale single-delta digest must fail construction");
+        assert!(matches!(
+            err,
+            TranscriptBatchError::TransferWitness {
+                source: fastpq_prover::Error::TransferInvariant { details },
+            } if details.contains("poseidon digest mismatch")
+        ));
+
+        let mut multi = sample_transcript();
+        multi.deltas.push(multi.deltas[0].clone());
+        multi.poseidon_preimage_digest = Some(Hash::prehashed([0xDD; Hash::LENGTH]));
+        let err = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&multi],
+        )
+        .expect_err("multi-delta transcript cannot carry one aggregate digest");
+        assert!(matches!(
+            err,
+            TranscriptBatchError::TransferWitness {
+                source: fastpq_prover::Error::TransferInvariant { details },
+            } if details.contains("multi-delta transcripts must omit")
+        ));
+    }
+    #[test]
     fn batch_from_transcripts_embeds_transfer_metadata() {
         let transcript = sample_transcript();
         let batch = batch_from_transcripts(
@@ -1619,16 +1696,16 @@ mod tests {
     }
 
     #[test]
-    fn batch_from_transcripts_keeps_one_scale_across_repeated_fractional_balances() {
+    fn batch_from_transcripts_repairs_stale_precision_at_one_asset_scale() {
         let first = sample_transcript();
         let mut second = sample_transcript();
         second.batch_hash = Hash::prehashed([0x5A; 32]);
         let delta = &mut second.deltas[0];
         delta.amount = "0.5".parse().expect("non-negative FASTPQ quantity");
-        delta.from_balance_before = Quantity::from(158_u64);
-        delta.from_balance_after = "157.5".parse().expect("non-negative FASTPQ quantity");
-        delta.to_balance_before = Quantity::from(43_u64);
-        delta.to_balance_after = "43.5".parse().expect("non-negative FASTPQ quantity");
+        delta.from_balance_before = "158.001".parse().expect("non-negative FASTPQ quantity");
+        delta.from_balance_after = "157.501".parse().expect("non-negative FASTPQ quantity");
+        delta.to_balance_before = "43.001".parse().expect("non-negative FASTPQ quantity");
+        delta.to_balance_after = "43.501".parse().expect("non-negative FASTPQ quantity");
         delta.from_smt_witness = Default::default();
         delta.to_smt_witness = Default::default();
         second.poseidon_preimage_digest = None;
@@ -1852,6 +1929,53 @@ mod tests {
         );
         assert_eq!(first_entry, hex::encode(bundle_a.entry_hash.as_ref()));
         assert_eq!(second_entry, hex::encode(bundle_b.entry_hash.as_ref()));
+    }
+    #[test]
+    fn batches_from_exec_witness_rejects_bundle_batch_cardinality_mismatch() {
+        let bundle_a = sample_bundle(Hash::prehashed([0x51; 32]));
+        let bundle_b = sample_bundle(Hash::prehashed([0x52; 32]));
+        let built = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            sample_tx_set_hash(),
+            [&bundle_a],
+        )
+        .expect("batch");
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle_a, bundle_b],
+            fastpq_batches: built.iter().map(transition_batch_to_dto).collect(),
+            ..ExecWitness::default()
+        };
+
+        assert!(matches!(
+            batches_from_exec_witness(&witness),
+            Err(TranscriptBatchError::FastpqBatchCardinality {
+                bundle_count: 2,
+                batch_count: 1,
+            })
+        ));
+    }
+    #[test]
+    fn batches_from_exec_witness_rejects_batch_not_bound_to_indexed_bundle() {
+        let bundle = sample_bundle(Hash::prehashed([0x53; 32]));
+        let mut built = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            sample_tx_set_hash(),
+            [&bundle],
+        )
+        .expect("batch");
+        built[0].transitions[0].post_value[0] ^= 0x01;
+        let witness = ExecWitness {
+            fastpq_transcripts: vec![bundle],
+            fastpq_batches: built.iter().map(transition_batch_to_dto).collect(),
+            ..ExecWitness::default()
+        };
+
+        assert!(matches!(
+            batches_from_exec_witness(&witness),
+            Err(TranscriptBatchError::FastpqBatchBinding { batch_index: 0 })
+        ));
     }
     #[test]
     fn batches_from_exec_witness_rejects_missing_batches() {

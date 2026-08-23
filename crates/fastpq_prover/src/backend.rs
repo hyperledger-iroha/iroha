@@ -6,7 +6,7 @@ use crate::{
     trace::{
         PoseidonPipelinePolicy, build_trace, column_index, derive_polynomial_data,
         hash_columns_from_coefficients, hash_trace_merkle_pairs_with_mode,
-        merkle_root_with_first_level,
+        merkle_root_with_first_level_with_mode,
     },
 };
 use core::convert::TryFrom;
@@ -42,8 +42,6 @@ const MIN_POSEIDON_LIMB_GPU_BATCH_MESSAGES: usize = 32;
 #[cfg(feature = "fastpq-gpu")]
 // Tiny row batches underutilise the fixed Metal dispatch and have failed under shared Izanami load.
 const MIN_POSEIDON_ROW_GPU_ROWS: usize = 32;
-#[cfg(target_os = "macos")]
-const METAL_FRAMEWORK: &str = "/System/Library/Frameworks/Metal.framework/Metal";
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 static DEBUG_METAL_ENUM_ENV: OnceLock<bool> = OnceLock::new();
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
@@ -73,6 +71,8 @@ const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS 
 /// lets equal-and-opposite residues at the same reuse offset cancel for every transcript.
 pub const AIR_COMPOSITION_ALPHA_COUNT: usize =
     AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT;
+/// Maximum algebraic degree of every implemented V1 AIR residue in trace columns.
+pub const AIR_MAX_CONSTRAINT_DEGREE_V1: usize = 2;
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
@@ -150,19 +150,51 @@ pub fn acquire_gpu_lane() -> MutexGuard<'static, ()> {
 fn execution_mode_observer_slot() -> &'static RwLock<Option<Arc<ExecutionModeObserver>>> {
     EXECUTION_MODE_OBSERVER.get_or_init(|| RwLock::new(None))
 }
+fn replace_execution_mode_observer(replacement: Option<Arc<ExecutionModeObserver>>) {
+    let previous = {
+        let mut guard = match execution_mode_observer_slot().write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(
+                    target: "fastpq::planner",
+                    "recovering poisoned execution mode observer registration lock"
+                );
+                let guard = poisoned.into_inner();
+                execution_mode_observer_slot().clear_poison();
+                guard
+            }
+        };
+        core::mem::replace(&mut *guard, replacement)
+    };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(previous))).is_err() {
+        tracing::warn!(
+            target: "fastpq::planner",
+            "execution mode observer destructor panicked"
+        );
+    }
+}
 fn notify_execution_mode_observer(
     requested: ExecutionMode,
     resolved: ExecutionMode,
     backend: Option<GpuBackend>,
 ) {
-    let observer = execution_mode_observer_slot()
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone());
+    let observer = match execution_mode_observer_slot().read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            tracing::warn!(
+                target: "fastpq::planner",
+                "recovering poisoned execution mode observer notification lock"
+            );
+            let guard = poisoned.into_inner();
+            execution_mode_observer_slot().clear_poison();
+            guard.clone()
+        }
+    };
     if let Some(callback) = observer {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             callback(requested, resolved, backend)
         }));
+        let drop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback)));
         if result.is_err() {
             tracing::warn!(
                 target: "fastpq::planner",
@@ -171,23 +203,28 @@ fn notify_execution_mode_observer(
                 "execution mode observer callback panicked"
             );
         }
+        if drop_result.is_err() {
+            tracing::warn!(
+                target: "fastpq::planner",
+                "execution mode observer destructor panicked"
+            );
+        }
     }
 }
-/// Install a hook invoked whenever [`ExecutionMode::Auto`] resolves to a concrete mode.
+/// Install a hook invoked whenever an execution mode resolves to the concrete mode used.
+///
+/// The hook runs without holding the registration lock, may replace or clear itself, and its
+/// panics are caught and logged.
 pub fn set_execution_mode_observer<F>(observer: F)
 where
     F: Fn(ExecutionMode, ExecutionMode, Option<GpuBackend>) + Send + Sync + 'static,
 {
-    let mut guard = execution_mode_observer_slot()
-        .write()
-        .expect("execution mode observer lock poisoned");
-    *guard = Some(Arc::new(observer));
+    let observer: Arc<ExecutionModeObserver> = Arc::new(observer);
+    replace_execution_mode_observer(Some(observer));
 }
 /// Remove the previously installed execution mode observer, if any.
 pub fn clear_execution_mode_observer() {
-    if let Ok(mut guard) = execution_mode_observer_slot().write() {
-        guard.take();
-    }
+    replace_execution_mode_observer(None);
 }
 fn gpu_available() -> bool {
     match gpu_override() {
@@ -542,7 +579,6 @@ fn system_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod detection_tests {
     use super::*;
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     fn availability(enabled: &[GpuBackend]) -> BackendAvailability {
         enabled
             .iter()
@@ -638,7 +674,18 @@ mod observer_tests {
     impl Drop for ExecutionModeObserverGuard {
         fn drop(&mut self) {
             clear_execution_mode_observer();
+        }
+    }
+    struct PoseidonPipelineObserverGuard;
+    impl Drop for PoseidonPipelineObserverGuard {
+        fn drop(&mut self) {
             crate::trace::clear_poseidon_pipeline_observer();
+        }
+    }
+    struct TraceMerkleModeObserverGuard;
+    impl Drop for TraceMerkleModeObserverGuard {
+        fn drop(&mut self) {
+            crate::trace::clear_trace_merkle_mode_observer();
         }
     }
     #[test]
@@ -673,11 +720,65 @@ mod observer_tests {
         clear_execution_mode_observer();
     }
     #[test]
+    fn execution_mode_observer_panic_does_not_escape_or_block_reregistration() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |_, _, _| {
+            assert!(
+                std::thread::current().id() != test_thread,
+                "observer failure"
+            );
+        });
+
+        let result = std::panic::catch_unwind(|| {
+            notify_execution_mode_observer(ExecutionMode::Auto, ExecutionMode::Cpu, None);
+        });
+        assert!(result.is_ok(), "observer panic must not escape resolution");
+
+        let (tx, rx) = mpsc::channel();
+        set_execution_mode_observer(move |requested, resolved, backend| {
+            let _ = tx.send((requested, resolved, backend));
+        });
+        notify_execution_mode_observer(ExecutionMode::Auto, ExecutionMode::Cpu, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2))
+                .expect("replacement observer payload"),
+            (ExecutionMode::Auto, ExecutionMode::Cpu, None)
+        );
+    }
+    #[test]
+    fn execution_mode_observer_can_clear_itself_reentrantly() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        clear_execution_mode_observer();
+        let _observer_guard = ExecutionModeObserverGuard;
+        let observed = Arc::new(AtomicUsize::new(0));
+        let observed_for_callback = Arc::clone(&observed);
+        let test_thread = std::thread::current().id();
+        set_execution_mode_observer(move |_, _, _| {
+            if std::thread::current().id() == test_thread {
+                observed_for_callback.fetch_add(1, Ordering::SeqCst);
+                clear_execution_mode_observer();
+            }
+        });
+
+        notify_execution_mode_observer(ExecutionMode::Auto, ExecutionMode::Cpu, None);
+        notify_execution_mode_observer(ExecutionMode::Auto, ExecutionMode::Cpu, None);
+        assert_eq!(observed.load(Ordering::SeqCst), 1);
+    }
+    #[test]
     fn backend_prove_uses_configured_execution_and_poseidon_modes() {
         let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        let _poseidon_lock = crate::trace::POSEIDON_PIPELINE_OBSERVER_TEST_LOCK
+            .lock()
+            .expect("Poseidon observer test lock");
         clear_execution_mode_observer();
         crate::trace::clear_poseidon_pipeline_observer();
         let _observer_guard = ExecutionModeObserverGuard;
+        let _poseidon_observer_guard = PoseidonPipelineObserverGuard;
 
         let (execution_tx, execution_rx) = mpsc::channel();
         let test_thread = std::thread::current().id();
@@ -716,43 +817,39 @@ mod observer_tests {
         assert_eq!(policy.resolved(), ExecutionMode::Cpu);
         assert_eq!(path, "cpu_fallback");
     }
+    #[test]
+    fn canonical_commitment_derivation_forces_cpu_trace_merkle_levels() {
+        let _lock = OBSERVER_TEST_LOCK.lock().expect("observer test lock");
+        crate::trace::clear_trace_merkle_mode_observer();
+        let _observer_guard = TraceMerkleModeObserverGuard;
+        let (tx, rx) = mpsc::channel();
+        let test_thread = std::thread::current().id();
+        crate::trace::set_trace_merkle_mode_observer(move |mode| {
+            if std::thread::current().id() == test_thread {
+                let _ = tx.send(mode);
+            }
+        });
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let batch = TransitionBatch::new(params.name, crate::PublicInputs::default());
+
+        derive_batch_commitments(&params, &batch, &PublicIO::default(), 1, 1)
+            .expect("canonical commitments");
+
+        let modes = rx.try_iter().collect::<Vec<_>>();
+        assert!(!modes.is_empty(), "trace Merkle mode must be observed");
+        assert!(
+            modes.iter().all(|mode| *mode == ExecutionMode::Cpu),
+            "canonical commitment derivation must keep trace Merkle levels on CPU: {modes:?}"
+        );
+    }
 }
 #[cfg(target_os = "macos")]
 fn metal_available() -> bool {
-    if metal_library_path().is_none() {
-        #[cfg(feature = "fastpq-gpu")]
-        tracing::warn!(
-            target: "fastpq::planner",
-            "Metal device detected path requires a compiled fastpq.metallib; GPU backend disabled"
-        );
-        return false;
-    }
-    if metal_device_visible_via_api() {
-        return true;
-    }
-    if !Path::new(METAL_FRAMEWORK).exists() {
-        return false;
-    }
-    let output = match Command::new("system_profiler")
-        .args(["SPDisplaysDataType", "-detailLevel", "basic"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let text = match String::from_utf8(output.stdout) {
-        Ok(text) => text,
-        Err(_) => return false,
-    };
-    let lowered = text.to_lowercase();
-    lowered.contains("metal: supported")
-        || lowered.contains("metal gpu family")
-        || lowered.contains("metal: up to date")
+    // The offline Metal compiler is an optional Xcode component on recent macOS
+    // releases. Runtime source compilation remains available through MTLDevice,
+    // so accelerator discovery must reflect usable hardware rather than the
+    // presence of a build-time `fastpq.metallib` artifact.
+    metal_device_visible_via_api()
 }
 #[cfg(target_os = "macos")]
 fn macos_opencl_devices_present() -> bool {
@@ -853,6 +950,7 @@ fn device_location_label(location: MTLDeviceLocation) -> &'static str {
         _ => "unknown",
     }
 }
+#[cfg(not(target_os = "macos"))]
 fn metal_library_path() -> Option<String> {
     overrides::guard_env_override(|| {
         overrides::debug_env_string("FASTPQ_METAL_LIB").and_then(|path| {
@@ -933,13 +1031,13 @@ pub struct BackendArtifact {
     pub parameter: String,
     /// Number of real trace rows prior to padding.
     pub trace_rows: u32,
-    /// Poseidon2 Merkle root over column commitments.
+    /// Poseidon Merkle root over column commitments.
     pub trace_root: u64,
-    /// Poseidon2 Merkle root over row-major AIR trace openings.
+    /// Poseidon Merkle root over row-major AIR trace openings.
     pub air_trace_root: u64,
-    /// Poseidon2 Merkle root over AIR composition evaluations.
+    /// Poseidon Merkle root over AIR composition evaluations.
     pub air_composition_root: u64,
-    /// Poseidon2 Merkle root over the low-degree extension leaf hashes.
+    /// Poseidon Merkle root over the low-degree extension leaf hashes.
     pub lookup_root: u64,
     /// Number of evaluation rows committed under `lookup_root`.
     pub lde_domain_size: u32,
@@ -953,7 +1051,7 @@ pub struct BackendArtifact {
     pub fri_arity: u32,
     /// Low-degree extension blowup factor.
     pub fri_blowup: u32,
-    /// Poseidon2 hash of each FRI layer plus the terminal root.
+    /// Poseidon hash of each FRI layer plus the terminal root.
     pub fri_layers: Vec<u64>,
     /// Fiat–Shamir challenges used for each FRI folding round.
     pub fri_betas: Vec<u64>,
@@ -1521,6 +1619,12 @@ fn merkle_paths_for_leaf_indices(
 /// Returns an error if an internal node hash cannot be computed.
 #[allow(clippy::unnecessary_wraps)]
 pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64]) -> Result<bool> {
+    // FASTPQ's canonical tree duplicates a sole leaf and therefore always has
+    // at least one authentication level. Accepting an empty path would treat a
+    // raw leaf as a root even though the tree builder never emits that shape.
+    if path.is_empty() {
+        return Ok(false);
+    }
     let mut current = leaf;
     let mut index = leaf_index;
     for &sibling in path {
@@ -1531,7 +1635,10 @@ pub fn verify_merkle_path(root: u64, leaf: u64, leaf_index: usize, path: &[u64])
         };
         index /= 2;
     }
-    Ok(current == root)
+    // Reject indices whose high bits lie above the authenticated tree depth.
+    // Without this check, `i` and `i + k * 2^path.len()` select identical
+    // left/right branches and therefore accept the same path.
+    Ok(index == 0 && current == root)
 }
 #[allow(clippy::unnecessary_wraps)]
 fn build_merkle_levels_with_mode(leaves: &[u64], mode: ExecutionMode) -> Result<Vec<Vec<u64>>> {
@@ -1585,16 +1692,22 @@ fn hash_field_with_domain_cpu(domain: &[u8], values: &[u64]) -> u64 {
 /// Compute the Fiat–Shamir lookup grand product accumulator over the supplied
 /// selector and witness evaluations using the canonical Goldilocks field
 /// arithmetic.
+///
+/// # Errors
+///
+/// Returns [`Error::LookupColumnLengthMismatch`] when the selector and witness
+/// columns do not contain the same number of evaluations.
 pub fn compute_lookup_grand_product(
     selector_values: &[u64],
     witness_values: &[u64],
     gamma: u64,
-) -> u64 {
-    assert_eq!(
-        selector_values.len(),
-        witness_values.len(),
-        "lookup witness LDE columns must share a length"
-    );
+) -> Result<u64> {
+    if selector_values.len() != witness_values.len() {
+        return Err(Error::LookupColumnLengthMismatch {
+            selector_len: selector_values.len(),
+            witness_len: witness_values.len(),
+        });
+    }
     let mut acc = FIELD_ONE;
     let mut running = Vec::with_capacity(witness_values.len());
     for (&selector, &witness) in selector_values.iter().zip(witness_values.iter()) {
@@ -1603,7 +1716,7 @@ pub fn compute_lookup_grand_product(
         }
         running.push(acc);
     }
-    poseidon::hash_field_elements_cpu(&running)
+    Ok(poseidon::hash_field_elements_cpu(&running))
 }
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn hash_trace_rows(columns: &[Vec<u64>]) -> Vec<u64> {
@@ -1746,7 +1859,7 @@ pub fn fold_with_fri(
     let mut layers = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > 1 && round < max_rounds {
+    while current.len() > arity && round < max_rounds {
         let span = tracing::info_span!("fastpq_fri_round", round, layer_len = current.len(), arity);
         let _enter = span.enter();
         let root = fri_layer_commitment(round, &current);
@@ -1775,6 +1888,13 @@ pub fn fold_with_fri(
         current = next;
         domain = domain.folded(round_arity);
         round += 1;
+    }
+    if current.len() > arity {
+        return Err(Error::FriReductionLimit {
+            max_reductions,
+            remaining: current.len(),
+            arity,
+        });
     }
     let final_root = fri_layer_commitment(round, &current);
     transcript.append_fri_final(final_root);
@@ -1820,7 +1940,7 @@ fn fold_with_fri_opening_layers(
     let mut roots = Vec::new();
     let mut betas = Vec::new();
     let mut round = 0usize;
-    while current.len() > 1 && round < max_rounds {
+    while current.len() > arity_usize && round < max_rounds {
         let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
         let root = merkle_root_with_mode(&leaves, mode);
         transcript.append_fri_layer(round, root);
@@ -1832,6 +1952,13 @@ fn fold_with_fri_opening_layers(
         current = fold_round(&current, arity_usize, beta, domain)?;
         domain = domain.folded(round_arity);
         round += 1;
+    }
+    if current.len() > arity_usize {
+        return Err(Error::FriReductionLimit {
+            max_reductions: params.fri.max_reductions,
+            remaining: current.len(),
+            arity: arity_usize,
+        });
     }
     let leaves = hash_fri_leaves_with_mode(round, &current, arity, mode)?;
     let final_root = merkle_root_with_mode(&leaves, mode);
@@ -2017,6 +2144,52 @@ impl FriDomain {
             offset: field_pow(self.offset, exponent),
         }
     }
+
+    /// Return whether evaluations on this domain encode a polynomial below
+    /// the exclusive degree bound.
+    pub(crate) fn evaluations_have_degree_below(
+        self,
+        values: &[u64],
+        degree_bound: usize,
+    ) -> Result<bool> {
+        if values.is_empty() || !values.len().is_power_of_two() {
+            return Err(Error::FriDomainSize {
+                length: values.len(),
+                arity: 1,
+            });
+        }
+        if degree_bound == 0 || degree_bound > values.len() {
+            return Err(Error::FriTerminalDegreeBound {
+                degree_bound,
+                domain_len: values.len(),
+            });
+        }
+        let inverse_len =
+            field_inverse(
+                u64::try_from(values.len()).map_err(|_| Error::FriDomainSize {
+                    length: values.len(),
+                    arity: values.len(),
+                })?,
+            );
+        let inverse_generator = field_inverse(self.generator);
+        let mut inverse_frequency = field_pow(
+            inverse_generator,
+            u64::try_from(degree_bound).expect("terminal FRI degree bound fits u64"),
+        );
+        for _degree in degree_bound..values.len() {
+            let mut coefficient = 0u64;
+            let mut twiddle = FIELD_ONE;
+            for &value in values {
+                coefficient = add_mod(coefficient, mul_mod(value, twiddle));
+                twiddle = mul_mod(twiddle, inverse_frequency);
+            }
+            if mul_mod(coefficient, inverse_len) != 0 {
+                return Ok(false);
+            }
+            inverse_frequency = mul_mod(inverse_frequency, inverse_generator);
+        }
+        Ok(true)
+    }
 }
 
 pub fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> {
@@ -2166,6 +2339,17 @@ pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, 
     Ok(openings)
 }
 
+struct BatchPreparationContext<'a> {
+    params: &'a StarkParameterSet,
+    batch: &'a TransitionBatch,
+    public_io: &'a PublicIO,
+    protocol_version: u16,
+    params_version: u16,
+    transcript_trace_root: Option<u64>,
+    execution_mode: ExecutionMode,
+    poseidon_policy: PoseidonPipelinePolicy,
+}
+
 #[derive(Debug)]
 struct PreparedBatch {
     trace_rows: u32,
@@ -2204,22 +2388,25 @@ pub struct BatchDerivedCommitments {
 }
 
 #[allow(clippy::too_many_lines)]
-fn prepare_batch(
-    params: &StarkParameterSet,
-    batch: &TransitionBatch,
-    public_io: &PublicIO,
-    protocol_version: u16,
-    params_version: u16,
-    transcript_trace_root: Option<u64>,
-    execution_mode: ExecutionMode,
-    poseidon_policy: PoseidonPipelinePolicy,
-) -> Result<PreparedBatch> {
+fn prepare_batch(context: &BatchPreparationContext<'_>) -> Result<PreparedBatch> {
+    let &BatchPreparationContext {
+        params,
+        batch,
+        public_io,
+        protocol_version,
+        params_version,
+        transcript_trace_root,
+        execution_mode,
+        poseidon_policy,
+    } = context;
     if params.name != batch.parameter {
         return Err(Error::ParameterMismatch {
             expected: params.name.to_string(),
             actual: batch.parameter.clone(),
         });
     }
+    crate::digest::ensure_trace_capacity(params, batch.transitions.len())?;
+    crate::trace::ensure_trace_schema_limit(batch, crate::trace::DEFAULT_MAX_TRACE_COLUMNS)?;
     let trace = build_trace(batch)?;
     ensure_base_trace_constraints(&trace)?;
     let column_names = trace
@@ -2247,8 +2434,11 @@ fn prepare_batch(
         execution_mode,
         poseidon_policy,
     );
-    let derived_trace_root =
-        merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
+    let derived_trace_root = merkle_root_with_first_level_with_mode(
+        column_digests.leaves(),
+        column_digests.fused_parents(),
+        poseidon_mode,
+    );
     let trace_root = transcript_trace_root.unwrap_or(derived_trace_root);
     let lde_columns = polynomial_data.into_lde_columns();
     let lde_rows = hash_trace_rows_with_mode(&lde_columns, poseidon_mode);
@@ -2281,7 +2471,7 @@ fn prepare_batch(
         &lde_columns[selector_index],
         &lde_columns[witness_index],
         gamma,
-    );
+    )?;
     let mut alphas = Vec::with_capacity(AIR_COMPOSITION_ALPHA_COUNT);
     for idx in 0..AIR_COMPOSITION_ALPHA_COUNT {
         let tag = format!("{TRANSCRIPT_TAG_ALPHA_PREFIX}:{idx}");
@@ -2334,16 +2524,16 @@ pub fn derive_batch_commitments(
     protocol_version: u16,
     params_version: u16,
 ) -> Result<BatchDerivedCommitments> {
-    let prepared = prepare_batch(
+    let prepared = prepare_batch(&BatchPreparationContext {
         params,
         batch,
         public_io,
         protocol_version,
         params_version,
-        None,
-        ExecutionMode::Cpu,
-        PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
-    )?;
+        transcript_trace_root: None,
+        execution_mode: ExecutionMode::Cpu,
+        poseidon_policy: PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
+    })?;
     Ok(BatchDerivedCommitments {
         trace_root: prepared.trace_root,
         air_trace_root: prepared.air_trace_root,
@@ -2385,8 +2575,8 @@ impl StarkBackend {
             air_composition_values,
             air_composition_leaves,
             mut transcript,
-        } = prepare_batch(
-            &self.config.params,
+        } = prepare_batch(&BatchPreparationContext {
+            params: &self.config.params,
             batch,
             public_io,
             protocol_version,
@@ -2394,7 +2584,7 @@ impl StarkBackend {
             transcript_trace_root,
             execution_mode,
             poseidon_policy,
-        )?;
+        })?;
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
@@ -2843,6 +3033,7 @@ mod tests {
         let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
         let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
         assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
+        assert!(!verify_merkle_path(leaf, leaf, 0, &[]).expect("empty path is noncanonical"));
     }
     #[test]
     fn merkle_paths_verify_against_lookup_root_for_odd_leaf_count() {
@@ -2859,6 +3050,25 @@ mod tests {
         let chunks = open_query_chunks(&evaluations, &[query_index], 8).expect("chunk");
         let leaf = hash_lde_chunk(leaf_index, &chunks[0]).expect("leaf hash");
         assert!(verify_merkle_path(root, leaf, leaf_index, &paths[0]).expect("path verifies"));
+    }
+    #[test]
+    fn merkle_path_rejects_indices_with_bits_above_the_tree_depth() {
+        let evaluations = (0u64..256).collect::<Vec<_>>();
+        let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
+        let root = merkle_root(&leaves);
+        let paths =
+            merkle_paths_for_queries(&leaves, &[0], 8, evaluations.len()).expect("query path");
+        let chunks = open_query_chunks(&evaluations, &[0], 8).expect("query chunk");
+        let leaf = hash_lde_chunk(0, &chunks[0]).expect("leaf hash");
+        let aliased_index = 1usize
+            .checked_shl(u32::try_from(paths[0].len()).expect("path depth fits u32"))
+            .expect("test path depth fits usize");
+
+        assert!(verify_merkle_path(root, leaf, 0, &paths[0]).expect("path verifies"));
+        assert!(
+            !verify_merkle_path(root, leaf, aliased_index, &paths[0])
+                .expect("high-bit alias is rejected")
+        );
     }
     #[test]
     fn trace_row_hashes_match_cpu_reference_for_edge_shapes() {
@@ -3071,7 +3281,7 @@ mod tests {
             TRANSCRIPT_TAG_INIT,
         )
         .expect("transcript");
-        let evaluations = [1u64, 2, 3, 4];
+        let evaluations = (1u64..=16).collect::<Vec<_>>();
         let (layers, betas) = fold_with_fri(
             &evaluations,
             params.fri.arity,
@@ -3171,8 +3381,46 @@ mod tests {
             lde_columns[selector_index].as_slice(),
             lde_columns[perm_index].as_slice(),
             gamma,
-        );
+        )
+        .expect("matching lookup column lengths");
         assert_ne!(product, 0);
+    }
+    #[test]
+    fn lookup_grand_product_rejects_mismatched_column_lengths() {
+        let err = compute_lookup_grand_product(&[1, 0], &[7], 3).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::LookupColumnLengthMismatch {
+                selector_len: 2,
+                witness_len: 1
+            }
+        ));
+    }
+    #[test]
+    fn low_level_backend_rejects_wide_trace_schema_before_allocation() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let mut batch = TransitionBatch::new(params.name, PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"wide-value".to_vec(),
+            vec![0xA5; (crate::trace::DEFAULT_MAX_TRACE_COLUMNS + 1) * crate::LIMB_BYTES],
+            Vec::new(),
+            OperationKind::MetaSet,
+        ));
+        let actual = crate::trace::column_count_for_batch(&batch).expect("schema count");
+        assert!(actual > crate::trace::DEFAULT_MAX_TRACE_COLUMNS);
+
+        let backend = StarkBackend::new(BackendConfig::new(params));
+        let err = backend
+            .prove(&batch, &crate::proof::PublicIO::default(), 1, 1)
+            .expect_err("wide trace schema must fail before materialisation");
+        assert!(matches!(
+            err,
+            Error::VerifierLimitExceeded {
+                limit: "max_air_row_values",
+                actual: observed,
+                max: crate::trace::DEFAULT_MAX_TRACE_COLUMNS,
+            } if observed == actual
+        ));
     }
     #[test]
     fn fri_round_arity_uses_a_real_final_subgroup_and_rejects_padding() {
@@ -3220,6 +3468,60 @@ mod tests {
             super::fold_round(&linear_values, 8, challenge, domain).unwrap(),
             vec![expected; 2]
         );
+    }
+    #[test]
+    fn terminal_fri_degree_check_interpolates_the_folded_coset() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let domain = super::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            8,
+            params.omega_coset,
+        )
+        .expect("terminal FRI domain");
+        let linear = (0..8)
+            .map(|index| {
+                let x = domain.point(index);
+                reference_add(3, reference_mul(5, x))
+            })
+            .collect::<Vec<_>>();
+        assert!(domain.evaluations_have_degree_below(&linear, 2).unwrap());
+        assert!(!domain.evaluations_have_degree_below(&linear, 1).unwrap());
+
+        let quadratic = (0..8)
+            .map(|index| {
+                let x = domain.point(index);
+                reference_add(
+                    reference_add(3, reference_mul(5, x)),
+                    reference_mul(7, reference_mul(x, x)),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(domain.evaluations_have_degree_below(&quadratic, 3).unwrap());
+        assert!(!domain.evaluations_have_degree_below(&quadratic, 2).unwrap());
+    }
+    #[test]
+    fn fri_rejects_a_reduction_limit_that_cannot_expose_the_terminal_layer() {
+        let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
+        let mut transcript = Transcript::initialise(
+            &crate::proof::PublicIO::default(),
+            params.name,
+            1,
+            1,
+            TRANSCRIPT_TAG_INIT,
+        )
+        .expect("transcript");
+        let error = super::fold_with_fri(
+            &(0u64..64).collect::<Vec<_>>(),
+            params.fri.arity,
+            0,
+            params.lde_root,
+            params.lde_log_size,
+            params.omega_coset,
+            &mut transcript,
+        )
+        .expect_err("zero reductions cannot expose an arity-sized terminal layer");
+        assert!(matches!(error, super::Error::FriReductionLimit { .. }));
     }
     #[test]
     fn fri_merkle_leaves_commit_strided_cosets() {
@@ -3271,7 +3573,7 @@ mod tests {
         )
         .expect("fri folding");
         assert_eq!(layers.len(), betas.len() + 1);
-        assert_eq!(betas.len(), 2);
+        assert_eq!(betas.len(), 1);
         let mut transcript_again = Transcript::initialise(
             &crate::proof::PublicIO::default(),
             params.name,
@@ -3295,18 +3597,18 @@ mod tests {
     }
     fn reference_add(a: u64, b: u64) -> u64 {
         u64::try_from((u128::from(a) + u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
-            .expect("Goldilocks remainder fits u64")
+            .expect("reduced sum fits u64")
     }
     fn reference_sub(a: u64, b: u64) -> u64 {
         u64::try_from(
             (u128::from(a) + u128::from(super::GOLDILOCKS_MODULUS) - u128::from(b))
                 % u128::from(super::GOLDILOCKS_MODULUS),
         )
-        .expect("Goldilocks remainder fits u64")
+        .expect("reduced difference fits u64")
     }
     fn reference_mul(a: u64, b: u64) -> u64 {
         u64::try_from((u128::from(a) * u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
-            .expect("Goldilocks remainder fits u64")
+            .expect("reduced product fits u64")
     }
     fn reference_pow(mut base: u64, mut exponent: u64) -> u64 {
         let mut result = 1;
@@ -3431,7 +3733,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > 1 && round < 3 {
+        while current.len() > arity && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             reference_layers.push(root);
@@ -3446,7 +3748,7 @@ mod tests {
         reference_transcript.append_fri_final(final_root);
         reference_layers.push(final_root);
         assert_eq!(layers, reference_layers);
-        assert_eq!(betas[..reference_betas.len()], reference_betas[..]);
+        assert_eq!(betas, reference_betas);
     }
     #[test]
     fn fri_reference_detects_mutation() {
@@ -3493,7 +3795,7 @@ mod tests {
         )
         .expect("reference FRI domain");
         let mut round = 0usize;
-        while current.len() > 1 && round < 3 {
+        while current.len() > arity && round < 3 {
             let root = reference_fri_layer_commitment(round, &current);
             reference_transcript.append_fri_layer(round, root);
             mutated_layers.push(root);

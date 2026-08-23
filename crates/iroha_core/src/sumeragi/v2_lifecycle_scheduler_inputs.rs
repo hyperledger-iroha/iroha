@@ -4,6 +4,7 @@ use super::work_registry::ReadyLifecycleBroadcastCarrierV1;
 use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
+    concrete_admission::ProductionCertifiedFetchAdmissionSettlementV1,
     open::ReadyRecoveredLifecycleBroadcastAttestationV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
     selector::{
