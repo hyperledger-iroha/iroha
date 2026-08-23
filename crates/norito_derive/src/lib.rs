@@ -1313,16 +1313,15 @@ fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, TokenStream
     let writes = needs
         .into_iter()
         .enumerate()
-        .filter_map(|(index, needs_size)| {
-            needs_size.then(|| {
-                quote! {
-                    norito::core::write_len_header(
-                        writer,
-                        u64::try_from(__field_lens[#index])
-                            .map_err(|_| norito::core::Error::LengthMismatch)?,
-                    )?;
-                }
-            })
+        .filter(|(_, needs_size)| *needs_size)
+        .map(|(index, _)| {
+            quote! {
+                norito::core::write_len_header(
+                    writer,
+                    u64::try_from(__field_lens[#index])
+                        .map_err(|_| norito::core::Error::LengthMismatch)?,
+                )?;
+            }
         })
         .collect::<Vec<_>>();
     let all_needs_false = bytes.is_empty() || bytes.iter().all(|byte| *byte == 0);
@@ -2445,10 +2444,8 @@ fn derive_enum_serialize(
                         .unnamed
                         .iter()
                         .zip(&bindings)
-                        .filter_map(|(field, binding)| {
-                            (!FieldAttr::parse_validated(&field.attrs).skip)
-                                .then(|| enum_field_len_add(binding, &field.ty, kind))
-                        })
+                        .filter(|(field, _)| !FieldAttr::parse_validated(&field.attrs).skip)
+                        .map(|(field, binding)| enum_field_len_add(binding, &field.ty, kind))
                         .collect::<Vec<_>>();
                     length_arms.push(quote! {
                         Self::#v_ident(#(#bindings),*) => {
@@ -2540,10 +2537,8 @@ fn derive_enum_serialize(
                         .named
                         .iter()
                         .zip(&names)
-                        .filter_map(|(field, name)| {
-                            (!FieldAttr::parse_validated(&field.attrs).skip)
-                                .then(|| enum_field_len_add(name, &field.ty, kind))
-                        })
+                        .filter(|(field, _)| !FieldAttr::parse_validated(&field.attrs).skip)
+                        .map(|(field, name)| enum_field_len_add(name, &field.ty, kind))
                         .collect::<Vec<_>>();
                     length_arms.push(quote! {
                         Self::#v_ident { #(#names),* } => {

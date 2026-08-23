@@ -473,13 +473,15 @@ fn relation_opening_and_batch_equations_reject_mutations() {
     assert_eq!(
         verify_relations_openings_and_batch_v1(
             fixture.context,
-            &fixture.initial_indices.values[..fixture.initial_indices.len],
-            &fixture.initial_values,
-            fixture.initial_indices,
-            view.quotient.values,
-            fixture.initial_indices,
-            view.fri_zero.values,
-            &bad_relation,
+            RelationOpeningsV1 {
+                initial_indices: &fixture.initial_indices.values[..fixture.initial_indices.len],
+                initial_values: &fixture.initial_values,
+                quotient_indices: fixture.initial_indices,
+                quotient_values: view.quotient.values,
+                fri_zero_indices: fixture.initial_indices,
+                fri_zero_values: view.fri_zero.values,
+                evaluations: &bad_relation,
+            },
         ),
         Err(RnsNativeQpcsPrefixErrorV1::InvalidRelation)
     );
@@ -495,13 +497,15 @@ fn relation_opening_and_batch_equations_reject_mutations() {
     assert_eq!(
         verify_relations_openings_and_batch_v1(
             fixture.context,
-            &fixture.initial_indices.values[..fixture.initial_indices.len],
-            &fixture.initial_values,
-            fixture.initial_indices,
-            &bad_quotient,
-            fixture.initial_indices,
-            view.fri_zero.values,
-            view.evaluations,
+            RelationOpeningsV1 {
+                initial_indices: &fixture.initial_indices.values[..fixture.initial_indices.len],
+                initial_values: &fixture.initial_values,
+                quotient_indices: fixture.initial_indices,
+                quotient_values: &bad_quotient,
+                fri_zero_indices: fixture.initial_indices,
+                fri_zero_values: view.fri_zero.values,
+                evaluations: view.evaluations,
+            },
         ),
         Err(RnsNativeQpcsPrefixErrorV1::InvalidOpeningQuotient)
     );
@@ -517,13 +521,15 @@ fn relation_opening_and_batch_equations_reject_mutations() {
     assert_eq!(
         verify_relations_openings_and_batch_v1(
             fixture.context,
-            &fixture.initial_indices.values[..fixture.initial_indices.len],
-            &fixture.initial_values,
-            fixture.initial_indices,
-            view.quotient.values,
-            fixture.initial_indices,
-            &bad_batch,
-            view.evaluations,
+            RelationOpeningsV1 {
+                initial_indices: &fixture.initial_indices.values[..fixture.initial_indices.len],
+                initial_values: &fixture.initial_values,
+                quotient_indices: fixture.initial_indices,
+                quotient_values: view.quotient.values,
+                fri_zero_indices: fixture.initial_indices,
+                fri_zero_values: &bad_batch,
+                evaluations: view.evaluations,
+            },
         ),
         Err(RnsNativeQpcsPrefixErrorV1::InvalidBatchEquation)
     );

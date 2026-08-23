@@ -162,7 +162,7 @@ pub struct PersistentReplayLedger {
     high_watermark_ms: u64,
     records: HashMap<[u8; 32], u64>,
     dirty: bool,
-    _ledger_lock: Option<ExclusiveLedgerLock>,
+    ledger_lock: Option<ExclusiveLedgerLock>,
 }
 impl PersistentReplayLedger {
     /// Create an in-memory ledger for tests or non-persistent tooling.
@@ -178,7 +178,7 @@ impl PersistentReplayLedger {
             high_watermark_ms: 0,
             records: HashMap::new(),
             dirty: false,
-            _ledger_lock: None,
+            ledger_lock: None,
         })
     }
     /// Load or create a durable replay ledger at `path`.
@@ -213,7 +213,7 @@ impl PersistentReplayLedger {
             high_watermark_ms: now_ms,
             records: HashMap::new(),
             dirty: true,
-            _ledger_lock: Some(ledger_lock),
+            ledger_lock: Some(ledger_lock),
         };
         ledger.load_from_disk(now_ms)?;
         Ok(ledger)
@@ -302,7 +302,7 @@ impl PersistentReplayLedger {
     }
     fn load_from_disk(&mut self, now_ms: u64) -> Result<(), ReplayLedgerError> {
         let ledger_lock = self
-            ._ledger_lock
+            .ledger_lock
             .as_ref()
             .expect("persistent ledger has a lock");
         let max_snapshot_bytes = self.limits.max_snapshot_bytes();
@@ -390,7 +390,7 @@ impl PersistentReplayLedger {
         self.high_watermark_ms
     }
     fn persist(&mut self) -> Result<(), ReplayLedgerError> {
-        let Some(ledger_lock) = &self._ledger_lock else {
+        let Some(ledger_lock) = &self.ledger_lock else {
             self.dirty = false;
             return Ok(());
         };

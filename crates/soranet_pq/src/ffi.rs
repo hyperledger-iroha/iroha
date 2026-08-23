@@ -679,9 +679,9 @@ mod tests {
             soranet_mldsa_generate_keypair(
                 suite_id,
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -696,9 +696,9 @@ mod tests {
             soranet_mlkem_generate_keypair(
                 suite_id,
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -713,11 +713,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn ffi_exported_operations_reject_overlapping_buffers_before_crypto() {
+    fn ffi_mlkem_operations_reject_overlapping_buffers_before_crypto() {
         let kem = MlKemSuite::MlKem512;
         let kem_id = c_uint::from(kem.kem_id());
         let kem_params = kem.parameters();
@@ -867,7 +867,10 @@ mod tests {
             )
         };
         assert_eq!(rc, ERR_BUFFER_OVERLAP);
+    }
 
+    #[test]
+    fn ffi_mldsa_operations_reject_overlapping_buffers_before_crypto() {
         let dsa = MlDsaSuite::MlDsa44;
         let dsa_id = c_uint::from(dsa.suite_id());
         let mut dsa_key_storage = vec![0_u8; dsa.secret_key_len()];
@@ -911,6 +914,11 @@ mod tests {
             )
         };
         assert_eq!(rc, ERR_BUFFER_OVERLAP);
+    }
+
+    #[test]
+    fn ffi_parameter_queries_reject_overlapping_outputs() {
+        let kem_id = c_uint::from(MlKemSuite::MlKem512.kem_id());
 
         let mut parameter = 0_u32;
         let mut ciphertext_len = 0_u32;
@@ -926,6 +934,7 @@ mod tests {
         };
         assert_eq!(rc, ERR_BUFFER_OVERLAP);
 
+        let dsa_id = c_uint::from(MlDsaSuite::MlDsa44.suite_id());
         let mut dsa_parameter = 0_u32;
         let mut dsa_signature_len = 0_u32;
         let rc = unsafe {
@@ -1122,11 +1131,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_receiver.as_mut_ptr(),
-                shared_receiver.len() as usize,
+                shared_receiver.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1145,11 +1154,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1166,11 +1175,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1188,11 +1197,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1210,11 +1219,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1235,11 +1244,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1256,11 +1265,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1322,9 +1331,9 @@ mod tests {
             soranet_mlkem_generate_keypair(
                 c_uint::from(suite.kem_id()),
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1339,9 +1348,9 @@ mod tests {
             soranet_mlkem_generate_keypair(
                 c_uint::from(suite.kem_id()),
                 ptr::null_mut(),
-                params.public_key as usize,
+                params.public_key,
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1349,9 +1358,9 @@ mod tests {
             soranet_mlkem_generate_keypair(
                 c_uint::from(suite.kem_id()),
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ptr::null_mut(),
-                params.secret_key as usize,
+                params.secret_key,
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1366,11 +1375,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 c_uint::from(suite.kem_id()),
                 ptr::null(),
-                params.public_key as usize,
+                params.public_key,
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1386,11 +1395,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 c_uint::from(suite.kem_id()),
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1400,11 +1409,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 c_uint::from(suite.kem_id()),
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1420,11 +1429,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 c_uint::from(suite.kem_id()),
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ptr::null_mut(),
-                params.ciphertext as usize,
+                params.ciphertext,
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1432,11 +1441,11 @@ mod tests {
             soranet_mlkem_encapsulate(
                 c_uint::from(suite.kem_id()),
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ciphertext.as_mut_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 ptr::null_mut(),
-                params.shared_secret as usize,
+                params.shared_secret,
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1453,11 +1462,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1466,11 +1475,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                (secret_key.len() - 1) as usize,
+                secret_key.len() - 1,
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1487,11 +1496,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 ptr::null(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1499,11 +1508,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ptr::null(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 shared_secret.as_mut_ptr(),
-                shared_secret.len() as usize,
+                shared_secret.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1519,11 +1528,11 @@ mod tests {
             soranet_mlkem_decapsulate(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ciphertext.as_ptr(),
-                ciphertext.len() as usize,
+                ciphertext.len(),
                 ptr::null_mut(),
-                params.shared_secret as usize,
+                params.shared_secret,
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1539,11 +1548,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1551,11 +1560,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1612,9 +1621,9 @@ mod tests {
             soranet_mldsa_generate_keypair(
                 c_uint::from(suite.suite_id()),
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1628,9 +1637,9 @@ mod tests {
             soranet_mldsa_generate_keypair(
                 c_uint::from(suite.suite_id()),
                 ptr::null_mut(),
-                suite.public_key_len() as usize,
+                suite.public_key_len(),
                 secret_key.as_mut_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1638,9 +1647,9 @@ mod tests {
             soranet_mldsa_generate_keypair(
                 c_uint::from(suite.suite_id()),
                 public_key.as_mut_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ptr::null_mut(),
-                suite.secret_key_len() as usize,
+                suite.secret_key_len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1654,11 +1663,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ptr::null(),
                 0,
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1672,11 +1681,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ptr::null(),
                 1,
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1690,11 +1699,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 ptr::null_mut(),
-                suite.signature_len() as usize,
+                suite.signature_len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1709,11 +1718,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                (secret_key.len() - 1) as usize,
+                secret_key.len() - 1,
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1721,11 +1730,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                (signature.len() - 1) as usize,
+                signature.len() - 1,
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1740,11 +1749,11 @@ mod tests {
             soranet_mldsa_sign(
                 c_uint::from(suite.suite_id()),
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1760,11 +1769,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1772,11 +1781,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 ptr::null(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1784,11 +1793,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 ptr::null(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1804,11 +1813,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1816,11 +1825,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ptr::null(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_NULL_POINTER);
@@ -1835,11 +1844,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 ptr::null(),
                 0,
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1847,11 +1856,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 ptr::null(),
                 0,
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1867,11 +1876,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1879,11 +1888,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                (public_key.len() - 1) as usize,
+                public_key.len() - 1,
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1891,11 +1900,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                (signature.len() - 1) as usize,
+                signature.len() - 1,
             )
         };
         assert_eq!(rc, ERR_LENGTH_MISMATCH);
@@ -1911,11 +1920,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1924,11 +1933,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key_zero.as_ptr(),
-                public_key_zero.len() as usize,
+                public_key_zero.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1937,11 +1946,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature_zero.as_ptr(),
-                signature_zero.len() as usize,
+                signature_zero.len(),
             )
         };
         assert_eq!(rc, ERR_ENCODING);
@@ -1957,11 +1966,11 @@ mod tests {
             soranet_mldsa_sign(
                 suite_id,
                 secret_key.as_ptr(),
-                secret_key.len() as usize,
+                secret_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_mut_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, 0);
@@ -1970,11 +1979,11 @@ mod tests {
             soranet_mldsa_verify(
                 suite_id,
                 public_key.as_ptr(),
-                public_key.len() as usize,
+                public_key.len(),
                 message.as_ptr(),
-                message.len() as usize,
+                message.len(),
                 signature.as_ptr(),
-                signature.len() as usize,
+                signature.len(),
             )
         };
         assert_eq!(rc, ERR_VERIFICATION_FAILED);

@@ -1066,7 +1066,7 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
             path.display()
         ))
     })?;
-    let record: SaltAnnouncementRecord = json::from_str(&contents)?;
+    let record: SaltAnnouncementRecord = json::from_str(contents)?;
     decode_salt_hex(&record.blinded_cid_salt_hex).map_err(|err| match err {
         HarnessError::SaltLength(len) => HarnessError::Validation(format!(
             "salt fixture {}: blinded_cid_salt_hex must decode to 32 bytes, got {len}",

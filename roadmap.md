@@ -7,9 +7,13 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Inrou V1 Taira qualification
 
-- Qualify the always-compiled Inrou runtime on a same-revision, four-validator
-  Taira deployment using the checked PortableVM/HVF profile: one VM, 1,000 CPU
-  millis, 1 GiB memory, and 10 GiB storage per hosting validator.
+- Qualify the always-compiled Inrou runtime through the same-revision
+  `scripts/taira_devnet.py up --full-doctor --inrou-canary-dir ...` four-peer
+  path, including the dedicated `iroha3d_taira` daemon, fixed-FD runtime signer
+  custody, canonical storage overlay, native SoraFS preseed, all-peer MCP
+  checks, and typed canary-before-doctor ordering. Use the checked PortableVM/HVF
+  profile: one VM, 1,000 CPU millis, 1 GiB memory, and 10 GiB storage per
+  hosting validator.
 - Archive PortableVM/HVF startup preflight, immutable capability adverts,
   hosted-HTTP canary results, and capability-loss withdrawal and placement-reconciliation
   evidence together with deployment-specific metrics and alerts.
