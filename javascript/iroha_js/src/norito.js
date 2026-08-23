@@ -86,6 +86,8 @@ const CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
   "zk::CancelConfidentialPolicyTransition";
 const SET_ASSET_TRANSFER_AVAILABILITY_VARIANT =
   "SetAssetTransferAvailability";
+const SET_ASSET_TRANSFER_BLACKLIST_VARIANT = "SetAssetTransferBlacklist";
+const SET_ASSET_TRANSFER_CONTROL_VARIANT = "SetAssetTransferControl";
 const SET_TRANSFER_REASON_CONTEXT = "SetAssetTransferAvailability.reason";
 const COMPLETE_ORDER_REVISION_CONTEXT = "CompleteReplicationOrder.expected_assignment_revision";
 const COMPLETE_ORDER_REVISION_MESSAGE = "CompleteReplicationOrder.expected_assignment_revision must be greater than zero";
@@ -124,6 +126,8 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Rwa.*",
   "CancelAssetLock",
   SET_ASSET_TRANSFER_AVAILABILITY_VARIANT,
+  SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+  SET_ASSET_TRANSFER_CONTROL_VARIANT,
   "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
@@ -140,6 +144,10 @@ const CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES = 85;
 const CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES = 148;
 const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
   "iroha.asset.transfer.availability.set";
+const SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID =
+  "iroha.asset.transfer.blacklist.set";
+const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
+  "iroha.asset.transfer.control.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
@@ -308,6 +316,10 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
+  [SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist",
+  [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl",
   [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
@@ -2736,6 +2748,36 @@ function encodePureJsInstructionPayload(instruction) {
     );
   }
   if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_BLACKLIST_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferBlacklistInstruction(
+      instruction.SetAssetTransferBlacklist,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_CONTROL_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_CONTROL_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferControlInstruction(
+      instruction.SetAssetTransferControl,
+    );
+  }
+  if (
     isPlainObject(instruction.IssueReplicationOrder) ||
     isPlainObject(instruction.CompleteReplicationOrder) ||
     isPlainObject(instruction.ExpireReplicationOrder)
@@ -2877,6 +2919,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return decodeCancelAssetLockInstructionPayload(payload);
     case SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID:
       return decodeSetAssetTransferAvailabilityInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID:
+      return decodeSetAssetTransferBlacklistInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_CONTROL_WIRE_ID:
+      return decodeSetAssetTransferControlInstructionPayload(payload);
     case ISSUE_REPLICATION_ORDER_WIRE_ID:
     case COMPLETE_REPLICATION_ORDER_WIRE_ID:
     case EXPIRE_REPLICATION_ORDER_WIRE_ID:
@@ -3479,6 +3525,208 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
         "SetAssetTransferAvailability.outgoing",
       ),
       reason,
+    },
+  };
+}
+
+function encodeSetAssetTransferBlacklistInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferBlacklist must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "blacklisted"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferBlacklist.${field} is required`);
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferBlacklist.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferBlacklist.asset_definition_id",
+        ),
+      ],
+      [
+        encodeBoolValue(
+          value.blacklisted,
+          "SetAssetTransferBlacklist.blacklisted",
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferBlacklistInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_BLACKLIST_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "blacklisted",
+  ]);
+  return {
+    SetAssetTransferBlacklist: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferBlacklist.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferBlacklist.asset_definition_id",
+      ),
+      blacklisted: decodeBoolValue(
+        fields.blacklisted,
+        "SetAssetTransferBlacklist.blacklisted",
+      ),
+    },
+  };
+}
+
+function encodeAssetTransferControlWindowValue(value, context) {
+  switch (value) {
+    case "Day":
+      return encodeEnumTagValue(0);
+    case "Week":
+      return encodeEnumTagValue(1);
+    case "Month":
+      return encodeEnumTagValue(2);
+    default:
+      throw new TypeError(`${context} must be exactly "Day", "Week", or "Month"`);
+  }
+}
+
+function decodeAssetTransferControlWindowValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  switch (tag) {
+    case 0:
+      return "Day";
+    case 1:
+      return "Week";
+    case 2:
+      return "Month";
+    default:
+      throw new Error(`${context} uses unsupported transfer-control window tag ${tag}`);
+  }
+}
+
+function encodeAssetTransferLimitValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const fields = ["window", "cap_amount"];
+  assertOnlyObjectKeys(value, fields, context);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+  return encodeStructValue([
+    [encodeAssetTransferControlWindowValue(value.window, `${context}.window`)],
+    [
+      encodeOptionValue(
+        value.cap_amount,
+        encodeQuantityValue,
+        `${context}.cap_amount`,
+      ),
+    ],
+  ]);
+}
+
+function decodeAssetTransferLimitValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["window", "cap_amount"]);
+  return {
+    window: decodeAssetTransferControlWindowValue(
+      fields.window,
+      `${context}.window`,
+    ),
+    cap_amount: decodeOptionValue(
+      fields.cap_amount,
+      decodeQuantityValue,
+      `${context}.cap_amount`,
+    ),
+  };
+}
+
+function encodeSetAssetTransferControlInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferControl must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "limits"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferControl.${field} is required`);
+    }
+  }
+  if (!Array.isArray(value.limits)) {
+    throw new TypeError("SetAssetTransferControl.limits must be an array");
+  }
+  for (let index = 0; index < value.limits.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
+      throw new TypeError("SetAssetTransferControl.limits must not contain holes");
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_CONTROL_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferControl.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferControl.asset_definition_id",
+        ),
+      ],
+      [
+        encodeNoritoVec(value.limits, (limit, index) =>
+          encodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferControlInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_CONTROL_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "limits",
+  ]);
+  return {
+    SetAssetTransferControl: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferControl.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferControl.asset_definition_id",
+      ),
+      limits: decodeNoritoVec(
+        fields.limits,
+        (limit, index) =>
+          decodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        "SetAssetTransferControl.limits",
+      ),
     },
   };
 }

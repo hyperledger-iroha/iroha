@@ -13,6 +13,8 @@ export {
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   buildTransferAssetInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,

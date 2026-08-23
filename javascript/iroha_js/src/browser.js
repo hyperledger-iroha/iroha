@@ -23,6 +23,8 @@ export {
 export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   buildTransferAssetInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,

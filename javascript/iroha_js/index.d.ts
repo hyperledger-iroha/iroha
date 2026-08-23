@@ -12597,6 +12597,56 @@ export function buildSetAssetTransferAvailabilityInstruction(options: {
   reason?: string | null;
 }): SetAssetTransferAvailabilityInstruction;
 
+export interface SetAssetTransferBlacklistInstruction {
+  SetAssetTransferBlacklist: {
+    account_id: string;
+    asset_definition_id: string;
+    blacklisted: boolean;
+  };
+}
+
+/** Set or clear the outbound-transfer blacklist for one account and asset. */
+export function buildSetAssetTransferBlacklistInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  blacklisted: boolean;
+}): SetAssetTransferBlacklistInstruction;
+
+/** Canonical app-API spelling for an outbound transfer-cap window. */
+export type AssetTransferControlWindow = "DAY" | "WEEK" | "MONTH";
+
+/** Exact Rust enum spelling carried by a native Norito instruction value. */
+export type AssetTransferControlWindowWire = "Day" | "Week" | "Month";
+
+export interface AssetTransferLimitInput {
+  window: AssetTransferControlWindow;
+  /** Null clears the cap for this window. */
+  capAmount: QuantityInput | null;
+}
+
+export interface AssetTransferLimit {
+  window: AssetTransferControlWindowWire;
+  cap_amount: string | null;
+}
+
+export interface SetAssetTransferControlInstruction {
+  SetAssetTransferControl: {
+    account_id: string;
+    asset_definition_id: string;
+    limits: AssetTransferLimit[];
+  };
+}
+
+/**
+ * Replace outbound transfer caps. Limits are unique and returned in canonical
+ * DAY/WEEK/MONTH order; an empty list clears every cap.
+ */
+export function buildSetAssetTransferControlInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  limits: readonly AssetTransferLimitInput[];
+}): SetAssetTransferControlInstruction;
+
 /**
  * Build a `Mint::Asset` instruction payload with deterministic quantity
  * normalisation.

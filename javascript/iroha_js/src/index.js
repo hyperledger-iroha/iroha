@@ -366,6 +366,8 @@ export {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   buildMintAssetInstruction,

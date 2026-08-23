@@ -245,6 +245,8 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "buildTransaction",
     "buildCancelAssetLockInstruction",
     "buildSetAssetTransferAvailabilityInstruction",
+    "buildSetAssetTransferBlacklistInstruction",
+    "buildSetAssetTransferControlInstruction",
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "encodeCancelAssetLockV1",
     "decodeCancelAssetLockV1",

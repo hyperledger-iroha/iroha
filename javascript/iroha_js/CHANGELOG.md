@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added native and pure-JavaScript Norito parity for the complete account-scoped
+  asset transfer-control family. Node and browser entry points now expose
+  typed blacklist and calendar-cap builders alongside directional
+  availability, with exact wire IDs, canonical window ordering, optional
+  Quantity clearing semantics, and closed input validation.
 - Require per-request canonical account authentication for the legacy SoraFS
   alias and replication inventory helpers, and require an immutable
   exact-network `OperatorSigningContext` for storage-state and legacy

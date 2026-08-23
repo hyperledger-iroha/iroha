@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   buildCancelAssetLockInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
 } from "../src/instructionBuilders.js";
 import { blake2b256 } from "../src/blake2b.js";
@@ -205,6 +207,118 @@ test("native and pure JS codecs byte-match for asset availability", () => {
     instruction,
     "SetAssetTransferAvailability",
   );
+});
+
+baseTest("asset transfer blacklist builder and pure codec use the native shape", () => {
+  const instruction = buildSetAssetTransferBlacklistInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    blacklisted: true,
+  });
+  assert.deepEqual(instruction, {
+    SetAssetTransferBlacklist: {
+      account_id: ACCOUNT_ID,
+      asset_definition_id: ASSET_DEFINITION_ID,
+      blacklisted: true,
+    },
+  });
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  });
+  for (const blacklisted of [0, "true", null, undefined]) {
+    assert.throws(() =>
+      buildSetAssetTransferBlacklistInstruction({
+        accountId: ACCOUNT_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        blacklisted,
+      }),
+    );
+  }
+});
+
+baseTest("asset transfer control builder canonicalizes complete window caps", () => {
+  const instruction = buildSetAssetTransferControlInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    limits: [
+      { window: "MONTH", capAmount: "3000.25" },
+      { window: "DAY", capAmount: 1000n },
+      { window: "WEEK", capAmount: null },
+    ],
+  });
+  assert.deepEqual(instruction, {
+    SetAssetTransferControl: {
+      account_id: ACCOUNT_ID,
+      asset_definition_id: ASSET_DEFINITION_ID,
+      limits: [
+        { window: "Day", cap_amount: "1000" },
+        { window: "Week", cap_amount: null },
+        { window: "Month", cap_amount: "3000.25" },
+      ],
+    },
+  });
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  });
+  assert.deepEqual(
+    buildSetAssetTransferControlInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      limits: [],
+    }).SetAssetTransferControl.limits,
+    [],
+  );
+});
+
+baseTest("asset transfer control rejects ambiguous or noncanonical limits", () => {
+  const build = (limits) =>
+    buildSetAssetTransferControlInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      limits,
+    });
+  for (const limits of [
+    [{ window: "day", capAmount: "1" }],
+    [{ window: "YEAR", capAmount: "1" }],
+    [{ window: "DAY" }],
+    [{ window: "DAY", capAmount: 1 }],
+    [
+      { window: "DAY", capAmount: "1" },
+      { window: "DAY", capAmount: null },
+    ],
+    [{ window: "DAY", capAmount: "1", cap_amount: "1" }],
+  ]) {
+    assert.throws(() => build(limits));
+  }
+  const sparse = new Array(1);
+  assert.throws(() => build(sparse), /must not contain holes/u);
+  assert.throws(() => build(null), /must be an array/u);
+});
+
+test("native and pure JS codecs byte-match for transfer blacklist and caps", () => {
+  const instructions = [
+    buildSetAssetTransferBlacklistInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      blacklisted: false,
+    }),
+    buildSetAssetTransferControlInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      limits: [
+        { window: "DAY", capAmount: "125.5" },
+        { window: "MONTH", capAmount: null },
+      ],
+    }),
+  ];
+  for (const instruction of instructions) {
+    assertNativeAndPureInstructionParity(
+      instruction,
+      Object.keys(instruction)[0],
+    );
+  }
 });
 
 baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", () => {
