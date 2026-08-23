@@ -19,8 +19,7 @@ public sealed partial class ToriiClientTests
     private const string OnboardingFixtureAuthority = "sorauﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
     private const string OnboardingFixtureAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
     private static readonly NetworkId OnboardingFixtureNetworkId = NetworkId.Parse(CanonicalNetworkId);
-    private static readonly NetworkId SharedOnboardingReceiptNetworkId = NetworkId.Parse(
-        "hash:401B9BA192DD11919F87FA6C430F475D80F8BD0B7F83EF1B858977A5CE203769#AE2D");
+    private static readonly NetworkId SharedOnboardingReceiptNetworkId = NetworkId.Parse("hash:401B9BA192DD11919F87FA6C430F475D80F8BD0B7F83EF1B858977A5CE203769#AE2D");
     private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
@@ -13093,11 +13092,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [MemberData(nameof(InvalidAccountOnboardingTokens))]
     public async Task AccountOnboardingApisRejectMalformedCredentialBeforeDispatch(string? onboardingToken)
     {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed onboarding token reached HTTP dispatch"));
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("malformed onboarding token reached HTTP dispatch"));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var receipt = SharedOnboardingReceipt();
-
         foreach (var operation in new Func<Task>[]
                  {
                      () => client.PlanAccountOnboardingAsync(
