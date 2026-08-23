@@ -24,6 +24,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import {
+  NATIVE_EXPORT_PROBE_TIMEOUT_MS,
   probeNativeBindingExports,
   publishNativeBinding,
   recoverNativeBindingPublication,
@@ -1590,6 +1591,19 @@ test("required-export probe accepts a complete module and rejects missing symbol
       `ABI mismatch.*expected ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 2}.*found ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION}`,
       "u",
     ),
+  );
+});
+
+test("required-export probe keeps one fixed bounded cold-host deadline", () => {
+  assert.equal(NATIVE_EXPORT_PROBE_TIMEOUT_MS, 120_000);
+  assert.ok(Number.isSafeInteger(NATIVE_EXPORT_PROBE_TIMEOUT_MS));
+  assert.ok(NATIVE_EXPORT_PROBE_TIMEOUT_MS > 0);
+
+  const source = readFileSync(COPY_NATIVE_SCRIPT, "utf8");
+  assert.match(source, /timeout:\s*NATIVE_EXPORT_PROBE_TIMEOUT_MS,/u);
+  assert.doesNotMatch(
+    source,
+    /NATIVE_EXPORT_PROBE_TIMEOUT_MS\s*=\s*(?:process\.env|Number\s*\(\s*process\.env)/u,
   );
 });
 

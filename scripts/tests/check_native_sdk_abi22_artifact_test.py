@@ -1650,6 +1650,23 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an "
         "absolute regular JDK directory"
     ) in jni_lane
+    java_home_resolution = (
+        'JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c '
+        "'import pathlib,sys; "
+        "print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "
+        '"$JAVA_HOME_DIR")"'
+    )
+    assert '[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]]' in jni_lane
+    assert java_home_resolution in jni_lane
+    assert (
+        '[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" '
+        '&& ! -L "$JAVA_HOME_DIR" ]]'
+        in jni_lane
+    )
+    assert (
+        "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must resolve to a "
+        "canonical regular JDK directory"
+    ) in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane

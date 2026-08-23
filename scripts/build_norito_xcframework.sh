@@ -103,6 +103,8 @@ run_python312_clean() {
 #   externally selected Cargo target/rustc/rustdoc build envelope.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
+# - MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical regular rustup
+#   executable when the default user-home rustup entry is a symlink.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
@@ -453,8 +455,42 @@ USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
-for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
+RUSTUP_BINARY="${MOBILE_SDK_RUSTUP_BINARY:-$USER_HOME_DIR/.cargo/bin/rustup}"
+if [[ "$RUSTUP_BINARY" != /* || ! -f "$RUSTUP_BINARY" \
+    || -L "$RUSTUP_BINARY" || ! -x "$RUSTUP_BINARY" ]] \
+    || ! canonical_rustup_binary="$(run_python312_clean - "$RUSTUP_BINARY" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+raw = sys.argv[1]
+candidate = Path(raw)
+if not candidate.is_absolute() or str(candidate) != raw:
+    raise SystemExit(1)
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(1) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISREG(metadata.st_mode)
+    or not os.access(candidate, os.X_OK)
+):
+    raise SystemExit(1)
+print(candidate)
+PY
+)" || [[ "$canonical_rustup_binary" != "$RUSTUP_BINARY" ]]; then
+  if [[ -n "${MOBILE_SDK_RUSTUP_BINARY:-}" ]]; then
+    echo "[-] MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable" >&2
+  else
+    echo "[-] Pinned Python, Git, and rustup executables are required: $RUSTUP_BINARY" >&2
+  fi
+  exit 1
+fi
+for tool_path in "$PYTHON_BINARY" "$GIT_BINARY"; do
   [[ -f "$tool_path" && ! -L "$tool_path" && -x "$tool_path" ]] || {
     echo "[-] Pinned Python, Git, and rustup executables are required: $tool_path" >&2
     exit 1

@@ -43,6 +43,8 @@ Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
 CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1.
+MOBILE_SDK_RUSTUP_BINARY may select an absolute canonical regular rustup
+executable when the default user-home rustup entry is a symlink.
 The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
 private prospective-loader path. Final certification always checks the tracked
 Swift loader.
@@ -276,13 +278,49 @@ SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
 SOURCE_SEAL_CARGO_TARGET_DIR=""
 
 initialize_source_seal_tools() {
-  local actual_toolchain
+  local actual_toolchain canonical_rustup_binary
   if [[ "$SOURCE_SEAL_TOOLS_INITIALIZED" == "1" ]]; then
     return
   fi
-  SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
-  if [[ ! -f "$SOURCE_SEAL_RUSTUP_BINARY" || -L "$SOURCE_SEAL_RUSTUP_BINARY" \
-    || ! -x "$SOURCE_SEAL_RUSTUP_BINARY" || ! -x /usr/bin/git ]]; then
+  SOURCE_SEAL_RUSTUP_BINARY="${MOBILE_SDK_RUSTUP_BINARY:-$CHECK_USER_HOME_DIR/.cargo/bin/rustup}"
+  if [[ "$SOURCE_SEAL_RUSTUP_BINARY" != /* \
+      || ! -f "$SOURCE_SEAL_RUSTUP_BINARY" \
+      || -L "$SOURCE_SEAL_RUSTUP_BINARY" \
+      || ! -x "$SOURCE_SEAL_RUSTUP_BINARY" ]] \
+      || ! canonical_rustup_binary="$(run_isolated_checker_python - \
+        "$SOURCE_SEAL_RUSTUP_BINARY" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+raw = sys.argv[1]
+candidate = Path(raw)
+if not candidate.is_absolute() or str(candidate) != raw:
+    raise SystemExit(1)
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(1) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISREG(metadata.st_mode)
+    or not os.access(candidate, os.X_OK)
+):
+    raise SystemExit(1)
+print(candidate)
+PY
+  )" || [[ "$canonical_rustup_binary" != "$SOURCE_SEAL_RUSTUP_BINARY" ]]; then
+    if [[ -n "${MOBILE_SDK_RUSTUP_BINARY:-}" ]]; then
+      echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_RUSTUP_BINARY must be an absolute canonical regular executable" >&2
+    else
+      echo "[mobile-sdk-artifacts] ERROR: pinned rustup and Git are required for source authentication" >&2
+    fi
+    exit 69
+  fi
+  if [[ ! -x /usr/bin/git ]]; then
     echo "[mobile-sdk-artifacts] ERROR: pinned rustup and Git are required for source authentication" >&2
     exit 69
   fi
