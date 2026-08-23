@@ -26,6 +26,18 @@ use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::collections::BTreeMap;
 use thiserror::Error;
+
+const TAIRA_RESET11_NETWORK_ID: [u8; Hash::LENGTH] = [
+    0x1e, 0x88, 0x19, 0xab, 0x7b, 0x55, 0xa4, 0xe7, 0xe4, 0x1e, 0xa3, 0xeb, 0x8e, 0x42, 0xae, 0xe6,
+    0x6d, 0x77, 0xcc, 0x07, 0x46, 0x1b, 0xa3, 0xb7, 0x01, 0x81, 0x42, 0x84, 0x25, 0x80, 0x92, 0x31,
+];
+
+/// Return whether this is the exact pre-release Taira reset-11 lineage.
+#[must_use]
+pub(crate) fn uses_pre_release_taira_nexus_projection(network_id: &NetworkId) -> bool {
+    network_id.as_bytes() == &TAIRA_RESET11_NETWORK_ID
+}
+
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
 pub struct GenesisV2Bootstrap {

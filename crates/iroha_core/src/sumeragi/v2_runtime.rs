@@ -121,6 +121,12 @@ impl RuntimeLifecycleOrdinalSource {
             authority: runtime_lifecycle_ordinal_authority_after_high_watermark(high_watermark),
         }
     }
+    /// Wrap the runtime-restricted view of a shared launch authority.
+    pub(in crate::sumeragi) const fn from_authority(
+        authority: RuntimeLifecycleOrdinalAuthority,
+    ) -> Self {
+        Self { authority }
+    }
     /// Reserve one globally unique ordinal.
     pub(crate) fn reserve_one(&self) -> Result<u128, String> {
         self.reserve_range(1)?

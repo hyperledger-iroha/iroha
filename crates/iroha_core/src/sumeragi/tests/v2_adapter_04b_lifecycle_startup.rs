@@ -675,8 +675,8 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             Some(retirement),
             &ingress_ready,
             &ingress,
-        )
-        .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
+    )
+    .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
     assert_eq!(setup_context, context.id());
 
     let mut active_runner =

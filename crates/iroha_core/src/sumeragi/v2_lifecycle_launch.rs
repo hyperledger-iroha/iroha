@@ -1885,6 +1885,33 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 impl LaunchedProductionLifecycleV1 {
+    /// Reauthenticate a CompleteTip successor after recovered-output launch settlement.
+    pub(super) fn reauthenticate_recovered_complete_tip_successor(
+        &mut self,
+        retirement: &mut super::ledger::RetiredRecoveredCompleteTipActivationAuthorityV1,
+    ) -> Result<(), super::ledger::CompleteTipSuccessorOwnerBindErrorV1> {
+        let launched_ownership_matches = self
+            .owner
+            .body_store_identity
+            .as_ref()
+            .is_some_and(|identity| self.services.matches_lifecycle_body_store(identity))
+            && self
+                .services
+                .matches_lifecycle_payload_store(&self.owner.payload_store.instance_identity())
+            && self
+                .services
+                .matches_lifecycle_executor_output_guard(&self.executor);
+        let result = launched_ownership_matches
+            .then(|| retirement.reauthenticate_launched_successor_owner(&mut self.owner))
+            .unwrap_or(Err(super::ledger::CompleteTipSuccessorOwnerBindErrorV1));
+        if result.is_err() {
+            self.services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+        }
+        result
+    }
+
     fn finish_clean_shutdown(
         mut self,
         operation: Option<crate::sumeragi::output_guard::ConsensusFailStopOperation<'_>>,

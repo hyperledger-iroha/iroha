@@ -717,7 +717,6 @@ fn commit_single_handle_envelope(
     let mut vm = IVM::new(1_000_000);
     host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
 }
-#[cfg(feature = "app_api")]
 fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) -> AssetHandle {
     AssetHandle {
         asset_definition_id: handle.asset_definition_id.clone(),

@@ -30,6 +30,73 @@ const TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH: [u8; Hash::LENGTH] = [
     0xec, 0xe9, 0xd0, 0xb3, 0x96, 0x7b, 0x36, 0xba, 0x4f, 0x92, 0x69, 0xcf, 0x36, 0x21, 0xc2, 0x3b,
 ];
 
+const TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH: [u8; Hash::LENGTH] = [
+    0x43, 0xcd, 0x25, 0xec, 0x05, 0x7a, 0x61, 0x4c, 0x06, 0xbc, 0x45, 0x72, 0xdb, 0xb5, 0x64, 0xbd,
+    0xee, 0x13, 0x44, 0x0a, 0xea, 0xe2, 0x4a, 0x9c, 0x8a, 0xcb, 0x23, 0x9a, 0xf6, 0x02, 0x91, 0xf1,
+];
+
+fn is_exact_taira_pre_release_projection_gap_identity(
+    descriptor_hash: Hash,
+    proposal_height: u64,
+    lane_id: LaneId,
+) -> bool {
+    (descriptor_hash == Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH)
+        && proposal_height == 4
+        && lane_id == LaneId::SINGLE)
+        || (descriptor_hash == Hash::prehashed(TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH)
+            && proposal_height == 7
+            && lane_id == LaneId::new(2))
+}
+
+fn is_exact_taira_pre_release_projection_gap(descriptor: &LaneBlockDescriptorV1) -> bool {
+    is_exact_taira_pre_release_projection_gap_identity(
+        descriptor.descriptor_hash,
+        descriptor.proposal_height,
+        descriptor.lane_id,
+    ) && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
+        && descriptor.previous_lane_block_height == 0
+        && descriptor.previous_lane_block_descriptor_hash.is_none()
+        && descriptor.lane_block_height == 1
+        && descriptor.lane_block_view == 0
+}
+
+#[cfg(test)]
+mod taira_pre_release_projection_gap_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_the_two_exact_descriptor_identities() {
+        let lane0 = Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH);
+        let lane2 = Hash::prehashed(TAIRA_RESET11_H7_LANE2_DESCRIPTOR_HASH);
+
+        assert!(is_exact_taira_pre_release_projection_gap_identity(
+            lane0,
+            4,
+            LaneId::SINGLE
+        ));
+        assert!(is_exact_taira_pre_release_projection_gap_identity(
+            lane2,
+            7,
+            LaneId::new(2)
+        ));
+        assert!(!is_exact_taira_pre_release_projection_gap_identity(
+            lane2,
+            6,
+            LaneId::new(2)
+        ));
+        assert!(!is_exact_taira_pre_release_projection_gap_identity(
+            lane2,
+            7,
+            LaneId::new(1)
+        ));
+        assert!(!is_exact_taira_pre_release_projection_gap_identity(
+            lane0,
+            7,
+            LaneId::new(2)
+        ));
+    }
+}
+
 /// Exact lane/dataspace route whose consensus authority is being resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LaneAuthorityRoute {
@@ -673,21 +740,16 @@ pub(super) fn authenticated_committee_for_descriptor(
     let mut ownerships = ownerships.take(2);
     let Some(ownership) = ownerships.next() else {
         // Reset-11 was produced before global blocks persisted the complete
-        // lane-payload ownership projection.  Its one certified lane-zero
-        // block was nevertheless authorized with the producer's canonical
-        // proposal-height committee.  Retain that exact, narrow recovery
-        // corridor only for the exact authenticated descriptor emitted by the
-        // reset producer.  The live State height may already expose a staged
-        // successor while this source is selected, so height is not a stable
-        // discriminator here; the immutable descriptor and H4 finality are.
+        // lane-payload ownership projection. Its two certified lane blocks
+        // were nevertheless authorized with the producer's canonical
+        // proposal-height committees. Retain that exact, narrow recovery
+        // corridor only for the two authenticated descriptors emitted by the
+        // reset producer. The live State height may already expose a staged
+        // successor while this source is selected, so it is not a stable
+        // discriminator here; the immutable descriptor and proposal-height
+        // finality are.
         if crate::sumeragi::v2_context::uses_pre_release_taira_nexus_projection(&state.network_id)
-            && descriptor.descriptor_hash == Hash::prehashed(TAIRA_RESET11_H4_LANE0_DESCRIPTOR_HASH)
-            && descriptor.proposal_height == 4
-            && descriptor.lane_id == LaneId::SINGLE
-            && descriptor.dataspace_id == DataSpaceId::UNIVERSAL
-            && descriptor.previous_lane_block_height == 0
-            && descriptor.previous_lane_block_descriptor_hash.is_none()
-            && descriptor.lane_block_height == 1
+            && is_exact_taira_pre_release_projection_gap(descriptor)
         {
             let committee = finality
                 .height_context

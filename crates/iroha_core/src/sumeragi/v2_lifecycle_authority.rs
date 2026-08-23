@@ -205,6 +205,13 @@ pub(super) enum DurableLifecycleOrdinalReservationError {
 }
 
 impl CoordinatorLifecycleOrdinalAuthority {
+    /// Verify that launch restoration placed the shared cursor after the ledger.
+    pub(super) fn recognizes_high_water(&self, high_water: u128) -> Result<bool, String> {
+        self.shared.lock_state().map(|state| {
+            state.pending.is_none() && state.next.is_some_and(|next| next > high_water)
+        })
+    }
+
     /// Reserve a still-unpublished range strictly after both shared and ledger cuts.
     pub(super) fn begin_durable_range(
         &self,

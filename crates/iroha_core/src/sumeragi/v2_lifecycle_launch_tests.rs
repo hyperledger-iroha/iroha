@@ -518,8 +518,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
             "pub(in crate::sumeragi) fn launch(",
-            "let Self { owner, retirement } = self;",
-            "let launched = owner.launch(inputs)?;",
+            "let Self {\n            owner,\n            mut retirement,\n        } = self;",
+            "let mut launched = owner.launch(inputs)?;",
+            "launched\n            .reauthenticate_recovered_complete_tip_successor(&mut retirement)",
             "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {\n            launched,\n            retirement,",
             "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
             "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
@@ -554,6 +555,11 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ],
     );
     assert_source_token_count(bound_launch, "owner.launch(inputs)?", 1);
+    assert_source_token_count(
+        bound_launch,
+        "reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+        1,
+    );
 
     assert!(source.contains("authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,"));
     assert_eq!(
