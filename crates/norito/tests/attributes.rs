@@ -22,6 +22,84 @@ struct SkipDefault {
     #[norito(default)]
     c: u32,
 }
+
+const fn custom_default() -> u16 {
+    41
+}
+
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct TupleDefaults(
+    u32,
+    #[norito(default)] Option<u64>,
+    #[norito(default = "custom_default")] u16,
+);
+
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum NamedDecision {
+    Accepted {
+        source: u32,
+        #[norito(default)]
+        program_revision: Option<u64>,
+        #[norito(default = "custom_default")]
+        marker: u16,
+    },
+}
+
+#[derive(NoritoSerialize)]
+enum RetiredNamedDecision {
+    Accepted { source: u32 },
+}
+
+#[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum TupleDecision {
+    Accepted(
+        u32,
+        #[norito(default)] Option<u64>,
+        #[norito(default = "custom_default")] u16,
+    ),
+}
+
+#[derive(NoritoSerialize)]
+enum RetiredTupleDecision {
+    Accepted(u32),
+}
+
+fn binary_layouts() -> [u8; 3] {
+    let ordinary = default_encode_flags();
+    let packed = ordinary | header_flags::PACKED_STRUCT;
+    [ordinary, packed, packed | header_flags::FIELD_BITSET]
+}
+
+fn encode_bare_with_flags(value: &impl NoritoSerialize, flags: u8) -> Vec<u8> {
+    let _flags = DecodeFlagsGuard::enter(flags);
+    let mut payload = Vec::new();
+    let mut encoder = Encoder::for_buffer(&mut payload);
+    value.serialize(&mut encoder).expect("encode bare value");
+    payload
+}
+
+fn decode_bare_with_flags<T>(payload: &[u8], flags: u8) -> T
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let _flags = DecodeFlagsGuard::enter(flags);
+    let (decoded, used) = decode_field_canonical::<T>(payload)
+        .unwrap_or_else(|error| panic!("decode bare value with flags {flags:#04x}: {error:?}"));
+    assert_eq!(used, payload.len());
+    decoded
+}
+
+fn assert_roundtrip_in_all_layouts<T>(value: &T)
+where
+    T: core::fmt::Debug + PartialEq + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    for flags in binary_layouts() {
+        let payload = encode_bare_with_flags(value, flags);
+        let decoded = decode_bare_with_flags::<T>(&payload, flags);
+        assert_eq!(&decoded, value, "roundtrip with flags {flags:#04x}");
+    }
+}
+
 #[test]
 fn skip_and_default() {
     let s = SkipDefault { a: 5, b: 7, c: 9 };
@@ -31,4 +109,57 @@ fn skip_and_default() {
     assert_eq!(decoded.a, 5);
     assert_eq!(decoded.b, 0);
     assert_eq!(decoded.c, 9);
+}
+
+#[test]
+fn default_fields_are_decoded_in_packed_layouts() {
+    let value = SkipDefault { a: 5, b: 7, c: 9 };
+    let packed = default_encode_flags() | header_flags::PACKED_STRUCT;
+    for flags in [packed, packed | header_flags::FIELD_BITSET] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let mut payload = Vec::new();
+        let mut encoder = Encoder::for_buffer(&mut payload);
+        value.serialize(&mut encoder).expect("encode packed value");
+
+        let (decoded, used) = decode_field_canonical::<SkipDefault>(&payload)
+            .expect("decode packed value with an encoded default field");
+        assert_eq!(used, payload.len());
+        assert_eq!(decoded.a, value.a);
+        assert_eq!(decoded.b, 0);
+        assert_eq!(decoded.c, value.c);
+    }
+}
+
+#[test]
+fn tuple_struct_default_fields_roundtrip_in_all_layouts() {
+    assert_roundtrip_in_all_layouts(&TupleDefaults(5, Some(7), 73));
+}
+
+#[test]
+fn enum_default_fields_roundtrip_and_fallback_in_all_layouts() {
+    assert_roundtrip_in_all_layouts(&NamedDecision::Accepted {
+        source: 5,
+        program_revision: Some(7),
+        marker: 73,
+    });
+    assert_roundtrip_in_all_layouts(&TupleDecision::Accepted(5, Some(7), 73));
+
+    for flags in binary_layouts() {
+        let named = encode_bare_with_flags(&RetiredNamedDecision::Accepted { source: 5 }, flags);
+        assert_eq!(
+            decode_bare_with_flags::<NamedDecision>(&named, flags),
+            NamedDecision::Accepted {
+                source: 5,
+                program_revision: None,
+                marker: custom_default(),
+            },
+            "named default fallback with flags {flags:#04x}",
+        );
+        let tuple = encode_bare_with_flags(&RetiredTupleDecision::Accepted(5), flags);
+        assert_eq!(
+            decode_bare_with_flags::<TupleDecision>(&tuple, flags),
+            TupleDecision::Accepted(5, None, custom_default()),
+            "tuple default fallback with flags {flags:#04x}",
+        );
+    }
 }

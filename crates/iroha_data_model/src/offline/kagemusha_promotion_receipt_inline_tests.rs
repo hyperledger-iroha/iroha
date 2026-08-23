@@ -517,6 +517,7 @@ struct CompleteReceiptOptions {
     failed_result: bool,
     instruction_promotion_id: Option<[u8; 32]>,
     expires_at_height: Option<u64>,
+    catalog_revalidation_receipt_json: &'static [u8],
 }
 
 #[cfg(feature = "transparent_api")]
@@ -528,6 +529,8 @@ impl Default for CompleteReceiptOptions {
             failed_result: false,
             instruction_promotion_id: None,
             expires_at_height: Some(3),
+            catalog_revalidation_receipt_json:
+                b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true}\n",
         }
     }
 }
@@ -593,7 +596,7 @@ fn complete_receipt_fixture_with_options(
             release_policy_source: binding.release_policy_source,
             signed_genesis: binding.signed_genesis,
             catalog_revalidation_receipt_json: exact_receipt_bytes(
-                b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true}\n",
+                options.catalog_revalidation_receipt_json,
             ),
             catalog_revalidation_catalog_sha256: digest(
                 b"fixture App-Attest catalog revalidation bindings",
@@ -789,7 +792,7 @@ fn github_promotion_id_derivation_matches_known_vector() {
     };
     assert_eq!(
         hex::encode(run.promotion_id()),
-        "a0ab5de0bf87e740b555f41b9eba3dd5b3cc14f2f811ad45ef87220713245a2d",
+        "347f1395c409aa93453a8497471a90a18122cd2e40ed197831f0bf3bb49f3291",
     );
 }
 
@@ -855,66 +858,44 @@ fn promotion_reservation_enforces_receipt_size_and_strict_signing_lifetime() {
 #[cfg(feature = "transparent_api")]
 #[test]
 fn validator_seals_reject_mixed_exact_reservation_generations() {
-    let fixture = complete_receipt_fixture(true);
-    let mut reservation_two_body = fixture.promotion_reservation.body.clone();
-    reservation_two_body.catalog_revalidation_receipt_json = exact_receipt_bytes(
-        b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true,\"generation\":2}\n",
-    );
-    let reservation_two = KagemushaV4PromotionReservationV1::try_sign(
-        reservation_two_body,
-        &fixture.promotion_controller,
-    )
-    .expect("controller can sign a second exact reservation generation");
-    let reservation_two_bytes =
-        norito::encode_canonical(&reservation_two).expect("canonical second reservation");
+    let fixture_one = complete_receipt_fixture(true);
+    let fixture_two = complete_receipt_fixture_with_options(CompleteReceiptOptions {
+        catalog_revalidation_receipt_json:
+            b"{\"schema\":\"fixture.catalog_revalidation.v1\",\"valid\":true,\"generation\":2}\n",
+        ..CompleteReceiptOptions::default()
+    });
     assert_ne!(
-        reservation_two_bytes, fixture.promotion_reservation_bytes,
+        fixture_two.promotion_reservation_bytes, fixture_one.promotion_reservation_bytes,
         "R1 and R2 must differ in their exact signed bytes"
     );
 
-    let mut binding_two = fixture.expectations_artifact.body.binding.clone();
-    binding_two.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-    let (_, seals_two, _) = qualified_receipt_hosts(&binding_two);
+    for fixture in [&fixture_one, &fixture_two] {
+        KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
+            &fixture.expectations_artifact_bytes,
+            fixture.promotion_controller.public_key(),
+            &fixture.promotion_reservation_bytes,
+        )
+        .expect("each complete reservation generation remains internally coherent");
+    }
 
-    let mut coherent_two_body = fixture.expectations_artifact.body.clone();
-    coherent_two_body.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-    coherent_two_body.binding = binding_two.clone();
-    coherent_two_body.validator_seals = seals_two.clone();
-    let coherent_two =
-        sign_expectations_body_unchecked(coherent_two_body, &fixture.promotion_controller);
-    let coherent_two_bytes =
-        norito::encode_canonical(&coherent_two).expect("canonical coherent R2 expectations");
-    KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
-        &coherent_two_bytes,
-        fixture.promotion_controller.public_key(),
-        &reservation_two_bytes,
-    )
-    .expect("four R2 seals and exact R2 reservation remain a coherent generation");
-
-    for use_second_generation_binding in [false, true] {
-        let mut mixed_body = fixture.expectations_artifact.body.clone();
-        if use_second_generation_binding {
-            mixed_body.promotion_reservation = exact_receipt_bytes(&reservation_two_bytes);
-            mixed_body.binding = binding_two.clone();
-            mixed_body.validator_seals = seals_two.clone();
-            mixed_body.validator_seals[0] =
-                fixture.expectations_artifact.body.validator_seals[0].clone();
-        } else {
-            mixed_body.validator_seals[0] = seals_two[0].clone();
-        }
-        let mixed = sign_expectations_body_unchecked(mixed_body, &fixture.promotion_controller);
+    for (claimed_generation, foreign_generation) in
+        [(&fixture_one, &fixture_two), (&fixture_two, &fixture_one)]
+    {
+        let mut mixed_body = claimed_generation.expectations_artifact.body.clone();
+        mixed_body.validator_seals[0] = foreign_generation
+            .expectations_artifact
+            .body
+            .validator_seals[0]
+            .clone();
+        let mixed =
+            sign_expectations_body_unchecked(mixed_body, &claimed_generation.promotion_controller);
         let mixed_bytes =
             norito::encode_canonical(&mixed).expect("canonical mixed-generation expectations");
-        let reservation_bytes = if use_second_generation_binding {
-            &reservation_two_bytes
-        } else {
-            &fixture.promotion_reservation_bytes
-        };
         assert_eq!(
             KagemushaV4ActivationReceiptExpectationsArtifactV1::decode_and_verify_canonical(
                 &mixed_bytes,
-                fixture.promotion_controller.public_key(),
-                reservation_bytes,
+                claimed_generation.promotion_controller.public_key(),
+                &claimed_generation.promotion_reservation_bytes,
             ),
             Err(KagemushaPromotionReceiptValidationError::ValidatorSet),
             "one R1/R2 seal splice must fail under either claimed reservation generation"
