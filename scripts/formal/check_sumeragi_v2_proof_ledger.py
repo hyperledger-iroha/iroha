@@ -863,7 +863,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
     "successor_retry": "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
-    "historical_body": "0a7c5d29372bc8970f88d82f74f36e1e7a06635f51a12ff7475e63b221577851",
+    "historical_body": "97681979dd7f57bd52e8666099f26014c37d6ccd07c6ce2fa4b9b30359354361",
     "terminal_application": "18c9adfc440c9e4302dd5e1b78c71beec18927bc30170ad1db8b4953d40df2b2",
 }
 
@@ -19811,7 +19811,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if not active_root.is_dir():
             continue
         for active_path in sorted(active_root.rglob("*")):
-            if (
+            if ".tlacache" in active_path.parts or (
                 active_path.suffix not in active_suffixes
                 or not active_path.is_file()
                 or active_path.is_symlink()
@@ -28171,22 +28171,11 @@ def _transport_geometry_production_source_fidelity_errors(
         "kagami_localnet": (
             repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
         ),
-        "kagami_profiles": repo_root / "xtask" / "src" / "kagami_profiles.rs",
-        "taira_default": (
-            repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
-        ),
         "taira_config": (
             repo_root / "configs" / "soranexus" / "taira" / "config.toml"
         ),
         "taira_genesis": (
             repo_root / "configs" / "soranexus" / "taira" / "genesis.json"
-        ),
-        "taira_default_genesis": (
-            repo_root
-            / "defaults"
-            / "kagami"
-            / "iroha3-taira"
-            / "genesis.json"
         ),
     }
     sources: dict[str, str] = {}
@@ -30574,27 +30563,6 @@ queues.insert(
 
     deployment_fragments = (
         (
-            "taira_default",
-            "max_transactions = 96\n"
-            "max_payload_bytes = 16777216\n"
-            "proposal_queue_scan_multiplier = 4",
-            "default Taira profile pins the revision-4 payload ceiling with privacy framing headroom",
-        ),
-        (
-            "taira_default",
-            "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 311427072\n"
-            "body_source_bytes = 34603008",
-            "default seven-validator Taira profile pins H=2 and nine source partitions",
-        ),
-        (
-            "taira_default",
-            "max_frame_bytes = 23068700\n"
-            "max_frame_bytes_block_sync = 23068672\n"
-            "max_frame_bytes_tx_gossip = 13631488",
-            "default Taira profile carries maximum privacy transaction and block-sync frames",
-        ),
-        (
             "taira_config",
             "max_frame_bytes = 23068700\n"
             "max_frame_bytes_block_sync = 23068672\n"
@@ -30620,11 +30588,6 @@ queues.insert(
             '"max_tx_bytes": 10485760',
             "production Taira genesis admits one maximum privacy transaction",
         ),
-        (
-            "taira_default_genesis",
-            '"max_tx_bytes": 10485760',
-            "default Taira genesis admits one maximum privacy transaction",
-        ),
     )
     for role, fragment, description in deployment_fragments:
         observed = sources[role].count(fragment)
@@ -30633,7 +30596,7 @@ queues.insert(
                 f"{paths[role]}: {description} must occur exactly 1 time(s); "
                 f"found {observed}"
             )
-    for role, label in (("taira_genesis", "production"), ("taira_default_genesis", "default")):
+    for role, label in (("taira_genesis", "production"),):
         try:
             genesis = json.loads(sources[role], object_pairs_hook=_unique_object)
             max_payload = genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
@@ -57431,9 +57394,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its thirteen reviewed runtime/recovery uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its fourteen reviewed runtime/recovery/readiness uses and no additional mutation surface",
         errors,
-        count=13,
+        count=14,
     )
     for expected, description in (
         (
@@ -57484,19 +57447,44 @@ self.finality_completion
         _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"recovered Decision Apply finality {description}", errors)
     _require_rust_token_sequence(
         effects_path, prepare_recovered_finality,
-        """self.pending_work() != 0 || !self.recovered_decision_fetch_request_index_is_exact_and_empty() || self.retained_effect_batch.is_some()
-|| self.parked_effect_batch.is_some() || self.pending_tip_recovery.is_some()
-|| self.finality_completion.is_some()
-|| self.runtime.queued_commands() != 0""",
+        """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
+    authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
+});
+if self.pending_work() != 0
+    || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
+    || self.retained_effect_batch.is_some()
+    || self.parked_effect_batch.is_some()
+    || !pending_recovery_is_exact
+    || self.finality_completion.is_some()""",
         "recovered Decision Apply completion must not overtake retained executor work",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_recovered_finality,
-        """self.finality_completion.is_none() && self.pending_work() == 0 && self.recovered_decision_fetch_request_index_is_exact_and_empty()
-&& dispatch_key.matches_height_context(&self.context) && artifact.height_context == self.context
-&& artifact.subject == receipt.subject() && receipt.context_id() == self.context.id()
-&& receipt.height() == self.context.height && receipt.artifact_hash() == HashOf::new(&artifact)
-&& self.runtime.driver().ready_to_finish()""",
+        """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
+    evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
+        && evidence.is_exact(&self.context)
+        && tag == evidence.replay_tag()
+        && artifact.subject == evidence.commit_subject()
+        && &artifact.commit_qc == evidence.commit_qc()
+        && receipt.height() == evidence.frozen_height()
+        && receipt.context_id() == evidence.frozen_context_id()
+        && receipt.block_hash() == evidence.commit_subject().block_hash
+        && receipt.subject() == evidence.commit_subject()
+        && receipt.certificate() == evidence.commit_qc().as_ref()
+        && receipt.artifact_hash() == HashOf::new(&artifact)
+});
+assert!(
+    self.finality_completion.is_none()
+        && self.pending_work() == 0
+        && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+        && pending_recovery_is_exact
+        && dispatch_key.matches_height_context(&self.context)
+        && artifact.height_context == self.context
+        && artifact.subject == receipt.subject()
+        && receipt.context_id() == self.context.id()
+        && receipt.height() == self.context.height
+        && receipt.artifact_hash() == HashOf::new(&artifact)
+        && self.runtime.driver().ready_to_finish()""",
         "recovered Decision Apply finality must authenticate its height, artifact, receipt, and drained runtime",
         errors)
     _require_rust_token_sequence(

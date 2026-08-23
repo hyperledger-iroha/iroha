@@ -910,7 +910,7 @@ impl<'a> FairIngressTurnCut<'a> {
         };
         if !cut.metadata_is_current() {
             return Err((
-                FairIngressQueueCutError::InvalidOccurrenceIdentity,
+                FairIngressQueueCutError::QueueCutChanged,
                 cut.into_ordinary_turn_cut(),
             ));
         }
@@ -2221,6 +2221,85 @@ mod tests {
     }
 
     #[test]
+    fn turn_cut_reports_retryable_change_when_selected_carrier_coalesces_before_narrowing() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(27);
+        let cut = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("capture exact current-context turn")
+            .expect("current-context winner exists");
+        assert_eq!(
+            cut.selected_occurrence().physical_admission_ordinal(),
+            ordinal
+        );
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer,)),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        let retained = match cut.narrow_to_lifecycle(context) {
+            Err((FairIngressQueueCutError::QueueCutChanged, retained)) => retained,
+            Err((_error, _retained)) => {
+                panic!("coalesced ownership must report a retryable queue-cut change")
+            }
+            Ok(_) => panic!("coalesced ownership cannot retain the stale frozen cut"),
+        };
+        drop(retained);
+        assert_eq!(ingress.len(), 1, "retry cannot consume the selected row");
+
+        let recaptured = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("recapture coalesced current-context turn")
+            .expect("coalesced winner remains available");
+        assert!(matches!(
+            recaptured.narrow_to_lifecycle(context),
+            Ok(FairIngressTurnContextCut::Lifecycle(_))
+        ));
+        assert_eq!(ingress.len(), 1, "narrowing alone cannot dequeue the row");
+    }
+
+    #[test]
+    fn lifecycle_cut_detects_selected_carrier_coalescence_during_selector_capture() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(28);
+        let turn = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("capture exact current-context turn")
+            .expect("current-context winner exists");
+        assert_eq!(
+            turn.selected_occurrence().physical_admission_ordinal(),
+            ordinal
+        );
+        let cut = match turn.narrow_to_lifecycle(context) {
+            Ok(FairIngressTurnContextCut::Lifecycle(cut)) => cut,
+            Ok(FairIngressTurnContextCut::Ordinary(_)) => {
+                panic!("current-context winner must narrow to lifecycle ownership")
+            }
+            Err((_error, _retained)) => panic!("unchanged turn cut must narrow exactly"),
+        };
+        assert!(cut.pre_cut_is_intact());
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer,)),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert!(
+            !cut.pre_cut_is_intact(),
+            "selector capture must reject a pre-cut ownership refresh"
+        );
+        drop(cut);
+        assert_eq!(ingress.len(), 1, "selector retry cannot consume the row");
+
+        let recaptured = ingress
+            .capture_next_ingress_turn_cut(|_| true)
+            .expect("recapture coalesced current-context turn")
+            .expect("coalesced winner remains available");
+        assert!(matches!(
+            recaptured.narrow_to_lifecycle(context),
+            Ok(FairIngressTurnContextCut::Lifecycle(_))
+        ));
+        assert_eq!(ingress.len(), 1, "stable recapture cannot dequeue the row");
+    }
+
+    #[test]
     fn foreign_winner_dequeues_as_ordinary_without_reselection() {
         const HEIGHT: wire::Height = 31;
         let bound_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -2816,6 +2895,42 @@ mod tests {
             before
         );
         assert!(find_entry_by_physical_ordinal(&state, ordinal).is_some());
+    }
+    #[test]
+    fn prepared_lock_reports_retryable_change_for_pre_lock_coalescence() {
+        let (ingress, context, peer, message, ordinal) = single_commit_request_ingress(33);
+        let witness = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture target before final lock")
+            .into_prepared_witness();
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer)),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        let retained = match witness.lock_exact_dequeue_retaining(&ingress, context, ordinal) {
+            Err((FairIngressQueueCutError::QueueCutChanged, retained)) => retained,
+            Err((error, _retained)) => {
+                panic!("coalescence returned structural error: {error:?}")
+            }
+            Ok(_) => panic!("stale witness cannot acquire the final dequeue lock"),
+        };
+        drop(retained);
+        assert_eq!(ingress.len(), 1, "failed pre-lock cannot dequeue the row");
+        assert!(ingress.producer_publication_lock.try_lock().is_some());
+
+        let recaptured = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("recapture coalesced target")
+            .into_prepared_witness();
+        let locked = recaptured
+            .lock_exact_dequeue_retaining(&ingress, context, ordinal)
+            .unwrap_or_else(|(error, _)| panic!("stable recapture must lock: {error:?}"));
+        drop(locked);
+        assert_eq!(
+            ingress.len(),
+            1,
+            "dropping unpublished lock retains the row"
+        );
     }
     #[test]
     fn locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit() {

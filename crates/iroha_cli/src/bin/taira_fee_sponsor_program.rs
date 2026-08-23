@@ -58,7 +58,7 @@ struct Args {
     #[arg(long = "beneficiary", value_name = "I105")]
     beneficiaries: Vec<String>,
     /// Runtime-only client profile containing the sponsor signer. This command never modifies it.
-    #[arg(long, default_value = "defaults/kagami/iroha3-taira/config.toml")]
+    #[arg(long, default_value = "/run/secrets/taira-canary-client.toml")]
     profile_config: PathBuf,
     #[arg(long, default_value_t = 600)]
     status_timeout_secs: u64,

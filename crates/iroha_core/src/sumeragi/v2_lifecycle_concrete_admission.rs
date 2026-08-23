@@ -18,13 +18,13 @@ use super::{
         LifecycleOutputRegistryJoinV1, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
         PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-        PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
-        PreparedLifecycleAdmissionV1, PreparedLifecycleOutputExecutionV1,
-        PreparedLifecycleOutputRegistryRetirementV1, PreparedRecoveredDecisionApplyDispatch,
-        PublishedDurableValidateCompletion, ReadyRecoveredDecisionApplyAttestation,
-        ReadyRecoveredDecisionApplyAttestationError, ReadyValidateCarrierError,
-        RecoveredDecisionApplyDispatchProjectionError, RecoveredWalParentFactoryError,
-        RegistryError, reconstruct_recovered_wal_validate_parent,
+        PreparedCertifiedFetchAdmissionV1, PreparedLifecycleAdmissionErrorV1,
+        PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
+        PreparedLifecycleOutputExecutionV1, PreparedLifecycleOutputRegistryRetirementV1,
+        PreparedRecoveredDecisionApplyDispatch, PublishedDurableValidateCompletion,
+        ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError,
+        ReadyValidateCarrierError, RecoveredDecisionApplyDispatchProjectionError,
+        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -93,6 +93,14 @@ impl LifecycleWorkRegistryHolder {
     {
         self.registry
             .attest_ready_recovered_decision_apply(coordinator, ordinal)
+    }
+    /// Prove the complete cold census contains the recovered, not live, Apply carrier.
+    pub(super) fn exactly_covers_recovered_decision_apply_ready_work(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        self.registry
+            .exactly_covers_recovered_decision_apply_ready_work(coordinator)
     }
     /// Project the exact claimed recovered Decision Apply into its dedicated worker task.
     ///
@@ -331,6 +339,18 @@ pub(super) enum AdapterEffectAdmissionTransaction {
         /// Complete replay-authorized owner returned to the caller.
         prepared: PreparedLifecycleAdmissionV1,
     },
+}
+/// Result of joining one live certified response to its durable Waiting Fetch owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProductionCertifiedFetchAdmissionSettlementV1 {
+    /// The exact logical row, concrete incumbent, and LedgerV1 record were installed.
+    Admitted,
+    /// The same exact Waiting Fetch owner already exists.
+    Existing,
+    /// Logical admission capacity retained the selected queue occurrence for retry.
+    Deferred,
+    /// Projection, registry, or durability invariants require restart.
+    RestartRequired,
 }
 /// Closed retry/fail-stop class for owner-facing durable Validate admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -979,6 +999,85 @@ impl LifecycleCoordinator {
     }
 }
 impl ProductionLifecycleOwnerV1 {
+    /// Atomically create or rejoin the selected certified response's Waiting Fetch owner.
+    pub(super) fn settle_certified_fetch_admission(
+        &mut self,
+        prepared: PreparedCertifiedFetchAdmissionV1,
+    ) -> ProductionCertifiedFetchAdmissionSettlementV1 {
+        let active_context = self.coordinator.active_context;
+        if !prepared.validates(active_context) {
+            return ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired;
+        }
+        let candidate = prepared.candidate().clone();
+        let mut next = self.coordinator.stage_durable_transaction();
+        let (decision, ordinal_reservation) =
+            next.reduce_admit_with_durable_ordinals(AdmissionRequest::Candidate(candidate.clone()));
+        if matches!(decision, AdmissionDecision::Admitted { .. }) {
+            let Ok(location) = concrete_work_location(&next, decision, None) else {
+                return ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired;
+            };
+            let bound = prepared.into_bound();
+            return match self.registry.registry.install_bound_before_publication(
+                active_context,
+                &candidate,
+                location.address,
+                location.digest,
+                bound,
+                || {
+                    next.persist_durable_projection_with_ordinal_reservation(
+                        ordinal_reservation.as_ref(),
+                    )
+                },
+            ) {
+                Ok(()) => {
+                    self.coordinator = next;
+                    match decision {
+                        AdmissionDecision::Admitted {
+                            producer_turn_ordinal: None,
+                            ..
+                        } => ProductionCertifiedFetchAdmissionSettlementV1::Admitted,
+                        _ => ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired,
+                    }
+                }
+                Err(BoundAdapterRegistryPublicationErrorV1::Install(_, bound)) => {
+                    let _prepared = PreparedCertifiedFetchAdmissionV1::from_returned_bound(
+                        active_context,
+                        candidate,
+                        bound,
+                    )
+                    .expect("registry rollback returns the exact certified-Fetch owner");
+                    ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired
+                }
+                Err(BoundAdapterRegistryPublicationErrorV1::Publication(_, bound)) => {
+                    self.coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
+                    let _prepared = PreparedCertifiedFetchAdmissionV1::from_returned_bound(
+                        active_context,
+                        candidate,
+                        bound,
+                    )
+                    .expect("publication rollback returns the exact certified-Fetch owner");
+                    ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired
+                }
+            };
+        }
+        self.coordinator = next;
+        match decision {
+            AdmissionDecision::Retry { .. } => {
+                ProductionCertifiedFetchAdmissionSettlementV1::Existing
+            }
+            AdmissionDecision::WaitForCapacity(_) => {
+                ProductionCertifiedFetchAdmissionSettlementV1::Deferred
+            }
+            AdmissionDecision::Admitted { .. }
+            | AdmissionDecision::ReplayTerminal { .. }
+            | AdmissionDecision::StutterTerminal { .. }
+            | AdmissionDecision::NonCandidate
+            | AdmissionDecision::Rejected(_)
+            | AdmissionDecision::FailClosed(_) => {
+                ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired
+            }
+        }
+    }
     /// Prepare and atomically admit one post-fsync live-WAL Sign owner.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn settle_live_wal_sign_admission(
@@ -1589,6 +1688,7 @@ mod tests {
     enum DurableValidateOriginFixture {
         LocalBody,
         RemoteProposal,
+        RefinedRemoteProposal(wire::GlobalPhase),
     }
     impl Fixture {
         fn new() -> Self {
@@ -1671,6 +1771,50 @@ mod tests {
                 ]),
             )
         }
+        fn quorum_certificate(
+            &self,
+            phase: wire::GlobalPhase,
+            subject: wire::BlockSubject,
+            marker: u8,
+        ) -> wire::QuorumCertificate {
+            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new([marker, 0xA1]),
+                Hash::new([marker, 0xA2]),
+                Hash::new([marker, 0xA3]),
+                1,
+                Hash::new([marker, 0xA4]),
+            );
+            let unsigned_vote = wire::Vote {
+                round: self.round,
+                proposal_round: self.round,
+                phase,
+                subject,
+                execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let preimage = unsigned_vote.signature_preimage();
+            let shares = self.keys[..3]
+                .iter()
+                .map(|key| {
+                    Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            wire::QuorumCertificate {
+                round: self.round,
+                proposal_round: self.round,
+                phase,
+                subject,
+                execution_commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate refined Proposal Validate QC"),
+            }
+        }
         fn effect(&self, marker: u8) -> AdapterEffect {
             let subject = wire::BlockSubject {
                 parent_block_hash: None,
@@ -1715,6 +1859,91 @@ mod tests {
                 .exact_pending_adapter_effect_binding(&effect)
                 .expect("mint pending concrete-admission binding");
             (effect, pending)
+        }
+        fn prepared_certified_fetch(&self, marker: u8) -> PreparedCertifiedFetchAdmissionV1 {
+            let body = vec![marker; 32];
+            let subject = wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 0xF1])),
+                payload_hash: Hash::new(&body),
+            };
+            let chunks = wire::encode_payload_chunks(self.context.da_layout, &body)
+                .expect("encode certified Fetch fixture chunks");
+            let manifest = wire::PayloadManifest::derive(
+                &self.context,
+                self.round,
+                subject,
+                u64::try_from(body.len()).expect("fixture body length fits u64"),
+                &chunks,
+            )
+            .expect("derive certified Fetch fixture manifest");
+            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new([marker, 0xF2]),
+                Hash::new([marker, 0xF3]),
+                Hash::new([marker, 0xF4]),
+                1,
+                Hash::new([marker, 0xF5]),
+            );
+            let unsigned_vote = wire::Vote {
+                round: self.round,
+                proposal_round: self.round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let preimage = unsigned_vote.signature_preimage();
+            let shares = self.keys[..3]
+                .iter()
+                .map(|key| {
+                    Signature::new(key.private_key(), &preimage)
+                        .payload()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let certificate = wire::QuorumCertificate {
+                round: self.round,
+                proposal_round: self.round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
+                    &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .expect("aggregate certified Fetch fixture PrepareQC"),
+            };
+            let request = wire::CertifiedBodyRequest {
+                round: self.round,
+                subject,
+                certificate: certificate.clone(),
+                requester: PeerId::new(self.keys[3].public_key().clone()),
+                signature: vec![marker],
+            };
+            let effect = AdapterEffect::FetchBody {
+                tag: self.tag,
+                round: self.round,
+                subject,
+                manifest: None,
+                certified_sources: self
+                    .context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect(),
+                certificate: Some(certificate),
+            };
+            let (effect, pending) = self.pair(effect, u128::from(marker));
+            PreparedCertifiedFetchAdmissionV1::prepare(
+                self.active_context(),
+                &self.verified,
+                effect,
+                pending,
+                manifest,
+                HashOf::new(&request),
+            )
+            .expect("prepare exact certified Fetch admission")
         }
         fn output_pending(
             &self,
@@ -1834,7 +2063,8 @@ mod tests {
                     .unwrap_or_else(|_| panic!("seal local Validate pre-admission"))
                     .into_pending_durable_validate_admission()
                 }
-                DurableValidateOriginFixture::RemoteProposal => {
+                DurableValidateOriginFixture::RemoteProposal
+                | DurableValidateOriginFixture::RefinedRemoteProposal(_) => {
                     let mut proposal = wire::Proposal {
                         round: self.round,
                         proposer: leader,
@@ -1855,7 +2085,7 @@ mod tests {
                         tag: self.tag,
                         round: self.round,
                         subject,
-                        manifest: Some(manifest),
+                        manifest: Some(manifest.clone()),
                         certified_sources: Vec::new(),
                         certificate: None,
                     };
@@ -1872,7 +2102,7 @@ mod tests {
                     let store_ownership = fetch_ownership
                         .rebind_as_inherited_adapter_effect(&store_effect)
                         .expect("project remote Store owner");
-                    let validate_ownership = store_ownership
+                    let ordinary_validate_ownership = store_ownership
                         .rebind_as_inherited_adapter_effect(&validate_effect)
                         .expect("project remote Validate owner");
                     assert!(
@@ -1881,7 +2111,7 @@ mod tests {
                             &fetch_effect,
                         )
                     );
-                    PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+                    let stored = PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
                         fetch_effect,
                         fetch_ownership,
                     )
@@ -1889,9 +2119,71 @@ mod tests {
                     .project_store(store_effect, store_ownership)
                     .unwrap_or_else(|_| panic!("project remote Store pre-admission"))
                     .bind_durable_body(durable_receipt)
-                    .unwrap_or_else(|_| panic!("bind remote durable body"))
-                    .project_validate(validate_effect.clone(), validate_ownership)
-                    .unwrap_or_else(|_| panic!("project remote Validate pre-admission"))
+                    .unwrap_or_else(|_| panic!("bind remote durable body"));
+                    match origin {
+                        DurableValidateOriginFixture::RemoteProposal => stored
+                            .project_validate(
+                                validate_effect.clone(),
+                                ordinary_validate_ownership,
+                                None,
+                            )
+                            .unwrap_or_else(|_| panic!("project remote Validate pre-admission")),
+                        DurableValidateOriginFixture::RefinedRemoteProposal(phase) => {
+                            let certificate = self.quorum_certificate(phase, subject, marker);
+                            let certified_fetch = AdapterEffect::FetchBody {
+                                tag: self.tag,
+                                round: self.round,
+                                subject,
+                                manifest: Some(manifest.clone()),
+                                certified_sources: self
+                                    .context
+                                    .roster
+                                    .iter()
+                                    .map(|entry| entry.validator.clone())
+                                    .collect(),
+                                certificate: Some(certificate.clone()),
+                            };
+                            let certified_validate_ownership = bind_adapter_effect_batch_ownership(
+                                core::slice::from_ref(&certified_fetch),
+                                vec![RuntimeEffectOwnership::fresh_for_test(
+                                    self.tag,
+                                    source_ordinal + 1,
+                                )],
+                            )
+                            .expect("bind refined remote Fetch authority")
+                            .pop()
+                            .expect("one refined remote Fetch owner")
+                            .rebind_as_inherited_adapter_effect(&validate_effect)
+                            .expect("carry refined authority into Validate");
+                            let validate_ownership = ordinary_validate_ownership
+                                .adopt_incumbent_body_stage_for_retry_or_authority(
+                                    &certified_validate_ownership,
+                                    &validate_effect,
+                                )
+                                .expect("retain Proposal owner under refined authority");
+                            match phase {
+                                wire::GlobalPhase::Prepare => stored
+                                    .project_validate(
+                                        validate_effect.clone(),
+                                        validate_ownership,
+                                        Some(&certificate),
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        panic!("project Prepare-refined Proposal Validate")
+                                    }),
+                                wire::GlobalPhase::Commit => stored
+                                    .project_validate_after_durable_decision(
+                                        validate_effect.clone(),
+                                        validate_ownership,
+                                        &certificate,
+                                    )
+                                    .unwrap_or_else(|_| {
+                                        panic!("project Commit-refined Proposal Validate")
+                                    }),
+                            }
+                        }
+                        DurableValidateOriginFixture::LocalBody => unreachable!(),
+                    }
                     .into_pending_durable_validate_admission()
                 }
             };
@@ -1979,30 +2271,89 @@ mod tests {
         }
     }
     #[test]
-    fn owner_settlement_admits_both_durable_validate_origins() {
+    fn certified_fetch_settlement_installs_one_waiting_owner_and_rejoins_its_duplicate() {
         let fixture = Fixture::new();
-        for (origin, remote_proposal) in [
-            (DurableValidateOriginFixture::LocalBody, false),
-            (DurableValidateOriginFixture::RemoteProposal, true),
-        ] {
-            let mut owner = fixture.production_owner(64);
-            let (pending, effect) = fixture.pending_durable_validate(0xB1, origin);
-            assert!(pending.exactly_retains_for_test(&effect, remote_proposal));
-            let ProductionDurableValidateAdmissionSettlementV1::Admitted(
-                AdmissionDecision::Admitted { ordinal: 1, .. },
-            ) = owner.settle_durable_validate_admission(pending)
-            else {
-                panic!("exact durable Validate origin must commit one fresh admission")
-            };
-            assert_eq!(owner.coordinator.high_water(), 1);
-            assert_eq!(owner.coordinator.records.len(), 1);
-            assert_eq!(owner.registry.registry.len(), 1);
-            assert_eq!(
-                owner.coordinator.records[&1].work_class,
-                LifecycleWorkClass::Validate
-            );
-            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
-        }
+        let mut owner = fixture.production_owner(64);
+        let prepared = fixture.prepared_certified_fetch(0xC1);
+        let expected_key = prepared.candidate().key;
+        assert_eq!(
+            owner.settle_certified_fetch_admission(prepared),
+            ProductionCertifiedFetchAdmissionSettlementV1::Admitted
+        );
+        assert_eq!(owner.coordinator.high_water(), 1);
+        assert_eq!(owner.coordinator.records.len(), 1);
+        assert_eq!(owner.registry.registry.len(), 1);
+        assert_eq!(owner.coordinator.records[&1].key, expected_key);
+        assert_eq!(
+            owner.coordinator.records[&1].work_class,
+            LifecycleWorkClass::Fetch
+        );
+        assert!(matches!(
+            owner.coordinator.records[&1].state,
+            LifecycleState::Waiting(_)
+        ));
+
+        let duplicate = fixture.prepared_certified_fetch(0xC1);
+        assert_eq!(
+            owner.settle_certified_fetch_admission(duplicate),
+            ProductionCertifiedFetchAdmissionSettlementV1::Existing
+        );
+        assert_eq!(owner.coordinator.high_water(), 1);
+        assert_eq!(owner.coordinator.records.len(), 1);
+        assert_eq!(owner.registry.registry.len(), 1);
+    }
+    #[test]
+    fn certified_fetch_settlement_defers_without_mutating_at_capacity() {
+        let fixture = Fixture::new();
+        let mut owner = fixture.production_owner(1);
+        assert_eq!(
+            owner.settle_certified_fetch_admission(fixture.prepared_certified_fetch(0xC2)),
+            ProductionCertifiedFetchAdmissionSettlementV1::Admitted
+        );
+        let prepared = fixture.prepared_certified_fetch(0xC3);
+        assert_eq!(
+            owner.settle_certified_fetch_admission(prepared),
+            ProductionCertifiedFetchAdmissionSettlementV1::Deferred
+        );
+        assert_eq!(owner.coordinator.high_water(), 1);
+        assert_eq!(owner.coordinator.records.len(), 1);
+        assert_eq!(owner.registry.registry.len(), 1);
+    }
+    #[test]
+    fn owner_settlement_admits_all_durable_validate_origins() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            for (origin, remote_proposal) in [
+                (DurableValidateOriginFixture::LocalBody, false),
+                (DurableValidateOriginFixture::RemoteProposal, true),
+                (
+                    DurableValidateOriginFixture::RefinedRemoteProposal(wire::GlobalPhase::Prepare),
+                    true,
+                ),
+                (
+                    DurableValidateOriginFixture::RefinedRemoteProposal(wire::GlobalPhase::Commit),
+                    true,
+                ),
+            ] {
+                let mut owner = fixture.production_owner(64);
+                let (pending, effect) = fixture.pending_durable_validate(0xB1, origin);
+                assert!(pending.exactly_retains_for_test(&effect, remote_proposal));
+                let ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                    AdmissionDecision::Admitted { ordinal: 1, .. },
+                ) = owner.settle_durable_validate_admission(pending)
+                else {
+                    panic!("exact durable Validate origin must commit one fresh admission")
+                };
+                assert_eq!(owner.coordinator.high_water(), 1);
+                assert_eq!(owner.coordinator.records.len(), 1);
+                assert_eq!(owner.registry.registry.len(), 1);
+                assert_eq!(
+                    owner.coordinator.records[&1].work_class,
+                    LifecycleWorkClass::Validate
+                );
+                assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+            }
+        });
     }
     #[test]
     fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal() {
@@ -2048,42 +2399,43 @@ mod tests {
     }
     #[test]
     fn owner_settlement_returns_the_exact_retry_without_reminting_an_ordinal() {
-        let fixture = Fixture::new();
-        let mut owner = fixture.production_owner(64);
-        let (pending, _) =
-            fixture.pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
-        assert!(matches!(
-            owner.settle_durable_validate_admission(pending),
-            ProductionDurableValidateAdmissionSettlementV1::Admitted(AdmissionDecision::Admitted {
-                ordinal: 1,
-                ..
-            })
-        ));
-        let (pending, effect) =
-            fixture.pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
-        let ProductionDurableValidateAdmissionSettlementV1::Returned {
-            decision: first_decision @ AdmissionDecision::Retry { ordinal: 1, .. },
-            pending,
-        } = owner.settle_durable_validate_admission(pending)
-        else {
-            panic!("an exact live duplicate must return its remote-Proposal owner")
-        };
-        assert!(pending.exactly_retains_for_test(&effect, true));
-        assert_eq!(owner.coordinator.high_water(), 1);
-        assert_eq!(owner.coordinator.records.len(), 1);
-        assert_eq!(owner.registry.registry.len(), 1);
-        let ProductionDurableValidateAdmissionSettlementV1::Returned {
-            decision: second_decision,
-            pending,
-        } = owner.settle_durable_validate_admission(pending)
-        else {
-            panic!("retrying the exact returned owner must remain non-mutating")
-        };
-        assert_eq!(second_decision, first_decision);
-        assert!(pending.exactly_retains_for_test(&effect, true));
-        assert_eq!(owner.coordinator.high_water(), 1);
-        assert_eq!(owner.coordinator.records.len(), 1);
-        assert_eq!(owner.registry.registry.len(), 1);
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let (pending, _) = fixture
+                .pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
+            assert!(matches!(
+                owner.settle_durable_validate_admission(pending),
+                ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                    AdmissionDecision::Admitted { ordinal: 1, .. }
+                )
+            ));
+            let (pending, effect) = fixture
+                .pending_durable_validate(0xB3, DurableValidateOriginFixture::RemoteProposal);
+            let ProductionDurableValidateAdmissionSettlementV1::Returned {
+                decision: first_decision @ AdmissionDecision::Retry { ordinal: 1, .. },
+                pending,
+            } = owner.settle_durable_validate_admission(pending)
+            else {
+                panic!("an exact live duplicate must return its remote-Proposal owner")
+            };
+            assert!(pending.exactly_retains_for_test(&effect, true));
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records.len(), 1);
+            assert_eq!(owner.registry.registry.len(), 1);
+            let ProductionDurableValidateAdmissionSettlementV1::Returned {
+                decision: second_decision,
+                pending,
+            } = owner.settle_durable_validate_admission(pending)
+            else {
+                panic!("retrying the exact returned owner must remain non-mutating")
+            };
+            assert_eq!(second_decision, first_decision);
+            assert!(pending.exactly_retains_for_test(&effect, true));
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records.len(), 1);
+            assert_eq!(owner.registry.registry.len(), 1);
+        });
     }
     fn run_lifecycle_output_test_on_stack(body: impl FnOnce() + Send + 'static) {
         let handle = std::thread::Builder::new()
@@ -3097,7 +3449,7 @@ mod tests {
         assert!(prepared.contains("candidate: CandidateAdmission"));
         assert!(!prepared.contains("Option<"));
         for origin in [
-            "LiveWal(BoundAdapterEffectV1)",
+            "LiveWal(PreparedLiveWalAdmissionV1)",
             "LocalBody(PreparedLocalBodyValidateReplayPreAdmission)",
             "RemoteProposal(PreparedRemoteProposalValidateReplayPreAdmission)",
             "InvalidBodyReport(BoundAdapterEffectV1)",

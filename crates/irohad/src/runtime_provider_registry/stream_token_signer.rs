@@ -105,7 +105,7 @@ mod tests {
     }
     fn bindings() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
-            chain_id: "iroha3-taira".to_owned(),
+            chain_id: "runtime-provider-test".to_owned(),
             network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(

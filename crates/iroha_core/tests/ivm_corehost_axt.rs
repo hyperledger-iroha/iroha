@@ -717,34 +717,6 @@ fn commit_single_handle_envelope(
     let mut vm = IVM::new(1_000_000);
     host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm)
 }
-#[cfg(feature = "app_api")]
-fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) -> AssetHandle {
-    AssetHandle {
-        asset_definition_id: handle.asset_definition_id.clone(),
-        scope: handle.scope.clone(),
-        subject: HandleSubject {
-            account: handle.subject.account.clone(),
-            origin_dsid: handle.subject.origin_dsid,
-        },
-        budget: HandleBudget {
-            remaining: handle.budget.remaining.clone(),
-            per_use: handle.budget.per_use.clone(),
-        },
-        handle_era: handle.handle_era,
-        sub_nonce: handle.sub_nonce,
-        group_binding: GroupBinding {
-            composability_group_id: handle.group_binding.composability_group_id.clone(),
-            epoch_id: handle.group_binding.epoch_id,
-        },
-        target_lane: handle.target_lane,
-        axt_binding: handle.axt_binding.as_bytes().to_vec(),
-        manifest_view_root: handle.manifest_view_root.to_vec(),
-        expiry_slot: handle.expiry_slot,
-        max_clock_skew_ms: handle.max_clock_skew_ms,
-        issuer_context: handle.issuer_context,
-        issuer_signature: handle.issuer_signature.clone(),
-    }
-}
 fn nexus_with_lane_catalog(
     lane_catalog: iroha_data_model::nexus::LaneCatalog,
 ) -> iroha_config::parameters::actual::Nexus {
@@ -1521,7 +1493,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             amount: Some(Quantity::from(5_u64)),
         },
     };
-    let replay_handle = abi_asset_handle_from_model(&envelope.handles[0].handle);
+    let replay_handle = abi_asset_handle_from_signed_model(envelope.handles[0].handle.clone());
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replay_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
@@ -1953,7 +1925,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
-    let handle = abi_asset_handle_from_model(&model_handle);
+    let handle = abi_asset_handle_from_signed_model(model_handle.clone());
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -2229,7 +2201,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             amount: Some(Quantity::from(5_u64)),
         },
     };
-    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_signed_model(handle_fragment.handle.clone());
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replayed_handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
@@ -2468,7 +2440,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             amount: Some(Quantity::from(10_u64)),
         },
     };
-    let replayed_handle = abi_asset_handle_from_model(&handle_fragment.handle);
+    let replayed_handle = abi_asset_handle_from_signed_model(handle_fragment.handle.clone());
     let proof = proof_blob_for_remote_spend(
         dsid,
         manifest_root,

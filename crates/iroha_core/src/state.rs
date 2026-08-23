@@ -347,6 +347,8 @@ pub use canonical_history::{CanonicalHistoryCursor, CanonicalHistorySource};
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
 pub(crate) use da_hydration::DaIndexHydrationError;
+#[cfg(test)]
+pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {

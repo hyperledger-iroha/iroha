@@ -26651,6 +26651,7 @@ mod event {
         fn produce_events(&self) -> impl Iterator<Item = PipelineEventBox> {
             let block_height = self.as_ref().header().height();
             let block = self.as_ref();
+            let is_genesis = block.header().is_genesis();
             let committed_routes = block
                 .execution_context()
                 .map(|bundle| bundle.external.as_slice());
@@ -26666,12 +26667,14 @@ mod event {
                         | TransactionEntrypoint::Time(_) => return None,
                     };
                     let Some(context) = committed_routes.and_then(|routes| routes.get(idx)) else {
-                        iroha_logger::error!(
-                            block_height = block_height.get(),
-                            entrypoint_index = idx,
-                            %entrypoint_hash,
-                            "validated block transaction event is missing its committed execution route"
-                        );
+                        if !is_genesis {
+                            iroha_logger::error!(
+                                block_height = block_height.get(),
+                                entrypoint_index = idx,
+                                %entrypoint_hash,
+                                "validated block transaction event is missing its committed execution route"
+                            );
+                        }
                         return None;
                     };
                     if context.entrypoint_hash != entrypoint_hash {
@@ -27021,8 +27024,10 @@ mod event {
         }
 
         #[test]
-        fn valid_block_transaction_events_fail_closed_without_committed_route() {
+        fn genesis_transaction_events_fail_closed_without_committed_route() {
             let (valid, _hash) = peer_received_valid_block_with_committed_route(0x08, None);
+
+            assert!(valid.as_ref().header().is_genesis());
 
             let events = valid.produce_events().collect::<Vec<_>>();
 

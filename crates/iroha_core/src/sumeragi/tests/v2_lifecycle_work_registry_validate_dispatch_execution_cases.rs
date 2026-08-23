@@ -1212,7 +1212,9 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     assert!(startup.is_empty());
     let now = std::time::Instant::now();
     let lifecycle_ordinals =
-        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+            lease.ordinal(),
+        );
     let lifecycle_ordinal_observer = lifecycle_ordinals.clone();
     let (mut runtime, startup) =
         crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
@@ -1254,7 +1256,7 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     assert_eq!(
         lifecycle_ordinal_observer
             .next_ordinal_for_test()
-            .expect("inspect adopted local Proposal lifecycle ordinal"),
+            .expect("inspect shared local Proposal lifecycle ordinal"),
         Some(
             physical_admission_ordinal
                 .checked_add(1)
@@ -1469,11 +1471,13 @@ fn local_proposal_intent_live_wal_sign_fixture() {
 fn assert_ready_validate_vote_sign_live_transaction(
     attach_ledger: bool,
     sign_phase: wire::GlobalPhase,
+    supersede_prepare: bool,
 ) {
     assert!(matches!(
         sign_phase,
         wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit
     ));
+    assert!(!supersede_prepare || (attach_ledger && sign_phase == wire::GlobalPhase::Prepare));
     let marker = match sign_phase {
         wire::GlobalPhase::Prepare => 0xDF,
         wire::GlobalPhase::Commit => 0xE0,
@@ -1956,7 +1960,7 @@ fn assert_ready_validate_vote_sign_live_transaction(
         let authority = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
             child_ordinal,
             sign_tag,
-            request,
+            request.clone(),
             signature.clone(),
             None,
             RecoveredLifecycleSignClassV1::PhaseVote,
@@ -1986,6 +1990,52 @@ fn assert_ready_validate_vote_sign_live_transaction(
         assert_eq!(ownership_after, ownership_before);
         assert!(ownership_after.still_retained());
         assert!(adapter.signature_fence_is_active());
+
+        if supersede_prepare {
+            let decision = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment: local_vote.execution_commitment.clone(),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![marker; 96],
+            };
+            adapter
+                .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                    wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::QuorumCertificate(decision),
+                    ),
+                ))
+                .expect("certified CommitQC bypasses the exact Prepare Sign fence");
+            let mut forged_signature = signature.clone();
+            forged_signature[0] ^= 1;
+            let forged = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
+                child_ordinal,
+                sign_tag,
+                request.clone(),
+                forged_signature,
+                None,
+                RecoveredLifecycleSignClassV1::PhaseVote,
+            );
+            assert!(matches!(
+                adapter.prepare_recovered_lifecycle_sign_completion(forged),
+                Err(AdapterError::RecoveredLifecycleSignCompletionMismatch)
+            ));
+            let superseded = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
+                child_ordinal,
+                sign_tag,
+                request,
+                signature,
+                None,
+                RecoveredLifecycleSignClassV1::PhaseVote,
+            );
+            assert!(matches!(
+                adapter.prepare_recovered_lifecycle_sign_completion(superseded),
+                Err(AdapterError::RecoveredLifecycleSignCompletionSuperseded)
+            ));
+            return;
+        }
 
         let signed = adapter
             .signature_completed(sign_tag, signature)
@@ -2018,25 +2068,99 @@ fn assert_ready_validate_vote_sign_live_transaction(
         assert_eq!(evidence.queue_lengths_before.completion, 0);
         assert_eq!(evidence.queue_lengths_before.progress, 0);
         assert_eq!(evidence.queue_lengths_before.normal, 1);
+    } else {
+        let cancellation = holder
+            .registry_for_test()
+            .prepare_recovered_lifecycle_sign_cancellation(&coordinator, &sign_lease, dispatch_key)
+            .expect("bind the exact dispatched Commit Sign for cancellation");
+        let mut staged = coordinator.stage_durable_transaction();
+        staged.reduce_cancel_superseded_sign(sign_lease.clone());
+        let mut wrong_staged = staged.clone();
+        wrong_staged.high_water = wrong_staged
+            .high_water
+            .checked_add(1)
+            .expect("negative staged high-water mutation fits");
+        let cancellation = match holder
+            .registry_for_test_mut()
+            .publish_recovered_lifecycle_sign_cancellation(
+                cancellation,
+                &coordinator,
+                &wrong_staged,
+                &sign_lease,
+                || -> Result<(), ()> { panic!("invalid staged cancellation must not publish") },
+            ) {
+            Err(RecoveredLifecycleSignCancellationPublicationError::Preflight(cancellation)) => {
+                cancellation
+            }
+            Ok(()) => panic!("invalid staged cancellation cannot publish"),
+            Err(RecoveredLifecycleSignCancellationPublicationError::Publication(_, _)) => {
+                panic!("invalid staged cancellation cannot reach publication")
+            }
+        };
+        assert!(
+            holder
+                .registry_for_test()
+                .entries
+                .contains_key(&child_address)
+        );
+        match holder
+            .registry_for_test_mut()
+            .publish_recovered_lifecycle_sign_cancellation(
+                cancellation,
+                &coordinator,
+                &staged,
+                &sign_lease,
+                || coordinator.persist_exact_staged_successor(&staged),
+            ) {
+            Ok(()) => {}
+            Err(RecoveredLifecycleSignCancellationPublicationError::Preflight(_)) => {
+                panic!("exact superseded Commit Sign cancellation must pass preflight")
+            }
+            Err(RecoveredLifecycleSignCancellationPublicationError::Publication(_, _)) => {
+                panic!("exact superseded Commit Sign cancellation must publish")
+            }
+        }
+        coordinator = staged;
+        assert!(holder.registry_for_test().entries.is_empty());
+        assert!(coordinator.active_lease.is_none());
+        assert_eq!(
+            coordinator.records[&child_ordinal].state,
+            LifecycleState::Terminal(TerminalOutcome::Cancelled)
+        );
+        let (_, reopened_cancelled) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            ledger_directory.path(),
+            active_context,
+        )
+        .expect("reopen LedgerV1 after Sign cancellation");
+        assert_eq!(
+            reopened_cancelled.records()[1].terminal(),
+            Some(Some(TerminalOutcome::Cancelled))
+        );
     }
 }
 
 #[cfg(feature = "bls")]
 #[test]
-fn ready_validate_commit_sign_publishes_one_atomic_live_transaction() {
-    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Commit);
+fn ready_validate_commit_sign_publishes_then_durably_cancels_exact_dispatch() {
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Commit, false);
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn ready_validate_prepare_sign_uses_typed_dispatch_and_exact_predecessor() {
-    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare);
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, false);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn certified_commit_supersedes_only_an_authenticated_exact_prepare_sign_completion() {
+    assert_ready_validate_vote_sign_live_transaction(true, wire::GlobalPhase::Prepare, true);
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn ready_validate_commit_sign_rejects_missing_ledger_store_and_fails_closed() {
-    assert_ready_validate_vote_sign_live_transaction(false, wire::GlobalPhase::Commit);
+    assert_ready_validate_vote_sign_live_transaction(false, wire::GlobalPhase::Commit, false);
 }
 
 #[cfg(feature = "bls")]

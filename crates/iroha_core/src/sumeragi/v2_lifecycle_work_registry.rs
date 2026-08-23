@@ -10,8 +10,8 @@ use super::{
     AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
     LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
     LifecycleRecord, LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId,
-    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease,
-    WaitSource, WaitToken, authority,
+    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent,
+    TerminalOutcome, TurnLease, WaitSource, WaitToken, authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
         SealedValidateApplyProjection, SealedValidateApplyProjectionPermit,
@@ -33,6 +33,7 @@ use super::{
         RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
         RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
         SealedLiveWalPersistedEffectV1, exact_direct_signed_admission_authority,
+        exact_pending_certified_fetch_admission_authority,
     },
     schema::{DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -2490,12 +2491,93 @@ impl DurableRecoveredDecisionStoreWork {
         self.fetch.owns_store_recovery(&self.store, recovery)
     }
 }
-/// Closed concrete carrier for the sole live Apply in a recovered Decision body chain.
+/// Closed live Decision carrier retaining the exact successful Validate parent.
 ///
-/// The carrier retains the original WAL Fetch, all three body successors, and
-/// the final pending binding. It has no generic adapter-effect extraction path.
+/// Moving the completion into the child preserves the predecessor pending
+/// binding, durable body, validation marker, and execution commitment beside
+/// the live-WAL Apply admission until terminal settlement.
+struct DurableLiveDecisionApplyCarrierV1 {
+    admission: PreparedLifecycleAdmissionV1,
+    validate: DurableValidateCompletion,
+    validate_digest: LifecycleDigest,
+}
+/// Origin-closed carrier shared by live and recovered Decision Apply work.
+enum LifecycleDecisionApplyCarrierV1 {
+    Live(DurableLiveDecisionApplyCarrierV1),
+    Recovered(RecoveredDecisionApplyRegistryCarrierV1),
+}
+impl LifecycleDecisionApplyCarrierV1 {
+    fn validates_at(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        match self {
+            Self::Live(carrier) => carrier.validates_at(address, installed_digest),
+            Self::Recovered(carrier) => {
+                carrier.installed_digest() == installed_digest
+                    && carrier.lineage().is_exact(carrier.context())
+            }
+        }
+    }
+    fn context(&self) -> LifecycleContext {
+        match self {
+            Self::Live(carrier) => carrier.context(),
+            Self::Recovered(carrier) => carrier.context(),
+        }
+    }
+    fn exactly_matches_candidate(&self, candidate: &CandidateAdmission) -> bool {
+        match self {
+            Self::Live(carrier) => carrier.exactly_matches_candidate(candidate),
+            Self::Recovered(carrier) => carrier.exactly_matches_candidate(candidate),
+        }
+    }
+    fn validates_in_ledger(
+        &self,
+        verified: &VerifiedHeightContext,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        installed_apply_ordinal: u128,
+    ) -> bool {
+        match self {
+            Self::Live(carrier) => {
+                carrier.validates_in_ledger(verified, ledger, installed_apply_ordinal)
+            }
+            Self::Recovered(carrier) => {
+                carrier.validates_in_ledger(verified, ledger, installed_apply_ordinal)
+            }
+        }
+    }
+    fn project_apply_task(
+        &self,
+        identity: RecoveredDecisionApplyDispatchIdentityV1,
+    ) -> Option<crate::sumeragi::v2_apply::RecoveredDecisionApplyTaskV1> {
+        match self {
+            Self::Live(carrier) => carrier.project_apply_task(identity),
+            Self::Recovered(carrier) => carrier.project_recovered_apply_task(identity),
+        }
+    }
+    fn project_apply_completion(
+        &self,
+        permit: RecoveredDecisionApplyCompletionProjectionPermit,
+        completion: &crate::sumeragi::v2_apply::RecoveredDecisionApplyCompletionV1,
+    ) -> Option<crate::sumeragi::v2::RecoveredDecisionApplyAdapterCompletionAuthorityV1> {
+        match self {
+            Self::Live(carrier) => carrier.project_apply_completion(permit, completion),
+            Self::Recovered(carrier) => {
+                carrier.project_recovered_apply_completion(permit, completion)
+            }
+        }
+    }
+    const fn is_recovered(&self) -> bool {
+        matches!(self, Self::Recovered(_))
+    }
+}
+/// Closed concrete carrier for the sole typed Apply in a Decision body chain.
+///
+/// Both live and recovered origins retain their complete causal lineage and
+/// have no generic adapter-effect extraction path.
 struct DurableRecoveredDecisionApplyWork {
-    carrier: RecoveredDecisionApplyRegistryCarrierV1,
+    carrier: LifecycleDecisionApplyCarrierV1,
     address: ConcreteWorkAddress,
     dispatch_key: Option<RecoveredDecisionApplyDispatchKeyV1>,
 }
@@ -2510,8 +2592,7 @@ impl fmt::Debug for DurableRecoveredDecisionApplyWork {
 }
 impl DurableRecoveredDecisionApplyWork {
     fn validates_digest(&self, installed_digest: LifecycleDigest) -> bool {
-        self.carrier.installed_digest() == installed_digest
-            && self.carrier.lineage().is_exact(self.carrier.context())
+        self.carrier.validates_at(self.address, installed_digest)
     }
     fn validates_at(
         &self,
@@ -2807,6 +2888,29 @@ pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignDispatch<'registry>
     task: Option<crate::sumeragi::v2_worker::RecoveredLifecycleSignTaskV1>,
     key: RecoveredLifecycleSignDispatchKeyV1,
 }
+/// Exact claimed Sign carrier authorized for durable supersession retirement.
+///
+/// This detached token retains no mutable registry borrow. Publication
+/// revalidates the same carrier and dispatch identity immediately before the
+/// terminal LedgerV1 fsync.
+#[must_use = "superseded recovered Sign has not reached its durable terminal"]
+pub(super) struct PreparedRecoveredLifecycleSignCancellationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    dispatch_key: RecoveredLifecycleSignDispatchKeyV1,
+    _linearity: RecoveredLifecycleSignCancellationLinearityV1,
+}
+struct RecoveredLifecycleSignCancellationLinearityV1;
+impl Drop for RecoveredLifecycleSignCancellationLinearityV1 {
+    fn drop(&mut self) {}
+}
+/// Failure from the recovered Sign carrier-before-Ledger cancellation cut.
+pub(super) enum RecoveredLifecycleSignCancellationPublicationError<E> {
+    /// Current or staged coordinator/registry state failed exact preflight.
+    Preflight(PreparedRecoveredLifecycleSignCancellationV1),
+    /// LedgerV1 publication failed while the incumbent carrier stayed installed.
+    Publication(E, PreparedRecoveredLifecycleSignCancellationV1),
+}
 impl PreparedRecoveredLifecycleSignDispatch<'_> {
     /// Return the immutable queue key without releasing Sign material.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
@@ -3056,6 +3160,29 @@ impl PreparedRecoveredDecisionApplyDispatch<'_> {
     /// Return the immutable queue key without releasing the worker task.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         self.key
+    }
+    /// Check the still-owned task against one authenticated interrupted-tip replay.
+    ///
+    /// This equality oracle exposes no task material or dispatch capability. It
+    /// exists so the executor can advance its no-clock recovery stage only
+    /// beside the exact registry projection which is about to enter the worker
+    /// queue's fail-stop publication cut.
+    pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(
+        &self,
+        context: &wire::HeightContext,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: &wire::QuorumCertificate,
+        validated_receipt: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    ) -> bool {
+        self.key.matches_height_context(context)
+            && self.task.as_ref().is_some_and(|task| {
+                task.dispatch_key() == self.key
+                    && task.tag() == tag
+                    && task.subject() == subject
+                    && task.certificate() == certificate
+                    && task.validated_receipt() == validated_receipt
+            })
     }
     /// Arm the exact carrier and release its task under the reserved queue cut.
     pub(in crate::sumeragi) fn commit_for_worker(
@@ -3334,6 +3461,31 @@ enum ConcreteLifecycleWorkKind {
     DurableRecoveredDecisionApply(DurableRecoveredDecisionApplyWork),
     DurableCertifiedServe(DurableCertifiedServeWork),
     DurableProducerTurn(DurableProducerTurnWork),
+}
+
+impl ConcreteLifecycleWorkRegistry {
+    /// Borrow every exact durable Validate row whose executable lifecycle
+    /// owner was already published before process restart.
+    pub(super) fn recovered_published_validate_retry_markers(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &AdapterEffect,
+            &PendingRuntimeEffectBinding,
+            &DurableBodyReceipt,
+        ),
+    > {
+        self.entries.values().filter_map(|work| {
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+                return None;
+            };
+            work.validate_exact().then_some((
+                &validate.effect,
+                &validate.pending,
+                &validate.durable_receipt,
+            ))
+        })
+    }
 }
 /// One move-only concrete effect paired with its sealed pending authority.
 #[derive(Debug)]
@@ -3953,7 +4105,6 @@ impl PreparedCertifiedServeRegistryBatchV1 {
             && self.preflights_registry(registry)
             && registry.exactly_covers_all_live_work(verified, current)
             && current.active_context == staged.active_context
-            && current.high_water.checked_add(2) == Some(staged.high_water)
             && self.exactly_matches_fresh_staged_append(current, staged)
             && registry
                 .serve_and_producer_carrier_count()
@@ -4004,7 +4155,8 @@ impl PreparedCertifiedServeRegistryBatchV1 {
         let (Some(serve), Some(producer)) = (serve, producer) else {
             return false;
         };
-        if serve.checked_add(1) != Some(producer)
+        if current.high_water >= serve
+            || serve.checked_add(1) != Some(producer)
             || producer != staged.high_water
             || current.records.len().checked_add(2) != Some(staged.records.len())
             || current.durable_records.len().checked_add(2) != Some(staged.durable_records.len())

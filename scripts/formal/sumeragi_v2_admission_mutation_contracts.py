@@ -758,7 +758,7 @@ coordinator.restore_validate_sidecar_wait(&identity, registry)?;
         "restart must restore an fsynced sidecar wait before Ready selection",
     )
     require_sequence(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",
         """
 let expected_reservation = match outcome_kind {
     ReadyDurableValidateOutcomeKind::Validated => None,
@@ -821,7 +821,9 @@ LiveWalPersistedReplayStateV1::Canonical { stage, authority }
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
         """
-if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+if let Err(error) = coordinator
+    .persist_exact_staged_successor_with_ordinal_reservation(&staged, &ordinal_reservation)
+{
     coordinator.fault = Some(CoordinatorFault::DurabilityFailure);
     return Err(LiveValidateReportPublicationError {
         _coordinator: coordinator,

@@ -407,3 +407,28 @@
             "stop script should clean pidfiles after shutdown"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_script_skips_zero_faucet_retries_before_seq() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        write_scripts(
+            temp.path(),
+            1,
+            false,
+            &localnet_client_account_literal(None),
+            &localnet_fee_asset_literal(),
+        )
+        .expect("write scripts");
+        let start = fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
+        let zero_retry_guard = start
+            .find("[ \"$FAUCET_RESERVE_RETRIES\" != \"0\" ] ||")
+            .expect("explicit zero-retry guard");
+        let reserve_loop = start
+            .find("for _ in $(seq 1 \"$FAUCET_RESERVE_RETRIES\"); do")
+            .expect("faucet reserve retry loop");
+        assert!(
+            zero_retry_guard < reserve_loop,
+            "zero retries must return before invoking platform-dependent seq"
+        );
+    }

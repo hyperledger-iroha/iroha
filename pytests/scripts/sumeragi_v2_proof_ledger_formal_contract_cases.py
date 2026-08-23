@@ -306,6 +306,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_verified_height_context_recovered_output_auth.rs'),
         Path('v2_adapter_equivocation_evidence.rs'),
         Path('v2_ready_durable_validate_adapter_preview.rs'),
+        Path('v2_recovered_lifecycle_sign_completion.rs'),
         Path('v2_wire_registry_and_authentication.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
@@ -317,6 +318,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_recovery_tests.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs'): (
+        Path('v2_lifecycle_coordinator_state_helpers.rs'),
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (
@@ -352,6 +354,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'): (
+        Path('v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_completion_impl.rs'),
         Path('v2_lifecycle_work_registry_access_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_execution_impl.rs'),

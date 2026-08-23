@@ -963,7 +963,9 @@ where
             }
         }
         BodyPipelineOriginV1::Certified { .. } => {
-            if !authenticated_genesis_standalone_source(verified, &source.source) {
+            if !authenticated_genesis_standalone_source(verified, &source.source)
+                && !authenticated_refined_proposal_standalone_source(verified, &source.source)
+            {
                 return Ok(None);
             }
         }
@@ -1269,7 +1271,16 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
 impl RecoveredStandaloneValidateSourceV1 {
     /// Return whether this recovered source requires the private genesis body-store policy.
     pub(super) fn requires_genesis_authority_body_store(&self) -> bool {
-        matches!(&self.source.origin, BodyPipelineOriginV1::Certified { .. })
+        match &self.source.origin {
+            BodyPipelineOriginV1::Certified {
+                fetch_manifest_present,
+                certified_sources,
+                ..
+            } => !*fetch_manifest_present || !certified_sources.is_empty(),
+            BodyPipelineOriginV1::Proposal(_)
+            | BodyPipelineOriginV1::LocalBody(_)
+            | BodyPipelineOriginV1::RecoveredDecision { .. } => false,
+        }
     }
 
     pub(super) fn exactly_matches_recovered_body_frame(
@@ -1328,6 +1339,43 @@ fn authenticated_genesis_standalone_source(
         && certificate.validate(context).is_ok()
         && manifest.validate(context).is_ok()
         && certified_sources == &expected_sources
+        && verified.verify_quorum_certificate(certificate).is_ok()
+}
+
+/// Authenticate the durable marker used when a signed-Proposal Validate
+/// acquires Prepare/Commit authority after its physical body pipeline began.
+///
+/// An empty source list is not a valid certified Fetch (which must name the
+/// complete roster); together with an already-present Proposal manifest it is
+/// the closed persisted discriminator minted by
+/// `exact_remote_proposal_validate_source`. The complete QC is sufficient
+/// restart authority, but must be verified again against the frozen context.
+fn authenticated_refined_proposal_standalone_source(
+    verified: &VerifiedHeightContext,
+    source: &BodyPipelineReplaySourceV1,
+) -> bool {
+    let BodyPipelineOriginV1::Certified {
+        certificate,
+        manifest,
+        fetch_manifest_present,
+        certified_sources,
+    } = &source.origin
+    else {
+        return false;
+    };
+    let context = verified.context();
+    *fetch_manifest_present
+        && certified_sources.is_empty()
+        && certificate.round.context_id == context.id()
+        && certificate.round.height == context.height
+        && certificate.proposal_round == manifest.round
+        && certificate.subject == manifest.subject
+        && matches!(
+            certificate.phase,
+            wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit
+        )
+        && certificate.validate(context).is_ok()
+        && manifest.validate(context).is_ok()
         && verified.verify_quorum_certificate(certificate).is_ok()
 }
 fn standalone_validate_effect(source: &BodyPipelineReplaySourceV1) -> Option<AdapterEffect> {
@@ -1588,7 +1636,7 @@ impl DurableValidateReplayEvidenceV1 {
                 {
                     return Err(AdapterEffectAdmissionError::InvalidCarrier);
                 }
-                evidence.family.source.clone()
+                evidence.validate_source.clone()
             }
             Self::LocalBody(evidence) => {
                 let (source, body_frame) = evidence.family.source_and_frame();
@@ -2031,6 +2079,13 @@ fn exact_certified_fetch_coordinates_from_manifest(
         return None;
     };
     let certificate = certificate.as_ref()?;
+    let context = replay_context(*round);
+    let replay_tag = ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
+    let tag_matches_origin = if certificate.phase == wire::GlobalPhase::Commit {
+        replay_tag.matches_decision_round(context, *round)
+    } else {
+        replay_tag.matches_round(context, *round)
+    };
     if response_manifest.round != *round
         || response_manifest.subject != *subject
         || manifest
@@ -2038,13 +2093,12 @@ fn exact_certified_fetch_coordinates_from_manifest(
             .is_some_and(|expected| expected != response_manifest)
         || certificate.proposal_round != *round
         || certificate.subject != *subject
-        || tag.height() != round.height
-        || tag.view() < round.view
+        || !tag_matches_origin
     {
         return None;
     }
     Some(CertifiedBodyPipelineCoordinatesV1 {
-        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        tag: replay_tag,
         certificate: certificate.clone(),
         manifest: response_manifest.clone(),
         fetch_manifest_present: manifest.is_some(),
@@ -2055,6 +2109,39 @@ fn exact_certified_fetch_coordinates_from_manifest(
             _ => unreachable!("Fetch shape was checked above"),
         },
     })
+}
+/// Derive the canonical payload-free replay authority for one live certified Fetch.
+///
+/// The response manifest supplies the immutable body coordinates when the
+/// certificate-backed `FetchBody` was admitted without a proposal manifest.
+/// Consensus authentication remains the responsibility of the adjacent
+/// verified-context projection; this helper only seals the exact effect,
+/// pending runtime binding, and canonical replay envelope together.
+pub(super) fn exact_pending_certified_fetch_admission_authority(
+    effect: &AdapterEffect,
+    pending: &PendingRuntimeEffectBinding,
+    response_manifest: &wire::PayloadManifest,
+) -> Option<LifecycleReplayAuthorityV1> {
+    if !pending.exactly_binds_adapter_effect(effect) {
+        return None;
+    }
+    let coordinates = exact_certified_fetch_coordinates_from_manifest(effect, response_manifest)?;
+    let context = replay_context(coordinates.certificate.round);
+    let source = BodyPipelineReplaySourceV1 {
+        tag: coordinates.tag,
+        origin: BodyPipelineOriginV1::Certified {
+            certificate: coordinates.certificate,
+            manifest: coordinates.manifest,
+            fetch_manifest_present: coordinates.fetch_manifest_present,
+            certified_sources: coordinates.certified_sources,
+        },
+    };
+    canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(source),
+        LifecycleStageKind::FetchBody,
+        ReplayPayloadBindingV1::None,
+    )
 }
 fn exact_certified_body_pipeline_family(
     coordinates: &CertifiedBodyPipelineCoordinatesV1,
@@ -2586,7 +2673,9 @@ fn exact_live_wal_replay_projection(
             || !source.role.matches(ReplayWalRoleV1::DECISION)
             || !qc_shape(context, certificate)
             || certificate.phase != wire::GlobalPhase::Commit
-            || !source.tag.matches_round(context, certificate.round)
+            || !source
+                .tag
+                .matches_decision_round(context, certificate.round)
         {
             return None;
         }
@@ -2735,21 +2824,21 @@ fn exact_recovered_wal_decision_fetch_authority(
         .iter()
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
+    let context = super::projection::lifecycle_context(verified.context());
+    let replay_tag = ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
     if certificate.phase != wire::GlobalPhase::Commit
         || certificate.proposal_round != *round
         || certificate.subject != *subject
         || certified_sources != &expected_sources
-        || tag.height() != certificate.round.height
-        || tag.view() < certificate.round.view
+        || !replay_tag.matches_decision_round(context, certificate.round)
         || verified.verify_quorum_certificate(certificate).is_err()
     {
         return None;
     }
-    let context = super::projection::lifecycle_context(verified.context());
     let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
         locator: locator.persisted_locator(),
         role: ReplayWalRoleV1::DECISION,
-        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        tag: replay_tag,
         action: WalReplayActionV1::FetchDecision {
             certificate: certificate.clone(),
             certified_sources: certified_sources.clone(),
@@ -2954,7 +3043,7 @@ impl WalReplaySourceV1 {
                 if !self.role.matches(ReplayWalRoleV1::DECISION)
                     || !qc_shape(context, certificate)
                     || certificate.phase != wire::GlobalPhase::Commit
-                    || !self.tag.matches_round(context, certificate.round)
+                    || !self.tag.matches_decision_round(context, certificate.round)
                     || !payload.matches_body_origin(
                         context,
                         certificate.proposal_round,
@@ -2983,7 +3072,7 @@ impl WalReplaySourceV1 {
                 if !self.role.matches(ReplayWalRoleV1::DECISION)
                     || !qc_shape(context, certificate)
                     || certificate.phase != wire::GlobalPhase::Commit
-                    || !self.tag.matches_round(context, certificate.round)
+                    || !self.tag.matches_decision_round(context, certificate.round)
                     || certified_sources.is_empty()
                     || certified_sources.len() > wire::MAX_VALIDATORS_PER_HEIGHT
                     || certified_sources
@@ -3080,92 +3169,109 @@ impl BodyPipelineReplaySourceV1 {
         requested_stage: LifecycleStageKind,
         payload: &ReplayPayloadBindingV1,
     ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
-        let (round, proposal_round, subject, commitment, manifest, local_body, recovered_decision) =
-            match &self.origin {
-                BodyPipelineOriginV1::Proposal(proposal) => {
-                    if !proposal_shape(context, proposal, true) {
-                        return Err(ReplayAuthorityValidationError::InvalidSource);
-                    }
-                    (
-                        proposal.round,
-                        proposal.round,
-                        proposal.subject,
-                        None,
-                        Some(&proposal.manifest),
-                        false,
-                        false,
-                    )
+        let (
+            round,
+            proposal_round,
+            subject,
+            commitment,
+            manifest,
+            local_body,
+            recovered_decision,
+            decision_owned,
+        ) = match &self.origin {
+            BodyPipelineOriginV1::Proposal(proposal) => {
+                if !proposal_shape(context, proposal, true) {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
                 }
-                BodyPipelineOriginV1::Certified {
-                    certificate,
-                    manifest,
-                    fetch_manifest_present: _,
-                    certified_sources,
-                } => {
-                    if !qc_shape(context, certificate)
-                        || !manifest_matches_origin(
-                            context,
-                            manifest,
-                            certificate.proposal_round,
-                            certificate.subject,
-                        )
-                        || !certified_sources_are_bounded_unique(certified_sources)
-                    {
-                        return Err(ReplayAuthorityValidationError::InvalidSource);
-                    }
-                    (
-                        certificate.round,
+                (
+                    proposal.round,
+                    proposal.round,
+                    proposal.subject,
+                    None,
+                    Some(&proposal.manifest),
+                    false,
+                    false,
+                    false,
+                )
+            }
+            BodyPipelineOriginV1::Certified {
+                certificate,
+                manifest,
+                fetch_manifest_present: _,
+                certified_sources,
+            } => {
+                if !qc_shape(context, certificate)
+                    || !manifest_matches_origin(
+                        context,
+                        manifest,
                         certificate.proposal_round,
                         certificate.subject,
-                        Some(execution_commitment(certificate.execution_commitment)),
-                        Some(manifest),
-                        false,
-                        false,
                     )
+                    || !certified_sources_are_bounded_unique(certified_sources)
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
                 }
-                BodyPipelineOriginV1::LocalBody(manifest) => {
-                    if !round_matches_context(context, manifest.round) {
-                        return Err(ReplayAuthorityValidationError::InvalidSource);
-                    }
-                    (
-                        manifest.round,
-                        manifest.round,
-                        manifest.subject,
-                        None,
-                        Some(manifest),
-                        true,
-                        false,
-                    )
+                (
+                    certificate.round,
+                    certificate.proposal_round,
+                    certificate.subject,
+                    Some(execution_commitment(certificate.execution_commitment)),
+                    Some(manifest),
+                    false,
+                    false,
+                    certificate.phase == wire::GlobalPhase::Commit,
+                )
+            }
+            BodyPipelineOriginV1::LocalBody(manifest) => {
+                if !round_matches_context(context, manifest.round) {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
                 }
-                BodyPipelineOriginV1::RecoveredDecision {
-                    locator,
-                    certificate,
-                    manifest,
-                } => {
-                    if !locator.is_exact()
-                        || !qc_shape(context, certificate)
-                        || certificate.phase != wire::GlobalPhase::Commit
-                        || !manifest_matches_origin(
-                            context,
-                            manifest,
-                            certificate.proposal_round,
-                            certificate.subject,
-                        )
-                    {
-                        return Err(ReplayAuthorityValidationError::InvalidSource);
-                    }
-                    (
-                        certificate.round,
+                (
+                    manifest.round,
+                    manifest.round,
+                    manifest.subject,
+                    None,
+                    Some(manifest),
+                    true,
+                    false,
+                    false,
+                )
+            }
+            BodyPipelineOriginV1::RecoveredDecision {
+                locator,
+                certificate,
+                manifest,
+            } => {
+                if !locator.is_exact()
+                    || !qc_shape(context, certificate)
+                    || certificate.phase != wire::GlobalPhase::Commit
+                    || !manifest_matches_origin(
+                        context,
+                        manifest,
                         certificate.proposal_round,
                         certificate.subject,
-                        Some(execution_commitment(certificate.execution_commitment)),
-                        Some(manifest),
-                        false,
-                        true,
                     )
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
                 }
-            };
-        if !self.tag.matches_round(context, round) {
+                (
+                    certificate.round,
+                    certificate.proposal_round,
+                    certificate.subject,
+                    Some(execution_commitment(certificate.execution_commitment)),
+                    Some(manifest),
+                    false,
+                    true,
+                    true,
+                )
+            }
+        };
+        let tag_matches_origin = if decision_owned {
+            self.tag.matches_decision_round(context, round)
+        } else {
+            self.tag.matches_round(context, round)
+        };
+        if !tag_matches_origin {
             return Err(ReplayAuthorityValidationError::InvalidSource);
         }
         let (phase, work_class) = match requested_stage {
@@ -3543,5 +3649,35 @@ impl ReplayPayloadBindingV1 {
             Self::None | Self::BodyFrame(_) => return false,
         };
         request == expected_request.as_bytes() && certificate == expected_certificate.as_bytes()
+    }
+}
+
+/// Published local-proposal command plus the replay authority retained beside it.
+#[must_use = "published local-proposal replay authority must be reconciled by the executor"]
+pub(in crate::sumeragi) struct PublishedLifecycleLocalProposalReadyV1 {
+    command_identity: LocalProposalReadyCommandIdentity,
+    command_was_coalesced: bool,
+    replay: LocalProposalReadyReplayEvidenceV1,
+}
+
+impl PublishedLifecycleLocalProposalReadyV1 {
+    /// Consume the published bundle into the executor's replay index entry.
+    pub(in crate::sumeragi) fn into_entry(
+        self,
+    ) -> (
+        LocalProposalReadyCommandIdentity,
+        LocalProposalReadyReplayEvidenceV1,
+    ) {
+        (self.command_identity, self.replay)
+    }
+
+    /// Borrow the inert command identity for exact duplicate lookup.
+    pub(in crate::sumeragi) const fn command_identity(&self) -> LocalProposalReadyCommandIdentity {
+        self.command_identity
+    }
+
+    /// Return whether runtime admission consumed no new FIFO owner.
+    pub(in crate::sumeragi) const fn command_was_coalesced(&self) -> bool {
+        self.command_was_coalesced
     }
 }

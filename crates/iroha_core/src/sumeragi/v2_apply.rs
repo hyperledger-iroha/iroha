@@ -3175,6 +3175,7 @@ pub(crate) struct V2ApplyService {
 #[must_use = "a recovered Decision Apply task must enter its dedicated worker command"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1 {
     dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+    tag: EventTag,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
     validated_receipt: ValidatedBodyReceipt,
@@ -3183,12 +3184,14 @@ impl RecoveredDecisionApplyTaskV1 {
     /// Bind the sole registry-minted dispatch identity to its closed carrier material.
     pub(in crate::sumeragi) fn from_registry_projection(
         dispatch_identity: RecoveredDecisionApplyDispatchIdentityV1,
+        tag: EventTag,
         subject: wire::BlockSubject,
         certificate: wire::QuorumCertificate,
         validated_receipt: ValidatedBodyReceipt,
     ) -> Self {
         Self {
             dispatch_identity,
+            tag,
             subject,
             certificate,
             validated_receipt,
@@ -3197,6 +3200,10 @@ impl RecoveredDecisionApplyTaskV1 {
     /// Return the closed queue key without exposing dispatch authority.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
+    }
+    /// Return the exact reducer incarnation which owns this Apply.
+    pub(in crate::sumeragi) const fn tag(&self) -> EventTag {
+        self.tag
     }
     /// Return the exact decided subject.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
@@ -4688,3 +4695,7 @@ include!("v2_apply/error_recovery.rs");
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::install_historical_autonomous_lane_recovery;
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use tests::{
+    ProductionRecoveredDecisionApplyFixtureV1, production_recovered_decision_apply_fixture_v1,
+};

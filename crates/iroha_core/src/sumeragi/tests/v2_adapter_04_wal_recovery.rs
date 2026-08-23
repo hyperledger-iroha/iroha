@@ -1779,6 +1779,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             &mut services,
             runtime,
             Arc::clone(&output_guard),
+            0,
             2,
         );
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
@@ -1901,6 +1902,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
                 &mut services,
                 runtime,
                 Arc::clone(&output_guard),
+                0,
                 2,
             );
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
@@ -2056,6 +2058,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             &mut services,
             runtime,
             Arc::clone(&output_guard),
+            0,
             2,
         );
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
@@ -2164,6 +2167,9 @@ fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
                         .reason()
                         .contains("deterministic local body rejection")
                 )
+            }
+            DecisionBodyMarkerFixture::DurableOnly => {
+                unreachable!("promoted-marker loop has no durable-only case")
             }
         }
         assert!(
@@ -2336,8 +2342,22 @@ fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
     assert_eq!(frames_after, frames_before);
 }
 #[cfg(feature = "bls")]
+fn run_unified_decision_body_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("sumeragi-v2-unified-decision-body".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open)
+        .expect("spawn unified Decision-body recovery test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+#[cfg(feature = "bls")]
 #[test]
 fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
+    if std::thread::current().name() != Some("sumeragi-v2-unified-decision-body") {
+        return run_unified_decision_body_test_on_stack();
+    }
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
         .expect("deterministic Decision body-preflight retainer");
@@ -2485,6 +2505,67 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     );
     assert!(!ledger_root.exists());
     assert!(!serve_root.exists());
+    assert!(crate::sumeragi::status::v2_status().is_none());
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic durable-only pending Decision retainer");
+    crate::sumeragi::status::clear_v2_status();
+    let safety = TempDir::new().expect("temporary durable-only pending Decision WAL");
+    let storage = TempDir::new().expect("temporary durable-only pending Decision stores");
+    let (startup, body_store) = write_decision_startup_with_body_marker(
+        &safety,
+        &storage.path().join("body"),
+        0xD8,
+        DecisionBodyMarkerFixture::DurableOnly,
+    );
+    let (context_id, height, block_hash) = match startup.effects.as_slice() {
+        [AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            ..
+        }] => {
+            (round.context_id, tag.height(), subject.block_hash)
+        }
+        _ => panic!("durable Decision must replay one certified Fetch"),
+    };
+    let expected = crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
+        context_id,
+        height,
+        block_hash,
+    );
+    let pending = startup
+        .bind_pending_kura_apply(expected)
+        .unwrap_or_else(|(error, _)| panic!("bind durable-only pending Decision: {error}"))
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|error| panic!("authenticate durable-only pending Decision: {error}"));
+    assert!(pending.retains_decision_fetch_for_test());
+    let body_store = body_store
+        .into_revalidated_startup()
+        .expect("seal durable-only pending Decision store");
+    let ledger_root = storage.path().join("ledger");
+    let serve_root = storage.path().join("serve");
+    let Err(error) = pending.open_production_lifecycle_owner_v1_with_store_for_test(
+        &lifecycle_owner_config(),
+        4,
+        &ledger_root,
+        &serve_root,
+        body_store,
+        &local_signer,
+    ) else {
+        panic!("pending Kura startup without a validation marker must reject Fetch-only owner open")
+    };
+    assert!(
+        error.to_string().contains(
+            "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier"
+        ),
+        "unexpected durable-only pending startup failure: {error}"
+    );
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
 #[cfg(feature = "bls")]

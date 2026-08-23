@@ -1394,7 +1394,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
         store.ordinal() < validate.ordinal()
-            && validate.ordinal().checked_add(1) == Some(apply.ordinal())
+            && validate.ordinal() < apply.ordinal()
             && Self::candidate_matches_record(
                 &self.store,
                 store,
@@ -1438,7 +1438,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
         store.ordinal() < validate.ordinal()
-            && validate.ordinal().checked_add(1) == Some(apply.ordinal())
+            && validate.ordinal() < apply.ordinal()
             && Self::candidate_matches_record(
                 &self.store,
                 store,
@@ -2841,6 +2841,13 @@ impl core::fmt::Debug for RemoteProposalStoredReplayEvidenceV1 {
 #[must_use = "remote Proposal Validate replay evidence must remain attached through completion"]
 pub(in crate::sumeragi) struct RemoteProposalValidateReplayEvidenceV1 {
     family: RemoteProposalBodyPipelineReplayFamilyV1,
+    /// Canonical authority for the installed Validate row.
+    ///
+    /// This remains the signed Proposal source for an ordinary body owner. If
+    /// the reducer has monotonically refined that owner to Prepare or Commit,
+    /// it is the complete authenticated QC plus the Proposal manifest instead;
+    /// the process-local candidate statement alone is never replay authority.
+    validate_source: BodyPipelineReplaySourceV1,
     validate_pending: Arc<PendingRuntimeEffectBinding>,
 }
 impl core::fmt::Debug for RemoteProposalValidateReplayEvidenceV1 {
@@ -3151,7 +3158,15 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
         validate_effect: &AdapterEffect,
         validate_pending: &PendingRuntimeEffectBinding,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
+        let Some(validate_source) = exact_remote_proposal_validate_source(
+            &self.family.source,
+            validate_pending,
+            authority_certificate,
+        ) else {
+            return Err(self);
+        };
         if !self.exactly_matches_store(store_effect, receipt)
             || !remote_proposal_body_stage_matches(
                 &self.family,
@@ -3182,6 +3197,7 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         debug_assert_eq!(&projected, validate_pending);
         Ok(RemoteProposalValidateReplayEvidenceV1 {
             family: self.family,
+            validate_source,
             validate_pending: Arc::new(projected),
         })
     }
@@ -3194,7 +3210,18 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
         validate_effect: &AdapterEffect,
         validate_pending: &PendingRuntimeEffectBinding,
+        decision_certificate: &wire::QuorumCertificate,
     ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
+        let Some(validate_source) = exact_remote_proposal_validate_source(
+            &self.family.source,
+            validate_pending,
+            Some(decision_certificate),
+        ) else {
+            return Err(self);
+        };
+        if decision_certificate.phase != wire::GlobalPhase::Commit {
+            return Err(self);
+        }
         if !self.exactly_matches_store(store_effect, receipt)
             || !remote_proposal_body_stage_matches(
                 &self.family,
@@ -3225,6 +3252,7 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         debug_assert_eq!(&projected, validate_pending);
         Ok(RemoteProposalValidateReplayEvidenceV1 {
             family: self.family,
+            validate_source,
             validate_pending: Arc::new(projected),
         })
     }
@@ -3237,6 +3265,11 @@ impl RemoteProposalValidateReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
     ) -> bool {
         self.validate_pending.exactly_binds_adapter_effect(effect)
+            && exact_remote_proposal_validate_source_from_retained(
+                &self.family.source,
+                &self.validate_source,
+                &self.validate_pending,
+            )
             && remote_proposal_body_stage_matches(
                 &self.family,
                 effect,
@@ -3253,6 +3286,99 @@ impl RemoteProposalValidateReplayEvidenceV1 {
     ) -> bool {
         self.exactly_matches_validate(effect, receipt) && self.validate_pending.as_ref() == pending
     }
+
+    /// Match the canonical Validate authority retained by this Proposal lineage.
+    ///
+    /// An ordinary Proposal remains the persisted source until its runtime
+    /// statement acquires Prepare/Commit authority. The refined form carries
+    /// the complete QC as a `Certified` source, so checking only the outer
+    /// source variant would reject the exact authority this evidence projected.
+    pub(super) fn exactly_authorizes_admission_authority(
+        &self,
+        active_context: LifecycleContext,
+        authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        exact_remote_proposal_validate_source_from_retained(
+            &self.family.source,
+            &self.validate_source,
+            &self.validate_pending,
+        ) && canonical_replay_authority(
+            active_context,
+            LifecycleReplaySourceV1::BodyPipeline(self.validate_source.clone()),
+            LifecycleStageKind::ValidateBody,
+            ReplayPayloadBindingV1::BodyFrame(self.family.body_frame),
+        )
+        .as_ref()
+            == Some(authority)
+    }
+}
+
+/// Bind one ordinary signed-Proposal body lineage to its exact Validate authority.
+///
+/// The runtime statement may refine monotonically, but it is process-local and
+/// cannot authorize restart. A refined row therefore carries the complete
+/// durable Prepare/Commit QC. Supplying no certificate is accepted only for an
+/// unchanged ordinary statement.
+fn exact_remote_proposal_validate_source(
+    source: &BodyPipelineReplaySourceV1,
+    pending: &PendingRuntimeEffectBinding,
+    authority_certificate: Option<&wire::QuorumCertificate>,
+) -> Option<BodyPipelineReplaySourceV1> {
+    let BodyPipelineOriginV1::Proposal(proposal) = &source.origin else {
+        return None;
+    };
+    let statement = pending.candidate_statement()?;
+    if statement.context_id() != proposal.round.context_id
+        || statement.proposal_round() != proposal.round
+        || statement.subject() != Some(proposal.subject)
+    {
+        return None;
+    }
+    match authority_certificate {
+        None if statement.round() == proposal.round
+            && statement.phase().is_none()
+            && statement.execution_commitment().is_none() =>
+        {
+            Some(source.clone())
+        }
+        Some(certificate)
+            if matches!(
+                certificate.phase,
+                wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit
+            ) && certificate.round == statement.round()
+                && certificate.proposal_round == proposal.round
+                && certificate.subject == proposal.subject
+                && statement.phase() == Some(certificate.phase)
+                && statement.execution_commitment() == Some(certificate.execution_commitment) =>
+        {
+            Some(BodyPipelineReplaySourceV1 {
+                tag: source.tag,
+                origin: BodyPipelineOriginV1::Certified {
+                    certificate: certificate.clone(),
+                    manifest: proposal.manifest.clone(),
+                    fetch_manifest_present: true,
+                    certified_sources: Vec::new(),
+                },
+            })
+        }
+        None | Some(_) => None,
+    }
+}
+
+fn exact_remote_proposal_validate_source_from_retained(
+    proposal_source: &BodyPipelineReplaySourceV1,
+    validate_source: &BodyPipelineReplaySourceV1,
+    pending: &PendingRuntimeEffectBinding,
+) -> bool {
+    let certificate = match &validate_source.origin {
+        BodyPipelineOriginV1::Proposal(_) => None,
+        BodyPipelineOriginV1::Certified { certificate, .. } => Some(certificate),
+        BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::RecoveredDecision { .. } => {
+            return false;
+        }
+    };
+    exact_remote_proposal_validate_source(proposal_source, pending, certificate).as_ref()
+        == Some(validate_source)
 }
 fn exact_remote_proposal_fetch<'a>(
     authenticated: &'a crate::sumeragi::v2::AuthenticatedConsensusMessage,
@@ -3478,14 +3604,6 @@ pub(in crate::sumeragi) struct PreparedLifecycleLocalProposalReadyV1 {
     lifecycle_ordinal: u128,
     replay: LocalValidateReplayEvidenceV1,
 }
-/// Published local-proposal command plus the replay authority retained beside it.
-#[must_use = "published local-proposal replay authority must enter executor retention"]
-pub(in crate::sumeragi) struct PublishedLifecycleLocalProposalReadyV1 {
-    tag: EventTag,
-    manifest: wire::PayloadManifest,
-    command_identity: LocalProposalReadyCommandIdentity,
-    replay: LocalProposalReadyReplayEvidenceV1,
-}
 /// Inert replay evidence retained beside one exact queued `LocalProposalReady` owner.
 ///
 /// This value is deliberately not part of the cloneable runtime command. Its
@@ -3498,6 +3616,7 @@ pub(in crate::sumeragi) struct LocalProposalReadyReplayEvidenceV1 {
     validate_pending: Arc<PendingRuntimeEffectBinding>,
     validated_receipt: ValidatedBodyReceipt,
     command_identity: LocalProposalReadyCommandIdentity,
+    lifecycle_ordinal: u128,
 }
 /// Inert composite joining one local body origin to its exact `ProposalIntent`.
 ///
@@ -3637,7 +3756,7 @@ impl PreparedLifecycleLocalProposalReadyV1 {
                 replay,
             });
         }
-        let command_identity = match runtime.enqueue_local_proposal_with_lifecycle_pending(
+        let admission = match runtime.enqueue_local_proposal_with_lifecycle_pending(
             tag,
             manifest.clone(),
             validated_receipt.durable().clone(),
@@ -3645,7 +3764,7 @@ impl PreparedLifecycleLocalProposalReadyV1 {
             replay.validate_pending.as_ref(),
             lifecycle_ordinal,
         ) {
-            Ok(identity) => identity,
+            Ok(admission) => admission,
             Err(_) => {
                 return Err(Self {
                     effect: AdapterEffect::ValidateBody {
@@ -3660,6 +3779,7 @@ impl PreparedLifecycleLocalProposalReadyV1 {
                 });
             }
         };
+        let command_identity = admission.command_identity();
         if command_identity != expected_identity {
             unreachable!("preflighted local-proposal publication changed command identity");
         }
@@ -3673,11 +3793,11 @@ impl PreparedLifecycleLocalProposalReadyV1 {
             &manifest,
             validated_receipt.clone(),
             command_identity,
+            lifecycle_ordinal,
         ) {
             Ok(replay) => Ok(PublishedLifecycleLocalProposalReadyV1 {
-                tag,
-                manifest,
                 command_identity,
+                command_was_coalesced: admission.was_coalesced(),
                 replay,
             }),
             Err(_) => unreachable!(
@@ -3687,38 +3807,6 @@ impl PreparedLifecycleLocalProposalReadyV1 {
     }
 }
 
-impl PublishedLifecycleLocalProposalReadyV1 {
-    /// Return whether an existing retained authority is the exact idempotent retry.
-    pub(in crate::sumeragi) fn exactly_matches_incumbent(
-        &self,
-        incumbent: &LocalProposalReadyReplayEvidenceV1,
-    ) -> bool {
-        incumbent.exactly_matches_retry(self.command_identity, self.tag, &self.manifest)
-    }
-
-    /// Return whether the command has already advanced into the exact ProposalIntent replay.
-    pub(in crate::sumeragi) fn exactly_matches_intent_incumbent(
-        &self,
-        incumbent: &LocalProposalIntentReplayEvidenceV1,
-    ) -> bool {
-        incumbent.exactly_matches_retry(self.command_identity, self.tag, &self.manifest)
-    }
-
-    /// Consume the published bundle into the executor's replay index entry.
-    pub(in crate::sumeragi) fn into_entry(
-        self,
-    ) -> (
-        LocalProposalReadyCommandIdentity,
-        LocalProposalReadyReplayEvidenceV1,
-    ) {
-        (self.command_identity, self.replay)
-    }
-
-    /// Borrow the inert command identity for exact duplicate lookup.
-    pub(in crate::sumeragi) const fn command_identity(&self) -> LocalProposalReadyCommandIdentity {
-        self.command_identity
-    }
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LocalBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
@@ -3882,11 +3970,13 @@ impl LocalValidateReplayEvidenceV1 {
         manifest: &wire::PayloadManifest,
         validated_receipt: ValidatedBodyReceipt,
         command_identity: LocalProposalReadyCommandIdentity,
+        lifecycle_ordinal: u128,
     ) -> Result<LocalProposalReadyReplayEvidenceV1, Self> {
         let AdapterEffect::ValidateBody { tag, .. } = effect else {
             return Err(self);
         };
-        if validated_receipt.durable().manifest_hash() != HashOf::new(manifest)
+        if lifecycle_ordinal == 0
+            || validated_receipt.durable().manifest_hash() != HashOf::new(manifest)
             || !self.exactly_matches_validate(effect, validated_receipt.durable())
             || self.family.assembled_manifest() != Some(manifest)
             || !command_identity.exactly_matches_handoff(
@@ -3910,6 +4000,7 @@ impl LocalValidateReplayEvidenceV1 {
             validate_pending: self.validate_pending,
             validated_receipt,
             command_identity,
+            lifecycle_ordinal,
         })
     }
 }
@@ -3979,6 +4070,7 @@ impl LocalProposalReadyReplayEvidenceV1 {
             return false;
         };
         self.command_identity == command_identity
+            && ownership.owner().lifecycle_ordinal() == self.lifecycle_ordinal
             && self.command_identity.exactly_matches_proposal_intent(
                 &self.validate_pending,
                 manifest,
@@ -5037,8 +5129,7 @@ pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture,
     durable_certified_fetch_waiting_record_fixture, exact_body_execution_commitment_fixture,
     exact_body_record_fixture, exact_durable_certified_fetch_record_fixture,
-    exact_local_body_record_fixture, exact_pending_certified_fetch_candidate_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
-    foreign_certified_serve_family_authority_fixture,
+    exact_local_body_record_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
 };

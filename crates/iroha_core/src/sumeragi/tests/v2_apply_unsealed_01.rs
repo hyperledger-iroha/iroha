@@ -155,7 +155,7 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
 v2_apply_test!(
     live_merge_publication_persists_application_receipt_before_retry,
     {
-        let fixture = ApplyFixture::new();
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let transaction = fixture
             .body
             .external_transactions()
@@ -232,7 +232,7 @@ v2_apply_test!(
     }
 );
 v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
-    let fixture = ApplyFixture::new();
+    let fixture = ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
     let transaction = fixture
         .body
         .external_transactions()
@@ -255,17 +255,144 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
             1024 * 1024,
         )
         .expect("install reservation journal");
-    let (reservation, entrypoint) =
+    let (initial_reservation, entrypoint) =
         reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
-    let (_parent, entry) = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+    let (_, identity_entry) =
+        merge_entry_with_reservation(&fixture.context, entrypoint.clone(), initial_reservation);
+    let identity_payload = Kura::decode_autonomous_lane_merge_bundle(
+        &identity_entry
+            .execution_batch
+            .as_ref()
+            .expect("committed cleanup identity execution batch")
+            .lanes[0]
+            .source_bundle,
+        fixture.context.network_id,
+        fixture.context.epoch,
+    )
+    .expect("decode committed cleanup identity source")
+    .autonomous
+    .executable_payload;
+    let (reservation_owner_hash, proposal_identity_hash) =
+        super::super::lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal(
+            fixture.context.network_id,
+            fixture.context.id(),
+            fixture.context.epoch,
+            &identity_payload.origin_proposal,
+            &identity_payload.producer,
+        )
+        .expect("derive committed cleanup lifecycle reservation identity");
+    queue
+        .release_lane_reservation(&initial_reservation)
+        .expect("release provisional committed cleanup reservation");
+    let corrected = queue
+        .reserve_transactions_for_lane(
+            fixture.state.as_ref(),
+            LaneQueueReservationScopeV1 {
+                lane_id: initial_reservation.lane_id,
+                dataspace_id: initial_reservation.dataspace_id,
+                lane_incarnation: initial_reservation.lane_incarnation,
+                proposal_height: initial_reservation.proposal_height,
+                lane_block_height: initial_reservation.lane_block_height,
+                lane_block_view: initial_reservation.lane_block_view,
+                reservation_owner_hash,
+                proposal_identity_hash,
+            },
+            NonZeroUsize::new(1).expect("non-zero committed cleanup reservation limit"),
+        )
+        .expect("reserve committed cleanup transaction under the exact lifecycle identity");
+    assert_eq!(corrected.len(), 1);
+    let reservation = *corrected[0].key();
+    let (parent, entry) = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+    let payload = Kura::decode_autonomous_lane_merge_bundle(
+        &entry
+            .execution_batch
+            .as_ref()
+            .expect("committed cleanup execution batch")
+            .lanes[0]
+            .source_bundle,
+        fixture.context.network_id,
+        fixture.context.epoch,
+    )
+    .expect("decode committed cleanup autonomous source")
+    .autonomous
+    .executable_payload;
+    assert_eq!(
+        payload.origin_proposal, identity_payload.origin_proposal,
+        "re-reservation must preserve the exact autonomous proposal identity"
+    );
+    let local_signer = fixture.validator_keys[0].clone();
+    let local_peer = PeerId::new(local_signer.public_key().clone());
     fixture
         .kura
-        .append_merge_entry(&entry)
-        .expect("persist committed merge history fixture");
+        .bind_local_peer_id(local_peer.clone())
+        .expect("bind committed cleanup local peer");
+    let generation = fixture
+        .kura
+        .claim_autonomous_lifecycle_process_generation(fixture.context.network_id, &local_peer)
+        .expect("claim committed cleanup lifecycle generation");
+    let runtime_lanes =
+        RuntimeLaneConfig::from_catalog(&fixture.state.nexus_snapshot().lane_catalog);
+    let descriptor = &payload.origin_proposal.descriptor;
+    fixture
+        .kura
+        .install_lane_incarnation_marker_for_test(
+            runtime_lanes
+                .entry(descriptor.lane_id)
+                .expect("committed cleanup runtime lane"),
+            descriptor.lane_incarnation,
+            0,
+        )
+        .expect("install committed cleanup lane marker");
+    fixture
+        .kura
+        .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+        .expect("persist committed cleanup executable payload");
+    let lifecycle_group = install_live_lifecycle_cursor_for_apply_test(
+        fixture.kura.as_ref(),
+        &generation,
+        &payload,
+        fixture.context.id(),
+        &local_peer,
+        &local_signer,
+    );
+    assert_eq!(
+        lifecycle_group,
+        lane_queue_reservation_group_binding_from_ordered_keys([reservation].iter())
+            .expect("bind committed cleanup reservation group"),
+    );
     let carrier = body_with_exact_merge_execution_header(&entry);
+    fixture
+        .kura
+        .store_block(Arc::new(parent.clone()))
+        .expect("persist execution-carrier parent");
+    fixture
+        .kura
+        .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+        .expect("persist exact execution carrier and merge log");
+    fixture.persist_exact_v2_finality_chain(&[&parent, &carrier]);
+    fixture
+        .state
+        .seed_applied_merge_entry_for_v2_settlement_test(&entry)
+        .expect("seed exact post-commit merge state");
+    let mut block_hashes = fixture.state.block_hashes.block();
+    block_hashes.push_for_tests(parent.hash());
+    block_hashes.push_for_tests(carrier.hash());
+    block_hashes.commit_for_tests();
+    fixture
+        .state
+        .update_latest_block_header_cache_for_tests(carrier.header().clone());
+    fixture
+        .service
+        .publish_committed_block_merge_entry(&carrier)
+        .expect("publish exact committed merge application evidence");
     fixture.state.record_direct_committed_entrypoints(
         [reservation.entrypoint_hash],
-        NonZeroUsize::new(1).expect("committed height"),
+        NonZeroUsize::new(2).expect("committed carrier height"),
+    );
+    queue.reconfigure_nexus_with_state(
+        &fixture.state.nexus_snapshot(),
+        fixture.state.as_ref(),
+        None,
     );
     let staged_merge_queue_reservation_hashes =
         certified_merge_queue_reservation_hashes(Some(&entry))
@@ -517,10 +644,7 @@ v2_apply_test!(
         batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
         fixture.state.record_direct_committed_entrypoints(
-            [
-                first.entrypoint_hash,
-                second.entrypoint_hash,
-            ],
+            [first.entrypoint_hash, second.entrypoint_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
         assert!(queue.remove_routing_plan_for_test(second.entrypoint_hash));
@@ -1404,10 +1528,7 @@ v2_apply_test!(
         fixture.persist_exact_v2_finality_chain(&[&parent, &first_carrier]);
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &first_carrier);
         fixture.state.record_direct_committed_entrypoints(
-            [
-                first.entrypoint_hash,
-                second.entrypoint_hash,
-            ],
+            [first.entrypoint_hash, second.entrypoint_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
         let before = queue

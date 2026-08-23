@@ -22,13 +22,7 @@ SERVER_TEMPLATES = (
 DEPLOYMENT_SERVER_TEMPLATES = (
     pathlib.Path("configs/soranexus/taira/config.toml"),
 )
-TAIRA_PROFILE_TEMPLATES = (
-    pathlib.Path("defaults/kagami/iroha3-taira/config.toml"),
-    *(pathlib.Path(f"defaults/kagami/iroha3-taira/config-peer-{index}.toml") for index in range(1, 7)),
-    *(pathlib.Path(f"defaults/kagami/iroha3-taira/peer{index}.toml") for index in range(7)),
-)
 GENERATED_SERVER_TEMPLATES = (
-    *TAIRA_PROFILE_TEMPLATES,
     pathlib.Path("defaults/kagami/iroha3-nexus/config.toml"),
 )
 CLIENT_TEMPLATE = pathlib.Path("defaults/nexus/client.toml")
@@ -200,17 +194,8 @@ def validate_repository(root: pathlib.Path) -> None:
         raise ProvisioningTemplateError(
             "Nexus server and client templates must consume the same exact genesis identity source"
         )
-    generated_identities = {
-        relative: validate_server_template(root / relative)
-        for relative in GENERATED_SERVER_TEMPLATES
-    }
-    taira_identities = {
-        generated_identities[relative] for relative in TAIRA_PROFILE_TEMPLATES
-    }
-    if len(taira_identities) != 1:
-        raise ProvisioningTemplateError(
-            "all checked-in Taira peer configs must carry the same exact genesis identity"
-        )
+    for relative in GENERATED_SERVER_TEMPLATES:
+        validate_server_template(root / relative)
     for relative in DEPLOYMENT_SERVER_TEMPLATES:
         validate_server_template(root / relative)
 

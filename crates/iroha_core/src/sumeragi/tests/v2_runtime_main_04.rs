@@ -2019,6 +2019,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
                 &durable,
                 validate_effect,
                 &foreign_validate_pending,
+                None,
             )
             .is_err(),
         "matching Validate coordinates cannot splice a foreign causal root"
@@ -2028,6 +2029,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         &durable,
         validate_effect,
         &validate_pending,
+        None,
     ) else {
         panic!("exact Store owner projects one Validate replay carrier")
     };

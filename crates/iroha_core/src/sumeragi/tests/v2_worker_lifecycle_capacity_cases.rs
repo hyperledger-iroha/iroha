@@ -121,6 +121,7 @@ fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
             RecoveredCompletionCapacityProbeV1::Apply {
                 ordinal: 10,
                 key: apply,
+                executor_available: true,
             },
             RecoveredCompletionCapacityProbeV1::Sign {
                 ordinal: 11,
@@ -137,6 +138,19 @@ fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
     reservation.cancel_uncommitted();
     assert!(!output_guard.restart_required());
     assert!(planner.command_rx.queue.lock().commands.is_empty());
+
+    let executor_blocked = service
+        .capture_recovered_completion_capacity_census(vec![
+            RecoveredCompletionCapacityProbeV1::Apply {
+                ordinal: 10,
+                key: apply,
+                executor_available: false,
+            },
+        ])
+        .expect("freeze an executor-blocked Apply capacity owner");
+    assert_eq!(executor_blocked.capacity_for_test(10), Some((false, 0)));
+    executor_blocked.complete_without_selection();
+    assert!(!output_guard.restart_required());
 
     let fetch_round = wire::ConsensusRound {
         context_id: context.id(),
@@ -193,6 +207,7 @@ fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
             RecoveredCompletionCapacityProbeV1::Apply {
                 ordinal: 10,
                 key: apply,
+                executor_available: true,
             },
             RecoveredCompletionCapacityProbeV1::Sign {
                 ordinal: 11,
@@ -229,6 +244,7 @@ fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop() {
                 RecoveredCompletionCapacityProbeV1::Apply {
                     ordinal: 12,
                     key: dropped_key,
+                    executor_available: true,
                 },
             ])
             .expect("arm one census before abandoning it"),
@@ -520,6 +536,39 @@ impl LifecyclePlannerIoFixture {
             ),
         )
         .expect("publish one guarded certified-Fetch completion");
+    }
+    /// Execute one exact recovered Decision Apply command through the same
+    /// application, queue-sealing, and guarded-completion path as the
+    /// production worker.
+    pub(in crate::sumeragi) fn execute_one_recovered_decision_apply(
+        &mut self,
+        context: &wire::HeightContext,
+        apply_service: &V2ApplyService,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one recovered Decision Apply command remains queued");
+        let V2IoCommand::RecoveredDecisionApply(task) = command else {
+            panic!("expected the exact recovered Decision Apply command")
+        };
+        let key = task.dispatch_key();
+        let result = apply_service
+            .execute_recovered_decision_apply(context, &mut self.body_store, task)
+            .unwrap_or_else(|error| panic!("execute recovered Decision Apply: {error}"));
+        self.command_rx
+            .complete_recovered_decision_apply(key, &result)
+            .expect("seal one recovered Decision Apply completion");
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::RecoveredDecisionApply(Box::new(
+                GuardedRecoveredDecisionApplyWorkerResultV1::new(result, output_guard),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish one guarded recovered Decision Apply completion");
     }
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(

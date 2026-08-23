@@ -2,6 +2,7 @@
 use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
+    concrete_admission::ProductionCertifiedFetchAdmissionSettlementV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
     selector::{
         PreparedCertifiedServeExactDequeueV1,
@@ -20,7 +21,8 @@ use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 use crate::sumeragi::{
     v2::VerifiedHeightContext,
     v2_effects::{
-        LifecycleModeRankSnapshot, RecoveredDecisionFetchRequestRegistrationErrorV1,
+        EffectExecutorError, LifecycleModeRankSnapshot,
+        RecoveredDecisionFetchRequestRegistrationErrorV1,
         RecoveredDecisionFetchResponseClaimErrorV1, V2EffectExecutor,
     },
     v2_runner::{LifecycleCurrentRunnerTurn, LifecycleRunnerRankTarget},
@@ -680,6 +682,8 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Service(String),
     /// A Fetch executor owner conflicted with the exact request catalogs.
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
+    /// The Apply executor was closed or retained an active mutation owner.
+    ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
     /// The selected claimed carrier could not project its exact task.
@@ -946,8 +950,17 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
     ForeignRunnerObservation,
     /// The I/O worker does not own the exact body store recovered by this owner.
     BodyStoreNotBound,
-    /// The selected family did not bind the exact waiting Fetch and registry incumbent.
+    /// The selected family could not seal its pending Fetch admission owner.
+    CertifiedFetchAdmissionPreparation,
+    /// The sealed pending Fetch could not enter or rejoin durable ownership.
+    CertifiedFetchAdmissionSettlement,
+    /// The admitted Fetch did not bind the exact waiting row and registry incumbent.
     InvalidSelectedCarrier,
+    /// Logical admission capacity retained the selected occurrence unchanged.
+    CertifiedFetchAdmissionDeferred {
+        /// Complete selector retained for a later admission retry.
+        _prepared: PreparedLifecycleIngressSelector,
+    },
     /// Direct Ready work must drain before the sole ingress wake is published.
     CompetingReadyWork,
     /// The selector could not be consumed into its exact persistence command.
@@ -976,6 +989,35 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
         /// Complete selector with its one-shot target restored.
         _prepared: PreparedLifecycleIngressSelector,
     },
+}
+impl ProductionIngressSchedulerInputsError {
+    /// Return the closed failure class without exposing retained authorities.
+    pub(crate) const fn reason(&self) -> &'static str {
+        match self {
+            Self::CoordinatorFaulted { .. } => "coordinator faulted",
+            Self::UnsettledLease { .. } => "unsettled lease",
+            Self::ForeignModeObservation => "foreign mode observation",
+            Self::StaleModeObservation => "stale mode observation",
+            Self::ForeignOutputGuard => "foreign output guard",
+            Self::ForeignRunnerObservation => "foreign runner observation",
+            Self::BodyStoreNotBound => "body store not bound",
+            Self::CertifiedFetchAdmissionPreparation => {
+                "certified Fetch admission preparation failed"
+            }
+            Self::CertifiedFetchAdmissionSettlement => {
+                "certified Fetch admission settlement failed"
+            }
+            Self::InvalidSelectedCarrier => "invalid selected carrier",
+            Self::CertifiedFetchAdmissionDeferred { .. } => "certified Fetch admission deferred",
+            Self::CompetingReadyWork => "competing Ready work",
+            Self::CommandPreparation { .. } => "command preparation failed",
+            Self::InFlightSelectedWork { .. } => "selected work already in flight",
+            Self::InvalidReservedCommand => "invalid reserved command",
+            Self::UnexpectedPlan => "unexpected scheduler plan",
+            Self::SettlementFault { .. } => "settlement fault",
+            Self::Service { .. } => "service capacity capture failed",
+        }
+    }
 }
 /// Authenticate the complete subset of Ready work already owned directly by
 /// the concrete registry.
@@ -1266,6 +1308,8 @@ impl ProductionLifecycleOwnerV1 {
         {
             Ok(execution) => execution,
             Err(error) => {
+                #[cfg(test)]
+                eprintln!("certified Fetch registry execution projection failed: {error:?}");
                 iroha_logger::error!(
                     ?error,
                     ordinal,
@@ -1482,7 +1526,12 @@ impl ProductionLifecycleOwnerV1 {
             .prepare_certified_fetch_execution(&lease, slot)
         {
             Ok(execution) => execution,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "certified Fetch registry execution projection failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1519,7 +1568,18 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal });
             }
-            Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Inactive) | Err(_) => {
+            Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Inactive) => {
+                iroha_logger::error!(ordinal, "certified Fetch adapter projection was inactive");
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "certified Fetch serialized adapter projection failed"
+                );
                 drop(execution);
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
@@ -1527,7 +1587,12 @@ impl ProductionLifecycleOwnerV1 {
         };
         let successor = match execution.seal_store_successor(adapter) {
             Ok(successor) => successor,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "certified Fetch-to-Store successor seal failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1538,7 +1603,12 @@ impl ProductionLifecycleOwnerV1 {
             successor,
         ) {
             Ok(transition) => transition,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "certified Fetch-to-Store transition projection failed"
+                );
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
@@ -1591,6 +1661,21 @@ impl ProductionLifecycleOwnerV1 {
             }
         };
         let (tag, round, subject) = execution.adapter_preview_inputs();
+        let retry_marker = match executor
+            .prepare_published_lifecycle_validate_retry_marker(execution.durable_body_receipt())
+        {
+            Ok(marker) => marker,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    ordinal,
+                    "lifecycle Store-to-Validate retry marker preflight failed"
+                );
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
         let adapter = match executor.prepare_durable_store_validate_adapter(
             tag,
             round,
@@ -1655,6 +1740,22 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
+        let retry_marker = match retry_marker.bind_validate_successor(
+            successor.validate_effect(),
+            successor.pending_effect_binding(),
+        ) {
+            Ok(marker) => marker,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    ordinal,
+                    "lifecycle Store-to-Validate retry marker sealing failed"
+                );
+                drop(successor);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
         let transition = match self.coordinator.prepare_sealed_store_validate_transition(
             &lease,
             &self.verified,
@@ -1691,6 +1792,7 @@ impl ProductionLifecycleOwnerV1 {
             return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
         }
         transition.commit_after_publication();
+        executor.commit_published_lifecycle_validate_retry_marker(retry_marker);
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,
@@ -1807,11 +1909,15 @@ impl ProductionLifecycleOwnerV1 {
                         return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
                     }
                     let key = attestation.dispatch_key();
+                    let executor_available = executor
+                        .recovered_decision_apply_dispatch_available()
+                        .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
                     (
                         AuthenticatedRecoveredCompletionReadyV1::Apply(attestation),
                         Some(RecoveredCompletionCapacityProbeV1::Apply {
                             ordinal: *ordinal,
                             key,
+                            executor_available,
                         }),
                     )
                 }
@@ -2115,7 +2221,10 @@ impl ProductionLifecycleOwnerV1 {
                 if !reservation.preflight(&prepared) {
                     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
                 }
-                reservation.commit(prepared);
+                let executor_dispatch = executor
+                    .prepare_recovered_decision_apply_executor_dispatch(&prepared)
+                    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+                reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
             }
             LifecycleWorkClass::SignVote
@@ -3029,7 +3138,7 @@ impl ProductionLifecycleOwnerV1 {
     }
     /// Plan, submit, and reblock one exact selected certified-Fetch response.
     ///
-    /// The selected response is reauthenticated against the exact Waiting
+    /// The selected response first creates or rejoins its exact durable Waiting
     /// Fetch row and concrete registry incumbent. The service then consumes
     /// the whole selector into either a locked I/O reservation or its opaque
     /// release-generation wait. With capacity held, the owner advances the
@@ -3118,9 +3227,6 @@ impl ProductionLifecycleOwnerV1 {
         if !services.matches_lifecycle_executor_output_guard(executor) {
             return Err(ProductionIngressSchedulerInputsError::ForeignOutputGuard);
         }
-        let fetch = selector
-            .attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)
-            .map_err(|_| ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
         if !self.coordinator.ready_index.is_empty()
             || self
                 .coordinator
@@ -3130,6 +3236,30 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionIngressSchedulerInputsError::CompetingReadyWork);
         }
+        let admission = selector
+            .prepare_selected_certified_fetch_admission(executor, &self.verified)
+            .map_err(|_| {
+                ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation
+            })?;
+        match self.settle_certified_fetch_admission(admission) {
+            ProductionCertifiedFetchAdmissionSettlementV1::Admitted
+            | ProductionCertifiedFetchAdmissionSettlementV1::Existing => {}
+            ProductionCertifiedFetchAdmissionSettlementV1::Deferred => {
+                return Err(
+                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionDeferred {
+                        _prepared: selector,
+                    },
+                );
+            }
+            ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {
+                return Err(
+                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement,
+                );
+            }
+        }
+        let fetch = selector
+            .attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)
+            .map_err(|_| ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
         let capacity = services
             .capture_lifecycle_capacity_rank(selector)
             .map_err(|error| {
@@ -3509,6 +3639,7 @@ mod recovered_sign_capacity_tests {
             &mut services,
             runtime,
             Arc::clone(&output_guard),
+            0,
             2,
         );
 
@@ -3568,6 +3699,7 @@ mod recovered_sign_capacity_tests {
                     &mut services,
                     runtime,
                     Arc::clone(&output_guard),
+                    0,
                     2,
                 );
 
@@ -3619,6 +3751,7 @@ mod recovered_sign_capacity_tests {
             &mut services,
             runtime,
             Arc::clone(&output_guard),
+            0,
             1,
         );
         planner_io.saturate_consensus_prefix(&services);
@@ -4269,7 +4402,9 @@ impl ProductionLifecycleOwnerV1 {
 
     /// Classify the exact current Ready census without constructing a reducer
     /// fence; scheduler fixtures contain no prospectively-woken rows.
-    fn exact_ready_completion_classification_for_test(&self) -> ProductionCompletionReadyWorkV1 {
+    pub(in crate::sumeragi) fn exact_ready_completion_classification_for_test(
+        &self,
+    ) -> ProductionCompletionReadyWorkV1 {
         let exact_ready = self
             .coordinator
             .records
@@ -4332,6 +4467,46 @@ impl ProductionLifecycleOwnerV1 {
             .is_ok()
     }
 
+    /// Reassemble an already-Ready Validate fixture into its storage-owning
+    /// production shape without minting a second coordinator or registry.
+    ///
+    /// The helper attaches a fresh LedgerV1 and empty structural Serve owner;
+    /// the exact body-store instance remains available for the normal launch
+    /// transfer into the bounded worker.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn ready_validate_completion_owner_for_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        mut coordinator: LifecycleCoordinator,
+        registry: LifecycleWorkRegistryHolder,
+        body_store: crate::sumeragi::v2_body_store::V2BodyStore,
+        root: &std::path::Path,
+    ) -> Self {
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("attach exact Ready Validate lifecycle ledger");
+        let (payload_store, serve_payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            &root.join("serve"),
+            verified.context(),
+        )
+        .expect("open empty Ready Validate Serve payload owner");
+        Self {
+            verified,
+            coordinator,
+            registry,
+            recovered_lifecycle_outputs: None,
+            payload_store,
+            serve_payloads,
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: Some(
+                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+            ),
+            timeout_supersession_successor: None,
+        }
+    }
+
     /// Open one clean production executor before moving this owner's body
     /// store into the matching bounded service worker.
     pub(in crate::sumeragi) fn bind_body_store_to_recovered_completion_io_for_test(
@@ -4339,6 +4514,7 @@ impl ProductionLifecycleOwnerV1 {
         services: &mut ProductionV2Services,
         runtime: crate::sumeragi::v2_runtime::SerializedV2Runtime,
         output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        local_validator: iroha_data_model::block::consensus_v2::ValidatorIndex,
         class_capacity: usize,
     ) -> (
         crate::sumeragi::v2_effects::V2EffectExecutor<
@@ -4352,18 +4528,33 @@ impl ProductionLifecycleOwnerV1 {
             .expect("the startup owner transfers its body store exactly once");
         let identity = body_store.instance_identity();
         let context = self.verified.context().clone();
-        let requester = context.roster[0].validator.clone();
-        let (executor, body_store) =
+        let local_validator_index = usize::try_from(local_validator)
+            .expect("the test validator index remains representable");
+        let requester = context.roster[local_validator_index].validator.clone();
+        let (mut executor, body_store) =
             crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
                 runtime,
                 body_store,
                 context.clone(),
                 requester,
-                Some(0),
+                Some(local_validator),
                 std::sync::Arc::clone(&output_guard),
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
             .expect("open the clean recovered Completion executor");
+        for (effect, pending, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_published_validate_retry_markers()
+        {
+            executor
+                .install_recovered_published_lifecycle_validate_retry_marker(
+                    effect,
+                    pending,
+                    durable_receipt,
+                )
+                .expect("reinstall the recovered lifecycle Validate retry marker");
+        }
         let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
             services,
             context,
@@ -4396,77 +4587,23 @@ impl ProductionLifecycleOwnerV1 {
             .exactly_covers_finalization_work(&self.coordinator)
     }
 
-    /// Build one storage-owning production owner around the exact selected
-    /// Fetch carrier used by the cross-module planner transaction regression.
-    pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(
+    /// Build one empty storage-owning production owner for the ingress
+    /// admission/planner transaction regression.
+    pub(in crate::sumeragi) fn empty_ingress_owner_for_test(
         verified: crate::sumeragi::v2::VerifiedHeightContext,
-        prepared: &PreparedLifecycleIngressSelector,
-        effect: crate::sumeragi::v2::AdapterEffect,
-        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
         local_signer: &iroha_crypto::KeyPair,
         root: &std::path::Path,
-    ) -> (Self, u128, super::WaitSource) {
-        use super::{
-            AdmissionDecision, AdmissionRequest, CapacityClass, WaitToken,
-            schema::CapacityGeometry,
-            work_registry::{ConcreteLifecycleWork, ConcreteWorkAddress},
-        };
-        let (context, _, _, _, expected_key, expected_root, source) = prepared
-            .certified_fetch_ready_authority_for_test()
-            .expect("selected Fetch must derive its exact lifecycle authority");
-        assert_eq!(
-            context,
-            super::projection::lifecycle_context(verified.context()),
-            "selected Fetch and verified owner must share one context"
-        );
+    ) -> Self {
+        use super::{CapacityClass, schema::CapacityGeometry};
+        let context = super::projection::lifecycle_context(verified.context());
         let mut coordinator = LifecycleCoordinator::new(
             context,
             0,
             CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
         );
-        let mut registry = LifecycleWorkRegistryHolder::empty();
-        let candidate = super::replay_authority::exact_pending_certified_fetch_candidate_fixture(
-            &verified, &effect, &pending,
-        )
-        .expect("the verified selected Fetch must derive exact replay authority");
-        assert_eq!(candidate.key, expected_key);
-        assert_eq!(candidate.causal_root, expected_root);
-        assert_eq!(candidate.work_class, LifecycleWorkClass::Fetch);
-        let replay_authority = candidate.replay_authority.clone();
-        let work =
-            ConcreteLifecycleWork::from_candidate_for_test(effect, pending, replay_authority)
-                .unwrap_or_else(|(error, _, _)| {
-                    panic!("the selected Fetch carrier is invalid: {error:?}")
-                });
-        let work_digest = work.digest();
-        let AdmissionDecision::Admitted {
-            owner,
-            ordinal,
-            producer_turn_ordinal: None,
-        } = coordinator.admit(AdmissionRequest::Candidate(candidate))
-        else {
-            panic!("the exact selected Fetch candidate must enter the coordinator")
-        };
-        let slot = super::PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let address = ConcreteWorkAddress::new(owner, ordinal, slot)
-            .expect("the admitted Fetch owns one exact concrete address");
-        registry
-            .registry_mut()
-            .install(address, work_digest, work)
-            .unwrap_or_else(|(error, _)| {
-                panic!("the exact selected Fetch must enter the concrete registry: {error:?}")
-            });
-        let record = coordinator
-            .records
-            .get_mut(&ordinal)
-            .expect("admitted Fetch owns its logical record");
-        assert_eq!(record.key, expected_key);
-        assert_eq!(record.owner.causal_root(), expected_root);
-        assert_eq!(record.work_class, LifecycleWorkClass::Fetch);
-        assert_eq!(record.physical_slots.get(&slot), Some(&work_digest));
-        assert!(coordinator.ready_index.remove(&ordinal));
-        record.state = LifecycleState::Waiting(WaitToken::new(source, 0));
-        assert!(coordinator.observed_generation.insert(source, 0).is_none());
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("attach the empty ingress lifecycle ledger");
         let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
             root.join("body"),
             verified.context().clone(),
@@ -4481,26 +4618,22 @@ impl ProductionLifecycleOwnerV1 {
         let serve_payloads = recovery
             .authenticate(&verified, local_signer, &body_store)
             .expect("authenticate exact owner Serve payload census");
-        (
-            Self {
-                verified,
-                coordinator,
-                registry,
-                recovered_lifecycle_outputs: None,
-                payload_store,
-                serve_payloads,
-                body_store: Some(body_store),
-                body_store_identity: None,
-                kura_binding: None,
-                apply_service: None,
-                adapter_startup: Some(
-                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
-                ),
-                timeout_supersession_successor: None,
-            },
-            ordinal,
-            source,
-        )
+        Self {
+            verified,
+            coordinator,
+            registry: LifecycleWorkRegistryHolder::empty(),
+            recovered_lifecycle_outputs: None,
+            payload_store,
+            serve_payloads,
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: Some(
+                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+            ),
+            timeout_supersession_successor: None,
+        }
     }
     /// Move the owner's exact startup body store into the bounded test worker
     /// while retaining only its comparison seal in the running owner.
@@ -4562,6 +4695,17 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.observed_generation.get(&source).copied(),
             self.coordinator.fault,
             self.coordinator.active_lease.is_some(),
+        )
+    }
+    /// Return the logical, durable, concrete, and ordinal admission census.
+    pub(in crate::sumeragi) fn ingress_admission_census_for_test(
+        &self,
+    ) -> (usize, usize, usize, u128) {
+        (
+            self.coordinator.records.len(),
+            self.coordinator.durable_records.len(),
+            self.registry.registry_for_test().len(),
+            self.coordinator.high_water,
         )
     }
     /// Rejoin the sole executor owner, exact external wait, and recovered WAL
