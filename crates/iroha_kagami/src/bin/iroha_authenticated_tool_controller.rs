@@ -6,18 +6,17 @@
 //! accounting. Linux is deliberately rejected until the Landlock, seccomp,
 //! and delegated-cgroup backend can be qualified on the deployment kernel.
 
+use std::{env, ffi::OsString, process::ExitCode};
+
+#[cfg(any(target_os = "macos", test))]
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fs::{self, Metadata},
     io::{self, Read, Write},
-    os::unix::{
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-        process::{CommandExt, ExitStatusExt},
-    },
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
-    process::{Child, Command, ExitCode, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,24 +25,68 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "macos")]
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+#[cfg(any(target_os = "macos", test))]
 #[path = "iroha_authenticated_tool_controller/kagemusha_promotion_publisher.rs"]
 mod kagemusha_promotion_publisher;
+#[cfg(all(not(target_os = "macos"), not(test)))]
+mod kagemusha_promotion_publisher {
+    use super::{ControllerError, OsString, Result};
+
+    pub(super) fn promote(_arguments: &[OsString]) -> Result<u8> {
+        Err(ControllerError::policy(
+            "Kagemusha promotion publication requires a qualified macOS host",
+        ))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
 #[path = "iroha_authenticated_tool_controller/kagemusha_python_launcher.rs"]
 mod kagemusha_python_launcher;
+#[cfg(all(not(target_os = "macos"), not(test)))]
+mod kagemusha_python_launcher {
+    use super::{ControllerError, OsString, Result};
+
+    pub(super) fn launch_readiness(_arguments: &[OsString]) -> Result<u8> {
+        unavailable()
+    }
+
+    pub(super) fn launch_sealed_builder(_arguments: &[OsString]) -> Result<u8> {
+        unavailable()
+    }
+
+    fn unavailable() -> Result<u8> {
+        Err(ControllerError::policy(
+            "Kagemusha native Python launch is available only on a qualified macOS host",
+        ))
+    }
+}
 
 #[cfg(target_os = "macos")]
 use std::{fs::File, os::fd::AsRawFd, process::Output};
 
+#[cfg(any(target_os = "macos", test))]
 const CONTRACT: &str = "iroha.authenticated-tool-os-isolation.v1";
 const CONTROLLER_ERROR: u8 = 125;
+#[cfg(any(target_os = "macos", test))]
 const CONTROLLER_LIMIT: u8 = 124;
+#[cfg(any(target_os = "macos", test))]
 const MAX_ARGUMENTS: usize = 512;
+#[cfg(any(target_os = "macos", test))]
 const MAX_WRITABLE_FILES: usize = 64;
+#[cfg(any(target_os = "macos", test))]
 const MAX_READABLE_PATHS: usize = 256;
+#[cfg(any(target_os = "macos", test))]
 const MAX_ARGUMENT_BYTES: usize = 1024 * 1024;
+#[cfg(any(target_os = "macos", test))]
 const MAX_PATH_BYTES: usize = 4096;
+#[cfg(any(target_os = "macos", test))]
 const MAX_WALL_SECONDS: f64 = 3600.0;
+#[cfg(any(target_os = "macos", test))]
 const MONITOR_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(any(target_os = "macos", test))]
 const CLEANUP_GRACE: Duration = Duration::from_millis(250);
 
 #[cfg(target_os = "macos")]
@@ -63,6 +106,7 @@ impl ControllerError {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn limit(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -73,12 +117,14 @@ impl ControllerError {
 
 type Result<T> = std::result::Result<T, ControllerError>;
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Platform {
     Macos,
     Linux,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug)]
 struct WritableFile {
     name: String,
@@ -86,6 +132,7 @@ struct WritableFile {
     maximum_bytes: u64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug)]
 struct Request {
     platform: Platform,
@@ -105,6 +152,7 @@ struct Request {
     tool: Vec<OsString>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FileIdentity {
     device: u64,
@@ -119,12 +167,14 @@ struct FileIdentity {
     sha256: [u8; 32],
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Debug)]
 struct RootSnapshot {
     directory: FileIdentity,
     entries: BTreeMap<String, FileIdentity>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug)]
 struct ReaderResult {
     bytes: Vec<u8>,
@@ -141,6 +191,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
     if arguments.len() < 2 {
         return Err(ControllerError::policy("missing subcommand"));
@@ -162,6 +213,33 @@ fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
     }
 }
 
+#[cfg(all(not(target_os = "macos"), not(test)))]
+fn entrypoint(arguments: Vec<OsString>) -> Result<u8> {
+    if arguments.len() < 2 {
+        return Err(ControllerError::policy("missing subcommand"));
+    }
+    match arguments[1].to_str() {
+        Some("run-v1") => Err(ControllerError::policy(
+            "Linux isolation is unavailable: a qualified Landlock, seccomp, and delegated-cgroup backend is required",
+        )),
+        Some("qualify-host-v1") => qualify_host(&arguments[2..]),
+        Some("qualification-probe-v1") => Err(ControllerError::policy(
+            "qualification probe is unavailable without the macOS backend",
+        )),
+        Some("launch-kagemusha-readiness-v1") => {
+            kagemusha_python_launcher::launch_readiness(&arguments[2..])
+        }
+        Some("launch-kagemusha-sealed-builder-v1") => {
+            kagemusha_python_launcher::launch_sealed_builder(&arguments[2..])
+        }
+        Some("promote-kagemusha-release-v4") => {
+            kagemusha_promotion_publisher::promote(&arguments[2..])
+        }
+        _ => Err(ControllerError::policy("unsupported subcommand")),
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
 fn parse_request(arguments: &[OsString]) -> Result<Request> {
     if arguments.len() > MAX_ARGUMENTS {
         return Err(ControllerError::policy("request has too many arguments"));
@@ -482,6 +560,7 @@ fn parse_request(arguments: &[OsString]) -> Result<Request> {
     })
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn required_value<'a>(values: &'a BTreeMap<&str, String>, name: &str) -> Result<&'a str> {
     values
         .get(name)
@@ -489,6 +568,7 @@ fn required_value<'a>(values: &'a BTreeMap<&str, String>, name: &str) -> Result<
         .ok_or_else(|| ControllerError::policy(format!("missing required option {name}")))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn positive_limit(values: &BTreeMap<&str, String>, name: &str) -> Result<u64> {
     let value = parse_u64(required_value(values, name)?, name)?;
     if value == 0 {
@@ -497,6 +577,7 @@ fn positive_limit(values: &BTreeMap<&str, String>, name: &str) -> Result<u64> {
     Ok(value)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_u64(value: &str, label: &str) -> Result<u64> {
     if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
         return Err(ControllerError::policy(format!("invalid {label}")));
@@ -506,11 +587,13 @@ fn parse_u64(value: &str, label: &str) -> Result<u64> {
         .map_err(|_| ControllerError::policy(format!("invalid {label}")))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_u32(value: &str, label: &str) -> Result<u32> {
     let value = parse_u64(value, label)?;
     u32::try_from(value).map_err(|_| ControllerError::policy(format!("invalid {label}")))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn valid_direct_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 255
@@ -520,6 +603,7 @@ fn valid_direct_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn canonical_request_directory(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute()
         || path.as_os_str().as_encoded_bytes().len() > MAX_PATH_BYTES
@@ -548,6 +632,7 @@ fn canonical_request_directory(path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn canonical_request_path(path: &Path, require_directory: bool) -> Result<PathBuf> {
     if !path.is_absolute()
         || path.as_os_str().as_encoded_bytes().len() > MAX_PATH_BYTES
@@ -576,6 +661,7 @@ fn canonical_request_path(path: &Path, require_directory: bool) -> Result<PathBu
     Ok(canonical)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_tool_arguments(tool: &[OsString]) -> Result<()> {
     if tool.is_empty() {
         return Err(ControllerError::policy("tool command is empty"));
@@ -599,6 +685,7 @@ fn validate_tool_arguments(tool: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn run(request: Request) -> Result<u8> {
     validate_environment(&request)?;
     validate_no_inherited_fds()?;
@@ -1328,6 +1415,7 @@ fn qualification_pid_exists(pid: u32) -> Result<bool> {
     Ok(true)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_environment(request: &Request) -> Result<()> {
     let allowed = BTreeSet::from([
         "HOME",
@@ -1383,6 +1471,7 @@ fn validate_environment(request: &Request) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_environment_directory(path: &Path, name: &str) -> Result<()> {
     if !path.is_absolute()
         || path.as_os_str().as_encoded_bytes().len() > MAX_PATH_BYTES
@@ -1421,6 +1510,7 @@ fn validate_environment_directory(path: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[allow(
     unsafe_code,
     reason = "fcntl is the audited descriptor-closure boundary"
@@ -1475,6 +1565,7 @@ fn validate_no_inherited_fds() -> Result<()> {
     unsafe_code,
     reason = "Unix credential queries have no safe standard-library wrappers"
 )]
+#[cfg(any(target_os = "macos", test))]
 fn validate_runtime_identity(request: &Request) -> Result<()> {
     unsafe extern "C" {
         fn getuid() -> u32;
@@ -1932,6 +2023,7 @@ fn seatbelt_literal(path: &Path) -> Result<String> {
     Ok(escaped)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_working_directory(request: &Request) -> Result<()> {
     if request.working_directory == Path::new("/") {
         if !request.deny_all_writes {
@@ -1957,6 +2049,7 @@ fn validate_working_directory(request: &Request) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_readable_inputs(request: &Request) -> Result<Vec<(PathBuf, FileIdentity)>> {
     let mut snapshots =
         Vec::with_capacity(request.readable_files.len() + request.readable_directories.len());
@@ -1971,6 +2064,7 @@ fn validate_readable_inputs(request: &Request) -> Result<Vec<(PathBuf, FileIdent
     Ok(snapshots)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_readable_path(path: &Path, require_directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| ControllerError::policy("readable input metadata is unavailable"))?;
@@ -1992,6 +2086,7 @@ fn validate_readable_path(path: &Path, require_directory: bool) -> Result<()> {
     validate_trusted_parent_chain(path)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<()> {
     for (path, expected) in snapshots {
         let require_regular = expected.mode & 0o170000 == 0o100000;
@@ -2005,6 +2100,7 @@ fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn prepare_writable_files(request: &Request) -> Result<()> {
     if request.deny_all_writes {
         return Ok(());
@@ -2055,6 +2151,7 @@ fn prepare_writable_files(request: &Request) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_trusted_path(path: &Path, require_root_owner: bool) -> Result<()> {
     let canonical = fs::canonicalize(path)
         .map_err(|_| ControllerError::policy("trusted executable path is unavailable"))?;
@@ -2084,10 +2181,12 @@ fn validate_trusted_path(path: &Path, require_root_owner: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn trusted_executable_mode_is_safe(mode: u32) -> bool {
     mode & 0o6022 == 0 && mode & 0o111 != 0
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_trusted_parent_chain(path: &Path) -> Result<()> {
     let runtime_uid = effective_uid();
     for parent in path.ancestors().skip(1) {
@@ -2155,11 +2254,12 @@ fn validate_trusted_path_acl(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), test))]
 fn validate_trusted_path_acl(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn root_snapshot(root: &Path) -> Result<RootSnapshot> {
     let directory = file_identity(root, false, false)?;
     let mut entries = BTreeMap::new();
@@ -2182,6 +2282,7 @@ fn root_snapshot(root: &Path) -> Result<RootSnapshot> {
     Ok(RootSnapshot { directory, entries })
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_write_state(request: &Request, initial: Option<&RootSnapshot>) -> Result<()> {
     if request.deny_all_writes {
         return Ok(());
@@ -2248,6 +2349,7 @@ fn validate_write_state(request: &Request, initial: Option<&RootSnapshot>) -> Re
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn directory_stable_fields(identity: &FileIdentity) -> (u64, u64, u32, u32, u32) {
     (
         identity.device,
@@ -2258,6 +2360,7 @@ fn directory_stable_fields(identity: &FileIdentity) -> (u64, u64, u32, u32, u32)
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_writable_identity(name: &str, identity: &FileIdentity, limit: u64) -> Result<()> {
     if identity.mode & 0o170000 != 0o100000
         || identity.links != 1
@@ -2276,6 +2379,7 @@ fn validate_writable_identity(name: &str, identity: &FileIdentity, limit: u64) -
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn file_identity(path: &Path, require_regular: bool, hash_contents: bool) -> Result<FileIdentity> {
     let metadata = fs::symlink_metadata(path).map_err(|_| {
         ControllerError::policy(format!("path metadata is unavailable: {}", path.display()))
@@ -2305,6 +2409,7 @@ fn file_identity(path: &Path, require_regular: bool, hash_contents: bool) -> Res
     })
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     let mut options = fs::OpenOptions::new();
     #[cfg(target_os = "macos")]
@@ -2345,6 +2450,7 @@ fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     Ok(hash.finish())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn stable_metadata(metadata: &Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i64, i64) {
     (
         metadata.dev(),
@@ -2359,6 +2465,7 @@ fn stable_metadata(metadata: &Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn bounded_reader<R: Read + Send + 'static>(
     mut reader: R,
     stream_limit: u64,
@@ -2585,6 +2692,7 @@ impl Drop for Watchdog {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
 fn effective_uid() -> u32 {
     unsafe extern "C" {
@@ -2593,6 +2701,7 @@ fn effective_uid() -> u32 {
     unsafe { geteuid() }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[allow(unsafe_code, reason = "getegid has no safe standard-library wrapper")]
 fn effective_gid() -> u32 {
     unsafe extern "C" {
@@ -2601,6 +2710,7 @@ fn effective_gid() -> u32 {
     unsafe { getegid() }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[allow(
     unsafe_code,
     reason = "the non-production hostile probe intentionally exercises denied raw Unix operations"
@@ -2805,6 +2915,7 @@ fn qualification_probe(arguments: &[OsString]) -> Result<u8> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn probe_path(arguments: &[OsString], index: usize) -> Result<&Path> {
     arguments
         .get(index)
@@ -2812,6 +2923,7 @@ fn probe_path(arguments: &[OsString], index: usize) -> Result<&Path> {
         .ok_or_else(|| ControllerError::policy("qualification probe path is missing"))
 }
 
+#[cfg(any(target_os = "macos", test))]
 struct Sha256 {
     state: [u32; 8],
     block: [u8; 64],
@@ -2819,6 +2931,7 @@ struct Sha256 {
     length: u64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Sha256 {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
