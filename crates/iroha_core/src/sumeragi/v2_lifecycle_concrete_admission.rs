@@ -19,13 +19,14 @@ use super::{
         LiveLifecycleDecisionApplyReconciliationAuthorityV1, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
         PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-        PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
-        PreparedLifecycleAdmissionV1, PreparedLifecycleDecisionApplyDispatchV1,
-        PreparedLifecycleOutputExecutionV1, PreparedLifecycleOutputRegistryRetirementV1,
-        PublishedDurableValidateCompletion, ReadyLifecycleDecisionApplyAttestationErrorV1,
-        ReadyLifecycleDecisionApplyAttestationV1, ReadyValidateCarrierError,
-        RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1,
-        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
+        PreparedCertifiedFetchAdmissionV1, PreparedLifecycleAdmissionErrorV1,
+        PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
+        PreparedLifecycleDecisionApplyDispatchV1, PreparedLifecycleOutputExecutionV1,
+        PreparedLifecycleOutputRegistryRetirementV1, PublishedDurableValidateCompletion,
+        ReadyLifecycleDecisionApplyAttestationErrorV1, ReadyLifecycleDecisionApplyAttestationV1,
+        ReadyValidateCarrierError, RecoveredDurableValidateRetryCensusV1,
+        RecoveredDurableValidateRetryOwnerErrorV1, RecoveredWalParentFactoryError, RegistryError,
+        reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -1382,6 +1383,14 @@ impl ProductionLifecycleOwnerV1 {
                     pending: execution.into_pending(),
                 };
             }
+            Err(_) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        LifecycleOutputRegistryFailureV1::ReadyRejoin,
+                    ),
+                    pending: execution.into_pending(),
+                };
+            }
         };
         match execution.execute_with(execute) {
             Ok(LifecycleOutputServiceDispositionV1::Accepted) => {}
@@ -1446,7 +1455,7 @@ impl ProductionLifecycleOwnerV1 {
         ) {
             return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                 failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
-                    RegistryError::CorruptWork,
+                    LifecycleOutputRegistryFailureV1::TerminalProjection,
                 ),
                 pending: execution.into_pending(),
             };

@@ -13469,7 +13469,7 @@ impl SoracloudRuntimeCacheBudgets {
 const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
 const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
 /// User-level Inrou PortableVM configuration and resource ceilings.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrou {
     /// Whether this validator advertises and materializes local Inrou workloads.

@@ -11,6 +11,7 @@ use super::{v2, v2_runner};
 mod authority;
 #[path = "v2_lifecycle_coordinator_support.rs"]
 mod coordinator_support;
+pub(in crate::sumeragi) use coordinator_support::RecoveredPendingKuraApplyCarrierPermitV1;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
@@ -311,9 +312,10 @@ pub(in crate::sumeragi) use work_registry::{
     LiveLifecycleDecisionApplyReconciliationAuthorityV1, PreparedLifecycleDecisionApplyDispatchV1,
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
-    RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
-    RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerV1,
-    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchDispatchIdentityV1,
+    RecoveredDecisionFetchDispatchKeyV1, RecoveredDurableValidateRetryCensusV1,
+    RecoveredDurableValidateRetryOwnerV1, RecoveredLifecycleSignDispatchIdentityV1,
+    RecoveredLifecycleSignDispatchKeyV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{

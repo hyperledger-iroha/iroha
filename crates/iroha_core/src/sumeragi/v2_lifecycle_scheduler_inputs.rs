@@ -4,6 +4,7 @@ use super::work_registry::ReadyLifecycleBroadcastCarrierV1;
 use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
+    concrete_admission::ProductionCertifiedFetchAdmissionSettlementV1,
     open::ReadyRecoveredLifecycleBroadcastAttestationV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
     selector::{
@@ -723,6 +724,8 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
     /// A Ready live Apply could not retire its exact competing executor work.
     LiveApplyReconciliation(EffectExecutorError),
+    /// The Apply executor was closed or retained an active mutation owner.
+    ApplyExecutor(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
     /// The selected claimed carrier could not project its exact task.

@@ -625,9 +625,7 @@ pub mod soranet_privacy_collector_id {
         fixed_bytes_hex::serialize_bounded(bytes, out)
     }
     /// Decode only the canonical 64-character lowercase hexadecimal spelling.
-    pub fn deserialize(
-        parser: &mut Parser<'_>,
-    ) -> Result<[u8; COLLECTOR_ID_BYTES], json::Error> {
+    pub fn deserialize(parser: &mut Parser<'_>) -> Result<[u8; COLLECTOR_ID_BYTES], json::Error> {
         let raw = parser.parse_string()?;
         if raw.len() != COLLECTOR_ID_BYTES * 2
             || !raw
