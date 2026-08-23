@@ -51,8 +51,9 @@ downgrade reason, and ticket cost without bespoke parsing.
 - The NDJSON payloads reuse the Norito types in
   `crates/iroha_data_model/src/soranet/privacy.rs`. Operators consuming
   `/privacy/events` or Torii’s `POST /v1/soranet/privacy/event` will see
-  `SoranetPrivacyEventKindV1::HandshakeFailure` with `reason="Downgrade"` plus
-  an optional RTT, keeping metrics and logs aligned.
+  `SoranetPrivacyEventKindV1::HandshakeFailure` with a closed `reason`, a
+  typed `pow_reason` exactly for proof-of-work failures, and an optional RTT.
+  Free-form failure details are not accepted.
 - Proxy toggle events are the same `SoranetPrivacyEventV1` entries, but the
   buffer constrains output to downgrade failures so orchestrators can throttle
   without parsing unrelated telemetry. `/policy/proxy-toggle` honours
@@ -112,21 +113,19 @@ downgrade reason, and ticket cost without bespoke parsing.
 ##### Proxy Toggle Schema
 
 Every `/policy/proxy-toggle` response line is an ordinary
-`SoranetPrivacyEventV1` entry encoded as NDJSON. The relay now stamps downgrade
-events with the canonical slug so orchestration scripts can react without
-parsing free-form strings:
+`SoranetPrivacyEventV1` entry encoded as NDJSON. The closed downgrade reason is
+sufficient for orchestration scripts; no caller-controlled text is exported:
 
 | Field | Description |
 |-------|-------------|
 | `timestamp_unix` | Seconds since Unix epoch when the downgrade was observed. |
 | `mode` | Relay mode that issued the downgrade (`entry`/`middle`/`exit`). |
-| `kind.handshakeFailure.reason` | Always `"Downgrade"` for proxy toggle entries. |
-| `kind.handshakeFailure.detail` | Normalised slug (`suite_no_overlap`, `mlkem_missing`, `downgrade`, …) derived in `tools/soranet-relay/src/runtime.rs:1311` using `normalize_downgrade_reason`. |
+| `kind.handshakeFailure.reason` | Always `"downgrade"` for proxy toggle entries. |
+| `kind.handshakeFailure.pow_reason` | Always `null`; this typed field is present only for `reason="pow"` in `/privacy/events`. |
 | `kind.handshakeFailure.rtt_ms` | Optional RTT captured for the failed handshake. |
 
-Consumers should treat the presence of `detail` as mandatory for downgrade
-automation; `null` indicates the relay could not determine a slug or the
-field was intentionally scrubbed.
+Consumers must reject a non-null `pow_reason` on non-PoW events and a missing
+`pow_reason` on PoW events.
 - The privacy event stream continues to feed Torii via
   `crates/iroha_torii/src/lib.rs::record_soranet_privacy_event`. The
   telemetry pipeline aggregates downgrades (see

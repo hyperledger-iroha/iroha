@@ -188,7 +188,10 @@ fn read_private_secret_file(
         }
     })?;
     let mut growth_probe = [0_u8; 1];
-    if file.read(&mut growth_probe)? != 0 {
+    let grew = file.read(&mut growth_probe)? != 0;
+    growth_probe.fill(0);
+    std::hint::black_box(&growth_probe);
+    if grew {
         return Err(HarnessError::Validation(format!(
             "{label} grew while being read or exceeds its {maximum_raw_bytes}-byte limit"
         )));
@@ -295,6 +298,15 @@ fn load_static_secret(path: &Path, label: &str) -> Result<StaticSecretKey, Harne
         return Err(HarnessError::Validation(format!(
             "{label} must decode to {STATIC_SECRET_KEY_BYTES} bytes, got {}",
             decoded.0.len()
+        )));
+    }
+    if decoded
+        .0
+        .first()
+        .is_some_and(|first| decoded.0.iter().all(|byte| byte == first))
+    {
+        return Err(HarnessError::Validation(format!(
+            "{label} must not be an all-zero or repeated-byte degenerate key"
         )));
     }
     let mut key = [0_u8; STATIC_SECRET_KEY_BYTES];
@@ -1099,6 +1111,24 @@ mod tests {
         )
         .expect_err("input above the corridor must fail");
         assert!(error.to_string().contains("first-release input limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_secret_loader_rejects_degenerate_keys() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("temporary directory");
+        for (name, byte) in [("zero.hex", "00"), ("repeated.hex", "a5")] {
+            let path = dir.path().join(name);
+            fs::write(&path, byte.repeat(STATIC_SECRET_KEY_BYTES)).expect("write static secret");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("make secret private");
+            let error = match load_static_secret(&path, "test static secret") {
+                Ok(_) => panic!("degenerate static secrets must fail closed"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("degenerate key"));
+        }
     }
 
     #[cfg(unix)]

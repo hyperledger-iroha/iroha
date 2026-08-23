@@ -798,7 +798,7 @@ fn global_then_zero_root_equality_consumes_the_exact_concrete_chronology() {
     let verified_zero_root =
         verified_zero_padding_root_fixture_v1(zero_pending.final_challenge_seeds_v1())
             .expect("same-session verified zero root");
-    zero_pending
+    let _terminal = zero_pending
         .discharge_zero_padding_root_equality_v1(verified_zero_root)
         .expect("all terminal roots equal");
 }

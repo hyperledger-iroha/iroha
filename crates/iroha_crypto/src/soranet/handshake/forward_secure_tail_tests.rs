@@ -127,9 +127,15 @@ fn suite_key_schedule_uses_distinct_domains() {
     let transcript = [0xAA; 32];
     let primary = [0x11; 32];
     let forward = [0x22; 32];
+    let noise_xx_dh = NoiseXxDhSecrets {
+        ee: Zeroizing::new([0x31; NOISE_SECRET_LEN]),
+        es: Zeroizing::new([0x32; NOISE_SECRET_LEN]),
+        se: Zeroizing::new([0x33; NOISE_SECRET_LEN]),
+    };
     let (nk2_session, nk2_confirm) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: &primary,
         forward_shared: None,
     })
@@ -137,6 +143,7 @@ fn suite_key_schedule_uses_distinct_domains() {
     let (nk3_session, nk3_confirm) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk3PqForwardSecure,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: &primary,
         forward_shared: Some(&forward),
     })
@@ -167,9 +174,15 @@ fn session_key_hkdf_length_prefixes_ikm_parts() {
 fn nk3_key_schedule_requires_forward_secret() {
     let transcript = [0xAB; 32];
     let primary = [0xCD; 32];
+    let noise_xx_dh = NoiseXxDhSecrets {
+        ee: Zeroizing::new([0x41; NOISE_SECRET_LEN]),
+        es: Zeroizing::new([0x42; NOISE_SECRET_LEN]),
+        se: Zeroizing::new([0x43; NOISE_SECRET_LEN]),
+    };
     let err = match derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk3PqForwardSecure,
         transcript_hash: &transcript,
+        noise_xx_dh: &noise_xx_dh,
         primary_shared: &primary,
         forward_shared: None,
     }) {

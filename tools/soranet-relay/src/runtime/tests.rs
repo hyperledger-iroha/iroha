@@ -20,7 +20,10 @@ mod tests {
                 CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
                 RelayCertificateBundleV2, RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
             },
-            handshake::HandshakeSuite,
+            handshake::{
+                DEFAULT_CLIENT_CAPABILITIES, HandshakeSuite, RuntimeParams as NoiseRuntimeParams,
+                build_client_hello, update_suite_list,
+            },
             pow,
             puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
         },
@@ -166,6 +169,7 @@ mod tests {
             payment_tx_hash: [0x44; 32],
             metering_public_key: key_pair.public_key().clone(),
             tariff: sample_vpn_tariff(),
+            network_policy_hash: [0x55; 32],
             expires_at_ms: u64::MAX,
         }
     }
@@ -660,39 +664,64 @@ mod tests {
             capacity,
         })
     }
-    fn client_hello_frame_with_resume(resume_hash: Option<&[u8]>) -> Vec<u8> {
-        let mut frame = Vec::new();
-        frame.push(crate::handshake::CLIENT_HELLO_TYPE);
-        frame.extend_from_slice(&32u16.to_be_bytes());
-        frame.extend_from_slice(&[0xAA; 32]);
-        frame.push(1);
-        frame.push(1);
-        frame.extend_from_slice(&[0x11; 32]);
-        frame.extend_from_slice(&4u16.to_be_bytes());
-        frame.extend_from_slice(&[0x22; 4]);
-        frame.extend_from_slice(&2u16.to_be_bytes());
-        frame.extend_from_slice(&[0x80, 0x01]);
-        match resume_hash {
-            Some(resume_hash) => {
-                frame.push(1);
-                frame.extend_from_slice(
-                    &u16::try_from(resume_hash.len())
-                        .expect("test resume hash length fits")
-                        .to_be_bytes(),
-                );
-                frame.extend_from_slice(resume_hash);
-            }
-            None => frame.push(0),
+    fn current_client_hello_frame(
+        suite: HandshakeSuite,
+        resume_hash: Option<&[u8]>,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let capabilities = update_suite_list(&DEFAULT_CLIENT_CAPABILITIES, &[suite], true)
+            .expect("encode current suite list");
+        let mut params = NoiseRuntimeParams::soranet_defaults();
+        params.client_capabilities = &capabilities;
+        params.relay_capabilities = &capabilities;
+        params.resume_hash = resume_hash;
+        let mut rng = StdRng::seed_from_u64(0x534f_5241_4e45_5401);
+        let (frame, _state) = build_client_hello(&params, &mut rng)
+            .expect("crypto engine must build current ClientHello");
+        (frame, capabilities)
+    }
+    fn matching_server_capabilities(client_capabilities: &[u8]) -> ServerCapabilities {
+        let advertised = parse_client_advertisement(client_capabilities)
+            .expect("crypto capability fixture must parse in the relay");
+        ServerCapabilities::new(
+            advertised.kem,
+            advertised.signatures,
+            advertised.padding.expect("fixture advertises padding"),
+            advertised.transcript_commit,
+            0x01,
+            advertised.constant_rate,
+        )
+    }
+    #[test]
+    fn relay_preflight_accepts_current_nk2_and_nk3_client_hello_frames() {
+        for suite in [
+            HandshakeSuite::Nk2Hybrid,
+            HandshakeSuite::Nk3PqForwardSecure,
+        ] {
+            let (frame, capabilities) = current_client_hello_frame(suite, None);
+            let current_wire_type = match suite {
+                HandshakeSuite::Nk2Hybrid => 0x11,
+                HandshakeSuite::Nk3PqForwardSecure => 0x21,
+            };
+            assert_eq!(frame.first().copied(), Some(current_wire_type));
+            let server_capabilities = matching_server_capabilities(&capabilities);
+            let preflight = preflight_client_hello(&frame, &server_capabilities)
+                .unwrap_or_else(|error| panic!("relay rejected current {suite} frame: {error}"));
+            assert_eq!(preflight.metadata.handshake_suite(), suite);
+            assert_eq!(
+                preflight.metadata.client_capabilities(),
+                capabilities.as_slice()
+            );
+            assert_eq!(
+                preflight.negotiated.kem.id.code(),
+                preflight.metadata.kem_id()
+            );
         }
-        frame.resize(crate::handshake::NOISE_PADDING_BLOCK, 0);
-        frame
     }
     #[test]
     fn admission_transcript_commits_to_the_exact_client_hello() {
-        let without_resume = client_hello_frame_with_resume(None);
-        let with_resume = client_hello_frame_with_resume(Some(&[0x44; 32]));
-        ClientHello::parse(&without_resume).expect("parse hello without resume hash");
-        ClientHello::parse(&with_resume).expect("parse hello with resume hash");
+        let (without_resume, _) = current_client_hello_frame(HandshakeSuite::Nk2Hybrid, None);
+        let (with_resume, _) =
+            current_client_hello_frame(HandshakeSuite::Nk2Hybrid, Some(&[0x44; 32]));
         let first = pow::derive_admission_transcript(&without_resume);
         assert_eq!(
             first,
@@ -1261,6 +1290,100 @@ mod tests {
         assert!(config.is_ok());
     }
     #[test]
+    fn relay_quic_server_applies_first_release_resource_limits() {
+        let config = RelayRuntime::self_signed_server_config("relay.test")
+            .expect("build relay QUIC configuration");
+        let rendered = format!("{config:?}");
+        for expected in [
+            "max_concurrent_bidi_streams: 32",
+            "max_concurrent_uni_streams: 8",
+            "max_idle_timeout: Some(30000)",
+            "stream_receive_window: 262144",
+            "receive_window: 4194304",
+            "send_window: 4194304",
+            "crypto_buffer_size: 65536",
+            "allow_spin: false",
+            "datagram_receive_buffer_size: Some(65536)",
+            "datagram_send_buffer_size: 65536",
+            "migration: false",
+            "max_incoming: 64",
+            "incoming_buffer_size: 65536",
+            "incoming_buffer_size_total: 4194304",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing `{expected}` in QUIC config: {rendered}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn relay_quic_address_gate_requires_retry_validation() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
+        let server_config = RelayRuntime::server_config(vec![cert.der().clone()], key)
+            .expect("build relay QUIC configuration");
+        let server = Endpoint::server(
+            server_config,
+            "127.0.0.1:0".parse().expect("parse loopback address"),
+        )
+        .expect("bind relay QUIC endpoint");
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(cert.der().clone())
+            .expect("trust test relay certificate");
+        let mut client_tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
+        let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
+            .expect("build QUIC client crypto");
+        let mut client = Endpoint::client(
+            "127.0.0.1:0"
+                .parse()
+                .expect("parse client loopback address"),
+        )
+        .expect("bind QUIC client endpoint");
+        client.set_default_client_config(quinn::ClientConfig::new(Arc::new(client_crypto)));
+        let connecting = client
+            .connect(server.local_addr().expect("relay address"), "relay.test")
+            .expect("start QUIC connection");
+        let client_task = tokio::spawn(connecting);
+
+        let initial = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("initial connection attempt timed out")
+            .expect("initial incoming connection");
+        assert!(!initial.remote_address_validated());
+        assert!(RelayRuntime::require_validated_quic_address(initial).is_none());
+
+        let retried = timeout(Duration::from_secs(2), server.accept())
+            .await
+            .expect("retried connection attempt timed out")
+            .expect("retried incoming connection");
+        let retried = RelayRuntime::require_validated_quic_address(retried)
+            .expect("retry token must validate the peer address");
+        assert!(retried.remote_address_validated());
+        let server_connecting = retried.accept().expect("accept validated connection");
+        let (server_connection, client_connection) = timeout(Duration::from_secs(2), async {
+            let (server_result, client_result) = tokio::join!(server_connecting, client_task);
+            (
+                server_result.expect("server QUIC handshake"),
+                client_result
+                    .expect("client task")
+                    .expect("client QUIC handshake"),
+            )
+        })
+        .await
+        .expect("validated QUIC handshake timed out");
+        server_connection.close(0u32.into(), b"test complete");
+        client_connection.close(0u32.into(), b"test complete");
+    }
+    #[test]
     fn relay_quic_server_rejects_tls_early_data() {
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
@@ -1666,17 +1789,13 @@ mod tests {
         }
     }
     #[test]
-    fn validate_client_selection_rejects_signature_mismatch() {
+    fn validate_client_selection_rejects_unsupported_signature_id() {
         let negotiated = negotiated_caps_fixture();
-        let err = validate_client_selection(
-            &negotiated,
-            KemId::MlKem768.code(),
-            SignatureId::Falcon512.code(),
-        )
-        .expect_err("signature mismatch should fail");
+        let err = validate_client_selection(&negotiated, KemId::MlKem768.code(), 0x02)
+            .expect_err("unsupported signature identifier should fail");
         match err {
             HandshakeError::InvalidClient(field) => {
-                assert_eq!(field, "client sig_id does not match negotiated capability");
+                assert_eq!(field, "client sig_id is not a supported signature suite");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -2025,20 +2144,6 @@ mod tests {
         assert!(render_incentive_prometheus(TEST_RELAY_ID, &overflow, RelayMode::Entry).is_err());
     }
     #[test]
-    fn ensure_nonzero_accepts_non_zero_bytes() {
-        let bytes = [0u8, 1, 0, 2];
-        assert!(ensure_nonzero("test", &bytes).is_ok());
-    }
-    #[test]
-    fn ensure_nonzero_rejects_all_zero_bytes() {
-        let bytes = [0u8; 4];
-        let err = ensure_nonzero("all zero rejected", &bytes).expect_err("should fail");
-        assert!(matches!(
-            err,
-            HandshakeError::InvalidClient("all zero rejected")
-        ));
-    }
-    #[test]
     fn admin_authorization_verifies_the_complete_bearer_token() {
         let file = secure_test_tempfile();
         std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef\n")
@@ -2131,6 +2236,32 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::TimedOut);
     }
     #[test]
+    fn admin_auth_rejects_ambiguous_or_body_framed_headers() {
+        const TOKEN: &str = "soranet-test-admin-token-00000001";
+        let valid = format!(
+            "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        );
+        assert_eq!(RelayRuntime::admin_bearer_token(&valid), Some(TOKEN));
+        for invalid in [
+            format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n folded\r\n\r\n"),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nContent-Length: 0\r\n\r\n"
+            ),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ),
+            format!(
+                "GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+            ),
+            format!("GET /metrics HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\nMalformed\r\n\r\n"),
+        ] {
+            assert!(
+                RelayRuntime::admin_bearer_token(&invalid).is_none(),
+                "ambiguous request was accepted: {invalid:?}"
+            );
+        }
+    }
+    #[test]
     fn admin_connection_permits_enforce_capacity() {
         let permits = Arc::new(Semaphore::new(1));
         let permit = RelayRuntime::try_admin_connection_permit(&permits)
@@ -2138,6 +2269,15 @@ mod tests {
         assert!(RelayRuntime::try_admin_connection_permit(&permits).is_none());
         drop(permit);
         assert!(RelayRuntime::try_admin_connection_permit(&permits).is_some());
+    }
+    #[test]
+    fn quic_handshake_permits_enforce_capacity() {
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = RelayRuntime::try_quic_handshake_permit(&permits)
+            .expect("first pending handshake should be admitted");
+        assert!(RelayRuntime::try_quic_handshake_permit(&permits).is_none());
+        drop(permit);
+        assert!(RelayRuntime::try_quic_handshake_permit(&permits).is_some());
     }
     #[tokio::test]
     async fn admin_endpoint_serves_privacy_events() {
@@ -2156,7 +2296,7 @@ mod tests {
             event_time,
             SoranetPrivacyThrottleScopeV1::DescriptorQuota,
         );
-        proxy_policy_events.record_downgrade(privacy_mode, event_time, Some("downgrade"));
+        proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let listener = match StdTcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => {
@@ -2206,6 +2346,23 @@ mod tests {
         assert!(
             unauthorized_text.starts_with("HTTP/1.1 401 Unauthorized"),
             "expected authentication failure, got: {unauthorized_text}"
+        );
+        let mut health_stream = TcpStream::connect(addr)
+            .await
+            .expect("connect to protected health endpoint");
+        health_stream
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write unauthenticated health request");
+        let mut health_response = Vec::new();
+        health_stream
+            .read_to_end(&mut health_response)
+            .await
+            .expect("read unauthenticated health response");
+        let health_text = String::from_utf8(health_response).expect("response must be UTF-8");
+        assert!(
+            health_text.starts_with("HTTP/1.1 401 Unauthorized"),
+            "health endpoint bypassed authentication: {health_text}"
         );
         let mut stream = TcpStream::connect(addr)
             .await
@@ -2288,8 +2445,8 @@ mod tests {
             "downgrade payload missing downgrade event: {downgrade_text}"
         );
         assert!(
-            downgrade_text.contains("\"detail\":\"downgrade\""),
-            "downgrade payload missing slug: {downgrade_text}"
+            !downgrade_text.contains("\"detail\""),
+            "downgrade payload must not expose free-form detail: {downgrade_text}"
         );
         downgrade_stream
             .shutdown()
@@ -2382,7 +2539,7 @@ mod tests {
             metrics.record_downgrade(&warning.message);
         }
         let event_time = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        proxy_policy_events.record_downgrade(privacy_mode, event_time, Some(&detail));
+        proxy_policy_events.record_downgrade(privacy_mode, event_time);
         let rendered = metrics.render_prometheus(mode, proxy_policy_events.queue_depth() as u64);
         let label_block =
             "mode=\"entry\",constant_rate_profile=\"unknown\",constant_rate_neighbors=\"0\"";
@@ -2404,8 +2561,8 @@ mod tests {
             "proxy policy NDJSON must tag downgrade reason slug: {ndjson}"
         );
         assert!(
-            ndjson.contains(&format!("\"detail\":\"{detail}\"")),
-            "proxy policy NDJSON should carry the slugged detail: {ndjson}"
+            !ndjson.contains("\"detail\""),
+            "proxy policy NDJSON must not carry free-form detail: {ndjson}"
         );
     }
 }

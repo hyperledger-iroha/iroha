@@ -280,6 +280,7 @@ _apalache-out*
 /bench_trace.json
 /fastpq_*.json
 /libtest.rlib
+/librust_out.rlib
 /libverus_macro_*.rlib
 /clippy_errors.txt
 /.playwright-cli*

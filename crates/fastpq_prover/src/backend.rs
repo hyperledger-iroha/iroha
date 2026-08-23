@@ -1732,29 +1732,40 @@ pub fn fold_with_fri(
     layers.push(final_root);
     Ok((layers, betas))
 }
-#[allow(clippy::type_complexity)]
+struct FriOpeningLayers {
+    layer_values: Vec<Vec<u64>>,
+    roots: Vec<u64>,
+    betas: Vec<u64>,
+}
+
 fn fold_with_fri_opening_layers(
     evaluations: &[u64],
-    arity: u32,
-    max_reductions: u32,
-    lde_root: u64,
-    lde_log_size: u32,
-    domain_offset: u64,
+    params: &StarkParameterSet,
     transcript: &mut Transcript,
     mode: ExecutionMode,
-) -> Result<(Vec<Vec<u64>>, Vec<u64>, Vec<u64>)> {
+) -> Result<FriOpeningLayers> {
+    let arity = params.fri.arity;
     if arity != 8 && arity != 16 {
         return Err(Error::FriArity(arity));
     }
     if evaluations.is_empty() {
         transcript.append_fri_final(0);
-        return Ok((vec![Vec::new()], vec![0], Vec::new()));
+        return Ok(FriOpeningLayers {
+            layer_values: vec![Vec::new()],
+            roots: vec![0],
+            betas: Vec::new(),
+        });
     }
     let arity_usize = usize::try_from(arity).expect("FRI arity fits usize");
-    let max_rounds = usize::try_from(max_reductions).expect("FRI reduction bound fits usize");
+    let max_rounds =
+        usize::try_from(params.fri.max_reductions).expect("FRI reduction bound fits usize");
     let mut current = evaluations.to_vec();
-    let mut domain =
-        FriDomain::from_lde_parameters(lde_root, lde_log_size, current.len(), domain_offset)?;
+    let mut domain = FriDomain::from_lde_parameters(
+        params.lde_root,
+        params.lde_log_size,
+        current.len(),
+        params.omega_coset,
+    )?;
     let mut layer_values = Vec::new();
     let mut roots = Vec::new();
     let mut betas = Vec::new();
@@ -1777,7 +1788,11 @@ fn fold_with_fri_opening_layers(
     transcript.append_fri_final(final_root);
     roots.push(final_root);
     layer_values.push(current);
-    Ok((layer_values, roots, betas))
+    Ok(FriOpeningLayers {
+        layer_values,
+        roots,
+        betas,
+    })
 }
 fn hash_fri_leaves_with_mode(
     round: usize,
@@ -1896,13 +1911,13 @@ fn open_fri_query_chains(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FriDomain {
+pub struct FriDomain {
     generator: u64,
     offset: u64,
 }
 
 impl FriDomain {
-    pub(crate) fn from_lde_parameters(
+    pub fn from_lde_parameters(
         lde_root: u64,
         lde_log_size: u32,
         domain_size: usize,
@@ -1928,7 +1943,7 @@ impl FriDomain {
         })
     }
 
-    pub(crate) fn point(self, index: usize) -> u64 {
+    pub fn point(self, index: usize) -> u64 {
         mul_mod(
             self.offset,
             field_pow(
@@ -1938,14 +1953,14 @@ impl FriDomain {
         )
     }
 
-    pub(crate) fn coset_generator(self, output_len: usize) -> u64 {
+    pub fn coset_generator(self, output_len: usize) -> u64 {
         field_pow(
             self.generator,
             u64::try_from(output_len).expect("FRI output length fits u64"),
         )
     }
 
-    pub(crate) fn folded(self, arity: usize) -> Self {
+    pub fn folded(self, arity: usize) -> Self {
         let exponent = u64::try_from(arity).expect("FRI arity fits u64");
         Self {
             generator: field_pow(self.generator, exponent),
@@ -1954,7 +1969,7 @@ impl FriDomain {
     }
 }
 
-pub(crate) fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> {
+pub fn fri_round_arity(length: usize, configured_arity: usize) -> Result<usize> {
     if configured_arity == 0 {
         return Err(Error::FriArity(0));
     }
@@ -1965,7 +1980,7 @@ pub(crate) fn fri_round_arity(length: usize, configured_arity: usize) -> Result<
         });
     }
     let round_arity = configured_arity.min(length);
-    if length % round_arity != 0 {
+    if !length.is_multiple_of(round_arity) {
         return Err(Error::FriDomainSize {
             length,
             arity: round_arity,
@@ -1974,12 +1989,7 @@ pub(crate) fn fri_round_arity(length: usize, configured_arity: usize) -> Result<
     Ok(round_arity)
 }
 
-pub(crate) fn fold_fri_coset(
-    values: &[u64],
-    challenge: u64,
-    x: u64,
-    coset_generator: u64,
-) -> Result<u64> {
+pub fn fold_fri_coset(values: &[u64], challenge: u64, x: u64, coset_generator: u64) -> Result<u64> {
     if values.is_empty() || x == 0 {
         return Err(Error::FriDomainSize {
             length: values.len(),
@@ -2330,13 +2340,13 @@ impl StarkBackend {
         let next_step = usize::try_from(self.config.params.fri.blowup_factor)
             .expect("FRI blowup factor fits usize")
             .max(1);
-        let (fri_layer_values, fri_layers, fri_betas) = fold_with_fri_opening_layers(
+        let FriOpeningLayers {
+            layer_values: fri_layer_values,
+            roots: fri_layers,
+            betas: fri_betas,
+        } = fold_with_fri_opening_layers(
             &air_composition_values,
-            self.config.params.fri.arity,
-            self.config.params.fri.max_reductions,
-            self.config.params.lde_root,
-            self.config.params.lde_log_size,
-            self.config.params.omega_coset,
+            &self.config.params,
             &mut transcript,
             canonical_mode,
         )?;
@@ -2394,7 +2404,7 @@ impl StarkBackend {
     }
 
     #[cfg(test)]
-    pub(crate) fn prove_with_transcript_trace_root(
+    pub fn prove_with_transcript_trace_root(
         &self,
         batch: &TransitionBatch,
         public_io: &PublicIO,
@@ -3226,14 +3236,19 @@ mod tests {
         assert_eq!(betas, repeat_betas);
     }
     fn reference_add(a: u64, b: u64) -> u64 {
-        ((u128::from(a) + u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS)) as u64
+        u64::try_from((u128::from(a) + u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
+            .expect("Goldilocks remainder fits u64")
     }
     fn reference_sub(a: u64, b: u64) -> u64 {
-        ((u128::from(a) + u128::from(super::GOLDILOCKS_MODULUS) - u128::from(b))
-            % u128::from(super::GOLDILOCKS_MODULUS)) as u64
+        u64::try_from(
+            (u128::from(a) + u128::from(super::GOLDILOCKS_MODULUS) - u128::from(b))
+                % u128::from(super::GOLDILOCKS_MODULUS),
+        )
+        .expect("Goldilocks remainder fits u64")
     }
     fn reference_mul(a: u64, b: u64) -> u64 {
-        ((u128::from(a) * u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS)) as u64
+        u64::try_from((u128::from(a) * u128::from(b)) % u128::from(super::GOLDILOCKS_MODULUS))
+            .expect("Goldilocks remainder fits u64")
     }
     fn reference_pow(mut base: u64, mut exponent: u64) -> u64 {
         let mut result = 1;

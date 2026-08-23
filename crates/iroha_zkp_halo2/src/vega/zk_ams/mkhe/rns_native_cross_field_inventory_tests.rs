@@ -1499,10 +1499,7 @@ fn pre_direct_candidate_projection_surface_is_sealed_one_pass_and_fail_closed() 
         );
     }
     assert!(!direct_bind_signature.contains("RnsNativeCrossFieldRlweFixedAxesV1"));
-    let raw_axes_bind = direct
-        .find("pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1")
-        .expect("test-only raw fixed-axes bind");
-    assert!(direct[raw_axes_bind.saturating_sub(64)..raw_axes_bind].contains("#[cfg(test)]"));
+    assert!(!direct.contains("pub(super) fn prepare_direct_relation_schedule_after_qpcs_v1"));
     let qpcs_bind = qpcs
         .find("pub(super) fn bind_direct_claimed_relation_v2")
         .expect("production qPCS bind");

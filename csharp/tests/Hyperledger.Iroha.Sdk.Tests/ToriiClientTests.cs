@@ -85,7 +85,7 @@ public sealed partial class ToriiClientTests
     private static readonly string VpnDescriptorCommitHex = string.Concat(Enumerable.Repeat("cd", 32));
     private static readonly string VpnRelayCertificateSha256Hex = string.Concat(Enumerable.Repeat("ef", 32));
     private static readonly string VpnDirectorySnapshotDigestHex = string.Concat(Enumerable.Repeat("42", 32));
-    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (664 - 8) * 2);
+    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (696 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
     private static readonly string ExplorerBlockHashHex = new('8', 64);
@@ -7138,7 +7138,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
         Assert.Equal("1000000.25", session.LeaseFee);
         Assert.Equal(VpnHelperTicketHex, session.HelperTicketHex);
-        Assert.Equal(1328, session.HelperTicketHex.Length);
+        Assert.Equal(1392, session.HelperTicketHex.Length);
     }
 
     public static IEnumerable<object[]> InvalidVpnSessionCreateRequests()
@@ -7342,10 +7342,10 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "CAFE", "lowercase" };
         yield return new object[] { "session-create", "session_id", "session-1", "32-byte hex string" };
         yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "664-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 664-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "664-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "696-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 696-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "696-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "696-byte hex string" };
         yield return new object[] { "session-get", "payment_tx_hash", VpnPaymentTransactionHashHex[..32] + " " + VpnPaymentTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "session-get", "payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "session-get", "relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex, "32-byte hex string" };
@@ -7773,10 +7773,10 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "session", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", null), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "664-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 664-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "664-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "696-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 696-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "696-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "696-byte hex string" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", null), "must not be null" };
         yield return new object[] { "receipt", "vpn receipt.audit", VpnReceiptUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "not allowed" };

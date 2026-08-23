@@ -127,7 +127,7 @@ pub enum Command {
     WriteCanary(WriteCanary),
     /// Build the canonical offline artifact stage that operators preseed into all validators.
     InrouStage(InrouStage),
-    /// Register an exact preseeded stage, deploy, and verify the four-replica Inrou canary.
+    /// Register an exact preseeded stage, mutate explicitly, and verify the four-replica Inrou canary.
     InrouCanary(InrouCanary),
 }
 impl Run for Command {
@@ -194,10 +194,9 @@ impl Run for WriteCanary {
     }
 }
 /// Explicit mutation mode for the Taira Inrou canary.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InrouCanaryMode {
     /// Register a new canary service.
-    #[default]
     Deploy,
     /// Replace an already-deployed canary revision.
     Upgrade,
@@ -260,7 +259,7 @@ pub struct InrouCanary {
     #[arg(long, value_name = "PATH")]
     pub stage_dir: PathBuf,
     /// Submit an explicit deploy or upgrade mutation; conflicts are never retried as another mode.
-    #[arg(long, value_enum, default_value_t = InrouCanaryMode::Deploy)]
+    #[arg(long, value_enum)]
     pub mode: InrouCanaryMode,
     /// Maximum convergence time for adverts, placements, runtime health, and all four routes.
     #[arg(long, value_name = "SECS", default_value_t = 180)]

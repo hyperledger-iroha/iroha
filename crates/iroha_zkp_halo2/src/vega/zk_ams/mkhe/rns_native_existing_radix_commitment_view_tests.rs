@@ -93,7 +93,9 @@ fn existing_radix_codec_is_exact_canonical_capped_and_upstream_bound() {
     assert_ne!(view.residual_digest, [0; DIGEST_BYTES_V1]);
     assert_ne!(view.codec_digest, [0; DIGEST_BYTES_V1]);
     assert_eq!(MIN_WIRE_BYTES_V1, 386_415);
-    assert!(MIN_WIRE_BYTES_V1 <= 386_513);
+    const {
+        assert!(MIN_WIRE_BYTES_V1 <= 386_513);
+    }
 
     let mut changed = upstream;
     changed.q_mask_verified_transcript_root[0] ^= 1;

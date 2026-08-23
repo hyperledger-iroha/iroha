@@ -794,17 +794,13 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
     assert!(cmd.json);
 }
 #[test]
-fn taira_inrou_canary_cli_requires_artifacts_and_parses_explicit_upgrade() {
+fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
     let args = Args::try_parse_from([
         "iroha",
         "taira",
         "inrou-canary",
-        "--container",
-        "/tmp/container.json",
-        "--service",
-        "/tmp/service.json",
-        "--bundle-file",
-        "/tmp/service.tgz",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
         "--mode",
         "upgrade",
         "--timeout-secs",
@@ -815,9 +811,10 @@ fn taira_inrou_canary_cli_requires_artifacts_and_parses_explicit_upgrade() {
     let Command::Taira(crate::taira::Command::InrouCanary(cmd)) = args.command else {
         panic!("expected taira inrou-canary command");
     };
-    assert_eq!(cmd.container, std::path::PathBuf::from("/tmp/container.json"));
-    assert_eq!(cmd.service, std::path::PathBuf::from("/tmp/service.json"));
-    assert_eq!(cmd.bundle_file, std::path::PathBuf::from("/tmp/service.tgz"));
+    assert_eq!(
+        cmd.stage_dir,
+        std::path::PathBuf::from("/tmp/taira-inrou-stage")
+    );
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
     assert_eq!(cmd.timeout_secs, 90);
     assert!(cmd.json);
@@ -826,12 +823,10 @@ fn taira_inrou_canary_cli_requires_artifacts_and_parses_explicit_upgrade() {
         "iroha",
         "taira",
         "inrou-canary",
-        "--container",
-        "/tmp/container.json",
-        "--service",
-        "/tmp/service.json",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
     ])
-    .expect_err("Inrou canary must require canonical bundle bytes");
+    .expect_err("Inrou canary must require an explicit mutation mode");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]

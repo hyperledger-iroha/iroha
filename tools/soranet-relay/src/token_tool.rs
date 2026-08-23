@@ -10,8 +10,8 @@ use soranet_pq::MlDsaSuite;
 use std::{
     collections::{HashSet, TryReserveError},
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, Read as _},
-    path::Path,
+    io::{self, Read as _, Write as _},
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 use thiserror::Error;
@@ -124,7 +124,10 @@ fn revocation_file_is_reparse_point(metadata: &FsMetadata) -> bool {
 fn revocation_file_is_reparse_point(_metadata: &FsMetadata) -> bool {
     false
 }
-fn validate_revocation_file_metadata(metadata: &FsMetadata) -> io::Result<()> {
+fn validate_revocation_file_metadata(
+    metadata: &FsMetadata,
+    expected_owner: Option<u32>,
+) -> io::Result<()> {
     if metadata.file_type().is_symlink()
         || revocation_file_is_reparse_point(metadata)
         || !metadata.file_type().is_file()
@@ -133,6 +136,39 @@ fn validate_revocation_file_metadata(metadata: &FsMetadata) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "revocation list must be a direct regular file with a stable identity",
+        ));
+    }
+    #[cfg(unix)]
+    if let Some(owner) = expected_owner {
+        use std::os::unix::fs::MetadataExt as _;
+        if (metadata.uid() != owner && metadata.uid() != 0)
+            || metadata.mode() & 0o022 != 0
+            || metadata.nlink() != 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "revocation list must be owned by the current user or root, not group/world writable, and have exactly one link",
+            ));
+        }
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn current_process_owner_uid() -> io::Result<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(tempfile::tempfile()?.metadata()?.uid())
+}
+#[cfg(unix)]
+fn validate_revocation_parent(metadata: &FsMetadata, owner: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_dir()
+        || (metadata.uid() != owner && metadata.uid() != 0)
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "revocation-list parent must be a direct directory owned by the current user or root and not group/world writable",
         ));
     }
     Ok(())
@@ -210,12 +246,16 @@ fn replace_revocation_file_for_test(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    #[cfg(unix)]
+    let expected_owner = Some(current_process_owner_uid()?);
+    #[cfg(not(unix))]
+    let expected_owner = None;
     let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    validate_revocation_file_metadata(&before)?;
+    validate_revocation_file_metadata(&before, expected_owner)?;
     let maximum_u64 = u64::try_from(REVOCATION_LIST_MAX_FILE_BYTES_V1)
         .expect("fixed revocation-list limit fits u64");
     if before.len() > maximum_u64 {
@@ -231,7 +271,7 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     replace_revocation_file_for_test(path)?;
     let mut file = open_revocation_file_direct(path)?;
     let opened = file.metadata()?;
-    validate_revocation_file_metadata(&opened)?;
+    validate_revocation_file_metadata(&opened, expected_owner)?;
     if !revocation_file_metadata_unchanged(&before, &opened) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -268,8 +308,8 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     let after_file = file.metadata()?;
     let after_path = fs::symlink_metadata(path)?;
-    validate_revocation_file_metadata(&after_file)?;
-    validate_revocation_file_metadata(&after_path)?;
+    validate_revocation_file_metadata(&after_file, expected_owner)?;
+    validate_revocation_file_metadata(&after_path, expected_owner)?;
     if !revocation_file_metadata_unchanged(&opened, &after_file)
         || !revocation_file_metadata_unchanged(&opened, &after_path)
     {
@@ -279,6 +319,226 @@ fn read_revocation_file_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
         ));
     }
     Ok(Some(bytes))
+}
+#[cfg(unix)]
+fn canonical_revocation_destination(path: &Path, owner: u32) -> io::Result<(PathBuf, File)> {
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "revocation-list path must name a file",
+        )
+    })?;
+    let configured_parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(configured_parent)?;
+    let parent = fs::canonicalize(configured_parent)?;
+    let named = fs::symlink_metadata(&parent)?;
+    validate_revocation_parent(&named, owner)?;
+    let opened = File::open(&parent)?;
+    let opened_metadata = opened.metadata()?;
+    validate_revocation_parent(&opened_metadata, owner)?;
+    if revocation_file_identity(&named) != revocation_file_identity(&opened_metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "revocation-list parent changed while being opened",
+        ));
+    }
+    Ok((parent.join(file_name), opened))
+}
+#[cfg(unix)]
+fn revocation_lock_path(destination: &Path) -> io::Result<PathBuf> {
+    let mut file_name = destination
+        .file_name()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "revocation-list path must name a file",
+            )
+        })?
+        .to_os_string();
+    file_name.push(".lock");
+    Ok(destination.with_file_name(file_name))
+}
+#[cfg(unix)]
+fn validate_revocation_lock_metadata(metadata: &FsMetadata, owner: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    validate_revocation_file_metadata(metadata, Some(owner))?;
+    if metadata.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "revocation-list lock must be owner-private",
+        ));
+    }
+    Ok(())
+}
+#[cfg(unix)]
+struct RevocationFileLock {
+    file: File,
+    path: PathBuf,
+    parent: File,
+    parent_path: PathBuf,
+    owner: u32,
+}
+#[cfg(unix)]
+impl RevocationFileLock {
+    fn acquire(path: &Path) -> io::Result<(PathBuf, Self)> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let owner = current_process_owner_uid()?;
+        let (destination, parent) = canonical_revocation_destination(path, owner)?;
+        let parent_path = destination
+            .parent()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "revocation-list destination has no parent",
+                )
+            })?
+            .to_path_buf();
+        let parent_opened = parent.metadata()?;
+        let parent_named = fs::symlink_metadata(&parent_path)?;
+        validate_revocation_parent(&parent_opened, owner)?;
+        validate_revocation_parent(&parent_named, owner)?;
+        if revocation_file_identity(&parent_opened) != revocation_file_identity(&parent_named) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "revocation-list parent changed before lock acquisition",
+            ));
+        }
+
+        let lock_path = revocation_lock_path(&destination)?;
+        let before = match fs::symlink_metadata(&lock_path) {
+            Ok(metadata) => {
+                validate_revocation_lock_metadata(&metadata, owner)?;
+                Some(metadata)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(REVOCATION_LIST_O_NOFOLLOW_FLAG)
+            .open(&lock_path)?;
+        let opened = file.metadata()?;
+        validate_revocation_lock_metadata(&opened, owner)?;
+        if before
+            .as_ref()
+            .is_some_and(|metadata| !revocation_file_metadata_unchanged(metadata, &opened))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "revocation-list lock changed while being opened",
+            ));
+        }
+        let named = fs::symlink_metadata(&lock_path)?;
+        validate_revocation_lock_metadata(&named, owner)?;
+        if !revocation_file_metadata_unchanged(&opened, &named) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "revocation-list lock path does not name the opened lock",
+            ));
+        }
+        file.lock()?;
+        let guard = Self {
+            file,
+            path: lock_path,
+            parent,
+            parent_path,
+            owner,
+        };
+        guard.validate()?;
+        Ok((destination, guard))
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        let opened = self.file.metadata()?;
+        let named = fs::symlink_metadata(&self.path)?;
+        validate_revocation_lock_metadata(&opened, self.owner)?;
+        validate_revocation_lock_metadata(&named, self.owner)?;
+        if !revocation_file_metadata_unchanged(&opened, &named) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "revocation-list lock changed during the transaction",
+            ));
+        }
+        let parent_opened = self.parent.metadata()?;
+        let parent_named = fs::symlink_metadata(&self.parent_path)?;
+        validate_revocation_parent(&parent_opened, self.owner)?;
+        validate_revocation_parent(&parent_named, self.owner)?;
+        if revocation_file_identity(&parent_opened) != revocation_file_identity(&parent_named) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "revocation-list parent changed during the transaction",
+            ));
+        }
+        Ok(())
+    }
+}
+#[cfg(unix)]
+fn write_revocation_file_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if bytes.len() > REVOCATION_LIST_MAX_FILE_BYTES_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "revocation-list output exceeds its first-release byte limit",
+        ));
+    }
+    let owner = current_process_owner_uid()?;
+    let (destination, parent) = canonical_revocation_destination(path, owner)?;
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) => validate_revocation_file_metadata(&metadata, Some(owner))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let parent_before = parent.metadata()?;
+    validate_revocation_parent(&parent_before, owner)?;
+    let destination_parent = destination.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "revocation-list destination has no parent",
+        )
+    })?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".soranet-revocations-")
+        .tempfile_in(destination_parent)?;
+    validate_revocation_file_metadata(&temporary.as_file().metadata()?, Some(owner))?;
+    temporary.write_all(bytes)?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+    let persisted = temporary
+        .persist(&destination)
+        .map_err(|error| error.error)?;
+    let persisted_metadata = persisted.metadata()?;
+    let named = fs::symlink_metadata(&destination)?;
+    validate_revocation_file_metadata(&persisted_metadata, Some(owner))?;
+    validate_revocation_file_metadata(&named, Some(owner))?;
+    if !revocation_file_metadata_unchanged(&persisted_metadata, &named) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "revocation-list destination changed while being persisted",
+        ));
+    }
+    parent.sync_all()?;
+    let parent_after = parent.metadata()?;
+    validate_revocation_parent(&parent_after, owner)?;
+    if revocation_file_identity(&parent_before) != revocation_file_identity(&parent_after) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "revocation-list parent changed while being persisted",
+        ));
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn write_revocation_file_atomic(_path: &Path, _bytes: &[u8]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "durable revocation-list writes require Unix owner/mode/link custody checks",
+    ))
 }
 /// Request parameters for minting an admission token.
 pub struct MintRequest<'a> {
@@ -364,15 +624,15 @@ impl TokenBundle {
         Ok(Self { token, metadata })
     }
     /// Serialise bundle details into a JSON value using Norito helpers.
+    ///
+    /// The canonical JSON form emits one bearer representation (base64)
+    /// instead of duplicating the same secret in hexadecimal.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        let encoded = self.token.encode();
-        let base64 = BASE64.encode(&encoded);
-        let hex = hex::encode(&encoded);
+        let base64 = encode_token_base64(&self.token);
         let ttl = self.metadata.ttl().as_secs();
         let mut object = json::Map::new();
         object.insert("token_base64".into(), Value::from(base64));
-        object.insert("token_hex".into(), Value::from(hex));
         object.insert(
             "token_id_hex".into(),
             Value::from(hex::encode(self.metadata.token_id)),
@@ -430,25 +690,44 @@ impl RevocationList {
         })
     }
     /// Persist the revocation list to disk, creating parent directories if needed.
-    pub fn write(&self, path: &Path) -> Result<(), TokenToolError> {
+    fn write(&self, path: &Path) -> Result<(), TokenToolError> {
         let bytes = self.to_canonical_json_bytes()?;
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, bytes)?;
+        write_revocation_file_atomic(path, &bytes)?;
         Ok(())
     }
-    /// Insert a token identifier into the revocation list.
+    /// Atomically insert and durably persist one token identifier.
     ///
-    /// This compatibility helper returns `false` for duplicates or a bounded
-    /// resource refusal. Call [`Self::try_insert`] when the distinction matters.
-    pub fn insert(&mut self, token_id: [u8; 32]) -> bool {
-        self.try_insert(token_id).unwrap_or(false)
+    /// A stable owner-private sibling lock serializes the complete
+    /// read-modify-replace transaction so concurrent revocations cannot lose an
+    /// update.
+    pub fn insert_durable(path: &Path, token_id: [u8; 32]) -> Result<bool, TokenToolError> {
+        #[cfg(unix)]
+        {
+            let (destination, lock) = RevocationFileLock::acquire(path)?;
+            let mut list = Self::load_or_default(&destination)?;
+            let inserted = list.insert(token_id)?;
+            if inserted {
+                list.write(&destination)?;
+            }
+            lock.validate()?;
+            Ok(inserted)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, token_id);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "durable revocation updates require Unix owner/mode/link custody checks",
+            )
+            .into())
+        }
     }
-    /// Fallibly insert a token identifier under the first-release entry cap.
-    pub fn try_insert(&mut self, token_id: [u8; 32]) -> Result<bool, TokenToolError> {
+    /// Insert a token identifier under the first-release entry cap.
+    ///
+    /// Returns `Ok(false)` only when the identifier is already present. Resource
+    /// refusal is reported as an error so callers cannot mistake a failed
+    /// revocation for an already-durable duplicate.
+    pub fn insert(&mut self, token_id: [u8; 32]) -> Result<bool, TokenToolError> {
         let position = match self.entries.binary_search(&token_id) {
             Ok(_) => return Ok(false),
             Err(position) => position,
@@ -605,7 +884,7 @@ fn parse_revocation_token_id(
         });
     }
     for (index, byte) in value.bytes().enumerate() {
-        if !byte.is_ascii_hexdigit() {
+        if !matches!(byte, b'0'..=b'9' | b'a'..=b'f') {
             return Err(TokenToolError::Hex {
                 field: "revocation_list",
                 error: FromHexError::InvalidHexCharacter {
@@ -735,12 +1014,20 @@ pub fn parse_rfc3339(value: &str, field: &'static str) -> Result<SystemTime, Tok
 /// Encode a token frame as base64.
 #[must_use]
 pub fn encode_token_base64(token: &AdmissionToken) -> String {
-    BASE64.encode(token.encode())
+    let mut encoded = token.encode();
+    let output = BASE64.encode(&encoded);
+    encoded.fill(0);
+    std::hint::black_box(encoded.as_mut_slice());
+    output
 }
 /// Encode a token frame as hexadecimal.
 #[must_use]
 pub fn encode_token_hex(token: &AdmissionToken) -> String {
-    hex::encode(token.encode())
+    let mut encoded = token.encode();
+    let output = hex::encode(&encoded);
+    encoded.fill(0);
+    std::hint::black_box(encoded.as_mut_slice());
+    output
 }
 /// Helper used by configuration parsing to load revocation IDs from disk.
 pub fn read_revocation_file(path: &Path) -> Result<Vec<[u8; 32]>, TokenToolError> {
@@ -829,6 +1116,9 @@ mod tests {
         let encoded = bundle.token.encode();
         let decoded = inspect_token(&encoded).expect("inspect");
         assert_eq!(bundle.metadata, decoded.metadata);
+        let json = bundle.to_json();
+        assert!(json.get("token_base64").is_some());
+        assert!(json.get("token_hex").is_none());
     }
     #[test]
     fn inspect_rejects_unrepresentable_token_timestamps_without_panic() {
@@ -849,8 +1139,8 @@ mod tests {
         let dir = tempdir().expect("tmp");
         let path = dir.path().join("revocations.json");
         let mut list = RevocationList::default();
-        list.insert([0x11; 32]);
-        list.insert([0x22; 32]);
+        list.insert([0x11; 32]).expect("insert first token");
+        list.insert([0x22; 32]).expect("insert second token");
         list.write(&path).expect("write");
         let loaded = RevocationList::load_or_default(&path).expect("load");
         assert_eq!(
@@ -866,6 +1156,85 @@ mod tests {
             )
             .into_bytes()
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+            let metadata = fs::metadata(&path).expect("revocation-list metadata");
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            assert_eq!(metadata.nlink(), 1);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn durable_revocation_insert_serializes_concurrent_writers() {
+        use std::{
+            os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+            sync::{Arc, Barrier},
+            thread,
+        };
+
+        let dir = tempdir().expect("tmp");
+        let path = Arc::new(
+            fs::canonicalize(dir.path())
+                .expect("canonical temporary directory")
+                .join("revocations.json"),
+        );
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = [[0x11; 32], [0x22; 32]].map(|token_id| {
+            let path = Arc::clone(&path);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                RevocationList::insert_durable(path.as_path(), token_id)
+            })
+        });
+        barrier.wait();
+        for handle in handles {
+            assert!(
+                handle
+                    .join()
+                    .expect("revocation writer must not panic")
+                    .expect("durable revocation insert"),
+                "each distinct identifier must be inserted"
+            );
+        }
+        let loaded = RevocationList::load_or_default(path.as_path()).expect("load merged list");
+        assert_eq!(
+            loaded.entries().copied().collect::<Vec<_>>(),
+            vec![[0x11; 32], [0x22; 32]]
+        );
+        let lock_path = revocation_lock_path(path.as_path()).expect("lock path");
+        let metadata = fs::metadata(lock_path).expect("stable lock metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(metadata.nlink(), 1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn durable_revocation_insert_rejects_linked_lock_path() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = tempdir().expect("tmp");
+        let parent = fs::canonicalize(dir.path()).expect("canonical temporary directory");
+        let path = parent.join("revocations.json");
+        let lock_path = revocation_lock_path(&path).expect("lock path");
+        let target = parent.join("lock-target");
+        fs::write(&target, b"sentinel").expect("write lock target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+            .expect("make target private");
+        symlink(&target, &lock_path).expect("create lock symlink");
+        let error = RevocationList::insert_durable(&path, [0x11; 32])
+            .expect_err("symlinked lock must fail");
+        assert!(matches!(error, TokenToolError::Io(_)));
+        assert_eq!(fs::read(&target).expect("read target"), b"sentinel");
+        assert!(!path.exists());
+
+        fs::remove_file(&lock_path).expect("remove lock symlink");
+        fs::hard_link(&target, &lock_path).expect("create lock hard link");
+        let error = RevocationList::insert_durable(&path, [0x22; 32])
+            .expect_err("multiply-linked lock must fail");
+        assert!(matches!(error, TokenToolError::Io(_)));
+        assert_eq!(fs::read(&target).expect("read target"), b"sentinel");
+        assert!(!path.exists());
     }
     #[test]
     fn revocation_file_limit_accepts_exact_and_rejects_plus_one() {
@@ -909,6 +1278,56 @@ mod tests {
             matches!(error, TokenToolError::Io(ref source) if source.kind() == io::ErrorKind::InvalidData),
             "unexpected error: {error:?}"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn revocation_list_write_rejects_symlink_and_hardlink_destinations() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().expect("tmp");
+        let target = dir.path().join("target.json");
+        let link = dir.path().join("link.json");
+        fs::write(&target, b"original").expect("write target");
+        symlink(&target, &link).expect("create symlink");
+        let mut list = RevocationList::default();
+        list.insert([0x11; 32]).expect("insert token");
+        let error = list
+            .write(&link)
+            .expect_err("symlink destination must fail");
+        assert!(
+            matches!(error, TokenToolError::Io(ref source) if source.kind() == io::ErrorKind::InvalidData),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(fs::read(&target).expect("read target"), b"original");
+
+        let hardlink = dir.path().join("hardlink.json");
+        fs::hard_link(&target, &hardlink).expect("create hard link");
+        let error = list
+            .write(&hardlink)
+            .expect_err("multiply-linked destination must fail");
+        assert!(
+            matches!(error, TokenToolError::Io(ref source) if source.kind() == io::ErrorKind::PermissionDenied),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(fs::read(&target).expect("read target"), b"original");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn revocation_list_write_rejects_untrusted_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempdir().expect("tmp");
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777))
+            .expect("make parent writable by other users");
+        let path = dir.path().join("revocations.json");
+        let mut list = RevocationList::default();
+        list.insert([0x22; 32]).expect("insert token");
+        let error = list
+            .write(&path)
+            .expect_err("untrusted parent custody must fail");
+        assert!(
+            matches!(error, TokenToolError::Io(ref source) if source.kind() == io::ErrorKind::PermissionDenied),
+            "unexpected error: {error:?}"
+        );
+        assert!(!path.exists());
     }
     #[cfg(unix)]
     #[test]
@@ -982,7 +1401,7 @@ mod tests {
     fn revocation_duplicate_error_preserves_input_index_and_spelling() {
         let dir = tempdir().expect("tmp");
         let path = dir.path().join("duplicate.json");
-        let duplicate = "AA".repeat(REVOCATION_TOKEN_ID_BYTES);
+        let duplicate = "aa".repeat(REVOCATION_TOKEN_ID_BYTES);
         std::fs::write(
             &path,
             format!(
@@ -998,11 +1417,30 @@ mod tests {
         );
     }
     #[test]
+    fn revocation_consumer_rejects_noncanonical_uppercase_hex() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("uppercase.json");
+        std::fs::write(
+            &path,
+            format!("[\"{}\"]", "AA".repeat(REVOCATION_TOKEN_ID_BYTES)),
+        )
+        .expect("write uppercase list");
+        let error = RevocationList::load_or_default(&path)
+            .expect_err("uppercase token identifiers must be rejected");
+        assert!(matches!(
+            error,
+            TokenToolError::Hex {
+                error: FromHexError::InvalidHexCharacter { c: 'A', index: 0 },
+                ..
+            }
+        ));
+    }
+    #[test]
     fn revocation_producer_accepts_exact_count_and_rejects_plus_one() {
         let mut list = RevocationList::default();
         for index in 0..REVOCATION_LIST_MAX_ENTRIES_V1 {
             assert!(
-                list.try_insert(revocation_id(index))
+                list.insert(revocation_id(index))
                     .expect("bounded insertion")
             );
         }
@@ -1021,7 +1459,7 @@ mod tests {
             REVOCATION_LIST_MAX_ENTRIES_V1
         );
         let error = list
-            .try_insert(revocation_id(REVOCATION_LIST_MAX_ENTRIES_V1))
+            .insert(revocation_id(REVOCATION_LIST_MAX_ENTRIES_V1))
             .expect_err("entry count + 1 must fail");
         assert!(matches!(
             error,

@@ -66,8 +66,7 @@
       { "id": "ml-kem-1024", "required": false }
     ],
     "signatures": [
-      { "id": "dilithium3", "required": true },
-      { "id": "ed25519", "required": false }
+      { "id": "dilithium3", "required": true }
     ],
     "grease": [
       { "typ": 32528, "value_hex": "deadbeef" },

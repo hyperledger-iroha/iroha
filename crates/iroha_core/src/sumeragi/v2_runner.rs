@@ -1014,6 +1014,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
+    if pending_kura_apply.is_none() {
+        state
+            .require_committed_kagemusha_runtime_effective_config()
+            .map_err(V2RunnerError::Service)?;
+    }
 
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(

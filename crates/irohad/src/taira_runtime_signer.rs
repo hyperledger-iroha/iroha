@@ -13,15 +13,12 @@ use crate::{
         SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
     },
 };
-use iroha_config::parameters::actual::{
-    NexusStorageWeights, Root as Config, SoracloudRuntime, SoracloudRuntimePortableVmAcceleration,
-};
+use iroha_config::parameters::actual::{NexusStorageWeights, Root as Config, SoracloudRuntime};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     soracloud::{
-        SoraInrouRuntimeBackendV1, SoracloudRuntimeProvenancePurposeV1,
-        validate_soracloud_runtime_provenance_preimage_v1,
+        SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
     },
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
@@ -34,7 +31,6 @@ use std::{
         fd::{FromRawFd as _, RawFd},
         unix::fs::MetadataExt as _,
     },
-    path::Path,
     sync::Arc,
 };
 
@@ -72,9 +68,6 @@ pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
 /// Exact effective SoraFS component cap derived for first-release Taira.
 pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
 
-const TAIRA_INROU_PORTABLE_VM_UID_V1: u32 = 60_001;
-const TAIRA_INROU_PORTABLE_VM_GID_V1: u32 = 60_001;
-const TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1: &str = "/var/run/iroha-inrou";
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.taira.runtime-signer.compiled-policy.digest.v1\0";
@@ -121,37 +114,14 @@ fn validate_taira_launcher_profile_v1(
         return Err("Taira launcher requires Soracloud production mode".to_owned());
     }
     let inrou = &runtime.inrou;
-    if !inrou.enabled {
-        return Err("Taira launcher requires Inrou hosting".to_owned());
-    }
-    if inrou.backends.len() != 1
-        || !inrou
-            .backends
-            .contains(&SoraInrouRuntimeBackendV1::PortableVm)
-    {
-        return Err("Taira launcher requires only the PortableVM backend".to_owned());
-    }
-    if inrou.portable_vm_acceleration != SoracloudRuntimePortableVmAcceleration::Kvm {
-        return Err("Taira launcher requires PortableVM KVM acceleration".to_owned());
-    }
-    if inrou.portable_vm_uid.map(|value| value.get()) != Some(TAIRA_INROU_PORTABLE_VM_UID_V1)
-        || inrou.portable_vm_gid.map(|value| value.get()) != Some(TAIRA_INROU_PORTABLE_VM_GID_V1)
-        || inrou.portable_vm_control_dir.as_deref()
-            != Some(Path::new(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1))
+    if inrou.enabled
+        || !inrou.backends.is_empty()
+        || inrou.portable_vm_uid.is_some()
+        || inrou.portable_vm_gid.is_some()
     {
         return Err(
-            "Taira launcher requires the compiled PortableVM uid, gid, and QMP control directory"
-                .to_owned(),
-        );
-    }
-    if inrou.max_concurrent_vms.get() != 1
-        || inrou.max_cpu_millis.get() != 1_000
-        || inrou.max_memory_bytes.get() != 1_073_741_824
-        || inrou.max_storage_bytes.get() != 10_737_418_240
-    {
-        return Err(
-            "Taira launcher requires capacity 1 and the compiled CPU, memory, and storage budgets"
-                .to_owned(),
+            "Taira production launch forbids Inrou hosting until PortableVM has mandatory mount, network, IPC, and MAC confinement"
+                .to_owned()
         );
     }
     Ok(())
@@ -559,29 +529,14 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use std::{
-        collections::BTreeSet,
         fs,
-        num::{NonZeroU16, NonZeroU32, NonZeroU64},
+        num::{NonZeroU32, NonZeroU64},
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
-        path::PathBuf,
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
-        runtime.inrou.enabled = true;
-        runtime.inrou.backends = BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm]);
-        runtime.inrou.portable_vm_acceleration = SoracloudRuntimePortableVmAcceleration::Kvm;
-        runtime.inrou.portable_vm_uid = NonZeroU32::new(TAIRA_INROU_PORTABLE_VM_UID_V1);
-        runtime.inrou.portable_vm_gid = NonZeroU32::new(TAIRA_INROU_PORTABLE_VM_GID_V1);
-        runtime.inrou.portable_vm_control_dir =
-            Some(PathBuf::from(TAIRA_INROU_PORTABLE_VM_CONTROL_DIR_V1));
-        runtime.inrou.max_concurrent_vms = NonZeroU16::new(1).expect("nonzero capacity");
-        runtime.inrou.max_cpu_millis = NonZeroU32::new(1_000).expect("nonzero CPU budget");
-        runtime.inrou.max_memory_bytes =
-            NonZeroU64::new(1_073_741_824).expect("nonzero memory budget");
-        runtime.inrou.max_storage_bytes =
-            NonZeroU64::new(10_737_418_240).expect("nonzero storage budget");
         runtime
     }
 
@@ -626,28 +581,27 @@ mod tests {
             )
             .is_err()
         );
-        let mut wrong_identity = runtime.clone();
-        wrong_identity.inrou.portable_vm_uid = NonZeroU32::new(60_002);
+        let mut enabled_inrou = runtime.clone();
+        enabled_inrou.inrou.enabled = true;
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
                 TAIRA_CHAIN_DISCRIMINANT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
-                &wrong_identity,
+                &enabled_inrou,
             )
             .is_err()
         );
-        let mut wrong_acceleration = runtime;
-        wrong_acceleration.inrou.portable_vm_acceleration =
-            SoracloudRuntimePortableVmAcceleration::Tcg;
+        let mut configured_identity = runtime;
+        configured_identity.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
                 TAIRA_CHAIN_DISCRIMINANT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
-                &wrong_acceleration,
+                &configured_identity,
             )
             .is_err()
         );

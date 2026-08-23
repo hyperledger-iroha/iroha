@@ -310,6 +310,13 @@ fn authenticated_candidate_binding_release_for_network(
         schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
         version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
         policy_id: "candidate-binding-policy".to_owned(),
+        internal_validation_runner_identity_sha256:
+            KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+                &internal_validation_receipt,
+            )
+            .expect("canonical candidate-binding internal-validation receipt")
+            .body
+            .validation_runner_identity_sha256,
         roles: roles
             .iter()
             .zip(&key_pairs)

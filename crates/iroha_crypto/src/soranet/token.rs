@@ -246,8 +246,10 @@ impl AdmissionToken {
     /// Mint a new admission token using the provided issuer secret key.
     ///
     /// # Errors
-    /// Returns [`MintError`] if the time bounds are invalid, the provided issuer fingerprint does
-    /// not match the signing key, random bytes cannot be generated, or signing fails.
+    /// Returns [`MintError`] if either timestamp is not an exact whole Unix
+    /// second, the time bounds are invalid, the provided issuer fingerprint
+    /// does not match the signing key, random bytes cannot be generated, or
+    /// signing fails.
     #[allow(clippy::too_many_arguments)]
     pub fn mint<R: TryCryptoRng>(
         suite: MlDsaSuite,
@@ -260,14 +262,22 @@ impl AdmissionToken {
         flags: u8,
         rng: &mut R,
     ) -> Result<Self, MintError> {
-        let issued_secs = issued_at
+        let issued_duration = issued_at
             .duration_since(UNIX_EPOCH)
-            .map_err(MintError::Clock)?
-            .as_secs();
-        let expires_secs = expires_at
+            .map_err(MintError::Clock)?;
+        if issued_duration.subsec_nanos() != 0 {
+            return Err(MintError::NonCanonicalTimestamp { field: "issued_at" });
+        }
+        let expires_duration = expires_at
             .duration_since(UNIX_EPOCH)
-            .map_err(MintError::Clock)?
-            .as_secs();
+            .map_err(MintError::Clock)?;
+        if expires_duration.subsec_nanos() != 0 {
+            return Err(MintError::NonCanonicalTimestamp {
+                field: "expires_at",
+            });
+        }
+        let issued_secs = issued_duration.as_secs();
+        let expires_secs = expires_duration.as_secs();
         if expires_secs <= issued_secs {
             return Err(MintError::InvalidTemporalBounds);
         }
@@ -1200,6 +1210,12 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
     Ok(())
 }
 /// Errors surfaced while decoding a token frame.
@@ -1263,6 +1279,12 @@ pub enum MintError {
     /// System clock not available.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
+    /// Token v1 timestamps must be exact whole Unix seconds.
+    #[error("{field} must have whole-second precision for admission token v1")]
+    NonCanonicalTimestamp {
+        /// Timestamp field that contained a subsecond component.
+        field: &'static str,
+    },
     /// `expires_at` was not greater than `issued_at`.
     #[error("token expires_at must be greater than issued_at")]
     InvalidTemporalBounds,
@@ -2121,6 +2143,45 @@ mod tests {
         assert!(frame_looks_like_token(&encoded));
     }
     #[test]
+    fn mint_rejects_subsecond_timestamps_in_whole_second_wire_format() {
+        let whole = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut rng = StdRng::seed_from_u64(0x51EC);
+        let issued_error = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            &[],
+            [0; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            whole + Duration::from_nanos(1),
+            whole + Duration::from_secs(60),
+            0,
+            &mut rng,
+        )
+        .expect_err("subsecond issued_at must not be truncated");
+        assert!(matches!(
+            issued_error,
+            MintError::NonCanonicalTimestamp { field: "issued_at" }
+        ));
+        let expires_error = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            &[],
+            [0; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            whole,
+            whole + Duration::from_secs(60) + Duration::from_nanos(1),
+            0,
+            &mut rng,
+        )
+        .expect_err("subsecond expires_at must not be truncated");
+        assert!(matches!(
+            expires_error,
+            MintError::NonCanonicalTimestamp {
+                field: "expires_at"
+            }
+        ));
+    }
+    #[test]
     fn admission_token_mint_matrix() {
         let id = TOKEN_CASES[4].0;
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
@@ -2259,6 +2320,16 @@ mod tests {
             }
             other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
+
+        let mut rng = FixedTryRng { byte: 0xA5 };
+        let error = fill_random(&mut rng, "minting admission token nonce", &mut nonce)
+            .expect_err("stuck nonzero token RNG material must fail");
+        assert!(matches!(
+            error,
+            MintError::RandomBytes { operation, message }
+                if operation == "minting admission token nonce"
+                    && message.contains("all-identical-byte material")
+        ));
     }
     #[test]
     fn admission_token_temporal_matrix() {

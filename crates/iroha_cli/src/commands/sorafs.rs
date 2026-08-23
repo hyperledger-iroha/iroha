@@ -10420,12 +10420,14 @@ impl HandshakeTokenIssueArgs {
         )?;
         let relay_id = parse_hex_array::<32>(&self.relay_id, "--relay-id")?;
         let transcript_hash = parse_hex_array::<32>(&self.transcript_hash, "--transcript-hash")?;
-        let issued_dt = parse_timestamp(self.issued_at.as_deref(), "--issued-at")?
-            .unwrap_or_else(|| OffsetDateTime::from(default_now));
+        let issued_dt = match parse_timestamp(self.issued_at.as_deref(), "--issued-at")? {
+            Some(explicit) => require_whole_second_token_timestamp(explicit, "--issued-at")?,
+            None => canonical_default_token_timestamp(default_now)?,
+        };
         let issued_secs = issued_dt.unix_timestamp();
         let expires_dt =
             if let Some(explicit) = parse_timestamp(self.expires_at.as_deref(), "--expires-at")? {
-                explicit
+                require_whole_second_token_timestamp(explicit, "--expires-at")?
             } else {
                 let ttl = self.ttl_secs.unwrap_or(600);
                 if ttl == 0 {
@@ -10539,6 +10541,28 @@ impl HandshakeTokenIssueArgs {
         let text = render_token_issue_text(artifacts, &obj, output, format.describe());
         print_with_optional_text(context, Some(text), &Value::Object(obj))
     }
+}
+fn require_whole_second_token_timestamp(
+    timestamp: OffsetDateTime,
+    field: &str,
+) -> Result<OffsetDateTime> {
+    if timestamp.nanosecond() != 0 {
+        return Err(eyre!(
+            "{field} must use whole-second precision because admission-token v1 stores seconds"
+        ));
+    }
+    Ok(timestamp)
+}
+fn canonical_default_token_timestamp(now: SystemTime) -> Result<OffsetDateTime> {
+    let seconds = now
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| eyre!("current time is earlier than the Unix epoch"))?
+        .as_secs();
+    let seconds = i64::try_from(seconds)
+        .map_err(|_| eyre!("current time cannot be represented as an RFC3339 timestamp"))?;
+    OffsetDateTime::from_unix_timestamp(seconds).map_err(|error| {
+        eyre!("current time cannot be represented as an RFC3339 timestamp: {error}")
+    })
 }
 fn token_issue_rng() -> Result<StdRng> {
     token_issue_rng_from_rng(&mut OsRng)
@@ -17858,6 +17882,82 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         .expect_err("existing bearer output must not be overwritten");
         artifacts.zeroize_encoded_token();
         assert!(artifacts.token_bytes.is_empty());
+    }
+    #[cfg(unix)]
+    fn handshake_token_issue_rejects_explicit_subsecond_timestamps() {
+        let mut ctx = TestContext::new();
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
+        let mut secret_file = NamedTempFile::new().expect("secret file");
+        secret_file
+            .write_all(keypair.secret_key())
+            .expect("write secret key");
+        let output_dir = TempDir::new().expect("token output directory");
+        let mut args = HandshakeTokenIssueArgs {
+            suite: MlDsaSuiteArg::MlDsa44,
+            issuer_secret_key: secret_file.path().to_path_buf(),
+            issuer_public_key: None,
+            issuer_public_hex: Some(hex::encode(keypair.public_key())),
+            relay_id: "11".repeat(32),
+            transcript_hash: "22".repeat(32),
+            issued_at: Some("2026-01-01T00:00:00.123Z".to_string()),
+            expires_at: None,
+            ttl_secs: Some(900),
+            flags: Some(0),
+            output: output_dir.path().join("admission.token"),
+            token_encoding: TokenOutputFormat::Binary,
+        };
+        let mut rng = StdRng::seed_from_u64(0x5eed);
+        let error = match args.issue_with_rng(&mut ctx, &mut rng, UNIX_EPOCH) {
+            Ok(_) => panic!("fractional explicit issuance time must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("--issued-at must use whole-second"));
+
+        args.issued_at = Some("2026-01-01T00:00:00Z".to_string());
+        args.expires_at = Some("2026-01-01T00:15:00.123Z".to_string());
+        args.ttl_secs = None;
+        let error = match args.issue_with_rng(&mut ctx, &mut rng, UNIX_EPOCH) {
+            Ok(_) => panic!("fractional explicit expiry time must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("--expires-at must use whole-second"));
+    }
+    #[cfg(unix)]
+    fn handshake_token_issue_floors_only_default_wall_clock_time() {
+        let mut ctx = TestContext::new();
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
+        let mut secret_file = NamedTempFile::new().expect("secret file");
+        secret_file
+            .write_all(keypair.secret_key())
+            .expect("write secret key");
+        let output_dir = TempDir::new().expect("token output directory");
+        let args = HandshakeTokenIssueArgs {
+            suite: MlDsaSuiteArg::MlDsa44,
+            issuer_secret_key: secret_file.path().to_path_buf(),
+            issuer_public_key: None,
+            issuer_public_hex: Some(hex::encode(keypair.public_key())),
+            relay_id: "33".repeat(32),
+            transcript_hash: "44".repeat(32),
+            issued_at: None,
+            expires_at: None,
+            ttl_secs: Some(600),
+            flags: None,
+            output: output_dir.path().join("admission.token"),
+            token_encoding: TokenOutputFormat::Binary,
+        };
+        let default_seconds = 1_800_000_000;
+        let default_now = UNIX_EPOCH
+            + Duration::from_secs(default_seconds)
+            + Duration::from_nanos(987_654_321);
+        let mut rng = StdRng::seed_from_u64(0xabad_1dea);
+        let artifacts = args
+            .issue_with_rng(&mut ctx, &mut rng, default_now)
+            .expect("default wall clock is canonicalized");
+        assert_eq!(artifacts.issued_dt.nanosecond(), 0);
+        assert_eq!(artifacts.expires_dt.nanosecond(), 0);
+        assert_eq!(artifacts.token.issued_at(), default_seconds);
+        assert_eq!(artifacts.token.expires_at(), default_seconds + 600);
+        assert_eq!(artifacts.issued_dt.unix_timestamp(), default_seconds as i64);
     }
     #[cfg(unix)]
     fn handshake_token_id_reports_expected_digest() {

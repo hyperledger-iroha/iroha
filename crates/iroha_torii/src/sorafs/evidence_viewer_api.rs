@@ -1098,9 +1098,14 @@ fn secret_from_headers(
     missing_code: &'static str,
     invalid_code: &'static str,
 ) -> Result<OpaqueEvidenceViewerSecretV1, Response> {
-    let value = headers
-        .get(name)
-        .ok_or_else(|| fixed_error(StatusCode::UNAUTHORIZED, missing_code))?
+    let mut values = headers.get_all(name).iter();
+    let value = values
+        .next()
+        .ok_or_else(|| fixed_error(StatusCode::UNAUTHORIZED, missing_code))?;
+    if values.next().is_some() {
+        return Err(fixed_error(StatusCode::UNAUTHORIZED, invalid_code));
+    }
+    let value = value
         .to_str()
         .map_err(|_| fixed_error(StatusCode::UNAUTHORIZED, invalid_code))?;
     if value.len() > EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1 {
@@ -1991,6 +1996,25 @@ mod tests {
                 .expect("grant header")
                 .is_sensitive()
         );
+    }
+    #[test]
+    fn opaque_request_secrets_reject_duplicate_header_lines() {
+        let grant_parser: fn(&HeaderMap) -> Result<OpaqueEvidenceViewerSecretV1, Response> =
+            grant_from_headers;
+        for (name, parse) in [
+            (HEADER_EVIDENCE_GRANT, grant_parser),
+            (HEADER_EVIDENCE_CHALLENGE, challenge_from_headers),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.append(name, HeaderValue::from_static("first-secret"));
+            headers.append(name, HeaderValue::from_static("second-secret"));
+
+            let response = match parse(&headers) {
+                Ok(_) => panic!("duplicate secret headers must fail closed"),
+                Err(response) => response,
+            };
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
     }
     #[tokio::test]
     async fn active_retention_is_a_payload_free_conflict() {

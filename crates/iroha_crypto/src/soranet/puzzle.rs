@@ -361,6 +361,12 @@ fn fill_random<R: TryCryptoRng>(
             message: "rng returned all-zero material".to_owned(),
         });
     }
+    if dest.len() > 1 && dest.iter().all(|&byte| byte == dest[0]) {
+        return Err(MintError::RandomBytes {
+            operation,
+            message: "rng returned all-identical-byte material".to_owned(),
+        });
+    }
     Ok(())
 }
 fn reject_repeated_nonce_material(
@@ -953,7 +959,7 @@ mod tests {
         match error {
             MintError::RandomBytes { operation, message } => {
                 assert_eq!(operation, "minting puzzle solution nonce");
-                assert!(message.contains("repeated previous solution nonce material"));
+                assert!(message.contains("all-identical-byte material"));
             }
             other => panic!("expected repeated nonce failure, got {other:?}"),
         }

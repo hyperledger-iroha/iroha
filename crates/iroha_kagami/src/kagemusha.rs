@@ -15,7 +15,13 @@ use iroha_core::zk::kagemusha_v2::{
     verify_candidate_recursive_step_two_receipt_v4,
 };
 use iroha_crypto::HashOf;
-use iroha_data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
+use iroha_data_model::isi::{
+    InstructionBox,
+    offline::{
+        ActivateKagemushaRecursiveReleaseV4, CancelKagemushaRecursiveReleaseV4,
+        DeactivateKagemushaRecursiveIssuanceV4, EnableKagemushaRecursiveIssuanceV4,
+    },
+};
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
@@ -30,13 +36,17 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
-    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV4,
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+    KAGEMUSHA_V4_ISSUANCE_ENABLE_WITNESS_MAX_BYTES_V1,
+    KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1, KagemushaAuthenticatedReleaseV4,
     KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendQualificationReceiptV4,
     KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
     KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactV2,
-    KagemushaV4PromotionBindingV1, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
+    KagemushaV4IssuanceEnableWitnessV1, KagemushaV4PromotionBindingV1,
+    KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseDeactivationV1,
+    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
@@ -176,6 +186,15 @@ enum Command {
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
     #[command(name = "prepare-activation-v4")]
     PrepareActivationV4(PrepareActivationV4Args),
+    /// Build one staged-to-enabled instruction from an exact canonical witness.
+    #[command(name = "prepare-enable-issuance-v4")]
+    PrepareEnableIssuanceV4(PrepareEnableIssuanceV4Args),
+    /// Build one permanent staged-release cancellation instruction.
+    #[command(name = "prepare-cancel-release-v4")]
+    PrepareCancelReleaseV4(PrepareCancelReleaseV4Args),
+    /// Build one permanent enabled-issuance deactivation instruction.
+    #[command(name = "prepare-deactivate-issuance-v4")]
+    PrepareDeactivateIssuanceV4(PrepareDeactivateIssuanceV4Args),
     /// Atomically publish the canonical reviewed Eq/Ep first-release circuit parameters.
     #[command(name = "prepare-release-circuit-params-v4")]
     PrepareReleaseCircuitParamsV4(PrepareReleaseCircuitParamsV4Args),
@@ -242,6 +261,9 @@ struct PrepareActivationV4Args {
     /// Exact lowercase SHA-256 directory name of the release to activate.
     #[arg(long, value_parser = parse_manifest_sha256)]
     manifest_sha256: [u8; 32],
+    /// Domain-separated SHA-256 shared by all four validator runtime projections.
+    #[arg(long, value_parser = parse_manifest_sha256)]
+    runtime_effective_config_sha256: [u8; 32],
     /// Next atomic Eq/Ep verifier version observed from live consensus state.
     #[arg(long)]
     verifier_version: u32,
@@ -253,7 +275,34 @@ struct PrepareActivationV4Args {
     /// The activation is checked again against its actual block timestamp on every validator.
     #[arg(long, value_parser = parse_nonzero_canonical_u64)]
     policy_evaluation_time_ms: u64,
-    /// New private file receiving a JSON array accepted by `iroha ledger multisig propose`.
+    /// New private file receiving exact instruction JSON for direct-lifecycle payload preparation.
+    #[arg(long)]
+    output: PathBuf,
+}
+#[derive(Debug, ClapArgs)]
+struct PrepareEnableIssuanceV4Args {
+    /// Exact canonical bounded staged-to-enabled witness.
+    #[arg(long)]
+    enable_witness: PathBuf,
+    /// New private file receiving exact instruction JSON for direct-lifecycle payload preparation.
+    #[arg(long)]
+    output: PathBuf,
+}
+#[derive(Debug, ClapArgs)]
+struct PrepareCancelReleaseV4Args {
+    /// Exact canonical predecessor-bound staged-release cancellation.
+    #[arg(long)]
+    cancellation: PathBuf,
+    /// New private file receiving exact instruction JSON for direct-lifecycle payload preparation.
+    #[arg(long)]
+    output: PathBuf,
+}
+#[derive(Debug, ClapArgs)]
+struct PrepareDeactivateIssuanceV4Args {
+    /// Exact canonical predecessor-bound enabled-issuance deactivation.
+    #[arg(long)]
+    deactivation: PathBuf,
+    /// New private file receiving exact instruction JSON for direct-lifecycle payload preparation.
     #[arg(long)]
     output: PathBuf,
 }
@@ -342,11 +391,11 @@ impl<T: Write> RunArgs<T> for Args {
                     .wrap_err("failed to encode governed device-attestation policy state")?;
                 let policy_state_sha256 =
                     hex::encode(kagemusha_recursive_spend_release_sha256(&state_bytes));
-                let promotion_binding_bytes = fs::read(&args.promotion_binding)
-                    .wrap_err("failed to read the canonical Kagemusha V4 promotion binding")?;
-                if promotion_binding_bytes.is_empty() || promotion_binding_bytes.len() > 64 * 1024 {
-                    bail!("canonical Kagemusha V4 promotion binding must be 1..=65536 bytes");
-                }
+                let promotion_binding_bytes = read_external_bounded(
+                    &args.promotion_binding,
+                    64 * 1024,
+                    "canonical Kagemusha V4 promotion binding",
+                )?;
                 let promotion_binding: KagemushaV4PromotionBindingV1 =
                     norito::decode_canonical_with_limits(
                         &promotion_binding_bytes,
@@ -359,8 +408,12 @@ impl<T: Write> RunArgs<T> for Args {
                 {
                     bail!("promotion binding is non-canonical or differs from --promotion-id");
                 }
-                let instruction =
-                    ActivateKagemushaRecursiveReleaseV4::new(promotion_binding, activation, policy);
+                let instruction = ActivateKagemushaRecursiveReleaseV4::new(
+                    promotion_binding,
+                    activation,
+                    policy,
+                    args.runtime_effective_config_sha256,
+                );
                 let instructions = vec![InstructionBox::from(instruction)];
                 let instructions_hash = HashOf::new(&instructions);
                 let mut instruction_json = norito::json::to_string(&instructions)
@@ -373,13 +426,62 @@ impl<T: Write> RunArgs<T> for Args {
                 publish_new_durable_file(writer, &args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
-                    "{{\"status\":\"prepared\",\"promotion_id\":\"{}\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
+                    "{{\"status\":\"prepared\",\"promotion_id\":\"{}\",\"manifest_sha256\":\"{}\",\"runtime_effective_config_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
                     hex::encode(args.promotion_id),
                     hex::encode(args.manifest_sha256),
+                    hex::encode(args.runtime_effective_config_sha256),
                     args.verifier_version,
                     instructions_hash,
                     policy_state_sha256,
                     args.policy_evaluation_time_ms,
+                )?;
+            }
+            Command::PrepareEnableIssuanceV4(args) => {
+                let bytes = read_external_bounded(
+                    &args.enable_witness,
+                    KAGEMUSHA_V4_ISSUANCE_ENABLE_WITNESS_MAX_BYTES_V1,
+                    "Kagemusha V4 issuance-enable witness",
+                )?;
+                let witness = KagemushaV4IssuanceEnableWitnessV1::decode_canonical(&bytes)
+                    .map_err(|error| eyre!(error))?;
+                prepare_lifecycle_instruction_v4(
+                    writer,
+                    &args.output,
+                    "enable-issuance-v4",
+                    &bytes,
+                    InstructionBox::from(EnableKagemushaRecursiveIssuanceV4::new(witness)),
+                )?;
+            }
+            Command::PrepareCancelReleaseV4(args) => {
+                let bytes = read_external_bounded(
+                    &args.cancellation,
+                    KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1,
+                    "Kagemusha V4 staged-release cancellation",
+                )?;
+                let cancellation = KagemushaV4ReleaseCancellationV1::decode_canonical(&bytes)
+                    .map_err(|error| eyre!(error))?;
+                prepare_lifecycle_instruction_v4(
+                    writer,
+                    &args.output,
+                    "cancel-release-v4",
+                    &bytes,
+                    InstructionBox::from(CancelKagemushaRecursiveReleaseV4::new(cancellation)),
+                )?;
+            }
+            Command::PrepareDeactivateIssuanceV4(args) => {
+                let bytes = read_external_bounded(
+                    &args.deactivation,
+                    KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1,
+                    "Kagemusha V4 issuance deactivation",
+                )?;
+                let deactivation = KagemushaV4ReleaseDeactivationV1::decode_canonical(&bytes)
+                    .map_err(|error| eyre!(error))?;
+                prepare_lifecycle_instruction_v4(
+                    writer,
+                    &args.output,
+                    "deactivate-issuance-v4",
+                    &bytes,
+                    InstructionBox::from(DeactivateKagemushaRecursiveIssuanceV4::new(deactivation)),
                 )?;
             }
             Command::PrepareReleaseCircuitParamsV4(args) => {
@@ -394,6 +496,26 @@ impl<T: Write> RunArgs<T> for Args {
         }
         Ok(())
     }
+}
+fn prepare_lifecycle_instruction_v4<T: Write>(
+    writer: &mut std::io::BufWriter<T>,
+    output: &Path,
+    operation: &'static str,
+    canonical_input: &[u8],
+    instruction: InstructionBox,
+) -> Outcome {
+    let instructions = vec![instruction];
+    let instructions_hash = HashOf::new(&instructions);
+    let mut instruction_json = norito::json::to_string(&instructions)
+        .wrap_err("failed to encode Kagemusha V4 lifecycle instruction JSON")?;
+    instruction_json.push('\n');
+    publish_new_durable_file(writer, output, instruction_json.as_bytes())?;
+    writeln!(
+        writer,
+        "{{\"status\":\"prepared\",\"operation\":\"{operation}\",\"instruction_count\":1,\"instructions_hash\":\"{instructions_hash}\",\"input_sha256\":\"{}\"}}",
+        hex::encode(kagemusha_recursive_spend_release_sha256(canonical_input)),
+    )?;
+    Ok(())
 }
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
 struct ReleaseCircuitParamsArtifactReportV4 {
@@ -2476,11 +2598,29 @@ mod tests {
     };
     #[cfg(unix)]
     use super::{
-        DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
+        Args, Command, DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
+        PrepareCancelReleaseV4Args, PrepareDeactivateIssuanceV4Args, PrepareEnableIssuanceV4Args,
         ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
         write_release_circuit_params_directory_with_hooks_v1,
     };
+    #[cfg(unix)]
+    use crate::RunArgs as _;
     use iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1;
+    #[cfg(unix)]
+    use iroha_crypto::HashOf;
+    #[cfg(unix)]
+    use iroha_data_model::isi::{
+        InstructionBox,
+        offline::{CancelKagemushaRecursiveReleaseV4, DeactivateKagemushaRecursiveIssuanceV4},
+    };
+    #[cfg(unix)]
+    use iroha_data_model::offline::{
+        KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1,
+        KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1,
+        KagemushaExactBytesDigestV1, KagemushaV4ReleaseCancellationV1,
+        KagemushaV4ReleaseDeactivationV1, KagemushaV4ReleaseLifecycleReasonV1,
+        kagemusha_recursive_spend_release_sha256,
+    };
     use iroha_data_model::offline::{
         KagemushaStepCircuitParamsV4, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
@@ -2653,6 +2793,242 @@ mod tests {
         let error = read_regular_bounded(root.path(), "oversized.bin", 32, "test artifact")
             .expect_err("oversized bounded artifact must fail closed");
         assert!(error.to_string().contains("size bound"));
+    }
+    #[cfg(unix)]
+    fn lifecycle_cancellation_fixture() -> KagemushaV4ReleaseCancellationV1 {
+        KagemushaV4ReleaseCancellationV1 {
+            schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            promotion_id: [1; 32],
+            manifest_sha256: [2; 32],
+            expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                byte_len: 1,
+                sha256: [3; 32],
+            },
+            transition_id: [4; 32],
+            reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+            evidence: None,
+        }
+    }
+    #[cfg(unix)]
+    fn lifecycle_deactivation_fixture() -> KagemushaV4ReleaseDeactivationV1 {
+        KagemushaV4ReleaseDeactivationV1 {
+            schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            promotion_id: [5; 32],
+            manifest_sha256: [6; 32],
+            expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                byte_len: 1,
+                sha256: [7; 32],
+            },
+            transition_id: [8; 32],
+            reason: KagemushaV4ReleaseLifecycleReasonV1::EmergencyDeactivation,
+            evidence: None,
+        }
+    }
+    #[cfg(unix)]
+    fn write_private_test_file(path: &Path, bytes: &[u8]) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::write(path, bytes).expect("write lifecycle test input");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("secure lifecycle test input");
+    }
+    #[cfg(unix)]
+    fn run_lifecycle_command(command: Command) -> (crate::Outcome, String) {
+        iroha_genesis::init_instruction_registry();
+        let mut writer = std::io::BufWriter::new(Vec::new());
+        let outcome = Args { command }.run(&mut writer);
+        let report = String::from_utf8(writer.into_inner().expect("flush lifecycle report"))
+            .expect("lifecycle report is UTF-8");
+        (outcome, report)
+    }
+    #[cfg(unix)]
+    fn assert_prepared_lifecycle_command(
+        command: Command,
+        output: &Path,
+        canonical_input: &[u8],
+        expected: Vec<InstructionBox>,
+        operation: &str,
+    ) {
+        let expected_instructions_hash = HashOf::new(&expected);
+        let expected_input_sha256 = kagemusha_recursive_spend_release_sha256(canonical_input);
+        let (outcome, report) = run_lifecycle_command(command);
+        outcome.expect("prepare lifecycle instruction");
+        let decoded: Vec<InstructionBox> = norito::json::from_slice(
+            &fs::read(&output).expect("read prepared lifecycle instruction"),
+        )
+        .expect("decode prepared lifecycle instruction");
+        assert_eq!(decoded, expected);
+        let report_lines = report.lines().collect::<Vec<_>>();
+        assert_eq!(
+            report_lines.len(),
+            2,
+            "durability record and preparation report"
+        );
+        assert!(report_lines[0].starts_with("iroha.kagami.kagemusha.durable_file_publication.v1 "));
+        assert_eq!(
+            report_lines[1],
+            format!(
+                "{{\"status\":\"prepared\",\"operation\":\"{operation}\",\"instruction_count\":1,\"instructions_hash\":\"{expected_instructions_hash}\",\"input_sha256\":\"{}\"}}",
+                hex::encode(expected_input_sha256),
+            )
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_terminal_commands_publish_exact_typed_instructions_and_reports() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("temporary lifecycle preparation root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure lifecycle preparation root");
+
+        let cancellation = lifecycle_cancellation_fixture();
+        cancellation.validate().expect("valid cancellation fixture");
+        let cancellation_bytes =
+            norito::encode_canonical(&cancellation).expect("encode cancellation fixture");
+        let cancellation_input = root.path().join("cancellation.norito");
+        let cancellation_output = root.path().join("cancel-instruction.json");
+        write_private_test_file(&cancellation_input, &cancellation_bytes);
+        let expected_cancellation = vec![InstructionBox::from(
+            CancelKagemushaRecursiveReleaseV4::new(cancellation),
+        )];
+        assert_prepared_lifecycle_command(
+            Command::PrepareCancelReleaseV4(PrepareCancelReleaseV4Args {
+                cancellation: cancellation_input,
+                output: cancellation_output.clone(),
+            }),
+            &cancellation_output,
+            &cancellation_bytes,
+            expected_cancellation,
+            "cancel-release-v4",
+        );
+
+        let deactivation = lifecycle_deactivation_fixture();
+        deactivation.validate().expect("valid deactivation fixture");
+        let deactivation_bytes =
+            norito::encode_canonical(&deactivation).expect("encode deactivation fixture");
+        let deactivation_input = root.path().join("deactivation.norito");
+        let deactivation_output = root.path().join("deactivate-instruction.json");
+        write_private_test_file(&deactivation_input, &deactivation_bytes);
+        let expected_deactivation = vec![InstructionBox::from(
+            DeactivateKagemushaRecursiveIssuanceV4::new(deactivation),
+        )];
+        assert_prepared_lifecycle_command(
+            Command::PrepareDeactivateIssuanceV4(PrepareDeactivateIssuanceV4Args {
+                deactivation: deactivation_input,
+                output: deactivation_output.clone(),
+            }),
+            &deactivation_output,
+            &deactivation_bytes,
+            expected_deactivation,
+            "deactivate-issuance-v4",
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_commands_reject_tampered_noncanonical_oversized_and_malformed_inputs() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("temporary lifecycle rejection root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure lifecycle rejection root");
+
+        let mut tampered = norito::encode_canonical(&lifecycle_cancellation_fixture())
+            .expect("encode cancellation fixture");
+        let schema = KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.as_bytes();
+        let schema_offset = tampered
+            .windows(schema.len())
+            .position(|window| window == schema)
+            .expect("canonical input contains its schema");
+        tampered[schema_offset] ^= 1;
+        let tampered_input = root.path().join("tampered-cancellation.norito");
+        let tampered_output = root.path().join("tampered-output.json");
+        write_private_test_file(&tampered_input, &tampered);
+        let (outcome, report) = run_lifecycle_command(Command::PrepareCancelReleaseV4(
+            PrepareCancelReleaseV4Args {
+                cancellation: tampered_input,
+                output: tampered_output.clone(),
+            },
+        ));
+        assert!(outcome.is_err());
+        assert!(report.is_empty());
+        assert!(!tampered_output.exists());
+
+        let mut noncanonical = norito::encode_canonical(&lifecycle_deactivation_fixture())
+            .expect("encode deactivation fixture");
+        noncanonical.push(0);
+        let noncanonical_input = root.path().join("noncanonical-deactivation.norito");
+        let noncanonical_output = root.path().join("noncanonical-output.json");
+        write_private_test_file(&noncanonical_input, &noncanonical);
+        let (outcome, report) = run_lifecycle_command(Command::PrepareDeactivateIssuanceV4(
+            PrepareDeactivateIssuanceV4Args {
+                deactivation: noncanonical_input,
+                output: noncanonical_output.clone(),
+            },
+        ));
+        assert!(outcome.is_err());
+        assert!(report.is_empty());
+        assert!(!noncanonical_output.exists());
+
+        let oversized_input = root.path().join("oversized-cancellation.norito");
+        let oversized_output = root.path().join("oversized-output.json");
+        let oversized = vec![0; KAGEMUSHA_V4_RELEASE_TRANSITION_MAX_BYTES_V1 + 1];
+        write_private_test_file(&oversized_input, &oversized);
+        let (outcome, report) = run_lifecycle_command(Command::PrepareCancelReleaseV4(
+            PrepareCancelReleaseV4Args {
+                cancellation: oversized_input,
+                output: oversized_output.clone(),
+            },
+        ));
+        assert!(outcome.is_err());
+        assert!(report.is_empty());
+        assert!(!oversized_output.exists());
+
+        let malformed_enable_input = root.path().join("malformed-enable-witness.norito");
+        let malformed_enable_output = root.path().join("malformed-enable-output.json");
+        write_private_test_file(&malformed_enable_input, b"not canonical Norito");
+        let (outcome, report) = run_lifecycle_command(Command::PrepareEnableIssuanceV4(
+            PrepareEnableIssuanceV4Args {
+                enable_witness: malformed_enable_input,
+                output: malformed_enable_output.clone(),
+            },
+        ));
+        assert!(outcome.is_err());
+        assert!(report.is_empty());
+        assert!(!malformed_enable_output.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_command_refuses_to_replace_existing_output() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("temporary lifecycle no-replace root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure lifecycle no-replace root");
+        let cancellation_input = root.path().join("cancellation.norito");
+        write_private_test_file(
+            &cancellation_input,
+            &norito::encode_canonical(&lifecycle_cancellation_fixture())
+                .expect("encode cancellation fixture"),
+        );
+        let output = root.path().join("existing-output.json");
+        write_private_test_file(&output, b"operator-reviewed sentinel");
+
+        let (outcome, report) = run_lifecycle_command(Command::PrepareCancelReleaseV4(
+            PrepareCancelReleaseV4Args {
+                cancellation: cancellation_input,
+                output: output.clone(),
+            },
+        ));
+        let error = outcome.expect_err("existing lifecycle output must never be replaced");
+        assert!(error.to_string().contains("refusing to overwrite"));
+        assert!(report.is_empty());
+        assert_eq!(
+            fs::read(&output).expect("read existing lifecycle output"),
+            b"operator-reviewed sentinel"
+        );
     }
     #[cfg(unix)]
     #[test]

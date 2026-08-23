@@ -209,7 +209,7 @@ pub(super) struct PreparedLiveValidateApplyRegistryPublication<'registry, 'adapt
 pub(super) struct LiveValidateApplyRegistryPublicationError<'registry, 'adapter> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidateApplyPublication<'adapter>,
-    reason: LiveValidateApplyRegistryPublicationFailureReason,
+    _reason: LiveValidateApplyRegistryPublicationFailureReason,
 }
 /// Exact fail-stop stage that rejected a live Validate-to-Apply publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,11 +236,16 @@ pub(super) enum LiveValidateApplyRegistryPublicationFailureReason {
     AdapterWork,
     /// The closed Apply work did not match the exact staged child row.
     RegistryWorkMismatch,
+    /// The closed adapter unexpectedly lost its prepared registry work.
+    MissingRegistryWork,
+    /// The prepared work and detached Validate parent did not form one typed Apply carrier.
+    TypedCarrierMismatch,
 }
+#[cfg(test)]
 impl LiveValidateApplyRegistryPublicationError<'_, '_> {
     /// Return only the closed failure discriminator; retained authorities stay opaque.
     pub(super) const fn reason(&self) -> LiveValidateApplyRegistryPublicationFailureReason {
-        self.reason
+        self._reason
     }
 }
 
@@ -1016,21 +1021,21 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::LeaseMismatch,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::LeaseMismatch,
             });
         }
         if registry.outcome_kind != ReadyDurableValidateOutcomeKind::Validated {
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::UnexpectedOutcome,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::UnexpectedOutcome,
             });
         }
         if !registry.registry.entries.contains_key(&registry.address) {
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::MissingParent,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::MissingParent,
             });
         }
         let Some(receipt) = registry
@@ -1040,7 +1045,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::MissingReceipt,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::MissingReceipt,
             });
         };
         let Some(child_address) =
@@ -1049,7 +1054,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::InvalidChildAddress,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::InvalidChildAddress,
             });
         };
         if child_address == registry.address
@@ -1060,7 +1065,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::ChildAddressMismatch,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::ChildAddressMismatch,
             });
         }
         if let Some(incumbent) = registry.registry.entries.get(&child_address) {
@@ -1072,7 +1077,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason,
+                _reason: reason,
             });
         }
         let mut adapter = match adapter.prepare_registry_work(
@@ -1084,7 +1089,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                 return Err(LiveValidateApplyRegistryPublicationError {
                     _registry: registry,
                     _adapter: adapter,
-                    reason: LiveValidateApplyRegistryPublicationFailureReason::AdapterWork,
+                    _reason: LiveValidateApplyRegistryPublicationFailureReason::AdapterWork,
                 });
             }
         };
@@ -1092,7 +1097,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
             });
         }
         let parent_address = registry.address;
@@ -1114,7 +1119,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             return Err(LiveValidateApplyRegistryPublicationError {
                 _registry: registry,
                 _adapter: adapter,
-                reason: LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
+                _reason: LiveValidateApplyRegistryPublicationFailureReason::MissingRegistryWork,
             });
         };
         let work =
@@ -1133,8 +1138,8 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
                     return Err(LiveValidateApplyRegistryPublicationError {
                         _registry: registry,
                         _adapter: adapter,
-                        reason:
-                            LiveValidateApplyRegistryPublicationFailureReason::RegistryWorkMismatch,
+                        _reason:
+                            LiveValidateApplyRegistryPublicationFailureReason::TypedCarrierMismatch,
                     });
                 }
             };

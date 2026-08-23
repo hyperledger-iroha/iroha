@@ -496,25 +496,6 @@ pub(super) struct RnsNativeQpcsClaimedInventoryChronologyV2<
 }
 
 impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsSchedulelessClaimedSourceV1<'_, S> {
-    pub(super) fn authoritative_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.terminal_chronology
-            .final_challenge_seeds_v1()
-            .source_binding_digest()
-    }
-
-    pub(super) fn numeric_tail_v1(
-        &self,
-        limb: usize,
-        repetition: usize,
-    ) -> Option<RnsNativeQpcsAuthenticatedNumericTailV1> {
-        if limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || repetition >= CLAIMED_SOURCE_REPETITIONS_V1 {
-            return None;
-        }
-        self.numeric_tails
-            .get(limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition)
-            .copied()
-    }
-
     pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
         self.source_binding_digest
     }
@@ -567,31 +548,6 @@ impl<'qpcs, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
             numeric_tails,
             source_binding_digest,
         })
-    }
-}
-
-impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQpcsClaimedInventoryChronologyV2<'_, '_, S> {
-    pub(super) fn authoritative_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.terminal_chronology
-            .final_challenge_seeds_v1()
-            .source_binding_digest()
-    }
-
-    pub(super) fn numeric_tail_v1(
-        &self,
-        limb: usize,
-        repetition: usize,
-    ) -> Option<RnsNativeQpcsAuthenticatedNumericTailV1> {
-        if limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || repetition >= CLAIMED_SOURCE_REPETITIONS_V1 {
-            return None;
-        }
-        self.numeric_tails
-            .get(limb * CLAIMED_SOURCE_REPETITIONS_V1 + repetition)
-            .copied()
-    }
-
-    pub(super) const fn claimed_source_binding_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
-        self.source_binding_digest
     }
 }
 

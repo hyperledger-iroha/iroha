@@ -3,7 +3,8 @@
 This note tracks the `soranet-handshake-harness` crate used to validate the
 handshake RFC (SNNet-1e deliverable). The harness now ships TLV parsing,
 transcript hashing, deterministic Noise XX simulation (ML-KEM material +
-dual-signature frames), salt/telemetry helpers (including SoraNetTelemetryV1 builders),
+directory-bound Ed25519 relay authentication), salt/telemetry helpers (including
+dual-signed SoraNetTelemetryV1 builders),
 and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
 ## Objectives
@@ -20,7 +21,7 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 
 1. **Harness binary** (`soranet-handshake-harness`): orchestrates capability TLV
    parsing, transcript hashing, deterministic Noise XX frame synthesis (with
-   ML-KEM shares, Ed25519/Dilithium signatures, and 1024-byte padding), telemetry
+   ML-KEM shares, Ed25519 relay authentication, and 1024-byte padding), telemetry
    scaffolding, and fixture regeneration plus JSON export helpers (`--json-out`,
    `--telemetry-out`). The crate lives under
    `tools/soranet-handshake-harness`; the current CLI (`inspect`, `summary`,
@@ -95,5 +96,8 @@ The harness binary can also be executed directly:
   emit a structured report (stdout when `-`), `--frames-out <dir>` to persist
   the binary frames (`client_hello.bin`, etc.), `--telemetry-out <path>` to write
   the first telemetry payload with deterministic Dilithium3 + Ed25519 signatures,
-  `--show-steps` to print the generated handshake timeline, and `--only-capability <type>` (repeatable) to filter warnings/output to specific capability IDs.
+  `--show-steps` to print the generated handshake timeline, and
+  `--only-capability <type>` (repeatable) to filter warnings/output to specific
+  capability IDs. The Dilithium3 telemetry envelope is not an online handshake
+  signature slot.
 - `cargo fuzz run handshake_state_machine` — exercises the relay-side parser and Noise XX state machine against adversarial payloads with deterministic RNG seeding.

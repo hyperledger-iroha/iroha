@@ -587,6 +587,7 @@ test("NexusAppClient accepts the complete default browser Connect approval proof
     waitForApproval() {
       return {
         accountId: fixture.transfer_input.authority,
+        signingPublicKey: Uint8Array.from(fixturePublicKey),
         walletPublicKey,
         signature: approvalSignature,
       };
@@ -610,14 +611,20 @@ test("NexusAppClient accepts the complete default browser Connect approval proof
 test("NexusAppClient keeps browser approval proofs strict and transport-local", async () => {
   const validProof = {
     accountId: fixture.transfer_input.authority,
+    signingPublicKey: Uint8Array.from(fixturePublicKey),
     walletPublicKey: new Uint8Array(32).fill(0xa5),
     signature: new Uint8Array(64).fill(0x5a),
   };
   const missingWalletKey = { ...validProof };
   delete missingWalletKey.walletPublicKey;
+  const missingSigningKey = { ...validProof };
+  delete missingSigningKey.signingPublicKey;
   const missingSignature = { ...validProof };
   delete missingSignature.signature;
   const malformedProofs = [
+    missingSigningKey,
+    { ...validProof, signingPublicKey: new Uint8Array(31) },
+    { ...validProof, signingPublicKey: Buffer.alloc(32) },
     missingWalletKey,
     { ...validProof, walletPublicKey: new Uint8Array(31) },
     { ...validProof, walletPublicKey: new Uint8Array(33) },
@@ -676,6 +683,7 @@ test("NexusAppClient keeps browser approval proofs strict and transport-local", 
   let accessorGets = 0;
   const accessorProof = {
     accountId: validProof.accountId,
+    signingPublicKey: validProof.signingPublicKey,
     signature: validProof.signature,
   };
   Object.defineProperty(accessorProof, "walletPublicKey", {

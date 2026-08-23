@@ -5,6 +5,16 @@ Last updated: 2026-08-23
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Merged-candidate compile recovery
+
+- Type the two large Halo2 tail-publication ledger equations explicitly so the
+  normal lint policy accepts their values without wrapping or lint overrides.
+- Complete the partially landed Sumeragi refactor represented by the 59
+  diagnostics in `MERGE_HEAD`-exact files. Reconcile the missing authorities,
+  carriers, executor fields, and result types as one canonical first-release
+  design; do not restore removed aliases or parallel compatibility surfaces just
+  to satisfy stale call sites.
+
 ## ZK algorithm release qualification
 
 - Once the in-progress Halo2 tree compiles, run the focused native-STARK and
@@ -14,22 +24,32 @@ Completed history lives in [`status.md`](./status.md).
   and archive direct-evaluation, CPU/GPU parity, FFT/LDE, and benchmark evidence
   from the same immutable source revision.
 
-## Inrou V1 Taira qualification
+## Inrou V1 secure launcher completion
 
-- Qualify the always-compiled Inrou runtime through the same-revision
-  `scripts/taira_devnet.py up --full-doctor --inrou-canary-dir ...` four-peer
-  path, including the dedicated `iroha3d_taira` daemon, fixed-FD runtime signer
-  custody, canonical storage overlay, native SoraFS preseed, all-peer MCP
-  checks, and typed canary-before-doctor ordering. Use the checked PortableVM/KVM
-  profile: one VM, 1,000 CPU millis, 1 GiB memory, and 10 GiB storage per
-  hosting validator.
-- Archive PortableVM/KVM startup preflight, immutable capability adverts,
-  hosted-HTTP canary results, and capability-loss withdrawal and placement-reconciliation
-  evidence together with deployment-specific metrics and alerts.
-- Qualify QEMU under a validator-independent unprivileged identity and an
-  OS-enforced service sandbox. Archive the private-QMP peer attestation,
-  ephemeral host-forward discovery, supervisor-owned forwarding, and ordered
-  proxy/VM/control-directory teardown evidence from the qualified Linux host.
+- Keep all first-release Inrou hosting and Taira capability advertisement
+  disabled until one mandatory internal launcher confines QEMU with private mount,
+  network, IPC, UTS, PID, and cgroup namespaces (or an equivalently strict
+  attested MAC profile). Give the child a minimal pivot root containing only
+  its KVM device, executable/runtime libraries, authenticated read-only inputs,
+  and exact writable disks; expose no host `/run`, Unix sockets, shared temp,
+  or unrelated proc/sys state. Package and digest the exact QEMU runtime
+  closure instead of exposing broad host library trees, and use fixed-path raw
+  root/lease disks so no qcow image embeds a host backing-file path.
+- Bridge Torii's supervisor-owned listener into the private network namespace
+  through an authenticated, bounded broker or inherited socket capability.
+  Keep the namespace without external interfaces, attest every namespace and
+  mount before advertisement, and prove that IPv4, IPv6, abstract/pathname Unix
+  sockets, DNS proxies, and descriptor passing cannot escape it.
+- Enforce KVM as the only release accelerator and add cgroup v2 CPU, memory,
+  pids, and I/O ceilings that account for QEMU overhead. TCG is not a release
+  isolation boundary. Re-enable shipping admission only after malicious
+  guest-root escape tests prove exact file, IPC, network, process, and resource
+  visibility.
+- Qualify the locked `iroha-inrou` identity, files-only NSS and subid policy,
+  `/dev/kvm` custody, write-lease disk reclaim, anonymous QMP, bounded teardown,
+  and fail-secure stale-firewall workflow on a same-revision four-validator
+  Linux/AArch64 deployment. Archive operator-approved stale-chain cleanup and
+  lease-capable local-filesystem evidence with the canary.
 
 ## SoraNet first-release security qualification
 
@@ -112,32 +132,46 @@ to:
 
 ## Kagemusha production evidence closeout
 
-The authenticated V4 publisher and phase-separated rollout commands are now
-implemented and fail closed. The remaining work is internal release
-qualification plus external evidence and execution. The internal blockers
-below cannot be closed by collecting external evidence:
+The source tree now contains the V4 publisher and a manifest-keyed staged,
+enable, cancel, and deactivate lifecycle. Its authenticated static source
+evaluator and hostile candidate self-test pass, but the lifecycle/runtime
+projection has not passed focused Cargo validation or the complete immutable
+candidate gate. Production readiness is not complete. The remaining work is
+internal release qualification plus external evidence and execution; the
+internal blockers below cannot be closed by collecting external evidence:
 
 - Replace the infeasible authenticated V5 k17 path with a feasible, reviewed
   shipping recursion backend that meets the release device and memory limits.
   V7 remains an unreviewed diagnostic experiment, not a fallback; keep
   promotion hard-failing until a reviewed shipping backend is authenticated.
-- Define and produce a signed candidate-bound internal-validation receipt that
-  binds the immutable source tree, unchanged `Cargo.lock`, toolchain, exact
-  commands and outcomes, full workspace matrix, strict all-target Clippy, fuzz
-  thresholds, release KATs, and log digests. The current focused results do not
-  provide that receipt.
-- Bind the now-validated self-stacking liveness decoder result into the
-  candidate validation receipt. Its nine focused regressions pass without an
-  ambient `RUST_MIN_STACK` override; immutable-candidate execution and receipt
-  publication remain outstanding.
+- Produce the independently authenticated candidate-bound internal-validation
+  receipt. The locally trusted release policy now pins the exact
+  key-and-executable validation-runner identity, so a receipt's self-declared
+  signing key is no longer an authorization root. Production execution remains
+  fail-closed, however: the two mandatory Kagemusha fuzz targets are declared
+  in a standalone workspace but have no tracked reviewed lock, and pinned
+  `cargo-fuzz 0.13.2` cannot pass a locked/frozen constraint to its internal
+  Cargo invocation. The root lock also lacks the standalone fuzz package and
+  its `libfuzzer-sys`/`arbitrary` dependencies, so no conforming production
+  receipt exists without an explicitly authorized standalone-lock exception.
+  Static review covered all seven policy constructors and every receipt call
+  site; focused
+  `rustfmt --edition 2024 --config skip_children=true --check`,
+  `git diff --check`, and exhaustive `rg` inventory checks passed without
+  starting Cargo.
+- Run the now self-stacking liveness decoder regressions from the immutable
+  candidate and bind their result into the candidate validation receipt. Do
+  not rely on an ambient `RUST_MIN_STACK` override.
 
 - Configure an Apple developer account in Xcode and install a provisioning
-  profile for the fixed production App Attest App ID. The physical iPhone is
-  already paired and wired with a connected CoreDevice tunnel, available DDI,
-  and Developer Mode; the Xcode 26.2 attempt reached signing but installed no
-  app and created no App Attest key or evidence. Capture and qualify the real
-  assertion only against the release-bound authority request, reviewed policy,
-  prepared application root, and immutable candidate.
+  profile for the fixed production App Attest App ID. `devicectl` sees iPhone
+  16 Pro Max `5BE53FB6-911D-54B5-9709-B44960E520CE`, and Xcode 26.2 build
+  `17C52` sees one Apple Development identity for team `6A4BK72ZFV`, but there
+  are zero profiles. The guarded prepare-only run failed with the exact
+  no-account and no-profile diagnostics, installed no app, and created no App
+  Attest key or evidence. Capture and qualify the real assertion only against
+  the release-bound authority request, reviewed policy, prepared application
+  root, and immutable candidate.
 - Provision the exact Xcode 26.6 candidate-lab toolchain and run native build
   and both physical launches with the same full Xcode build identity and
   `iphoneos` SDK. Rebuild a fresh same-source Connect artifact at ABI 22; the
@@ -159,20 +193,27 @@ below cannot be closed by collecting external evidence:
   separate root-custodied Xcode 26.2 build `17C52` source-seal/Seatbelt
   corridor, then run the focused Cargo suites, full workspace matrix, and
   strict all-target Clippy from that same source.
-- Freeze the exact sixteen-file candidate, install the signed promotion
-  reservation and runtime-only keys, publish the seventeenth promotion record
+- Freeze the exact seventeen-file candidate, install the signed promotion
+  reservation and runtime-only keys, publish the eighteenth promotion record
   through the authenticated controller, and collect exactly four protected
   validator qualification seals carrying one identical canonical
   runtime-effective projection. The typed projection and post-genesis producer
   are implemented; only real protected-host artifacts can close this item.
   Mutable-tree or workflow-only checks are not release receipts.
-- Replace one-step activation with a two-phase install/enable lifecycle that
-  cannot expose issuance before liveness closure and that provides an
-  authenticated cancellation or deactivation path when closeout fails. After
-  that internal blocker is closed and explicit write authorization is supplied,
-  stage the qualified release on the four-validator deployment, prove the exact
-  transaction wire and bounded finality chain, and issue the no-replace staging
-  receipt. Have the promotion controller sign the bounded post-receipt canary's
+- Complete and validate the source-level two-phase lifecycle so staging leaves
+  public issuance disabled while only the exact controlled canary can run,
+  enable requires signed post-canary liveness from all four validators, and
+  authenticated replay-safe cancel/deactivate transitions close failed or
+  withdrawn releases. The activation wire now carries
+  `runtime_effective_config_sha256`; the static runtime-gate, validator-seal,
+  consensus/replay, state-install, bounded-scan, namespace, and signature-floor
+  invariants now pass their direct evaluator and hostile self-test. This
+  lifecycle/runtime projection is not yet Cargo- or immutable-candidate-
+  validated and remains an internal blocker. After that blocker is closed and
+  explicit write authorization is supplied, stage the qualified release on the
+  four-validator deployment, prove the exact transaction wire and bounded
+  finality chain, and issue the no-replace staging receipt. Have the promotion
+  controller sign the bounded post-receipt canary's
   permit, minimal non-disclosing exact-hash reservation, and complete private
   authorization. Journal the complete canary before the separately authorized
   reservation and canary writes; prove the exact reserved entrypoint committed
@@ -184,7 +225,9 @@ below cannot be closed by collecting external evidence:
   alone is finality context, not evidence that every validator answered. Cancel
   or deactivate the staged release on any failed closeout. Complete the
   release-wide workspace tests and strict all-target Clippy from that same
-  immutable source before closing readiness.
+  immutable source before closing readiness. Real device receipts, the
+  four-validator run, and live canaries remain external blockers; source wiring
+  alone cannot close them.
 
 ## Workspace review closure
 
@@ -195,6 +238,24 @@ below cannot be closed by collecting external evidence:
   accepted or migrated by relabelling; pre-transition-set block results and
   fixtures must be regenerated rather than defaulting the required set to
   empty.
+
+- TODO: extend Connect's P2P lifecycle wire with an authenticated session
+  incarnation (or durable tombstone) so role-consumed, termination, and dedupe
+  state cannot affect a later same-SID incarnation. Add an authenticated claim
+  renewal protocol, or make the local session ceiling identical to the
+  advertised absolute peer deadline, before supporting sessions longer than
+  the original claim.
+- TODO: define one workspace-wide global ordering/pagination contract for every
+  routed list fanout. Torii now fetches the exact admitted global prefix from
+  each shard and applies the requested page once for the repaired directory
+  path; add bounded multi-page shard retrieval before permitting a larger
+  offset window, and make every remaining fanout list prove the same property
+  with cross-shard fixtures.
+- Add a configured MCP in-flight dispatch budget before exposing expensive
+  operator tool sets on an untrusted ingress. Request bytes, nested response
+  bytes, body deadlines, and the shared 64-dispatch batch ceiling are bounded;
+  long-running handler execution intentionally remains outside the body-read
+  deadline and therefore needs independent concurrency admission.
 
 - TODO: add an authenticated cancellation/rebind protocol for an exact pending
   QueuePlan whose fresh dataspace/role topology changes (for example after an

@@ -743,14 +743,15 @@ impl FivePointBlockEvaluationV1 {
             self.work
                 .charge_v1(1, REPETITIONS_V1 as u64, REPETITIONS_V1 as u64)?;
         }
-        for repetition in 0..REPETITIONS_V1 {
-            self.values[repetition] = mod_add_v1(
-                self.values[repetition],
-                mod_mul_v1(
-                    self.block_powers[repetition],
-                    block_values[repetition],
-                    self.plan.modulus,
-                ),
+        for ((value, block_power), block_value) in self
+            .values
+            .iter_mut()
+            .zip(self.block_powers)
+            .zip(block_values)
+        {
+            *value = mod_add_v1(
+                *value,
+                mod_mul_v1(block_power, block_value, self.plan.modulus),
                 self.plan.modulus,
             );
         }
@@ -761,12 +762,9 @@ impl FivePointBlockEvaluationV1 {
             .checked_add(1)
             .ok_or(RnsNativePublicPolynomialReaderErrorV1::ArithmeticOverflow)?;
         if self.blocks_absorbed < self.plan.block_count {
-            for repetition in 0..REPETITIONS_V1 {
-                self.block_powers[repetition] = mod_mul_v1(
-                    self.block_powers[repetition],
-                    self.plan.block_steps[repetition],
-                    self.plan.modulus,
-                );
+            for (block_power, block_step) in self.block_powers.iter_mut().zip(self.plan.block_steps)
+            {
+                *block_power = mod_mul_v1(*block_power, block_step, self.plan.modulus);
             }
             self.work.charge_v1(0, REPETITIONS_V1 as u64, 0)?;
         }
@@ -1127,14 +1125,14 @@ where
         let public_a =
             self.required_descriptor_v1(RnsNativePublicPolynomialRoleV1::PublicA, None, limb)?;
         let values = evaluate(self, public_a, plan)?;
-        for repetition in 0..REPETITIONS_V1 {
-            self.cache[repetition].public_a = values[repetition];
+        for (evaluation, value) in self.cache.iter_mut().zip(values) {
+            evaluation.public_a = value;
         }
         let public_b =
             self.required_descriptor_v1(RnsNativePublicPolynomialRoleV1::PublicB, None, limb)?;
         let values = evaluate(self, public_b, plan)?;
-        for repetition in 0..REPETITIONS_V1 {
-            self.cache[repetition].public_b = values[repetition];
+        for (evaluation, value) in self.cache.iter_mut().zip(values) {
+            evaluation.public_b = value;
         }
         for record in 0..RECORDS_V1 {
             let c0 = self.required_descriptor_v1(
@@ -1143,8 +1141,8 @@ where
                 limb,
             )?;
             let values = evaluate(self, c0, plan)?;
-            for repetition in 0..REPETITIONS_V1 {
-                self.cache[repetition].ciphertext_c0[record] = values[repetition];
+            for (evaluation, value) in self.cache.iter_mut().zip(values) {
+                evaluation.ciphertext_c0[record] = value;
             }
             let c1 = self.required_descriptor_v1(
                 RnsNativePublicPolynomialRoleV1::CiphertextC1,
@@ -1152,8 +1150,8 @@ where
                 limb,
             )?;
             let values = evaluate(self, c1, plan)?;
-            for repetition in 0..REPETITIONS_V1 {
-                self.cache[repetition].ciphertext_c1[record] = values[repetition];
+            for (evaluation, value) in self.cache.iter_mut().zip(values) {
+                evaluation.ciphertext_c1[record] = value;
             }
         }
         if self.cache.iter().any(|evaluation| {

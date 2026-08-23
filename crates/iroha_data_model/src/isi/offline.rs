@@ -57,14 +57,19 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Atomically publish one device-attestation policy and activate one signed ABI-21 release.
+    /// Atomically stage one governed device policy and signed ABI-21 release.
+    ///
+    /// Public issuance remains disabled until the separate enable transition.
     pub struct ActivateKagemushaRecursiveReleaseV4 {
-        /// Complete authenticated release activation payload.
+        /// Complete authenticated release payload installed in the staged phase.
         pub activation: KagemushaRecursiveSpendReleaseActivationV4,
         /// Exact governed device-attestation policy installed with the release.
         pub device_attestation_policy: OfflineDeviceAttestationPolicy,
-        /// Controller-signed promotion identity committed for post-activation verification.
+        /// Controller-signed promotion identity committed for post-stage verification.
         pub promotion_binding: KagemushaV4PromotionBindingV1,
+        /// Domain-separated SHA-256 of the unanimous complete validator runtime projection.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub runtime_effective_config_sha256: [u8; 32],
     }
 }
 impl PartialOrd for ActivateKagemushaRecursiveReleaseV4 {
@@ -226,21 +231,23 @@ impl RedeemKagemushaRecursiveV4 {
     }
 }
 impl ActivateKagemushaRecursiveReleaseV4 {
-    /// Construct an atomic device-policy and ABI-21 release activation instruction.
+    /// Construct an atomic device-policy and ABI-21 release staging instruction.
     #[must_use]
     pub fn new(
         promotion_binding: KagemushaV4PromotionBindingV1,
         activation: KagemushaRecursiveSpendReleaseActivationV4,
         device_attestation_policy: OfflineDeviceAttestationPolicy,
+        runtime_effective_config_sha256: [u8; 32],
     ) -> Self {
         Self {
             activation,
             device_attestation_policy,
             promotion_binding,
+            runtime_effective_config_sha256,
         }
     }
 
-    /// Return the promotion-run identity committed by this activation.
+    /// Return the promotion-run identity committed by this staging instruction.
     #[must_use]
     pub const fn promotion_id(&self) -> &[u8; 32] {
         &self.promotion_binding.promotion_id
@@ -252,8 +259,10 @@ impl ActivateKagemushaRecursiveReleaseV4 {
     ///
     /// Returns an error when the fixed-width identity is all zeroes.
     pub fn validate_promotion_id(&self) -> Result<(), &'static str> {
-        if self.promotion_binding.promotion_id == [0; 32] {
-            return Err("Kagemusha V4 promotion id must be nonzero");
+        if self.promotion_binding.promotion_id == [0; 32]
+            || self.runtime_effective_config_sha256 == [0; 32]
+        {
+            return Err("Kagemusha V4 promotion and runtime projection ids must be nonzero");
         }
         Ok(())
     }
@@ -399,6 +408,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let runtime_effective_config_sha256 = super::decode_aos_canonical_field::<[u8; 32]>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -408,6 +421,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveRelease
                 activation,
                 device_attestation_policy,
                 promotion_binding,
+                runtime_effective_config_sha256,
             },
             offset,
         ))
@@ -477,7 +491,7 @@ mod tests {
         KagemushaExactBytesDigestV1, KagemushaV4ReleaseLifecycleReasonV1,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
+    use norito::core::NoritoDeserialize as _;
     fn registration_fixture() -> OfflineDeviceAttestationRegistration {
         let account_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
             .expect("derive checked offline attestation fixture keypair");

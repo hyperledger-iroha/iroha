@@ -32,7 +32,7 @@ pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Each tariff quantity occupies a length byte plus a zero-padded canonical
 /// V1 quantity frame. Fixed slots retain constant-time framing while allowing
 /// the full bounded quantity domain without an integer nano-XOR side channel.
-pub const VPN_HELPER_TICKET_LEN: usize = 664;
+pub const VPN_HELPER_TICKET_LEN: usize = 696;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
@@ -1236,6 +1236,8 @@ pub struct VpnHelperTicketV1 {
     pub metering_public_key: PublicKey,
     /// Deterministic usage tariff fixed by the native lease.
     pub tariff: VpnTariffV1,
+    /// Canonical digest of every privileged route, DNS, address, and MTU input.
+    pub network_policy_hash: [u8; 32],
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
@@ -1280,6 +1282,9 @@ impl VpnHelperTicketV1 {
         ] {
             encode_helper_ticket_quantity(&mut bytes, &mut cursor, quantity)?;
         }
+        bytes[cursor..cursor + self.network_policy_hash.len()]
+            .copy_from_slice(&self.network_policy_hash);
+        cursor += self.network_policy_hash.len();
         bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
         cursor += 8;
         let mac = helper_ticket_mac(secret, &bytes[..cursor]);
@@ -1402,6 +1407,9 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
     let active_fee_per_minute = decode_helper_ticket_quantity(bytes, &mut cursor)?;
     let ingress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
     let egress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let mut network_policy_hash = [0u8; 32];
+    network_policy_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
     let mut expires = [0u8; 8];
     expires.copy_from_slice(&bytes[cursor..cursor + 8]);
     cursor += 8;
@@ -1419,8 +1427,45 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
             ingress_fee_per_mib,
             egress_fee_per_mib,
         },
+        network_policy_hash,
         expires_at_ms: u64::from_be_bytes(expires),
     })
+}
+
+/// Compute the canonical digest authorized by a V1 VPN helper ticket.
+///
+/// Sequence order is significant because overlapping routes are applied in order. Every string is
+/// length-delimited, each sequence has an explicit element count, and the MTU is big-endian, so no
+/// two policy tuples share a serialization. Callers must separately enforce the canonical CIDR and
+/// IP-address syntax required by the VPN control plane.
+#[must_use]
+pub fn vpn_helper_network_policy_hash_v1(
+    route_pushes: &[String],
+    excluded_routes: &[String],
+    dns_servers: &[String],
+    tunnel_addresses: &[String],
+    mtu_bytes: u64,
+) -> [u8; 32] {
+    fn update_sequence(hasher: &mut blake3::Hasher, values: &[String]) {
+        let count = u64::try_from(values.len())
+            .expect("VPN network policy sequences are protocol-bounded below u64::MAX");
+        hasher.update(&count.to_be_bytes());
+        for value in values {
+            let len = u64::try_from(value.len())
+                .expect("VPN network policy strings are protocol-bounded below u64::MAX");
+            hasher.update(&len.to_be_bytes());
+            hasher.update(value.as_bytes());
+        }
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha.soranet.vpn.helper-network-policy.v1");
+    update_sequence(&mut hasher, route_pushes);
+    update_sequence(&mut hasher, excluded_routes);
+    update_sequence(&mut hasher, dns_servers);
+    update_sequence(&mut hasher, tunnel_addresses);
+    hasher.update(&mtu_bytes.to_be_bytes());
+    *hasher.finalize().as_bytes()
 }
 const VPN_HELPER_TICKET_QUANTITY_SLOT_LEN: usize = 1 + MAX_QUANTITY_FRAME_BYTES_V1;
 fn encode_helper_ticket_quantity(
@@ -1820,6 +1865,7 @@ mod tests {
                 ingress_fee_per_mib: quantity_nanos(10),
                 egress_fee_per_mib: quantity_nanos(20),
             },
+            network_policy_hash: [0xF0; 32],
             expires_at_ms,
         }
     }
@@ -1924,6 +1970,59 @@ mod tests {
         assert_eq!(ticket, parsed_hex);
     }
     #[test]
+    fn helper_network_policy_hash_is_canonical_and_complete() {
+        let routes = vec!["0.0.0.0/0".to_owned(), "::/0".to_owned()];
+        let exclusions = vec!["192.0.2.0/24".to_owned()];
+        let dns = vec!["1.1.1.1".to_owned()];
+        let addresses = vec!["10.208.0.2/32".to_owned()];
+        let expected =
+            vpn_helper_network_policy_hash_v1(&routes, &exclusions, &dns, &addresses, 1_280);
+        assert_eq!(
+            expected,
+            vpn_helper_network_policy_hash_v1(&routes, &exclusions, &dns, &addresses, 1_280)
+        );
+
+        let mut variants = Vec::new();
+        let mut changed = routes.clone();
+        changed.reverse();
+        variants.push(vpn_helper_network_policy_hash_v1(
+            &changed,
+            &exclusions,
+            &dns,
+            &addresses,
+            1_280,
+        ));
+        variants.push(vpn_helper_network_policy_hash_v1(
+            &routes,
+            &[],
+            &dns,
+            &addresses,
+            1_280,
+        ));
+        variants.push(vpn_helper_network_policy_hash_v1(
+            &routes,
+            &exclusions,
+            &[],
+            &addresses,
+            1_280,
+        ));
+        variants.push(vpn_helper_network_policy_hash_v1(
+            &routes,
+            &exclusions,
+            &dns,
+            &[],
+            1_280,
+        ));
+        variants.push(vpn_helper_network_policy_hash_v1(
+            &routes,
+            &exclusions,
+            &dns,
+            &addresses,
+            1_400,
+        ));
+        assert!(variants.into_iter().all(|variant| variant != expected));
+    }
+    #[test]
     fn helper_ticket_mac_comparison_checks_the_complete_digest() {
         let expected = helper_ticket_mac(&[0x42; 32], b"helper-ticket-payload");
         assert!(helper_ticket_mac_matches(&expected, expected.as_bytes()));
@@ -1986,13 +2085,13 @@ mod tests {
         let secret = [0x42; 32];
         let ticket = sample_helper_ticket(1_700_000_000_000);
         let bytes = ticket.to_bytes(&secret);
-        let old_len = bytes[..192].to_vec();
+        let old_len = bytes[..664].to_vec();
         let err = VpnHelperTicketV1::parse(&old_len, &secret, 1_699_999_999_000)
             .expect_err("old ticket length must fail");
         assert_eq!(
             VpnHelperTicketError::InvalidLength {
                 expected: VPN_HELPER_TICKET_LEN,
-                actual: 192,
+                actual: 664,
             },
             err
         );
@@ -2107,9 +2206,28 @@ mod tests {
             + 32
             + 32
             + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
+        let expiry_offset = expiry_offset + 32;
         bytes[expiry_offset + 7] ^= 0x01;
         let err =
             VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("expiry tamper must fail");
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+    #[test]
+    fn helper_ticket_mac_covers_network_policy_hash() {
+        let secret = [0x24; 32];
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        let policy_offset = VPN_HELPER_TICKET_MAGIC.len()
+            + 16
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
+        bytes[policy_offset] ^= 0x01;
+        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+            .expect_err("network policy tamper must fail");
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
     }
     #[test]

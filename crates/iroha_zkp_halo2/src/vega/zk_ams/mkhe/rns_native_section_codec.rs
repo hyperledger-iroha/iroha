@@ -1422,8 +1422,9 @@ const _: () = {
 /// It authenticates canonical transport structure only. Final transcript
 /// context and every algebraic claim remain unverified.
 #[allow(
+    dead_code,
     missing_copy_implementations,
-    reason = "the exact envelope section must be split and consumed once"
+    reason = "the exact envelope section is implemented before its live carrier integration and must be split and consumed once"
 )]
 #[must_use = "the unbound cross section must be split into its final-context and proof leases"]
 pub(super) struct RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
@@ -1486,6 +1487,10 @@ pub(super) struct RnsNativeBoundCrossFieldGlobalLookupV1<'env> {
 impl<'env> RnsNativeUnboundCrossFieldGlobalLookupEnvelopeV1<'env> {
     /// Split the single parsed owner into the pending final-context binder and
     /// the sealed proof lease. Neither child grants proof authority.
+    #[allow(
+        dead_code,
+        reason = "the source-complete envelope split awaits its live claimed-qPCS carrier"
+    )]
     pub(super) fn split_pre_qpcs_v1(
         self,
     ) -> (
@@ -1534,6 +1539,10 @@ impl<'env> RnsNativePendingCrossFieldGlobalLookupContextV1<'env> {
 impl<'env> RnsNativeSealedCrossProofLeaseV1<'env> {
     /// Consume the sealed section identity into the one-pass inner inventory
     /// preflight. Raw proof bytes never leave this purpose-specific transition.
+    #[allow(
+        dead_code,
+        reason = "the source-complete sealed preflight awaits its live claimed-qPCS carrier"
+    )]
     pub(super) fn preflight_q_mask_inventory_v1(
         self,
     ) -> Result<RnsNativePreQpcsQMaskInventoryPreflightV1<'env>, RnsNativeCrossFieldInventoryErrorV1>

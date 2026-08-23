@@ -42,10 +42,14 @@ The supported field-level attributes are:
   this allows schemas to remain compatible across languages.
 - `#[norito(skip)]` omits the field entirely. During deserialization the field
   is filled with [`Default::default`].
-- `#[norito(default)]` behaves similarly to `skip`, using
-  [`Default::default`] when reading the value.
-- `#[norito(default = "path::to::function")]` supplies a function for a
-  missing value.
+- `#[norito(default)]` decodes an encoded value normally and uses
+  [`Default::default`] only when a compatible older positional payload ends
+  before an appended trailing field.
+- `#[norito(default = "path::to::function")]` behaves the same way, calling
+  the function only for such a missing trailing value.
+  Binary fields are positional: defaults do not make middle-field insertion or
+  reordering compatible, and packed-struct field-count or bitset changes require
+  a versioned layout.
 - `#[norito(skip_serializing_if = "path::to::predicate")]` conditionally
   omits a JSON field.
 - `#[norito(with = "path::to::module")]` delegates JSON serialization and

@@ -269,7 +269,14 @@ hosts:
   must be direct, singly linked, owner-only, and contain exactly 64 hex
   characters. Bootstrap
   frames are Norito envelopes with timestamp, nonce, and keyed MAC, and the
-  backend rejects stale timestamps, bad MACs, and replayed nonces.
+  backend rejects stale timestamps, bad MACs, and replayed nonces. Nonces and a
+  wall-clock high-water mark are durably reserved in the owner-private
+  `--replay-directory` / `SORANET_VPN_BACKEND_REPLAY_DIRECTORY` (default
+  `/run/sora-vpn-backend-replay`) before a bootstrap is accepted, so a backend
+  restart or clock rollback cannot reopen the authentication window. The
+  directory is created as `0700` beneath a trusted direct parent and is held by
+  an exclusive process lock; pre-create it with backend-user ownership when the
+  service does not run as root.
 - It derives a per-session Linux `tun` interface name from
   `SORANET_VPN_BACKEND_INTERFACE` (used as an interface prefix, default
   `svpn`).
@@ -336,9 +343,10 @@ verifies the body hash in the canonical request headers.
 
 The relay exposes an authenticated admin HTTP listener at `admin_listen` for
 operational telemetry and policy signals. The listener is accepted only on a
-loopback address, and every route except the non-sensitive `GET /healthz`
-requires `Authorization: Bearer <token>` using the secret loaded from
-`admin_auth_token_path`:
+loopback address, and every route (including `GET /healthz`) requires
+`Authorization: Bearer <token>` using the secret loaded from
+`admin_auth_token_path`. Body framing headers, folded/malformed fields, and
+duplicate authorization fields are rejected rather than interpreted:
 
 - `GET /metrics` returns Prometheus metrics for handshakes, constant-rate lanes,
   privacy counters, and incentive summaries.

@@ -62,6 +62,127 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
     Ok((values, diagnostics, routed_by, budget))
 }
 #[cfg(feature = "app_api")]
+fn space_directory_manifest_query_for_route(
+    query: &routing::SpaceDirectoryManifestQuery,
+    route: RoutingDecision,
+) -> routing::SpaceDirectoryManifestQuery {
+    let mut query = query.clone();
+    query.dataspace = Some(route.dataspace_id.as_u64());
+    query.offset = Some(0);
+    query.limit = Some(1);
+    query.count_mode = Some("bounded".to_owned());
+    query
+}
+#[cfg(feature = "app_api")]
+async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
+    app: &SharedAppState,
+    mut routes: Vec<RoutingDecision>,
+    path_args: Vec<String>,
+    query: routing::SpaceDirectoryManifestQuery,
+    body: Vec<u8>,
+    proxy_memory: Option<ToriiProxyMemoryReservation>,
+) -> Result<
+    (
+        Vec<(RoutingDecision, Value)>,
+        ToriiFanoutDiagnostics,
+        &'static str,
+        ToriiRoutedReadMemoryBudget,
+    ),
+    Response,
+> {
+    if let Some(requested_dataspace) = query.dataspace {
+        routes.retain(|route| route.dataspace_id.as_u64() == requested_dataspace);
+        if routes.is_empty() {
+            return Err(with_torii_fanout_headers(
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    format!(
+                        "no Nexus route is configured for requested dataspace {requested_dataspace}"
+                    ),
+                ),
+                ToriiFanoutDiagnostics::default(),
+            ));
+        }
+    }
+    if routes.is_empty() {
+        return Err(with_torii_fanout_headers(
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "no Nexus dataspace routes are configured",
+            ),
+            ToriiFanoutDiagnostics::default(),
+        ));
+    }
+
+    let routed_by = routed_by_for_routes(app, &routes);
+    let mut diagnostics = ToriiFanoutDiagnostics::default();
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+    let mut budget = ToriiRoutedReadMemoryBudget::new(
+        app.query_fanout_working_set_bytes,
+        app.torii_proxy_max_response_bytes,
+    )?;
+    let mut payloads = budget.try_retained_vec(routes.len())?;
+    for route in routes {
+        diagnostics.record_attempt();
+        let route_query = space_directory_manifest_query_for_route(&query, route);
+        let query_string = encode_torii_proxy_query(&route_query)
+            .map_err(|error| with_torii_fanout_headers(error.into_response(), diagnostics))?;
+        let response = execute_torii_read_for_route(
+            app,
+            route,
+            torii_read_request(
+                ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
+                route,
+                path_args.clone(),
+                query_string,
+                body.clone(),
+            ),
+            proxy_memory.clone(),
+        )
+        .await;
+        if response.status() == StatusCode::NOT_FOUND {
+            diagnostics.record_skipped_response(&response);
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            diagnostics.record_skipped_response(&response);
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        if !response.status().is_success() {
+            diagnostics.record_skipped_response(&response);
+            return Err(with_torii_fanout_headers(response, diagnostics));
+        }
+        match torii_json_body_value(response, &mut budget).await {
+            Ok(payload) => {
+                diagnostics.record_success();
+                budget.push_retained(&mut payloads, (route, payload))?;
+            }
+            Err(response) => {
+                diagnostics.record_skipped_response(&response);
+                return Err(with_torii_fanout_headers(response, diagnostics));
+            }
+        }
+    }
+    if payloads.is_empty() {
+        let response = last_not_found.unwrap_or_else(|| {
+            last_route_unavailable.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        });
+        return Err(with_torii_fanout_headers(response, diagnostics));
+    }
+    Ok((payloads, diagnostics, routed_by, budget))
+}
+#[cfg(feature = "app_api")]
 async fn execute_torii_accounts_list_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
@@ -105,7 +226,7 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
         Err(error) => return error.into_response(),
     };
     let page_offset = params.offset;
-    let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
+    let count_mode_label = routed_read_count_mode_label(params.count_mode.as_deref());
     let routed_by = routed_by_for_routes(app, &routes);
     params.offset = 0;
     params.limit = Some(limits.max_page_limit.max(1));

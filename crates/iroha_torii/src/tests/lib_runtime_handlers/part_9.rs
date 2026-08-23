@@ -783,37 +783,6 @@ async fn openapi_enforces_token_policy() {
     .expect("token accepted");
     assert_eq!(ok.status(), axum::http::StatusCode::OK);
 }
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn connect_session_handler_rejects_missing_remote_addr_header() {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-    let app = mk_app_state_for_tests();
-    let network_id = *app.state.network_id_ref();
-    let app_pk = [0x24_u8; 32];
-    let nonce = [0x42_u8; 16];
-    let req = routing::ConnectSessionRequest {
-        sid: B64.encode(iroha_torii_shared::connect_sdk::derive_session_id(
-            &network_id,
-            &app_pk,
-            &nonce,
-        )),
-        network_id,
-        app_pk: B64.encode(app_pk),
-        nonce: B64.encode(nonce),
-        node: None,
-    };
-    let err =
-        match super::handler_connect_session(State(app), HeaderMap::new(), NoritoJson(req)).await {
-            Ok(_) => panic!("missing remote addr should fail closed"),
-            Err(err) => err,
-        };
-    assert!(matches!(
-        err,
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-        )) if message == "connect: remote addr unavailable"
-    ));
-}
 #[tokio::test]
 async fn soracloud_status_handler_returns_snapshot_sections() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());

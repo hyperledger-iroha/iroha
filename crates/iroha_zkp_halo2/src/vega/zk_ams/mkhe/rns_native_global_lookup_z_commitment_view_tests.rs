@@ -570,25 +570,30 @@ fn exact_inverse_product_inventory_is_cap_blocked_without_weakening() {
         114_484
     );
     assert_eq!(SMALLEST_COMPLETE_ROLE_CAP_EXCESS_V1, 413_159);
-    assert!(
-        SMALLEST_COMPLETE_ROLE_MIN_BYTES_V1 > RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
-    );
+    const {
+        assert!(
+            SMALLEST_COMPLETE_ROLE_MIN_BYTES_V1
+                > RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
+        );
+    }
 
     assert_eq!(MAX_FITTING_PARTIAL_CORES_V1, 55);
     assert_eq!(MAX_FITTING_PARTIAL_PLANES_V1, 220);
-    assert!(MAX_FITTING_PARTIAL_PLANES_V1 < SMALLEST_COMPLETE_ROLE_PLANES_V1);
-    assert!(
-        MAX_FITTING_PARTIAL_CORES_V1 * INVERSE_PRODUCT_RECORD_BYTES_V1
-            + CODEC_DIGEST_BYTES_V1
-            + MIN_NONEMPTY_RESIDUAL_BYTES_V1
-            <= RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
-    );
-    assert!(
-        (MAX_FITTING_PARTIAL_CORES_V1 + 1) * INVERSE_PRODUCT_RECORD_BYTES_V1
-            + CODEC_DIGEST_BYTES_V1
-            + MIN_NONEMPTY_RESIDUAL_BYTES_V1
-            > RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
-    );
+    const {
+        assert!(MAX_FITTING_PARTIAL_PLANES_V1 < SMALLEST_COMPLETE_ROLE_PLANES_V1);
+        assert!(
+            MAX_FITTING_PARTIAL_CORES_V1 * INVERSE_PRODUCT_RECORD_BYTES_V1
+                + CODEC_DIGEST_BYTES_V1
+                + MIN_NONEMPTY_RESIDUAL_BYTES_V1
+                <= RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
+        );
+        assert!(
+            (MAX_FITTING_PARTIAL_CORES_V1 + 1) * INVERSE_PRODUCT_RECORD_BYTES_V1
+                + CODEC_DIGEST_BYTES_V1
+                + MIN_NONEMPTY_RESIDUAL_BYTES_V1
+                > RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1
+        );
+    }
 
     assert_eq!(BOTH_SMALL_ROLES_MIN_BYTES_V1, 1_055_253);
     assert_eq!(ALL_INVERSE_PRODUCT_CORES_V1, 8_102);
@@ -596,10 +601,12 @@ fn exact_inverse_product_inventory_is_cap_blocked_without_weakening() {
     assert_eq!(ALL_INVERSE_PRODUCT_MIN_BYTES_V1, 16_568_623);
     assert_eq!(ALL_INVERSE_PRODUCT_CAP_EXCESS_V1, 16_454_139);
 
-    assert!(!INVERSE_PRODUCT_RELATIONS_VERIFIED_V1);
-    assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
-    assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
-    assert!(!RELEASE_READY_V1);
+    const {
+        assert!(!INVERSE_PRODUCT_RELATIONS_VERIFIED_V1);
+        assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
+        assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
+        assert!(!RELEASE_READY_V1);
+    }
     let blocker = core::str::from_utf8(PRODUCT_CAP_BLOCKER_LANGUAGE_V1)
         .expect("cap-blocker language is canonical ASCII");
     assert!(blocker.contains("forbidden=partial-role-token"));
@@ -612,13 +619,15 @@ fn exact_inverse_product_inventory_is_cap_blocked_without_weakening() {
 
 #[test]
 fn boundary_is_private_move_only_non_authorizing_acyclic_and_fail_closed() {
-    assert!(SOLE_GLOBAL_LOOKUP_Z_DERIVED_V1);
-    assert!(POST_Z_INVERSE_COMMITMENT_VIEW_AUTHENTICATED_V1);
-    assert!(LEGACY_GLOBAL_LOOKUP_SUMCHECK_MASK_RETIRED_V1);
-    assert!(!INVERSE_PRODUCT_RELATIONS_VERIFIED_V1);
-    assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
-    assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
-    assert!(!RELEASE_READY_V1);
+    const {
+        assert!(SOLE_GLOBAL_LOOKUP_Z_DERIVED_V1);
+        assert!(POST_Z_INVERSE_COMMITMENT_VIEW_AUTHENTICATED_V1);
+        assert!(LEGACY_GLOBAL_LOOKUP_SUMCHECK_MASK_RETIRED_V1);
+        assert!(!INVERSE_PRODUCT_RELATIONS_VERIFIED_V1);
+        assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
+        assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
+        assert!(!RELEASE_READY_V1);
+    }
 
     let source = include_str!("rns_native_global_lookup_z_commitment_view.rs");
     for declaration in [

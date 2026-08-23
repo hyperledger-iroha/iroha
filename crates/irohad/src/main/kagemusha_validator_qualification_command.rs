@@ -130,6 +130,53 @@ pub fn read_configured_kagemusha_catalog_qualification_seal(
     )
 }
 
+/// Read and verify the exact configured root-owned local validator seal.
+pub(super) fn read_configured_kagemusha_validator_qualification_seal(
+    config: &Config,
+) -> Result<KagemushaV4ValidatorQualificationSealV1, String> {
+    let path = config
+        .settlement
+        .offline
+        .kagemusha_validator_qualification_seal_path
+        .as_deref()
+        .ok_or_else(|| {
+            "runtime qualification requires kagemusha_validator_qualification_seal_path".to_owned()
+        })?;
+    let exact = RootOwnedNoReplaceArtifactPublicationTarget::read_root_owned_bounded(
+        path,
+        KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1,
+        "Kagemusha validator qualification seal",
+    )?;
+    decode_exact_kagemusha_validator_qualification_seal(&exact)
+}
+
+fn decode_exact_kagemusha_validator_qualification_seal(
+    exact: &[u8],
+) -> Result<KagemushaV4ValidatorQualificationSealV1, String> {
+    if exact.is_empty() || exact.len() > KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1 {
+        return Err(format!(
+            "Kagemusha validator seal exceeds the {}-byte limit",
+            KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1
+        ));
+    }
+    let seal = norito::decode_canonical_with_limits::<KagemushaV4ValidatorQualificationSealV1>(
+        exact,
+        norito::canonical_decode_limits(exact.len()),
+    )
+    .map_err(|error| format!("invalid canonical Kagemusha validator seal: {error}"))?;
+    seal.verify()
+        .map_err(|error| format!("invalid Kagemusha validator qualification seal: {error}"))?;
+    if norito::encode_canonical(&seal)
+        .map_err(|error| format!("failed to re-encode Kagemusha validator seal: {error}"))?
+        != exact
+    {
+        return Err(
+            "Kagemusha validator qualification seal is not exact canonical Norito".to_owned(),
+        );
+    }
+    Ok(seal)
+}
+
 /// Prepared root-owned, no-replace destination for one local validator seal.
 pub struct KagemushaValidatorSealPublicationTarget {
     inner: RootOwnedNoReplaceArtifactPublicationTarget,
@@ -314,6 +361,14 @@ mod tests {
         .err()
         .expect("noncanonical reservation must fail");
         assert!(error.contains("invalid configured"));
+    }
+
+    #[test]
+    fn validator_seal_decoder_rejects_empty_and_noncanonical_bytes() {
+        assert!(decode_exact_kagemusha_validator_qualification_seal(&[]).is_err());
+        let error = decode_exact_kagemusha_validator_qualification_seal(b"not canonical Norito")
+            .expect_err("noncanonical validator seal must fail");
+        assert!(error.contains("canonical Kagemusha validator seal"));
     }
 
     #[test]

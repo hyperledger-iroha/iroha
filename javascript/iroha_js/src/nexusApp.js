@@ -498,6 +498,7 @@ const APPROVAL_FIELDS = new Set([
 ]);
 const BROWSER_CONNECT_APPROVAL_FIELDS = new Set([
   "accountId",
+  "signingPublicKey",
   "walletPublicKey",
   "signature",
 ]);
@@ -521,6 +522,7 @@ function projectBrowserConnectApproval(value) {
     );
   }
   for (const [field, byteLength] of [
+    ["signingPublicKey", 32],
     ["walletPublicKey", 32],
     ["signature", 64],
   ]) {
@@ -549,7 +551,10 @@ function projectBrowserConnectApproval(value) {
       );
     }
   }
-  return Object.freeze({ accountId: approval.accountId });
+  return Object.freeze({
+    accountId: approval.accountId,
+    signingPublicKey: Uint8Array.from(approval.signingPublicKey),
+  });
 }
 
 function requireNonEmptyString(value, context) {

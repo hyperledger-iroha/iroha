@@ -5342,6 +5342,18 @@ fn privacy_payload_shape_is_bounded(payload: &str) -> bool {
                 index < HARD_MAX_PRIVACY_PAYLOAD_LINES && line.len() <= HARD_MAX_PRIVACY_LINE_BYTES
             })
 }
+fn canonical_proxy_downgrade(event: &SoranetPrivacyEventV1) -> Option<bool> {
+    let SoranetPrivacyEventKindV1::HandshakeFailure(failure) = &event.kind else {
+        return Some(false);
+    };
+    if !failure.has_canonical_reason() {
+        return None;
+    }
+    Some(matches!(
+        failure.reason,
+        SoranetPrivacyHandshakeFailureV1::Downgrade
+    ))
+}
 fn ingest_privacy_payload(
     aggregator: &SoranetSecureAggregator,
     metrics: &Arc<iroha_telemetry::metrics::Metrics>,
@@ -5553,20 +5565,28 @@ async fn poll_privacy_endpoint(
                                             }
                                             match json::from_str::<SoranetPrivacyEventV1>(trimmed) {
                                                 Ok(event) => {
-                                                    if let SoranetPrivacyEventKindV1::HandshakeFailure(
-                                                        failure,
-                                                    ) = &event.kind
-                                                        && matches!(
-                                                            failure.reason,
-                                                            SoranetPrivacyHandshakeFailureV1::Downgrade
-                                                        )
-                                                    {
-                                                        remediator
-                                                            .observe_handshake_downgrade(
-                                                                event.timestamp_unix,
-                                                                event.mode,
-                                                            )
-                                                            .await;
+                                                    match canonical_proxy_downgrade(&event) {
+                                                        None => {
+                                                            warn!(
+                                                                target: "telemetry::sorafs.privacy",
+                                                                provider = %alias,
+                                                                line = idx + 1,
+                                                                "rejected proxy policy event with inconsistent typed failure reason"
+                                                            );
+                                                            metrics
+                                                                .soranet_privacy_poll_errors_total
+                                                                .with_label_values(&[alias_label])
+                                                                .inc();
+                                                        }
+                                                        Some(true) => {
+                                                            remediator
+                                                                .observe_handshake_downgrade(
+                                                                    event.timestamp_unix,
+                                                                    event.mode,
+                                                                )
+                                                                .await
+                                                        }
+                                                        Some(false) => {}
                                                     }
                                                 }
                                                 Err(error) => {
@@ -6089,9 +6109,10 @@ mod tests {
     use futures::executor::block_on;
     #[cfg(feature = "local-quic-proxy")]
     use iroha_data_model::soranet::privacy_metrics::{
-        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
-        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventThrottleV1,
-        SoranetPrivacyEventVerifiedBytesV1, SoranetPrivacyThrottleScopeV1,
+        SoranetPowFailureReasonV1, SoranetPrivacyEventActiveSampleV1,
+        SoranetPrivacyEventHandshakeFailureV1, SoranetPrivacyEventHandshakeSuccessV1,
+        SoranetPrivacyEventThrottleV1, SoranetPrivacyEventVerifiedBytesV1,
+        SoranetPrivacyThrottleScopeV1,
     };
     use iroha_logger::{telemetry::Channel, test_logger};
     use iroha_telemetry::metrics::global_or_default;
@@ -6705,6 +6726,36 @@ mod tests {
         assert!(!privacy_payload_shape_is_bounded(&too_many_lines));
         let oversized_line = "x".repeat(HARD_MAX_PRIVACY_LINE_BYTES + 1);
         assert!(!privacy_payload_shape_is_bounded(&oversized_line));
+    }
+    #[cfg(feature = "local-quic-proxy")]
+    #[test]
+    fn proxy_downgrade_classifier_rejects_inconsistent_pow_reason() {
+        let event = |reason, pow_reason| SoranetPrivacyEventV1 {
+            timestamp_unix: 1,
+            mode: SoranetPrivacyModeV1::Middle,
+            kind: SoranetPrivacyEventKindV1::HandshakeFailure(
+                SoranetPrivacyEventHandshakeFailureV1 {
+                    reason,
+                    pow_reason,
+                    rtt_ms: None,
+                },
+            ),
+        };
+        assert_eq!(
+            canonical_proxy_downgrade(&event(SoranetPrivacyHandshakeFailureV1::Downgrade, None,)),
+            Some(true)
+        );
+        assert_eq!(
+            canonical_proxy_downgrade(&event(
+                SoranetPrivacyHandshakeFailureV1::Downgrade,
+                Some(SoranetPowFailureReasonV1::InvalidSolution),
+            )),
+            None
+        );
+        assert_eq!(
+            canonical_proxy_downgrade(&event(SoranetPrivacyHandshakeFailureV1::Pow, None)),
+            None
+        );
     }
     #[test]
     fn provider_metadata_bounds_reject_attacker_controlled_growth() {
@@ -9695,7 +9746,6 @@ mod tests {
             .expect("current time before unix epoch")
             .as_secs();
         let bucket_start = ((now_secs.saturating_sub(bucket_secs)) / bucket_secs) * bucket_secs;
-        let bucket_label = bucket_start.to_string();
         let mode = SoranetPrivacyModeV1::Middle;
         let events = [
             SoranetPrivacyEventV1 {
@@ -9714,7 +9764,7 @@ mod tests {
                 kind: SoranetPrivacyEventKindV1::HandshakeFailure(
                     SoranetPrivacyEventHandshakeFailureV1 {
                         reason: SoranetPrivacyHandshakeFailureV1::Pow,
-                        detail: None,
+                        pow_reason: Some(SoranetPowFailureReasonV1::InvalidSolution),
                         rtt_ms: Some(110),
                     },
                 ),
@@ -9755,7 +9805,7 @@ mod tests {
             kind: SoranetPrivacyEventKindV1::HandshakeFailure(
                 SoranetPrivacyEventHandshakeFailureV1 {
                     reason: SoranetPrivacyHandshakeFailureV1::Downgrade,
-                    detail: None,
+                    pow_reason: None,
                     rtt_ms: Some(88),
                 },
             ),
@@ -9851,32 +9901,32 @@ mod tests {
         );
         let accepted = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&[mode.as_label(), &bucket_label, "accepted"])
+            .with_label_values(&[mode.as_label(), "accepted"])
             .get();
         assert_eq!(accepted, 1);
         let pow_rejected = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&[mode.as_label(), &bucket_label, "pow_rejected"])
+            .with_label_values(&[mode.as_label(), "pow_rejected"])
             .get();
         assert_eq!(pow_rejected, 1);
         let throttled = metrics
             .soranet_privacy_throttles_total
-            .with_label_values(&[mode.as_label(), &bucket_label, "remote_quota"])
+            .with_label_values(&[mode.as_label(), "remote_quota"])
             .get();
         assert_eq!(throttled, 1);
         let verified_bytes = metrics
             .soranet_privacy_verified_bytes_total
-            .with_label_values(&[mode.as_label(), &bucket_label])
+            .with_label_values(&[mode.as_label()])
             .get();
         assert_eq!(verified_bytes, 2_048);
         let suppressed = metrics
             .soranet_privacy_bucket_suppressed
-            .with_label_values(&[mode.as_label(), &bucket_label])
+            .with_label_values(&[mode.as_label()])
             .get();
         assert_eq!(suppressed, 0.0);
         let max_active = metrics
             .soranet_privacy_active_circuits_max
-            .with_label_values(&[mode.as_label(), &bucket_label])
+            .with_label_values(&[mode.as_label()])
             .get();
         assert_eq!(max_active, 6.0);
         let last_poll = metrics.soranet_privacy_last_poll_unixtime.get();
@@ -9969,7 +10019,7 @@ mod tests {
             .expect("current time before unix epoch")
             .as_secs();
         let bucket_start = (now_secs / 60) * 60;
-        let mut share_a = SoranetPrivacyPrioShareV1::new(1, bucket_start, 60);
+        let mut share_a = SoranetPrivacyPrioShareV1::new([1; 32], bucket_start, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
         share_a.handshake_pow_reject_share = 1;
@@ -9979,7 +10029,7 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-        let mut share_b = SoranetPrivacyPrioShareV1::new(2, bucket_start, 60);
+        let mut share_b = SoranetPrivacyPrioShareV1::new([2; 32], bucket_start, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
         share_b.handshake_pow_reject_share = 2;
@@ -10044,7 +10094,7 @@ mod tests {
         );
         let accepted = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&["entry", &bucket_start.to_string(), "accepted"])
+            .with_label_values(&["entry", "accepted"])
             .get();
         assert_eq!(accepted, 15);
         let poll_errors = metrics
@@ -10063,7 +10113,7 @@ mod tests {
             .expect("current time before unix epoch")
             .as_secs();
         let bucket_start = (now_secs / 60) * 60;
-        let mut share_a = SoranetPrivacyPrioShareV1::new(1, bucket_start, 60);
+        let mut share_a = SoranetPrivacyPrioShareV1::new([1; 32], bucket_start, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
         share_a.handshake_pow_reject_share = 1;
@@ -10073,7 +10123,7 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-        let mut share_b = SoranetPrivacyPrioShareV1::new(2, bucket_start, 60);
+        let mut share_b = SoranetPrivacyPrioShareV1::new([2; 32], bucket_start, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
         share_b.handshake_pow_reject_share = 2;
@@ -10137,40 +10187,39 @@ mod tests {
             "collector enabled gauge should reset after shutdown"
         );
         let mode_label = SoranetPrivacyModeV1::Entry.as_label();
-        let bucket_label = share_a.bucket_start_unix.to_string();
         let accepted = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&[mode_label, &bucket_label, "accepted"])
+            .with_label_values(&[mode_label, "accepted"])
             .get();
         assert_eq!(accepted, 15);
         let pow_rejected = metrics
             .soranet_privacy_circuit_events_total
-            .with_label_values(&[mode_label, &bucket_label, "pow_rejected"])
+            .with_label_values(&[mode_label, "pow_rejected"])
             .get();
         assert_eq!(pow_rejected, 3);
         let throttles = metrics
             .soranet_privacy_throttles_total
-            .with_label_values(&[mode_label, &bucket_label, "congestion"])
+            .with_label_values(&[mode_label, "congestion"])
             .get();
         assert_eq!(throttles, 3);
         let verified_bytes = metrics
             .soranet_privacy_verified_bytes_total
-            .with_label_values(&[mode_label, &bucket_label])
+            .with_label_values(&[mode_label])
             .get();
         assert_eq!(verified_bytes, 3_072);
         let suppressed = metrics
             .soranet_privacy_bucket_suppressed
-            .with_label_values(&[mode_label, &bucket_label])
+            .with_label_values(&[mode_label])
             .get();
         assert_eq!(suppressed, 0.0);
         let active_avg = metrics
             .soranet_privacy_active_circuits_avg
-            .with_label_values(&[mode_label, &bucket_label])
+            .with_label_values(&[mode_label])
             .get();
         assert_close(active_avg, 4.0);
         let active_max = metrics
             .soranet_privacy_active_circuits_max
-            .with_label_values(&[mode_label, &bucket_label])
+            .with_label_values(&[mode_label])
             .get();
         assert_eq!(active_max, 11.0);
     }

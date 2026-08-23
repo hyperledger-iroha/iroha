@@ -1775,15 +1775,25 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(true),
         "Taira profile should run the Soracloud runtime in production posture"
     );
-    assert_eq!(
-        runtime
-            .get("inrou")
-            .and_then(TomlValue::as_table)
+    let inrou = runtime.get("inrou").and_then(TomlValue::as_table);
+    assert_ne!(
+        inrou
             .and_then(|inrou| inrou.get("enabled"))
             .and_then(TomlValue::as_bool),
         Some(true),
-        "Soracloud production mode requires Inrou to be explicitly enabled"
+        "first-release Taira must not enable unconfined Inrou hosting"
     );
+    for retired in [
+        "backends",
+        "max_concurrent_vms",
+        "portable_vm_acceleration",
+        "portable_vm_supplementary_gids",
+    ] {
+        assert!(
+            inrou.is_none_or(|inrou| !inrou.contains_key(retired)),
+            "Taira must not retain retired Inrou selector `{retired}`"
+        );
+    }
     assert_eq!(
         runtime
             .get("submission")

@@ -366,7 +366,7 @@ class HttpClientTransportVpnParserTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(656)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(688)
 
     private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
         """

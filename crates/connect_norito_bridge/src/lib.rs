@@ -13946,8 +13946,10 @@ mod kagemusha_bridge_tests {
                 path: "Cargo.lock".to_owned(),
                 git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
                 git_mode: "100644".to_owned(),
-                sha256: [6; 32],
-                size_bytes: 1024,
+                sha256: manifest.reviewed_source_closure.ignored_cargo_lock_sha256,
+                size_bytes: manifest
+                    .reviewed_source_closure
+                    .ignored_cargo_lock_size_bytes,
             },
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
@@ -14204,6 +14206,13 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
             policy_id: "ds-streaming-install-policy-v1".to_owned(),
+            internal_validation_runner_identity_sha256:
+                iroha_data_model::offline::KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+                    &internal_validation_receipt,
+                )
+                .expect("canonical DS streaming internal-validation receipt")
+                .body
+                .validation_runner_identity_sha256,
             roles: roles
                 .iter()
                 .zip(&key_pairs)
@@ -17166,6 +17175,13 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
             policy_id: "production-gate-release-policy-v1".to_owned(),
+            internal_validation_runner_identity_sha256:
+                iroha_data_model::offline::KagemushaRecursiveSpendInternalValidationReceiptV1::decode_canonical(
+                    &internal_validation_receipt,
+                )
+                .expect("canonical production-gate internal-validation receipt")
+                .body
+                .validation_runner_identity_sha256,
             roles: roles
                 .iter()
                 .zip(&key_pairs)

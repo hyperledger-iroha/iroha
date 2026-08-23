@@ -134,16 +134,14 @@ pub mod soracloud_runtime {
     pub const MODEL_ARTIFACT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(1_024_u64 * 1024 * 1024);
     /// Default model-weight cache budget in bytes.
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
-    /// Default concurrent Inrou microVMs allowed on one node.
-    pub const INROU_MAX_CONCURRENT_VMS: NonZeroU16 = nonzero!(8_u16);
+    /// First-release PortableVM capacity for one dedicated QEMU identity.
+    pub const INROU_MAX_CONCURRENT_VMS: NonZeroU16 = nonzero!(1_u16);
     /// Whether this node advertises local Inrou hosting by default.
     pub const INROU_ENABLED: bool = false;
     /// Dedicated QEMU uid. `None` keeps PortableVM hosting fail-closed until configured.
     pub const INROU_PORTABLE_VM_UID: Option<NonZeroU32> = None;
     /// Dedicated QEMU primary gid. `None` keeps PortableVM hosting fail-closed until configured.
     pub const INROU_PORTABLE_VM_GID: Option<NonZeroU32> = None;
-    /// Root-owned QMP control directory. `None` requires an explicit deployment path.
-    pub const INROU_PORTABLE_VM_CONTROL_DIR: Option<&str> = None;
     /// Disabled-profile fallback aggregate CPU ceiling in millicores.
     pub const INROU_MAX_CPU_MILLIS: NonZeroU32 = nonzero!(8_000_u32);
     /// Disabled-profile fallback aggregate memory ceiling in bytes.

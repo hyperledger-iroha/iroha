@@ -42,37 +42,24 @@ python3 scripts/taira_devnet.py down
 
 Teardown returns success only after every managed PID file and matching peer
 process is gone. If that cannot be proved, the bundle is retained for diagnosis
-and the command fails instead of deleting its ownership evidence. An already
-absent signer directory is treated as deleted; a present partial, substituted,
-or unexpectedly populated signer directory still fails closed.
+and the command fails instead of deleting its ownership evidence.
 
-Run the broader public-product route diagnostic only when that is the purpose
-of the deployment:
+Optionally run the broader read-only public-product route diagnostic after the
+standard signed smoke and four-peer MCP checks:
 
 ```bash
-python3 scripts/taira_devnet.py up \
-  --full-doctor \
-  --inrou-canary-dir /private/runtime/taira-inrou-canary
+python3 scripts/taira_devnet.py up --full-doctor
 ```
 
-The owner-held canary directory must be outside the disposable devnet tree and
-contain `container_manifest.json`, `service_manifest.json`, and `bundle.tgz`.
-This product-route path requires a qualified Linux/KVM host with the dedicated
-QEMU identity, the non-root group that owns `/dev/kvm`, and the root-owned QMP
-control directory from the generated config. Kagami carries a safe, non-zero
-`/dev/kvm` group into `portable_vm_supplementary_gids` when that device is
-present during generation; the runtime rechecks access after dropping to the
-exact QEMU identity before advertising the host.
+`--full-doctor` runs the same-revision `iroha taira doctor` against the
+generated local endpoint. It uses the same three standard binaries as the
+default devnet and requires no Inrou workspace or SoraFS preseed. The
+first-release devnet interface has no `--inrou-canary-dir` option.
 
-Before startup, `up` creates the canonical Inrou stage and uses `sorafs-node` to
-preseed both staged payloads into every validator's disjoint store. After signed
-finality and four-peer MCP checks, it runs the Inrou canary and only then the
-broad doctor. `--full-doctor` without this exact canary input fails before
-building binaries or replacing a running cohort. The `sorafs-node` build and
-Inrou CLI surface preflight occur only for this explicit opt-in path; ordinary
-throwaway deployments do not pay for unused product-route tooling. When KVM is
-unavailable, the runtime manager withdraws the local Inrou host capability while
-the consensus-only disposable cohort remains usable.
+The dedicated daemon's config validation, help, and version commands are
+offline introspection surfaces: they never open or consume the inherited
+runtime-signer descriptor. Every node-starting invocation still requires the
+exact descriptor and compiled Taira profile.
 
 Use already-built binaries when iterating on orchestration:
 
@@ -82,8 +69,8 @@ python3 scripts/taira_devnet.py up \
   --bin-dir "$PWD/target/local-release"
 ```
 
-The directory needs the three default binaries above. Add `sorafs-node` only
-when using `--inrou-canary-dir`.
+The directory needs the three default binaries above for both the standard and
+`--full-doctor` paths.
 
 The output directory is owner-only and contains private keys and runtime
 tokens. Never commit, print, upload, or archive it. On failure the command stops
