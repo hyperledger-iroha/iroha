@@ -11,7 +11,7 @@ ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 22 library"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required"
 LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {

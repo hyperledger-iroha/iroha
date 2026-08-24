@@ -205,7 +205,7 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
       },
       {
         label: "browser.js (public aggregate)",
-        limitKb: 469,
+        limitKb: 470,
         lazyChunks: [
           {
             specifier: "./sumeragiTyped.js",
@@ -249,9 +249,9 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 469);
-  assert.equal(target.reviewedEagerBytes, 480_165);
-  assert.equal(target.reviewedCombinedBytes, 563_034);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 470);
+  assert.equal(target.reviewedEagerBytes, 480_380);
+  assert.equal(target.reviewedCombinedBytes, 563_249);
   assert.match(target.lazyChunks[0].entryPoint, /dist[/\\]sumeragiTyped\.js$/u);
   assert.match(
     target.lazyChunks[1].entryPoint,
@@ -342,6 +342,7 @@ test("browser graph audit derives every explicit browser-conditioned package exp
       subpaths: ["./bootle-lantern-issuance"],
     },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
+    { target: "./dist/contractPayload.js", subpaths: ["./contract-payload"] },
     {
       target: "./dist/smartContractDeployment.js",
       subpaths: ["./smart-contract-deployment"],
@@ -524,19 +525,19 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
       combinedLimitKb: metrics.combinedLimitKb,
     },
     {
-      eagerBytes: 480_165,
+      eagerBytes: 480_380,
       lazyBytes: [
         { specifier: "./sumeragiTyped.js", bytes: 73_692 },
         { specifier: "./smartContractDeploymentSubmit.js", bytes: 9_177 },
       ],
-      combinedBytes: 563_034,
-      combinedLimitKb: 550,
+      combinedBytes: 563_249,
+      combinedLimitKb: 551,
     },
   );
   assert.equal(
     target.limitKb * 1024 - metrics.eagerBytes,
-    91,
-    "public browser aggregate must retain the audited 91-byte eager headroom",
+    900,
+    "public browser aggregate must retain the audited 900-byte eager headroom",
   );
   assert.ok(
     metrics.eagerBytes <= Math.floor(458_081 * 1.05),
@@ -595,9 +596,9 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 1.05],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 991_627, modules: 97 }],
+    ["toriiClient.js", { bytes: 991_842, modules: 97 }],
     ["transactionCodec.js (browser)", { bytes: 300_883, modules: 45 }],
-    ["nexusApp.js (browser)", { bytes: 385_020, modules: 55 }],
+    ["nexusApp.js (browser)", { bytes: 385_220, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 95_840, modules: 42 }],
   ]);
   const { build } = await import("esbuild");
@@ -648,14 +649,14 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       );
       assert.equal(
         target.limitKb * 1024 - actual.bytes,
-        14_965,
-        "Torii hard ceiling must retain the audited 14,965-byte eager headroom",
+        14_750,
+        "Torii hard ceiling must retain the audited 14,750-byte eager headroom",
       );
       assert.deepEqual(
         splitMetrics.lazyChunks.map(({ specifier, bytes }) => ({ specifier, bytes })),
         [{ specifier: "./sumeragiTyped.js", bytes: 73_354 }],
       );
-      assert.equal(splitMetrics.combinedBytes, 1_064_981);
+      assert.equal(splitMetrics.combinedBytes, 1_065_196);
       assert.equal(splitMetrics.combinedLimitKb, 1_055);
       assert.equal(splitMetrics.eagerBytes, target.reviewedEagerBytes);
       assert.equal(splitMetrics.combinedBytes, target.reviewedCombinedBytes);

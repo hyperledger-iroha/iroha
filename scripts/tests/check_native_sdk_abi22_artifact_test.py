@@ -1572,6 +1572,11 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "func requireNativeTestCapability(" in all_swift_tests
     assert "RequiredNativeTestCapabilityError.unavailable" in all_swift_tests
 
+    required_jvm_native_assertion = (
+        "A freshly built connect_norito_bridge ABI 22 "
+        "artifact-streaming library is required"
+    )
+
     all_kotlin_tests = read_test_tree("kotlin/core-jvm/src/test", ".kt")
     assert "assumeTrue(" not in all_kotlin_tests
     assert "IROHA_REQUIRE_KAGEMUSHA_NATIVE" not in all_kotlin_tests
@@ -1580,11 +1585,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         r"if\s*\(\s*!NativeSignerBridge\.isNativeAvailable\(\)\s*\)\s*return\b",
         all_kotlin_tests,
     ) is None
-    assert (
-        "A freshly built connect_norito_bridge ABI 22 "
-        "artifact-streaming library is required"
-        in all_kotlin_tests
-    )
+    assert required_jvm_native_assertion in all_kotlin_tests
 
     all_java_tests = read_test_tree("java/iroha_android/src/test", ".java")
     assert "org.junit.Assume" not in all_java_tests
@@ -1596,11 +1597,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         r"\s*\{\s*return;",
         all_java_tests,
     ) is None
-    assert (
-        "A freshly built connect_norito_bridge ABI 22 "
-        "artifact-streaming library is required"
-        in all_java_tests
-    )
+    assert required_jvm_native_assertion in all_java_tests
 
     all_javascript_tests = "\n".join(
         (
@@ -1636,6 +1633,9 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")
+    assert (
+        f'REQUIRED_NATIVE_ASSERTION="{required_jvm_native_assertion}"' in jni_lane
+    )
     assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane

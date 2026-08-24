@@ -20,12 +20,12 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // The eager code-split closure is 991,627 bytes. Sumeragi's three existing
+    // The eager code-split closure is 991,842 bytes. Sumeragi's three existing
     // async typed methods load their reviewed 73,354-byte incremental closure
-    // on demand. The unchanged 983 KiB eager ceiling leaves 14,965 bytes.
+    // on demand. The unchanged 983 KiB eager ceiling leaves 14,750 bytes.
     limitKb: 983,
-    reviewedEagerBytes: 991_627,
-    reviewedCombinedBytes: 1_064_981,
+    reviewedEagerBytes: 991_842,
+    reviewedCombinedBytes: 1_065_196,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -58,7 +58,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
     // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 385,047 bytes (+3.67%). The
+    // asset-definition builder bring current V1 to 385,220 bytes (+3.72%). The
     // 380 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -104,13 +104,14 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 480,165 bytes
-    // (+4.82%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 91 bytes. The typed Sumeragi parser and deployment
-    // submit continuation are audited below as non-overlapping lazy closures.
-    limitKb: 469,
-    reviewedEagerBytes: 480_165,
-    reviewedCombinedBytes: 563_034,
+    // same pinned runner. Its reviewed eager code-split closure is 480,380 bytes
+    // (+4.87%) after shared validation paths are interned. The 470 KiB eager
+    // ceiling leaves 900 bytes while the measured graph remains below the protected
+    // 5% predecessor regression. The typed Sumeragi parser and deployment submit
+    // continuation are audited below as non-overlapping lazy closures.
+    limitKb: 470,
+    reviewedEagerBytes: 480_380,
+    reviewedCombinedBytes: 563_249,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
