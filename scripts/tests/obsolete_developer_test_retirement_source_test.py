@@ -158,10 +158,10 @@ OPENING_LOCK_PIN = FilePin(
 )
 LOCK_PIN = FilePin(
     LOCKFILE,
-    "5d04cef722cb695dd636110be01ff8de52ae7b45",
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
-    311_172,
-    13_613,
+    "dff7dc4b22caba0c70c0e29e6ea87e07db4b15bc",
+    "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492",
+    311_163,
+    13_612,
 )
 REPLACEMENT_PINS = (
     FilePin(

@@ -562,10 +562,14 @@ pinned Verus, external signing, and broader workspace/Clippy evidence remain
 outstanding. During the earlier Sumeragi task, `Cargo.lock` changed concurrently
 from task-start SHA-256 `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`
 to `c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b`;
-that task did not edit it. For the present hard-reset candidate, the latter
-311,172-byte lockfile is the admitted baseline and remains byte-identical across
-HEAD, `MERGE_HEAD`, index, and worktree at Git blob
-`5d04cef722cb695dd636110be01ff8de52ae7b45`; the older hash is historical only.
+that task did not edit it. At that checkpoint, the latter 311,172-byte lockfile
+was byte-identical across HEAD, `MERGE_HEAD`, index, and worktree at Git blob
+`5d04cef722cb695dd636110be01ff8de52ae7b45`. A subsequent PR-lineage repair
+resolved the tracked lock to 311,163 bytes at SHA-256
+`4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492`
+and Git blob `dff7dc4b22caba0c70c0e29e6ea87e07db4b15bc`; current-source
+gates use that authority without editing `Cargo.lock`, while the earlier values
+remain historical checkpoint evidence.
 
 The outstanding revision-4 work includes:
 
