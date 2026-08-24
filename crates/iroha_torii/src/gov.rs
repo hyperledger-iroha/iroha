@@ -859,24 +859,7 @@ pub struct GovernanceCapabilitiesV1 {
     /// Canonical public governance routes supported by the node.
     pub supported_routes: Vec<String>,
 }
-fn governance_approval_mode(state: &iroha_core::state::State) -> String {
-    let catalog = state.nexus_snapshot().governance;
-    let configured = catalog
-        .default_module
-        .as_deref()
-        .and_then(|name| catalog.modules.get(name))
-        .and_then(|module| module.module_type.as_deref())
-        .or(catalog.default_module.as_deref())
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_");
-    if configured.contains("parliament") || configured.contains("sortition") {
-        "PARLIAMENT_SORTITION_JIT".to_owned()
-    } else {
-        "LEGACY_COUNCIL_EPOCH".to_owned()
-    }
-}
+const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_SORTITION_JIT";
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
 /// # Errors
@@ -904,7 +887,7 @@ pub async fn handle_gov_capabilities(
         network_prefix: iroha_data_model::account::address::chain_discriminant().to_string(),
         abi_version: world.abi_version().to_string(),
         data_model_version: iroha_data_model::DATA_MODEL_VERSION.to_string(),
-        approval_mode: governance_approval_mode(state.as_ref()),
+        approval_mode: GOVERNANCE_APPROVAL_MODE_V1.to_owned(),
         plain_voting_enabled: gov.plain_voting_enabled,
         auto_finalize_plain: true,
         auto_finalize_plain_scope: "GENERIC_NON_VALIDATION_FEE_ONLY".to_owned(),
@@ -2409,10 +2392,10 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
-            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceStageApprovals,
-            State, World,
+            CouncilState, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, GovernancePipeline, GovernanceProposalRecord,
+            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+            GovernanceReferendumStatus, GovernanceStageApprovals, State, World,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
@@ -2433,6 +2416,64 @@ mod tests {
     use std::sync::Arc;
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+    fn parliament_snapshot(
+        member: &AccountId,
+        selection_epoch: u64,
+    ) -> iroha_core::state::GovernanceParliamentSnapshot {
+        use iroha_data_model::{
+            governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
+            isi::governance::CouncilDerivationKind,
+        };
+        let rosters = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .map(|body| {
+            (
+                body,
+                ParliamentRoster {
+                    body,
+                    epoch: selection_epoch,
+                    members: vec![member.clone()],
+                    alternates: Vec::new(),
+                    candidate_count: 1,
+                    derived_by: CouncilDerivationKind::Sortition,
+                },
+            )
+        })
+        .collect();
+        iroha_core::state::GovernanceParliamentSnapshot::try_new(
+            [0xA5; 32],
+            ParliamentBodies {
+                selection_epoch,
+                rosters,
+            },
+        )
+        .expect("canonical test Parliament snapshot")
+    }
+    fn generic_lock_custody(state: &State) -> GovernanceLockCustody {
+        GovernanceLockCustody {
+            escrowed: !state.gov.min_bond_amount.is_zero(),
+            asset_definition_id: state.gov.voting_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
+        }
+    }
+    #[test]
+    fn first_release_capabilities_expose_only_jit_parliament_approval() {
+        assert_eq!(GOVERNANCE_APPROVAL_MODE_V1, "PARLIAMENT_SORTITION_JIT");
+        let source = include_str!("gov.rs");
+        let retired_mode = ["LEGACY", "COUNCIL", "EPOCH"].join("_");
+        let retired_resolver = ["fn governance", "approval", "mode"].join("_");
+        assert!(!source.contains(&retired_mode));
+        assert!(!source.contains(&retired_resolver));
+    }
     #[test]
     fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {
         let source = include_str!("gov.rs");
@@ -3967,6 +4008,7 @@ seiyaku GovernedReadFixture {
         cfg.conviction_step_blocks = 2;
         cfg.max_conviction = 4;
         state.set_gov(cfg);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-conviction".to_string();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(1).unwrap(),
@@ -3998,7 +4040,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 4,
-                    custody: None,
+                    custody,
                 },
             );
             stx.world.governance_locks_mut().insert(rid.clone(), locks);
@@ -4042,6 +4084,7 @@ seiyaku GovernedReadFixture {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-invalid-direction".to_string();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         {
@@ -4066,7 +4109,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 100,
                     direction: 3,
                     duration_blocks: 4,
-                    custody: None,
+                    custody,
                 },
             );
             tx.world.governance_locks_mut().insert(rid.clone(), locks);
@@ -4126,7 +4169,7 @@ seiyaku GovernedReadFixture {
                     created_height: 1,
                     status: GovernanceProposalStatus::Proposed,
                     pipeline: GovernancePipeline::default(),
-                    parliament_snapshot: None,
+                    parliament_snapshot: parliament_snapshot(&ALICE_ID, 1),
                     finalization_evidence: None,
                     enacted_at_height: None,
                 },
@@ -4162,6 +4205,7 @@ seiyaku GovernedReadFixture {
         cfg.conviction_step_blocks = 1;
         cfg.max_conviction = u64::MAX;
         state.set_gov(cfg);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-overflow".to_string();
         let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
             .expect("alternate account id")
@@ -4190,7 +4234,7 @@ seiyaku GovernedReadFixture {
                         expiry_height: u64::MAX,
                         direction: 0,
                         duration_blocks: u64::MAX - 1,
-                        custody: None,
+                        custody: custody.clone(),
                     },
                 );
             }

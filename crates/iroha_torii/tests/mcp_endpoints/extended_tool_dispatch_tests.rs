@@ -112,7 +112,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_flat_subscription_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_canonical_path => error(
         1062233,
         "iroha.subscriptions.get",
         InvalidSubscriptionId,
@@ -121,7 +121,7 @@ mcp_alias_dispatch_test! {
     )
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_flat_subscription_id() {
+async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_exact_subscription_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -157,7 +157,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_cancel_accepts_flat_su
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_subscription_actions_accept_flat_subscription_id() {
+async fn mcp_jsonrpc_tools_call_subscription_draft_actions_use_exact_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -166,7 +166,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscription_actions_accept_flat_sub
         (10622341, "iroha.subscriptions.pause"),
         (10622342, "iroha.subscriptions.resume"),
         (10622343, "iroha.subscriptions.keep"),
-        (10622344, "iroha.subscriptions.usage"),
         (10622345, "iroha.subscriptions.charge_now"),
     ] {
         let (status, call) = post_mcp(
@@ -199,6 +198,16 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscription_actions_accept_flat_sub
             "expected invalid subscription id to be rejected by `{tool_name}`"
         );
     }
+}
+mcp_alias_dispatch_test! {
+    #[tokio::test]
+    async fn mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path => error(
+        10622344,
+        "iroha.subscriptions.usage",
+        InvalidSubscriptionId,
+        "invalid canonical subscription path should be marked as MCP tool error for usage",
+        "expected invalid canonical subscription path to be rejected by usage",
+    )
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query_fields() {
@@ -237,7 +246,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_accepts_flat_query
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_flat_definition_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_canonical_path => error(
         1062241,
         "iroha.assets.definitions.get",
         InvalidDefinitionId,
@@ -275,7 +284,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_definitions_query_accepts_flat
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -289,7 +298,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments
             "params": {
                 "name": "iroha.assets.holders",
                 "arguments": {
-                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                    "path": {
+                        "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+                    },
                     "limit": 0
                 }
             }
@@ -311,7 +322,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -325,7 +336,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arg
             "params": {
                 "name": "iroha.assets.holders.query",
                 "arguments": {
-                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                    "path": {
+                        "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+                    },
                     "limit": 2
                 }
             }
@@ -578,7 +591,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_query_submit_rejects_unknown_payload
     assert!(message.contains("body_base64"));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs008_accepts_xml_shortcut() {
+async fn mcp_jsonrpc_tools_call_iso20022_pacs008_rejects_retired_message_xml() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -599,21 +612,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs008_accepts_xml_shortcu
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "ISO pacs.008 submit should surface HTTP errors when bridge is unavailable/invalid"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected pacs.008 alias to dispatch and surface non-success status"
-    );
+    assert_tool_error(&call, "retired message_xml must fail closed");
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs009_accepts_xml_shortcut() {
+async fn mcp_jsonrpc_tools_call_iso20022_pacs009_rejects_retired_xml() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -634,21 +636,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_pacs009_accepts_xml_shortcu
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "ISO pacs.009 submit should surface HTTP errors when bridge is unavailable/invalid"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected pacs.009 alias to dispatch and surface non-success status"
-    );
+    assert_tool_error(&call, "retired xml must fail closed");
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_status_accepts_message_id_shortcut() {
+async fn mcp_jsonrpc_tools_call_iso20022_status_rejects_retired_message_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -669,18 +660,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_iso20022_status_accepts_message_id_s
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "ISO status alias should surface HTTP errors when bridge/status lookup is unavailable"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected ISO status alias to dispatch and surface non-success status"
-    );
+    assert_tool_error(&call, "retired message_id must fail closed");
 }
 #[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_submit_and_wait_surfaces_submit_error() {

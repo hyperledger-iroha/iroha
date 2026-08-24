@@ -212,6 +212,10 @@ fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKi
         ToriiProxyRequestKindV4::SubmitTransaction {
             admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
             ..
+        }
+        | ToriiProxyRequestKindV4::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+            ..
         } => QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2.max(1),
         ToriiProxyRequestKindV4::SignedQuery { .. }
         | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. } => {

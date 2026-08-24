@@ -198,16 +198,6 @@ mod tests {
                 },
             ))
     }
-    fn vega_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("fixed Vega profile derives")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 100,
-                    activate_at_height: 400,
-                },
-            ))
-    }
     fn bootle_lantern_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_bootle_lantern_profile_material_v1()
             .expect("fixed Bootle/Lantern profile derives")
@@ -487,7 +477,6 @@ mod tests {
         let mut expected = vec![
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
@@ -501,6 +490,10 @@ mod tests {
         assert!(
             zk_x509_release_candidate_profile_material_v1().is_ok(),
             "X.509 candidate material must derive independently of governance release"
+        );
+        assert!(
+            vega_release_candidate_profile_material_v1().is_ok(),
+            "Vega candidate material must derive independently of governance release"
         );
         assert_eq!(available, expected);
     }
@@ -1445,11 +1438,14 @@ mod tests {
         );
     }
     #[test]
-    fn vega_profile_is_deterministic_complete_and_bounded() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
+    fn vega_candidate_is_deterministic_bounded_and_not_governance_available() {
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id),
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        );
+        let first = vega_release_candidate_profile_material_v1().expect("candidate profile");
+        let second = vega_release_candidate_profile_material_v1().expect("candidate profile");
         assert_eq!(first, second);
         assert_eq!(
             first.proof_system_id,
@@ -1476,31 +1472,35 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
-        assert_eq!(
-            (
-                hex::encode(first.parameter_id.as_bytes()),
-                hex::encode(first.parameter_digest.as_bytes()),
-                hex::encode(first.verifier_digest.as_bytes()),
-                hex::encode(first.statement_schema_digest.as_bytes()),
-                hex::encode(first.engine_manifest_digest.as_bytes()),
-            ),
-            (
-                "9fa2a07d17989e07bb7ff804bb408e95e127b80ab5e01258b77af9b00c82607d".to_owned(),
-                "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
-                "6056ad21ff647212dcc81ff5508e5348400ca734a230073ac6367fa9c7b5ba3f".to_owned(),
-                "f45032acceaf4b65e5afe114ca1f87fde477a73040e07c60a2c99e831f4cdc63".to_owned(),
-                "c701b59a7083969770841a85a784608543c61e5849fed0670bfd97c2aa845009".to_owned(),
-            )
-        );
     }
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
-    fn print_all_compiled_profile_tuples() {
+    fn print_available_and_release_candidate_profile_tuples() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
-            let profile = if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                zk_x509_release_candidate_profile_material_v1()
-            } else {
-                compiled_privacy_profile_v1(protocol_id)
+            let profile = match protocol_id {
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+                    // ZK-ACE has no authenticated release-candidate tuple. Report the exact
+                    // production unavailability instead of manufacturing synthetic material.
+                    match compiled_privacy_profile_v1(protocol_id) {
+                        Err(
+                            error @ CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                                protocol_id: unavailable,
+                            },
+                        ) if unavailable == protocol_id => {
+                            eprintln!("{}=unavailable|{error}", protocol_id.canonical_label());
+                            continue;
+                        }
+                        result => result,
+                    }
+                }
+                PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                    zk_x509_release_candidate_profile_material_v1()
+                }
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                    vega_release_candidate_profile_material_v1()
+                }
+                _ => compiled_privacy_profile_v1(protocol_id),
             }
             .unwrap_or_else(|error| {
                 panic!(
@@ -1520,9 +1520,24 @@ mod tests {
         }
     }
     #[test]
-    fn vega_compiled_profile_rejects_every_binding_mismatch() {
-        let valid = vega_activation();
-        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+    fn vega_candidate_rejects_every_binding_mismatch_while_admission_fails_closed() {
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        let candidate =
+            vega_release_candidate_profile_material_v1().expect("candidate profile material");
+        let valid = candidate.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
+            .expect("exact candidate binding");
+        assert_eq!(
+            validate_compiled_privacy_activation_v1(&valid),
+            Err(CompiledPrivacyProfileValidationErrorV1::Profile(
+                CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }
+            ))
+        );
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -1562,7 +1577,7 @@ mod tests {
             let mut changed = valid;
             mutate(&mut changed);
             assert_eq!(
-                validate_compiled_privacy_activation_v1(&changed),
+                validate_compiled_privacy_activation_against_profile_v1(&changed, &candidate),
                 Err(expected)
             );
         }

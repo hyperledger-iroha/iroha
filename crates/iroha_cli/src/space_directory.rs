@@ -1,10 +1,4 @@
 //! Space Directory operator helpers.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
-};
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -31,6 +25,12 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{ACCEPT, HeaderValue},
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 const SPACE_DIRECTORY_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;

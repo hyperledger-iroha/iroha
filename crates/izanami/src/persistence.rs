@@ -836,7 +836,10 @@ mod tests {
             log_filter: "info".to_string(),
             fault_min_ms: 1_000,
             fault_max_ms: 5_000,
-            fault_flags: FaultToggles::from_array([true, false, true, false]).bits(),
+            fault_flags: FaultToggles::from_enabled_flags([
+                true, true, true, true, false, false, true, false,
+            ])
+            .bits(),
             nexus: false,
             allow_net: true,
         };

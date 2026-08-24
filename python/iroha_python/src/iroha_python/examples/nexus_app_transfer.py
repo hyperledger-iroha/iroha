@@ -56,10 +56,10 @@ class DemoConnectTransport:
         )
 
     def await_approval(self, session, config):
+        _ = session, config
         return {
             "account_id": ACCOUNT_ID,
             "signing_public_key": SIGNING_PUBLIC_KEY,
-            "session": session,
         }
 
     def request_signature(self, session, signable, config):

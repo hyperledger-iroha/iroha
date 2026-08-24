@@ -4,7 +4,7 @@ use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams,
-        SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello, relay_finalize_handshake,
+        SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello,
     },
 };
 use rand::SeedableRng as _;
@@ -49,23 +49,20 @@ fn run_handshake(preferred: HandshakeSuite) {
     let relay_keys = checked_seeded_keypair(0x22);
     let (client_hello, client_state) =
         build_client_hello(&params, &mut rng_client).expect("client hello");
-    let (relay_message, relay_state) = iroha_crypto::soranet::handshake::process_client_hello(
+    let (relay_message, _relay_session) = iroha_crypto::soranet::handshake::process_client_hello(
         &client_hello,
         &params,
         &relay_keys,
         &mut rng_relay,
     )
     .expect("relay processing");
-    let (client_finish, _) = client_handle_relay_hello(
+    client_handle_relay_hello(
         client_state,
         &relay_message,
         relay_keys.public_key(),
         &params,
-        &mut rng_client,
     )
-    .expect("client finish");
-    let finish = client_finish.as_deref().unwrap_or(&[]);
-    relay_finalize_handshake(relay_state, finish, &relay_keys).expect("relay finalize");
+    .expect("client session");
 }
 fn soranet_handshake_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("soranet_handshake_cycle");

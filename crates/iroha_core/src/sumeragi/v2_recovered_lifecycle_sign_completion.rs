@@ -16,7 +16,6 @@ impl LifecycleDecisionApplyAdapterCompletionAuthorityV1 {
             && evidence.is_exact(context)
             && self.tag == evidence.replay_tag()
             && self.subject == evidence.commit_subject()
-            && self.dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()
             && self.dispatch_key.matches_height_context(context)
             && self.artifact.validate().is_ok()
             && self.artifact.height_context == *context

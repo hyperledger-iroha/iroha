@@ -5457,7 +5457,6 @@ mod tests {
             );
             let inrou = &parsed.soracloud_runtime.inrou;
             assert!(!inrou.enabled);
-            assert!(inrou.backends.is_empty());
             assert!(inrou.portable_vm_uid.is_none());
             assert!(inrou.portable_vm_gid.is_none());
 

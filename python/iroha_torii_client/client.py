@@ -254,11 +254,14 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
 _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
 _QUANTITY_MAX_TEXT_LENGTH = 155
 _QUANTITY_MAX_MANTISSA = (1 << 511) - 1
-_VPN_HELPER_TICKET_BYTES = 696
+_VPN_SESSION_ID_HEX_LENGTH = 16 * 2
+_VPN_HELPER_TICKET_BYTES = 788
 _VPN_HELPER_TICKET_HEX_LENGTH = _VPN_HELPER_TICKET_BYTES * 2
 _VPN_EXIT_CLASSES = frozenset({"standard", "low-latency", "high-security"})
 _VPN_SESSION_STATUSES = frozenset({"active"})
-_VPN_RECEIPT_STATUSES = frozenset({"disconnected", "expired", "replaced", "settled"})
+_VPN_RECEIPT_STATUSES = frozenset(
+    {"disconnected", "expired", "replaced", "settlement_pending", "settled"}
+)
 _VPN_RECEIPT_SOURCES = frozenset({"torii", "relay", "wsv"})
 _VPN_LEASE_SECONDS_MAX = (1 << 32) - 1
 _VPN_UINT64_MAX = (1 << 64) - 1
@@ -889,15 +892,6 @@ __all__ = [
     "KaigiRelayDomainMetrics",
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
-    "OfflineReadinessBlocker",
-    "OfflineVerifierId",
-    "OfflineActiveTransferVerifier",
-    "OfflineActiveTopUpShieldVerifier",
-    "OfflineActiveUnshieldVerifier",
-    "OfflineActiveRecursiveStepEqVerifier",
-    "OfflineActiveRecursiveStepEpVerifier",
-    "OfflineAuthenticatedArtifactSet",
-    "OfflineReadiness",
     "OfflineStatus",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -1807,7 +1801,7 @@ class KagemushaRedeemRequestV4:
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
 
 
-_OFFLINE_READINESS_PATH = "/v1/offline/readiness"
+_OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
 _OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
 _OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
 _OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
@@ -1846,27 +1840,6 @@ _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
-_KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
-_KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
-_KAGEMUSHA_VERIFIER_ROLES = {
-    "active_transfer_verifier": "confidential_transfer_v2_verifier_record",
-    "active_topup_shield_verifier": "kagemusha_topup_shield_v2_verifier_record",
-    "active_unshield_verifier": "confidential_unshield_v3_verifier_record",
-    "active_recursive_step_eq_verifier": "kagemusha_recursive_step_eq_v4_verifier_record",
-    "active_recursive_step_ep_verifier": "kagemusha_recursive_step_ep_v4_verifier_record",
-}
-_KAGEMUSHA_VERIFIER_CIRCUITS = {
-    "active_transfer_verifier":
-        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "active_topup_shield_verifier":
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "active_unshield_verifier":
-        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-    "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-}
 
 
 def _validate_kagemusha_norito_request(
@@ -2198,71 +2171,13 @@ def _offline_top_up_shield_evidence_request(value: Any, context: str) -> None:
 
 
 @dataclass(frozen=True)
-class OfflineReadinessBlocker:
-    """Legacy command-specific proof-material diagnostic.
-
-    This type never represents deployment, dataspace, or asset enrollment.
-    """
-
-    code: str
-    message: str
-
-
-@dataclass(frozen=True)
-class OfflineVerifierId:
-    """Stable registry identity of a verifier selected for Offline transfers."""
-
-    backend: str
-    name: str
-
-
-@dataclass(frozen=True)
-class OfflineActiveTransferVerifier:
-    """Key-material-free transfer verifier active at the readiness snapshot."""
-
-    id: OfflineVerifierId
-    version: int
-    circuit_id: str
-    commitment: str
-    public_inputs_schema_hash: str
-    max_proof_bytes: int
-    activation_height: int
-    withdrawal_height: Optional[int]
-
-
-@dataclass(frozen=True)
-class OfflineAuthenticatedArtifactSet:
-    """Exact authenticated ABI-21 V4 recursive release selected for readiness."""
-
-    generation: str
-    manifest_sha256: str
-    release_policy_sha256: str
-    release_attestation_sha256: str
-    activation_height: int
-    withdrawal_height: int
-    max_proof_bytes: int
-    asset_scale: int
-
-
-# Every readiness role exposes the same key-material-free registry record
-# shape. Distinct aliases keep role substitution visible at the API boundary.
-OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
-OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier
-
-
-@dataclass(frozen=True)
 class OfflineStatus:
     """Universal, asset-neutral offline cash-handoff capability."""
 
-    mandatory: bool
     cash_handoff_capability: str
     required_bridge_abi_version: int
     max_hops: int
     ready: bool
-    assets: Tuple[()]
-    blockers: Tuple[()]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineStatus":
@@ -2274,18 +2189,12 @@ class OfflineStatus:
             record,
             context,
             required=(
-                "mandatory",
                 "cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "ready",
-                "assets",
-                "blockers",
             ),
         )
-        mandatory = _offline_required(record, "mandatory", context)
-        if mandatory is not False:
-            raise RuntimeError(f"{context}.mandatory must be false")
         capability = _offline_exact_string(
             _offline_required(record, "cash_handoff_capability", context),
             f"{context}.cash_handoff_capability",
@@ -2317,611 +2226,11 @@ class OfflineStatus:
         ready = _offline_required(record, "ready", context)
         if ready is not True:
             raise RuntimeError(f"{context}.ready must be true")
-        assets = _offline_required(record, "assets", context)
-        if not isinstance(assets, list) or assets:
-            raise RuntimeError(f"{context}.assets must be an empty array")
-        blockers = _offline_required(record, "blockers", context)
-        if not isinstance(blockers, list) or blockers:
-            raise RuntimeError(f"{context}.blockers must be an empty array")
         return cls(
-            mandatory=False,
             cash_handoff_capability=_KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
             required_bridge_abi_version=_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
             max_hops=_KAGEMUSHA_MAX_HOPS,
             ready=True,
-            assets=(),
-            blockers=(),
-        )
-
-
-def _offline_active_transfer_verifier(
-    value: Any,
-    evaluated_block_height: int,
-    context: str,
-) -> OfflineActiveTransferVerifier:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "id",
-            "version",
-            "circuit_id",
-            "commitment",
-            "public_inputs_schema_hash",
-            "max_proof_bytes",
-            "activation_height",
-            "withdrawal_height",
-        ),
-    )
-    raw_id = _offline_mapping(_offline_required(record, "id", context), f"{context}.id")
-    _offline_exact_object_fields(
-        raw_id,
-        f"{context}.id",
-        required=("backend", "name"),
-    )
-    backend = _offline_exact_string(
-        _offline_required(raw_id, "backend", f"{context}.id"),
-        f"{context}.id.backend",
-    )
-    name = _offline_exact_string(
-        _offline_required(raw_id, "name", f"{context}.id"),
-        f"{context}.id.name",
-    )
-    if len(backend) > 256 or len(name) > 256:
-        raise RuntimeError(f"{context}.id backend and name must not exceed 256 characters")
-    version = _offline_unsigned(
-        _offline_required(record, "version", context),
-        f"{context}.version",
-        _OFFLINE_MAX_U32,
-        positive=True,
-    )
-    circuit_id = _offline_exact_string(
-        _offline_required(record, "circuit_id", context),
-        f"{context}.circuit_id",
-    )
-    commitment = _offline_transaction_hash(
-        _offline_required(record, "commitment", context),
-        f"{context}.commitment",
-    )
-    public_inputs_schema_hash = _offline_transaction_hash(
-        _offline_required(record, "public_inputs_schema_hash", context),
-        f"{context}.public_inputs_schema_hash",
-    )
-    if commitment == "0" * 64 or public_inputs_schema_hash == "0" * 64:
-        raise RuntimeError(
-            f"{context} commitment and public_inputs_schema_hash must be non-zero"
-        )
-    max_proof_bytes = _offline_unsigned(
-        _offline_required(record, "max_proof_bytes", context),
-        f"{context}.max_proof_bytes",
-        _OFFLINE_MAX_U32,
-        positive=True,
-    )
-    activation_height = _offline_unsigned(
-        _offline_required(record, "activation_height", context),
-        f"{context}.activation_height",
-        _OFFLINE_MAX_U64,
-    )
-    raw_withdrawal_height = _offline_required(record, "withdrawal_height", context)
-    withdrawal_height = (
-        None
-        if raw_withdrawal_height is None
-        else _offline_unsigned(
-            raw_withdrawal_height,
-            f"{context}.withdrawal_height",
-            _OFFLINE_MAX_U64,
-            positive=True,
-        )
-    )
-    if activation_height > evaluated_block_height:
-        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
-    if withdrawal_height is not None and withdrawal_height <= evaluated_block_height:
-        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
-    return OfflineActiveTransferVerifier(
-        id=OfflineVerifierId(backend=backend, name=name),
-        version=version,
-        circuit_id=circuit_id,
-        commitment=commitment,
-        public_inputs_schema_hash=public_inputs_schema_hash,
-        max_proof_bytes=max_proof_bytes,
-        activation_height=activation_height,
-        withdrawal_height=withdrawal_height,
-    )
-
-
-def _offline_authenticated_artifact_set(
-    value: Any,
-    evaluated_block_height: int,
-    context: str,
-) -> OfflineAuthenticatedArtifactSet:
-    record = _offline_mapping(value, context)
-    _offline_exact_object_fields(
-        record,
-        context,
-        required=(
-            "generation",
-            "manifest_sha256",
-            "release_policy_sha256",
-            "release_attestation_sha256",
-            "activation_height",
-            "withdrawal_height",
-            "max_proof_bytes",
-            "asset_scale",
-        ),
-    )
-    generation = _offline_exact_string(
-        _offline_required(record, "generation", context),
-        f"{context}.generation",
-    )
-    try:
-        generation_bytes = generation.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise RuntimeError(
-            f"{context}.generation must be a canonical portable artifact identifier"
-        ) from exc
-    if (
-        len(generation_bytes) > 128
-        or not generation_bytes[0:1].isalnum()
-        or not generation_bytes[-1:].isalnum()
-        or any(
-            not (byte < 128 and (chr(byte).isalnum() or byte in b"._-"))
-            for byte in generation_bytes
-        )
-    ):
-        raise RuntimeError(
-            f"{context}.generation must be a canonical portable artifact identifier"
-        )
-    basename = generation.split(".", 1)[0].lower()
-    if basename in {"con", "prn", "aux", "nul"} or (
-        len(basename) == 4
-        and basename[:3] in {"com", "lpt"}
-        and basename[3] in "123456789"
-    ):
-        raise RuntimeError(
-            f"{context}.generation must not use a Windows reserved basename"
-        )
-
-    digests: Dict[str, str] = {}
-    for field in (
-        "manifest_sha256",
-        "release_policy_sha256",
-        "release_attestation_sha256",
-    ):
-        digest = _offline_required(record, field, context)
-        if not isinstance(digest, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(digest) is None:
-            raise RuntimeError(
-                f"{context}.{field} must be a lowercase 64-character SHA-256 digest"
-            )
-        digests[field] = digest
-    if any(digest == "0" * 64 for digest in digests.values()) or len(set(digests.values())) != 3:
-        raise RuntimeError(f"{context} digests must be non-zero and pairwise distinct")
-
-    activation_height = _offline_unsigned(
-        _offline_required(record, "activation_height", context),
-        f"{context}.activation_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    withdrawal_height = _offline_unsigned(
-        _offline_required(record, "withdrawal_height", context),
-        f"{context}.withdrawal_height",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if withdrawal_height <= activation_height:
-        raise RuntimeError(f"{context}.withdrawal_height must be after activation_height")
-    if activation_height > evaluated_block_height:
-        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
-    if withdrawal_height <= evaluated_block_height:
-        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
-    max_proof_bytes = _offline_unsigned(
-        _offline_required(record, "max_proof_bytes", context),
-        f"{context}.max_proof_bytes",
-        _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4,
-        positive=True,
-    )
-    asset_scale = _offline_unsigned(
-        _offline_required(record, "asset_scale", context),
-        f"{context}.asset_scale",
-        _OFFLINE_MAX_ASSET_SCALE,
-    )
-    return OfflineAuthenticatedArtifactSet(
-        generation=generation,
-        manifest_sha256=digests["manifest_sha256"],
-        release_policy_sha256=digests["release_policy_sha256"],
-        release_attestation_sha256=digests["release_attestation_sha256"],
-        activation_height=activation_height,
-        withdrawal_height=withdrawal_height,
-        max_proof_bytes=max_proof_bytes,
-        asset_scale=asset_scale,
-    )
-
-
-@dataclass(frozen=True)
-class OfflineReadiness:
-    """Legacy snapshot-bound proof-release diagnostics for one asset.
-
-    Retained for historical wire compatibility and command diagnostics only.
-    Capability discovery returns :class:`OfflineStatus`; this record must not
-    be used to enroll or gate a deployment, dataspace, or asset.
-    """
-
-    required_bridge_abi_version: int
-    max_hops: int
-    asset_definition_id: str
-    asset_scale: Optional[int]
-    evaluated_block_height: int
-    evaluated_block_hash: str
-    active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
-    active_topup_shield_verifier: Optional[OfflineActiveTopUpShieldVerifier]
-    active_unshield_verifier: Optional[OfflineActiveUnshieldVerifier]
-    active_recursive_step_eq_verifier: Optional[OfflineActiveRecursiveStepEqVerifier]
-    active_recursive_step_ep_verifier: Optional[OfflineActiveRecursiveStepEpVerifier]
-    artifact_set: Optional[OfflineAuthenticatedArtifactSet]
-    proof_backend_available: bool
-    recursive_lineage_supported: bool
-    ready: bool
-    blockers: Tuple[OfflineReadinessBlocker, ...]
-
-    @classmethod
-    def from_payload(
-        cls,
-        payload: Mapping[str, Any],
-        requested_asset_selector: str,
-    ) -> "OfflineReadiness":
-        context = "offline readiness response"
-        requested_selector = _offline_asset_selector(
-            requested_asset_selector, "requested asset selector"
-        )
-        record = _offline_mapping(payload, context)
-        _offline_exact_object_fields(
-            record,
-            context,
-            required=(
-                "required_bridge_abi_version",
-                "max_hops",
-                "asset_definition_id",
-                "asset_scale",
-                "evaluated_block_height",
-                "evaluated_block_hash",
-                "active_transfer_verifier",
-                "active_topup_shield_verifier",
-                "active_unshield_verifier",
-                "active_recursive_step_eq_verifier",
-                "active_recursive_step_ep_verifier",
-                "artifact_set",
-                "proof_backend_available",
-                "recursive_lineage_supported",
-                "ready",
-                "blockers",
-            ),
-        )
-        required_bridge_abi_version = _offline_unsigned(
-            _offline_required(record, "required_bridge_abi_version", context),
-            f"{context}.required_bridge_abi_version",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if required_bridge_abi_version != _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION:
-            raise RuntimeError(
-                f"{context}.required_bridge_abi_version must be "
-                f"{_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION}"
-            )
-        max_hops = _offline_unsigned(
-            _offline_required(record, "max_hops", context),
-            f"{context}.max_hops",
-            _OFFLINE_MAX_U32,
-            positive=True,
-        )
-        if max_hops != _KAGEMUSHA_MAX_HOPS:
-            raise RuntimeError(f"{context}.max_hops must be {_KAGEMUSHA_MAX_HOPS}")
-        asset_definition_id = _offline_canonical_asset_definition_id(
-            _offline_required(record, "asset_definition_id", context),
-            f"{context}.asset_definition_id",
-        )
-        if "#" not in requested_selector and asset_definition_id != requested_selector:
-            raise RuntimeError(
-                f"{context}.asset_definition_id does not match the requested asset"
-            )
-        raw_asset_scale = _offline_required(record, "asset_scale", context)
-        asset_scale = (
-            None
-            if raw_asset_scale is None
-            else _offline_unsigned(
-                raw_asset_scale,
-                f"{context}.asset_scale",
-                _OFFLINE_MAX_U32,
-            )
-        )
-        evaluated_block_height = _offline_unsigned(
-            _offline_required(record, "evaluated_block_height", context),
-            f"{context}.evaluated_block_height",
-            _OFFLINE_MAX_U64,
-        )
-        evaluated_block_hash = _offline_transaction_hash(
-            _offline_required(record, "evaluated_block_hash", context),
-            f"{context}.evaluated_block_hash",
-        )
-        raw_active_transfer_verifier = _offline_required(
-            record, "active_transfer_verifier", context
-        )
-        active_transfer_verifier = (
-            None
-            if raw_active_transfer_verifier is None
-            else _offline_active_transfer_verifier(
-                raw_active_transfer_verifier,
-                evaluated_block_height,
-                f"{context}.active_transfer_verifier",
-            )
-        )
-        raw_active_topup_shield_verifier = _offline_required(
-            record, "active_topup_shield_verifier", context
-        )
-        active_topup_shield_verifier = (
-            None
-            if raw_active_topup_shield_verifier is None
-            else _offline_active_transfer_verifier(
-                raw_active_topup_shield_verifier,
-                evaluated_block_height,
-                f"{context}.active_topup_shield_verifier",
-            )
-        )
-        parsed_verifiers: Dict[str, Optional[OfflineActiveTransferVerifier]] = {
-            "active_transfer_verifier": active_transfer_verifier,
-            "active_topup_shield_verifier": active_topup_shield_verifier,
-        }
-        for field in (
-            "active_unshield_verifier",
-            "active_recursive_step_eq_verifier",
-            "active_recursive_step_ep_verifier",
-        ):
-            raw_verifier = _offline_required(record, field, context)
-            parsed_verifiers[field] = (
-                None
-                if raw_verifier is None
-                else _offline_active_transfer_verifier(
-                    raw_verifier,
-                    evaluated_block_height,
-                    f"{context}.{field}",
-                )
-            )
-        for field, verifier in parsed_verifiers.items():
-            if verifier is None:
-                continue
-            if (
-                verifier.id.backend != _KAGEMUSHA_VERIFIER_BACKEND
-                or verifier.id.name != _KAGEMUSHA_VERIFIER_ROLES[field]
-            ):
-                raise RuntimeError(
-                    f"{context}.{field}.id does not match its production Kagemusha role"
-                )
-            if verifier.circuit_id != _KAGEMUSHA_VERIFIER_CIRCUITS[field]:
-                raise RuntimeError(
-                    f"{context}.{field}.circuit_id does not match its Kagemusha role"
-                )
-        active_unshield_verifier = parsed_verifiers["active_unshield_verifier"]
-        active_recursive_step_eq_verifier = parsed_verifiers[
-            "active_recursive_step_eq_verifier"
-        ]
-        active_recursive_step_ep_verifier = parsed_verifiers[
-            "active_recursive_step_ep_verifier"
-        ]
-        raw_artifact_set = _offline_required(record, "artifact_set", context)
-        artifact_set = (
-            None
-            if raw_artifact_set is None
-            else _offline_authenticated_artifact_set(
-                raw_artifact_set,
-                evaluated_block_height,
-                f"{context}.artifact_set",
-            )
-        )
-        active_records = [verifier for verifier in parsed_verifiers.values() if verifier is not None]
-        if len({(record.id.backend, record.id.name) for record in active_records}) != len(active_records):
-            raise RuntimeError(f"{context} must not reuse a verifier id across roles")
-        if len({record.commitment for record in active_records}) != len(active_records):
-            raise RuntimeError(f"{context} must not reuse a verifier commitment across roles")
-        if len({record.public_inputs_schema_hash for record in active_records}) != len(
-            active_records
-        ):
-            raise RuntimeError(
-                f"{context} must not reuse a verifier public-input schema hash across roles"
-            )
-        recursive_verifiers = (
-            active_recursive_step_eq_verifier,
-            active_recursive_step_ep_verifier,
-        )
-        if (recursive_verifiers[0] is None) != (recursive_verifiers[1] is None):
-            raise RuntimeError(
-                f"{context} must report the ABI-21 V4 recursive verifier pair atomically"
-            )
-        if artifact_set is None:
-            if any(verifier is not None for verifier in recursive_verifiers):
-                raise RuntimeError(
-                    f"{context}.artifact_set must accompany the ABI-21 V4 recursive verifier pair"
-                )
-        else:
-            if any(verifier is None for verifier in recursive_verifiers):
-                raise RuntimeError(
-                    f"{context}.artifact_set requires the ABI-21 V4 recursive verifier pair"
-                )
-            if asset_scale != artifact_set.asset_scale:
-                raise RuntimeError(
-                    f"{context}.artifact_set.asset_scale must equal the authoritative asset scale"
-                )
-            for field, verifier in zip(
-                ("active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier"),
-                recursive_verifiers,
-            ):
-                if verifier is None:
-                    raise RuntimeError(
-                        f"{context}.{field} is required with the ABI-21 V4 artifact set"
-                    )
-                if verifier.version == 0:
-                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-21 V4")
-                if verifier.max_proof_bytes != artifact_set.max_proof_bytes:
-                    raise RuntimeError(
-                        f"{context}.{field}.max_proof_bytes must equal artifact_set.max_proof_bytes"
-                    )
-                if verifier.activation_height != artifact_set.activation_height:
-                    raise RuntimeError(
-                        f"{context}.{field}.activation_height must equal artifact_set.activation_height"
-                    )
-                if verifier.withdrawal_height != artifact_set.withdrawal_height:
-                    raise RuntimeError(
-                        f"{context}.{field}.withdrawal_height must equal artifact_set.withdrawal_height"
-                    )
-        proof_backend_available = _offline_required(
-            record, "proof_backend_available", context
-        )
-        if not isinstance(proof_backend_available, bool):
-            raise RuntimeError(f"{context}.proof_backend_available must be a boolean")
-        recursive_lineage_supported = _offline_required(
-            record, "recursive_lineage_supported", context
-        )
-        if not isinstance(recursive_lineage_supported, bool):
-            raise RuntimeError(f"{context}.recursive_lineage_supported must be a boolean")
-        ready = _offline_required(record, "ready", context)
-        if not isinstance(ready, bool):
-            raise RuntimeError(f"{context}.ready must be a boolean")
-        raw_blockers = _offline_required(record, "blockers", context)
-        if not isinstance(raw_blockers, list):
-            raise RuntimeError(f"{context}.blockers must be an array")
-        blockers: List[OfflineReadinessBlocker] = []
-        blocker_codes: set[str] = set()
-        for index, raw in enumerate(raw_blockers):
-            blocker_context = f"{context}.blockers[{index}]"
-            blocker = _offline_mapping(raw, blocker_context)
-            _offline_exact_object_fields(
-                blocker,
-                blocker_context,
-                required=("code", "message"),
-            )
-            code = _offline_exact_string(
-                _offline_required(blocker, "code", blocker_context),
-                f"{blocker_context}.code",
-            )
-            if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
-                raise RuntimeError(
-                    f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
-                )
-            if code in blocker_codes:
-                raise RuntimeError(f"{context}.blockers repeats blocker code {code}")
-            blocker_codes.add(code)
-            message = _offline_required(blocker, "message", blocker_context)
-            if not isinstance(message, str):
-                raise RuntimeError(f"{blocker_context}.message must be a string")
-            _offline_exact_string(message, f"{blocker_context}.message")
-            if len(message) > 1024:
-                raise RuntimeError(
-                    f"{blocker_context}.message must not exceed 1024 Unicode characters"
-                )
-            blockers.append(OfflineReadinessBlocker(code=code, message=message))
-        recursive_registry_codes = blocker_codes & {
-            "recursive_v4_registry_unavailable",
-            "recursive_v4_registry_malformed",
-        }
-        if artifact_set is None:
-            if len(recursive_registry_codes) != 1:
-                raise RuntimeError(
-                    f"{context}.artifact_set null requires exactly one ABI-21 V4 registry blocker"
-                )
-            if proof_backend_available:
-                raise RuntimeError(
-                    f"{context}.proof_backend_available requires an authenticated artifact_set"
-                )
-        elif recursive_registry_codes:
-            raise RuntimeError(
-                f"{context}.artifact_set contradicts the ABI-21 V4 registry blocker set"
-            )
-        if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
-            raise RuntimeError(
-                f"{context}.asset_scale_unavailable must be present exactly when asset_scale is null"
-            )
-        if ("asset_scale_unsupported" in blocker_codes) != (
-            asset_scale is not None and asset_scale > _OFFLINE_MAX_ASSET_SCALE
-        ):
-            raise RuntimeError(
-                f"{context}.asset_scale_unsupported must be present exactly when asset_scale exceeds 28"
-            )
-        if ("transfer_verifier_unavailable" in blocker_codes) != (
-            active_transfer_verifier is None
-        ):
-            raise RuntimeError(
-                f"{context}.transfer_verifier_unavailable must be present exactly when no active verifier is reported"
-            )
-        if ("topup_shield_verifier_unavailable" in blocker_codes) != (
-            active_topup_shield_verifier is None
-        ):
-            raise RuntimeError(
-                f"{context}.topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"
-            )
-        for field, blocker_code in (
-            ("active_unshield_verifier", "unshield_verifier_unavailable"),
-            (
-                "active_recursive_step_eq_verifier",
-                "recursive_step_eq_verifier_unavailable",
-            ),
-            ("active_recursive_step_ep_verifier", "recursive_step_ep_verifier_unavailable"),
-        ):
-            if (blocker_code in blocker_codes) != (parsed_verifiers[field] is None):
-                raise RuntimeError(
-                    f"{context}.{blocker_code} must be present exactly when {field} is null"
-                )
-        if ("proof_backend_unavailable" in blocker_codes) == proof_backend_available:
-            raise RuntimeError(
-                f"{context}.proof_backend_available contradicts the blocker set"
-            )
-        expected_recursive_lineage_supported = (
-            proof_backend_available
-            and artifact_set is not None
-            and active_recursive_step_eq_verifier is not None
-            and active_recursive_step_ep_verifier is not None
-        )
-        if recursive_lineage_supported != expected_recursive_lineage_supported:
-            raise RuntimeError(
-                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
-            )
-        lineage_blocked = "recursive_lineage_unavailable" in blocker_codes
-        if lineage_blocked == recursive_lineage_supported:
-            raise RuntimeError(
-                f"{context}.recursive_lineage_supported contradicts the blocker set"
-            )
-        expected_ready = (
-            proof_backend_available
-            and recursive_lineage_supported
-            and artifact_set is not None
-            and asset_scale is not None
-            and asset_scale <= _OFFLINE_MAX_ASSET_SCALE
-            and active_transfer_verifier is not None
-            and active_topup_shield_verifier is not None
-            and active_unshield_verifier is not None
-            and active_recursive_step_eq_verifier is not None
-            and active_recursive_step_ep_verifier is not None
-            and not blockers
-        )
-        if ready != expected_ready:
-            raise RuntimeError(
-                f"{context}.ready must equal the complete ABI-21 runtime conjunction"
-            )
-        return cls(
-            required_bridge_abi_version=required_bridge_abi_version,
-            max_hops=max_hops,
-            asset_definition_id=asset_definition_id,
-            asset_scale=asset_scale,
-            evaluated_block_height=evaluated_block_height,
-            evaluated_block_hash=evaluated_block_hash,
-            active_transfer_verifier=active_transfer_verifier,
-            active_topup_shield_verifier=active_topup_shield_verifier,
-            active_unshield_verifier=active_unshield_verifier,
-            active_recursive_step_eq_verifier=active_recursive_step_eq_verifier,
-            active_recursive_step_ep_verifier=active_recursive_step_ep_verifier,
-            artifact_set=artifact_set,
-            proof_backend_available=proof_backend_available,
-            recursive_lineage_supported=recursive_lineage_supported,
-            ready=ready,
-            blockers=tuple(blockers),
         )
 
 
@@ -5470,7 +4779,7 @@ class VpnSession:
 
 @dataclass(frozen=True)
 class VpnReceipt:
-    """Disconnected or settled native Sora VPN lease receipt."""
+    """Native Sora VPN lease receipt, including provisional settlement state."""
 
     session_id: str
     account_id: str
@@ -5919,7 +5228,6 @@ class StatusMetrics:
     queue_delta: int
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
-    da_reschedule_delta: int
     tx_approved_delta: int
     tx_rejected_delta: int
     view_change_delta: int
@@ -5945,7 +5253,6 @@ class StatusPayload:
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
     commit_time_ms: int
-    da_reschedule_total: int
     txs_approved: int
     txs_rejected: int
     view_changes: int
@@ -6415,7 +5722,6 @@ class PipelinePreflightBlock:
 class PipelinePreflightPipeline:
     """Pipeline execution and verification limits advertised by Torii preflight."""
 
-    signature_batch_max: int
     signature_batch_max_ed25519: int
     signature_batch_max_secp256k1: int
     signature_batch_max_pqc: int
@@ -10979,13 +10285,13 @@ class ToriiClient(
         canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> Optional[VpnSession]:
-        """Fetch an active VPN session, returning `None` when absent."""
+        """Fetch an active VPN session by its canonical 16-byte hex identifier."""
 
         canonical_auth = self._require_canonical_auth(canonical_auth, "vpn session")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
-            expected_length=64,
+            expected_length=_VPN_SESSION_ID_HEX_LENGTH,
         )
         path = f"/v1/vpn/sessions/{quote(normalized, safe='')}"
         response = self._vpn_json_request(
@@ -11000,34 +10306,6 @@ class ToriiClient(
             return None
         return self._parse_vpn_session(response, context="vpn session")
 
-    def delete_vpn_session(
-        self,
-        session_id: Union[str, bytes, bytearray, memoryview],
-        *,
-        canonical_auth: ToriiCanonicalRequestAuth,
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Optional[VpnReceipt]:
-        """Disconnect a VPN session, returning the canonical lease receipt when present."""
-
-        canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipt")
-        normalized = self._normalize_hex_string(
-            session_id,
-            context="vpn session_id",
-            expected_length=64,
-        )
-        path = f"/v1/vpn/sessions/{quote(normalized, safe='')}"
-        response = self._vpn_json_request(
-            "DELETE",
-            path,
-            canonical_auth=canonical_auth,
-            headers=headers,
-            context="vpn receipt",
-            expected_status=(200, 404),
-        )
-        if response is None:
-            return None
-        return self._parse_vpn_receipt(response, context="vpn receipt")
-
     def submit_vpn_receipt(
         self,
         request: Union[VpnReceiptSubmitRequest, Mapping[str, Any]],
@@ -11035,7 +10313,7 @@ class ToriiClient(
         canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceipt:
-        """Submit a relay receipt and receive the native `SettleVpnLease` instruction."""
+        """Submit a relay receipt and receive a provisional settlement receipt."""
 
         canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipt")
         payload = self._normalize_vpn_receipt_request(request)
@@ -11056,7 +10334,7 @@ class ToriiClient(
         canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceiptListResponse:
-        """List recent disconnected or settled VPN lease receipts for the signed account."""
+        """List recent VPN lease lifecycle receipts for the signed account."""
 
         canonical_auth = self._require_canonical_auth(canonical_auth, "vpn receipts")
         response = self._vpn_json_request(
@@ -11724,7 +11002,7 @@ class ToriiClient(
 
         response = self._request(
             "GET",
-            _OFFLINE_READINESS_PATH,
+            _OFFLINE_CAPABILITY_PATH,
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200})
@@ -13059,7 +12337,7 @@ class ToriiClient(
             session_id_hex=cls._require_exact_lower_hex_string(
                 record.get("session_id_hex"),
                 context=f"{context}.session_id_hex",
-                expected_length=32,
+                expected_length=_VPN_SESSION_ID_HEX_LENGTH,
             ),
             payment_reference=cls._require_string(
                 record.get("payment_reference"),
@@ -13147,7 +12425,7 @@ class ToriiClient(
             session_id=cls._require_exact_lower_hex_string(
                 record.get("session_id"),
                 context=f"{context}.session_id",
-                expected_length=64,
+                expected_length=_VPN_SESSION_ID_HEX_LENGTH,
             ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
             exit_class=cls._require_vpn_enum(
@@ -13225,7 +12503,7 @@ class ToriiClient(
             session_id=cls._require_exact_lower_hex_string(
                 record.get("session_id"),
                 context=f"{context}.session_id",
-                expected_length=64,
+                expected_length=_VPN_SESSION_ID_HEX_LENGTH,
             ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
             exit_class=cls._require_vpn_enum(
@@ -15297,10 +14575,6 @@ class ToriiClient(
                 f"{context}.time_since_last_non_empty_block_ms",
             ),
             commit_time_ms=self._coerce_int(record.get("commit_time_ms"), f"{context}.commit_time_ms"),
-            da_reschedule_total=self._coerce_int(
-                record.get("da_reschedule_total"),
-                f"{context}.da_reschedule_total",
-            ),
             txs_approved=self._coerce_int(record.get("txs_approved"), f"{context}.txs_approved"),
             txs_rejected=self._coerce_int(record.get("txs_rejected"), f"{context}.txs_rejected"),
             view_changes=self._coerce_int(record.get("view_changes"), f"{context}.view_changes"),
@@ -15328,6 +14602,20 @@ class ToriiClient(
         admission = self._ensure_mapping(record.get("admission"), f"{context}.admission")
         block = self._ensure_mapping(record.get("block"), f"{context}.block")
         pipeline = self._ensure_mapping(record.get("pipeline"), f"{context}.pipeline")
+        self._reject_unknown_fields(
+            pipeline,
+            {
+                "signature_batch_max_ed25519",
+                "signature_batch_max_secp256k1",
+                "signature_batch_max_pqc",
+                "signature_batch_max_bls",
+                "overlay_max_instructions",
+                "ivm_max_cycles_upper_bound",
+                "ivm_admission_cycle_limit",
+                "ivm_max_decoded_instructions",
+            },
+            f"{context}.pipeline",
+        )
         queue = self._ensure_mapping(record.get("queue"), f"{context}.queue")
         fees = self._ensure_mapping(record.get("fees"), f"{context}.fees")
         raw = self._clone_json_payload(record, context=context)
@@ -15378,10 +14666,6 @@ class ToriiClient(
                 )
             ),
             pipeline=PipelinePreflightPipeline(
-                signature_batch_max=self._coerce_int(
-                    pipeline.get("signature_batch_max"),
-                    f"{context}.pipeline.signature_batch_max",
-                ),
                 signature_batch_max_ed25519=self._coerce_int(
                     pipeline.get("signature_batch_max_ed25519"),
                     f"{context}.pipeline.signature_batch_max_ed25519",

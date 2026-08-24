@@ -24,9 +24,8 @@ The default four-validator topology is the smallest exact Sumeragi committee.
 Custom profiles may use four or seven validators and use the one-second
 localnet cadence so crash-safe consensus persistence can keep up when all
 validators share one development machine. Explicit Kagami genesis profiles
-retain their profile-defined cadence. The historical `single-peer` profile
-name remains readable for saved-config compatibility but launches four
-validators.
+retain their profile-defined cadence. The only built-in topology preset is the
+exact name `four-peer-bft`.
 
 The desktop app now treats the selected workspace as the home for bootstrap files and uses
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the

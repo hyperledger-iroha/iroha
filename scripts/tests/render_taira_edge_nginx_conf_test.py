@@ -33,6 +33,7 @@ def _write_roster(
     torii_address: str = "0.0.0.0:18080",
     include_edge_upstreams: bool = True,
     include_soracloud_alias_route: bool = False,
+    validator_count: int = 4,
 ) -> None:
     parts = [f'torii_address = "{torii_address}"', ""]
     if include_soracloud_alias_route:
@@ -40,11 +41,11 @@ def _write_roster(
             [
                 "[[soracloud_alias_routes]]",
                 'alias = "solswap-indexer.sora"',
-                'edge_upstream = "0.0.0.0:8788"',
+                'edge_upstream = "127.0.0.1:8788"',
                 "",
             ]
         )
-    for index in range(1, 5):
+    for index in range(1, validator_count + 1):
         parts.extend(
             [
                 "[[validators]]",
@@ -76,62 +77,154 @@ def test_load_edge_validators_uses_explicit_edge_upstreams(tmp_path: Path) -> No
     assert validators[0].validator_host == "taira-validator-1.sora.org"
 
 
-def test_load_edge_validators_falls_back_to_torii_address(tmp_path: Path) -> None:
+def test_load_edge_validators_rejects_missing_or_legacy_upstream_fields(
+    tmp_path: Path,
+) -> None:
     roster_path = tmp_path / "validator_roster.toml"
-    _write_roster(roster_path, torii_address="0.0.0.0:29080", include_edge_upstreams=False)
+    _write_roster(roster_path, include_edge_upstreams=False)
 
     try:
         MODULE.load_edge_validators(roster_path)
     except ValueError as error:
-        assert "duplicated" in str(error)
+        assert "missing canonical field" in str(error)
     else:  # pragma: no cover
-        raise AssertionError("load_edge_validators accepted duplicated fallback upstreams")
+        raise AssertionError("load_edge_validators accepted missing canonical upstreams")
 
+    legacy = roster_path.read_text(encoding="utf-8").replace(
+        'torii_public_address = "https://taira-validator-1.sora.org"',
+        'torii_public_address = "https://taira-validator-1.sora.org"\n'
+        'torii_address = "127.0.0.1:29080"',
+        1,
+    )
+    roster_path.write_text(legacy, encoding="utf-8")
+    try:
+        MODULE.load_edge_validators(roster_path)
+    except ValueError as error:
+        assert "unknown first-release field" in str(error)
+        assert "`torii_address`" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("load_edge_validators accepted legacy validator alias")
+
+
+def test_roster_requires_exactly_four_validators_and_rejects_unknowns(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    for count in (3, 5):
+        _write_roster(roster_path, validator_count=count)
+        try:
+            MODULE.load_edge_validators(roster_path)
+        except ValueError as error:
+            assert "exactly 4 validators" in str(error)
+        else:  # pragma: no cover
+            raise AssertionError(f"accepted a {count}-validator Taira edge roster")
+
+    _write_roster(roster_path)
     roster_path.write_text(
-        "\n".join(
-            [
-                'torii_address = "0.0.0.0:29080"',
-                "",
-                '[[validators]]',
-                'slug = "taira-validator-1"',
-                'public_key = "peer-1-public"',
-                'pop_hex = "peer-1-pop"',
-                'public_address = "taira-validator-1.sora.org:1337"',
-                'torii_public_address = "https://taira-validator-1.sora.org"',
-                'torii_address = "0.0.0.0:29080"',
-                "",
-                '[[validators]]',
-                'slug = "taira-validator-2"',
-                'public_key = "peer-2-public"',
-                'pop_hex = "peer-2-pop"',
-                'public_address = "taira-validator-2.sora.org:1337"',
-                'torii_public_address = "https://taira-validator-2.sora.org"',
-                'torii_address = "0.0.0.0:29081"',
-                "",
-                '[[validators]]',
-                'slug = "taira-validator-3"',
-                'public_key = "peer-3-public"',
-                'pop_hex = "peer-3-pop"',
-                'public_address = "taira-validator-3.sora.org:1337"',
-                'torii_public_address = "https://taira-validator-3.sora.org"',
-                'torii_address = "0.0.0.0:29082"',
-                "",
-                '[[validators]]',
-                'slug = "taira-validator-4"',
-                'public_key = "peer-4-public"',
-                'pop_hex = "peer-4-pop"',
-                'public_address = "taira-validator-4.sora.org:1337"',
-                'torii_public_address = "https://taira-validator-4.sora.org"',
-                'torii_address = "0.0.0.0:29083"',
-                "",
-            ]
-        ),
+        'legacy_edge_mode = true\n' + roster_path.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    try:
+        MODULE.load_edge_validators(roster_path)
+    except ValueError as error:
+        assert "unknown first-release field" in str(error)
+        assert "`legacy_edge_mode`" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("accepted an unknown top-level roster field")
 
-    validators = MODULE.load_edge_validators(roster_path)
-    assert validators[0].upstream_address == "127.0.0.1:29080"
-    assert validators[-1].upstream_address == "127.0.0.1:29083"
+
+def test_validator_values_require_exact_canonical_spelling(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    mutations = (
+        (
+            'slug = "taira-validator-1"',
+            'slug = "Taira-Validator-1"',
+            "lowercase kebab-case",
+        ),
+        (
+            'slug = "taira-validator-1"',
+            'slug = "taira_validator_1"',
+            "lowercase kebab-case",
+        ),
+        (
+            'slug = "taira-validator-1"',
+            'slug = " taira-validator-1"',
+            "surrounding whitespace",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "HTTPS://taira-validator-1.sora.org"',
+            "exact canonical spelling",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "https://Taira-Validator-1.sora.org"',
+            "exact canonical spelling",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "https://taira-validator-1.sora.org."',
+            "trailing dot",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "https://taira-validator-1.sora.org/"',
+            "must not contain credentials",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "https://taira-validator-1.sora.org:443"',
+            "explicit port",
+        ),
+        (
+            'torii_public_address = "https://taira-validator-1.sora.org"',
+            'torii_public_address = "http://taira-validator-1.sora.org"',
+            "exact https:// DNS origin",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "0.0.0.0:18080"',
+            "wildcard address",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "localhost:18080"',
+            "localhost alias",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "127.000.0.1:18080"',
+            "IPv4 host must use exact canonical spelling",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "127.0.0.1:018080"',
+            "canonical decimal spelling",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "127.0.0.1:65536"',
+            "between 1 and 65535",
+        ),
+        (
+            'edge_torii_upstream = "127.0.0.1:18080"',
+            'edge_torii_upstream = "127.0.0.1:18080 "',
+            "surrounding whitespace",
+        ),
+    )
+
+    for old, new, expected in mutations:
+        _write_roster(roster_path)
+        roster_path.write_text(
+            roster_path.read_text(encoding="utf-8").replace(old, new, 1),
+            encoding="utf-8",
+        )
+        try:
+            MODULE.load_edge_validators(roster_path)
+        except ValueError as error:
+            assert expected in str(error)
+        else:  # pragma: no cover
+            raise AssertionError(f"accepted non-canonical roster value {new!r}")
 
 
 def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
@@ -152,7 +245,8 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "map $host $taira_mon_alias_host" in rendered
     assert "server_name mon.taira.sora.net;" in rendered
     assert "Taira Soracloud Mon gateway" in rendered
-    assert "https://mon.taira.sora.net/soradns/<alias>/<path>" in rendered
+    assert "/soradns/" not in rendered
+    assert "$soradns_" not in rendered
     assert "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;" in rendered
     assert "proxy_set_header Host $taira_mon_alias_host;" in rendered
     assert "proxy_set_header X-Forwarded-Host $host;" in rendered
@@ -165,7 +259,6 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "127.0.0.1:18082" not in public_upstream
     assert "127.0.0.1:18083" not in public_upstream
     assert "proxy_pass http://taira_public_edge_upstream;" in rendered
-    assert "proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;" in rendered
     assert "proxy_pass http://taira_validator_1_upstream;" in rendered
     assert "location = /v1/connect/session" in rendered
     assert "location ^~ /v1/connect/session/" in rendered
@@ -242,9 +335,9 @@ def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:
         raise AssertionError("accepted an unknown canonical public validator")
 
 
-def test_parse_soracloud_alias_routes_normalizes_and_rejects_unsafe_values() -> None:
+def test_parse_soracloud_alias_routes_requires_canonical_values() -> None:
     routes = MODULE.parse_soracloud_alias_routes(
-        ["Solswap-Indexer.Sora=0.0.0.0:8788"]
+        ["solswap-indexer.sora=127.0.0.1:8788"]
     )
 
     assert routes == [
@@ -258,12 +351,26 @@ def test_parse_soracloud_alias_routes_normalizes_and_rejects_unsafe_values() -> 
 
     for value, expected in (
         ("solswap-indexer.sora", "ALIAS=HOST:PORT"),
-        ("solswap/indexer.sora=127.0.0.1:8788", "DNS label characters"),
-        ("solswap-.sora=127.0.0.1:8788", "valid DNS labels"),
+        (
+            "Solswap-Indexer.Sora=127.0.0.1:8788",
+            "exact lowercase DNS spelling",
+        ),
+        ("solswap-indexer.sora.=127.0.0.1:8788", "trailing dot"),
+        ("solswap/indexer.sora=127.0.0.1:8788", "canonical lowercase DNS labels"),
+        ("solswap-.sora=127.0.0.1:8788", "canonical lowercase DNS labels"),
+        ("solswap-indexer.sora=0.0.0.0:8788", "wildcard address"),
+        ("solswap-indexer.sora=[::]:8788", "wildcard address"),
+        ("solswap-indexer.sora=localhost:8788", "localhost alias"),
+        (
+            "solswap-indexer.sora=127.0.0.1:08788",
+            "canonical decimal spelling",
+        ),
         (
             "solswap-indexer.sora=127.0.0.1:not-a-port",
-            "port `not-a-port` must be numeric",
+            "canonical decimal spelling",
         ),
+        (" solswap-indexer.sora=127.0.0.1:8788", "canonical lowercase DNS labels"),
+        ("solswap-indexer.sora=127.0.0.1:8788 ", "surrounding whitespace"),
     ):
         try:
             MODULE.parse_soracloud_alias_routes([value])
@@ -290,7 +397,7 @@ def test_load_soracloud_alias_route_specs_from_roster(tmp_path: Path) -> None:
     _write_roster(roster_path, include_soracloud_alias_route=True)
 
     assert MODULE.load_soracloud_alias_route_specs(roster_path) == [
-        "solswap-indexer.sora=0.0.0.0:8788"
+        "solswap-indexer.sora=127.0.0.1:8788"
     ]
     routes = MODULE.parse_soracloud_alias_routes(
         MODULE.load_soracloud_alias_route_specs(roster_path)
@@ -307,20 +414,133 @@ def test_load_soracloud_alias_route_specs_rejects_bad_roster_entries(tmp_path: P
         ('soracloud_alias_routes = "bad"\n', "array of tables"),
         (
             '[[soracloud_alias_routes]]\nedge_upstream = "127.0.0.1:8788"\n',
-            "field `alias`",
+            "missing canonical field",
         ),
         (
             '[[soracloud_alias_routes]]\nalias = "solswap-indexer.sora"\n',
-            "must set `edge_upstream`",
+            "missing canonical field",
+        ),
+        (
+            '[[soracloud_alias_routes]]\n'
+            'alias = "solswap-indexer.sora"\n'
+            'upstream_address = "127.0.0.1:8788"\n',
+            "unknown first-release field",
+        ),
+        (
+            '[[soracloud_alias_routes]]\n'
+            'alias = "solswap-indexer.sora"\n'
+            'upstream = "127.0.0.1:8788"\n',
+            "unknown first-release field",
         ),
     ):
-        roster_path.write_text(f"{extra}\n{roster_text}", encoding="utf-8")
+        prefix, marker, suffix = roster_text.partition("[[validators]]")
+        roster_path.write_text(
+            f"{prefix}{extra}\n{marker}{suffix}",
+            encoding="utf-8",
+        )
         try:
             MODULE.load_soracloud_alias_route_specs(roster_path)
         except ValueError as error:
             assert expected in str(error)
         else:  # pragma: no cover
             raise AssertionError(f"accepted bad route entry {extra!r}")
+
+
+def test_render_requires_exactly_four_validators() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+    for drifted in (validators[:-1], validators + [validators[-1]]):
+        try:
+            MODULE.render_edge_nginx_conf(drifted)
+        except ValueError as error:
+            assert "exactly 4 edge validators" in str(error)
+        else:  # pragma: no cover
+            raise AssertionError("renderer accepted a non-four-validator cohort")
+
+
+def test_render_rejects_noncanonical_preconstructed_values() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    drifted_values = (
+        (
+            MODULE.EdgeValidator(
+                slug="Taira-Validator-1",
+                upstream_name="taira_validator_1",
+                validator_host=validators[0].validator_host,
+                upstream_address=validators[0].upstream_address,
+            ),
+            "lowercase kebab-case",
+        ),
+        (
+            MODULE.EdgeValidator(
+                slug=validators[0].slug,
+                upstream_name="legacy_sanitized_name",
+                validator_host=validators[0].validator_host,
+                upstream_address=validators[0].upstream_address,
+            ),
+            "upstream name must be exactly",
+        ),
+        (
+            MODULE.EdgeValidator(
+                slug=validators[0].slug,
+                upstream_name=validators[0].upstream_name,
+                validator_host="Taira-Validator-1.sora.org",
+                upstream_address=validators[0].upstream_address,
+            ),
+            "exact lowercase DNS spelling",
+        ),
+        (
+            MODULE.EdgeValidator(
+                slug=validators[0].slug,
+                upstream_name=validators[0].upstream_name,
+                validator_host=validators[0].validator_host,
+                upstream_address="0.0.0.0:18080",
+            ),
+            "wildcard address",
+        ),
+    )
+    for drifted, expected in drifted_values:
+        cohort = [drifted, *validators[1:]]
+        try:
+            MODULE.render_edge_nginx_conf(cohort)
+        except ValueError as error:
+            assert expected in str(error)
+        else:  # pragma: no cover
+            raise AssertionError(f"renderer accepted non-canonical value {drifted!r}")
+
+    route = MODULE.parse_soracloud_alias_routes(
+        ["solswap-indexer.sora=127.0.0.1:8788"]
+    )[0]
+    drifted_route = MODULE.SoracloudAliasRoute(
+        alias=route.alias,
+        upstream_name="legacy_sanitized_name",
+        upstream_address=route.upstream_address,
+        pretty_host=route.pretty_host,
+    )
+    try:
+        MODULE.render_edge_nginx_conf(
+            validators,
+            soracloud_alias_routes=[drifted_route],
+        )
+    except ValueError as error:
+        assert "upstream name must be exactly" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("renderer accepted a normalized Soracloud route record")
 
 
 def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstream() -> None:
@@ -362,22 +582,8 @@ def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstrea
     assert "proxy_set_header Host solswap-indexer.sora;" in exact_host_server
     assert "proxy_set_header X-Forwarded-Host $host;" in exact_host_server
 
-    public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
-        "server_name mon.taira.sora.net;", 1
-    )[0]
-    mon_apex_server = rendered.split("server_name mon.taira.sora.net;", 1)[1].split(
-        "server_name solswap-indexer.sora.mon.taira.sora.net;", 1
-    )[0]
-    exact_debug_marker = r"location ~ ^/soradns/solswap\-indexer\.sora"
-    generic_debug_marker = "location ~ ^/soradns/(?<soradns_alias>"
-    for server in (public_server, mon_apex_server):
-        assert server.index(exact_debug_marker) < server.index(generic_debug_marker)
-        block = _location_block(server, exact_debug_marker)
-        assert (
-            "proxy_pass http://soracloud_solswap_indexer_sora_upstream"
-            "$soradns_target_path$is_args$args;"
-        ) in block
-        assert "proxy_set_header Host solswap-indexer.sora;" in block
+    assert "/soradns/" not in rendered
+    assert "$soradns_" not in rendered
 
     wildcard_mon_server = rendered.split(
         "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;",
@@ -411,7 +617,7 @@ def test_main_writes_soracloud_alias_route(tmp_path: Path) -> None:
             "--output",
             str(output_path),
             "--soracloud-alias-route",
-            "solswap-indexer.sora=0.0.0.0:8788",
+            "solswap-indexer.sora=127.0.0.1:8788",
         ]
     )
 

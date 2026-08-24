@@ -497,9 +497,9 @@ struct FieldAttr {
     skip: bool,
     /// Require this `Option` field's key to be present during JSON deserialization.
     required: bool,
-    /// Use [`Default::default`] or a provided function when the field is missing.
+    /// Use [`Default::default`] when the field is missing from JSON input.
     default: bool,
-    /// Optional function path to compute the default value.
+    /// Optional function path to compute a missing JSON field's default value.
     default_fn: Option<syn::Path>,
     /// Optional predicate to skip serialization when it returns true.
     skip_serializing_if: Option<syn::Path>,
@@ -1528,14 +1528,8 @@ fn sequential_deserialize_value(
         add_bound(generics, ty, quote!(Default));
         return None;
     }
-    let fallback = if let Some(path) = &field.attrs.default_fn {
-        Some(quote! { (#path)() })
-    } else if field.attrs.default {
-        add_bound(generics, ty, quote!(Default));
-        Some(quote! { Default::default() })
-    } else {
-        None
-    };
+    // Binary V1 fields are positional and mandatory. `default` remains a JSON
+    // input policy and must never synthesize an omitted binary field.
     let decode = if field.attrs.flatten {
         add_bound(
             generics,
@@ -1575,22 +1569,7 @@ fn sequential_deserialize_value(
             norito::core::decode_context_field_canonical::<#ty>(ptr, &mut offset)
         }
     };
-    Some(if let Some(fallback) = fallback {
-        quote! {
-            match #decode {
-                Ok(value) => value,
-                Err(norito::core::Error::LengthMismatch) => { #fallback },
-                Err(err) => return Err(err),
-            }
-        }
-    } else {
-        quote! {
-            match #decode {
-                Ok(value) => value,
-                Err(err) => return Err(err),
-            }
-        }
-    })
+    Some(quote! { (#decode)? })
 }
 
 /// Generate `NoritoDeserialize` implementation for a struct.
@@ -1651,7 +1630,7 @@ fn derive_struct_deserialize(
     match fields {
         Fields::Named(_) => {
             let packed_named_count = active_struct_fields(&parsed_fields).count();
-            // Build packed-struct named field initializers (compat offsets-based)
+            // Build packed-struct named field initializers for the offset-table layout.
             let packed_named_inits: Vec<TokenStream2> = match fields {
                 Fields::Named(named) => named
                     .named
@@ -1705,7 +1684,7 @@ fn derive_struct_deserialize(
                         let name = f.ident.as_ref().unwrap();
                         let ty = &f.ty;
                         let fixed_size = is_fixed_size(ty);
-                        let compat_decode_named = if is_option_type(ty) {
+                        let sequential_decode_named = if is_option_type(ty) {
                             let inner_ty = option_inner_type(ty).expect("Option inner type");
                             quote! {
                                 let ptr2 = unsafe { data_base.add(__data_off) };
@@ -1747,7 +1726,7 @@ fn derive_struct_deserialize(
                                 )?
                             }
                         };
-                        let compat_decode_named_len_mismatch = compat_decode_named.clone();
+                        let sequential_decode_named_without_size = sequential_decode_named.clone();
                         if attrs.skip {
                             quote! { #name: Default::default() }
                         } else if let Some(len_expr) = u8_array_len(ty) {
@@ -1792,13 +1771,13 @@ fn derive_struct_deserialize(
                                             eprintln!("packed signature decode len={}", __len);
                                         }
                                         __sz_i += 1;
-                                        norito::core::decode_context_field_archived_compat::<#ty>(
+                                        norito::core::decode_context_field_fixed_canonical::<#ty>(
                                             data_base,
                                             &mut __data_off,
                                             __len,
                                         )?
                                     } else {
-                                        #compat_decode_named_len_mismatch
+                                        #sequential_decode_named_without_size
                                     }
                                 }
                             }
@@ -1812,12 +1791,12 @@ fn derive_struct_deserialize(
                                             .get(__sz_i)
                                             .ok_or(norito::core::Error::LengthMismatch)?;
                                         __sz_i += 1;
-                                        norito::core::decode_context_field_archived_compat::<#ty>(
+                                        norito::core::decode_context_field_fixed_canonical::<#ty>(
                                             data_base,
                                             &mut __data_off,
                                             __len,
                                         )?
-                                    } else { #compat_decode_named }
+                                    } else { #sequential_decode_named }
                                 }
                             }
                         }
@@ -1960,7 +1939,7 @@ fn derive_struct_deserialize(
                                 // Initialize fields in order
                                 Self { #(#packed_named_inits_hybrid),* }
                             } else {
-                                // Compat: read offsets or sizes into offsets array
+                                // Read the advertised offset-table layout.
                                 let mut __offs: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
                                 let mut __packed_data_len: usize = 0;
                                 let mut __packed_tail_len: usize = 0;
@@ -2033,7 +2012,7 @@ fn derive_struct_deserialize(
                 .map(|i| format_ident!("field{}", i))
                 .collect();
             let packed_unnamed_count = active_struct_fields(&parsed_fields).count();
-            // Build packed-struct unnamed field statements (compat offsets-based)
+            // Build packed-struct unnamed field statements for the offset-table layout.
             let packed_unnamed_stmts: Vec<TokenStream2> = match fields {
                 Fields::Unnamed(unnamed) => unnamed
                     .unnamed
@@ -2052,7 +2031,7 @@ fn derive_struct_deserialize(
                                     let __end = __offs[__i + 1];
                                     __i += 1;
                                     let __len = __end - __start;
-                                    norito::core::decode_context_field_fixed_archived::<#ty>(
+                                    norito::core::decode_context_field_fixed_canonical::<#ty>(
                                         data_base,
                                         &mut __start,
                                         __len,
@@ -2100,7 +2079,7 @@ fn derive_struct_deserialize(
                             let fixed_len_lit = fixed_len;
                             quote! {
                                 let #idx_var = {
-                                    norito::core::decode_context_field_fixed_archived::<#ty>(
+                                    norito::core::decode_context_field_fixed_canonical::<#ty>(
                                         data_base,
                                         &mut __data_off,
                                         #fixed_len_lit,
@@ -2589,34 +2568,6 @@ fn derive_enum_serialize(
     }
 }
 
-fn binary_field_value_with_default(
-    attrs: &FieldAttr,
-    ty: &syn::Type,
-    decode: TokenStream2,
-    generics: &mut Generics,
-) -> TokenStream2 {
-    let fallback = if let Some(path) = attrs.default_fn.as_ref() {
-        Some(quote! { (#path)() })
-    } else if attrs.default {
-        add_bound(generics, ty, quote!(Default));
-        Some(quote! { Default::default() })
-    } else {
-        None
-    };
-    fallback.map_or_else(
-        || quote! { (#decode)? },
-        |fallback| {
-            quote! {
-                match (#decode) {
-                    Ok(value) => value,
-                    Err(norito::core::Error::LengthMismatch) => #fallback,
-                    Err(error) => return Err(error),
-                }
-            }
-        },
-    )
-}
-
 /// Generate `NoritoDeserialize` implementation for an enum.
 fn derive_enum_deserialize(
     ident: &syn::Ident,
@@ -2687,7 +2638,7 @@ fn derive_enum_deserialize(
                                                     &mut offset,
                                                 )
                                             } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
+                                                norito::core::decode_context_field_canonical::<#ty>(
                                                     ptr,
                                                     &mut offset,
                                                 )
@@ -2698,13 +2649,13 @@ fn derive_enum_deserialize(
                                         let fixed_len_lit = fixed_size.expect("fixed-size field");
                                         quote! {
                                             if norito::core::use_packed_struct() {
-                                                norito::core::decode_context_field_fixed_archived::<#ty>(
+                                                norito::core::decode_context_field_fixed_canonical::<#ty>(
                                                     ptr,
                                                     &mut offset,
                                                     #fixed_len_lit,
                                                 )
                                             } else {
-                                                norito::core::decode_context_field_archived::<#ty>(
+                                                norito::core::decode_context_field_canonical::<#ty>(
                                                     ptr,
                                                     &mut offset,
                                                 )
@@ -2724,12 +2675,12 @@ fn derive_enum_deserialize(
                                 } else if is_vec_type(ty) {
                                     quote! {
                                         if norito::core::use_packed_struct() {
-                                            norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                            norito::core::decode_context_field_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )
                                         } else {
-                                            norito::core::decode_context_field_archived::<#ty>(
+                                            norito::core::decode_context_field_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )
@@ -2737,19 +2688,14 @@ fn derive_enum_deserialize(
                                     }
                                 } else {
                                     quote! {
-                                        norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                        norito::core::decode_context_field_canonical::<#ty>(
                                             ptr,
                                             &mut offset,
                                         )
                                     }
                                 }
                             };
-                            let value = binary_field_value_with_default(
-                                &attrs,
-                                ty,
-                                decode,
-                                &mut r#gen,
-                            );
+                            let value = quote! { (#decode)? };
                             quote! {
                                 let #idx_var = #value;
                             }
@@ -2797,7 +2743,7 @@ fn derive_enum_deserialize(
                                                 &mut offset,
                                             )
                                         } else {
-                                            norito::core::decode_context_field_archived::<#ty>(
+                                            norito::core::decode_context_field_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )
@@ -2811,7 +2757,7 @@ fn derive_enum_deserialize(
                                                 &mut offset,
                                             )
                                         } else {
-                                            norito::core::decode_context_field_archived::<#ty>(
+                                            norito::core::decode_context_field_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )
@@ -2821,13 +2767,13 @@ fn derive_enum_deserialize(
                                     let fixed_len_lit = fixed_size.expect("fixed-size field");
                                     quote! {
                                         if norito::core::use_packed_struct() {
-                                            norito::core::decode_context_field_fixed_archived::<#ty>(
+                                            norito::core::decode_context_field_fixed_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                                 #fixed_len_lit,
                                             )
                                         } else {
-                                            norito::core::decode_context_field_archived::<#ty>(
+                                            norito::core::decode_context_field_canonical::<#ty>(
                                                 ptr,
                                                 &mut offset,
                                             )
@@ -2845,26 +2791,21 @@ fn derive_enum_deserialize(
                                     }
                                 } else if is_vec_type(ty) {
                                     quote! {
-                                        norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                        norito::core::decode_context_field_canonical::<#ty>(
                                             ptr,
                                             &mut offset,
                                         )
                                     }
                                 } else {
                                     quote! {
-                                        norito::core::decode_context_field_archived::<#ty>(
+                                        norito::core::decode_context_field_canonical::<#ty>(
                                             ptr,
                                             &mut offset,
                                         )
                                     }
                                 }
                             };
-                            let value = binary_field_value_with_default(
-                                &attrs,
-                                ty,
-                                decode,
-                                &mut r#gen,
-                            );
+                            let value = quote! { (#decode)? };
                             quote! {
                                 let #name = #value;
                             }

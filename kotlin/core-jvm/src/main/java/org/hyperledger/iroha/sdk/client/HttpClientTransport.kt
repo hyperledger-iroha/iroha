@@ -745,21 +745,11 @@ class HttpClientTransport(
     }
 
     fun getVpnSession(sessionId: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<Optional<VpnSession>> {
-        val normalizedSessionId = normalizeHex32(sessionId, "sessionId")
+        val normalizedSessionId = normalizeHex16(sessionId, "sessionId")
         return fetchJsonAllowingNotFound(
             buildVpnRequest("GET", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
             VpnJsonParser::parseSession,
             "vpn session lookup",
-            200,
-        )
-    }
-
-    fun deleteVpnSession(sessionId: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<Optional<VpnReceipt>> {
-        val normalizedSessionId = normalizeHex32(sessionId, "sessionId")
-        return fetchJsonAllowingNotFound(
-            buildVpnRequest("DELETE", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
-            VpnJsonParser::parseReceipt,
-            "vpn session delete",
             200,
         )
     }
@@ -2150,6 +2140,7 @@ class HttpClientTransport(
                 },
             )
         }
+        @JvmStatic internal fun normalizeHex16(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 32) { "$field must contain 32 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
         @JvmStatic internal fun normalizeEd25519PublicKeyHex(value: String, field: String): String {
             val normalized = normalizeHex32(value, field)

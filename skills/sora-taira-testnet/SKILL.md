@@ -26,6 +26,27 @@ files or committed documentation.
 
 ## Disposable deployment
 
+Before the first run on each native AArch64 Linux validator, install direct,
+root-owned, single-link executables at `/usr/bin/qemu-system-aarch64`,
+`/usr/bin/setpriv`, `/usr/bin/ldd`, `/usr/bin/bwrap`, `/usr/bin/nsenter`, and
+`/usr/bin/socat`. Then create the fixed parent and package the immutable runtime
+from the `optimizations` checkout:
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/iroha
+sudo -- python3 scripts/ci/package_inrou_runtime_v1.py
+```
+
+The packager publishes only the previously absent
+`/opt/iroha/inrou-runtime-v1/{root,manifest.sha256}` and never replaces it. Its
+CLI exposes only canonical absolute `--qemu`, `--setpriv`, and `--ldd` source
+overrides; use the defaults for Taira AArch64. The host must also provide
+root-custodied `/usr/bin/qemu-img`, a supported standard-path `iptables`, KVM
+API 12, and unified cgroup-v2 `cpu`, `io`, `memory`, and `pids` controllers.
+The daemon's bounded startup probe verifies the remaining namespace, QEMU
+user-network listener/private connector, QMP, firewall, and cgroup posture. It
+does not start or verify the workload loopback bridge.
+
 Run from the repository root:
 
 ```bash
@@ -35,20 +56,57 @@ python3 scripts/taira_devnet.py down
 ```
 
 `up` builds the current Kagami, daemon, and CLI and replaces one marked
-owner-only directory under `dist/`. It generates exactly four fresh-key NPoS
-validators on the canonical Taira chain, binds them to loopback, validates all
-four configs with the current daemon, starts them, requires health/readiness,
+owner-only directory under `/var/lib/iroha-taira-devnet/` by default. It
+generates exactly four fresh-key NPoS validators on the canonical Taira chain,
+binds them to loopback, validates all four configs with the current daemon,
+starts them, requires health/readiness,
 submits a signed ping, waits for its typed `Applied` status, requires four-peer
 height convergence, and performs a semantic MCP initialize/tools-list smoke.
 
-Use `--full-doctor` only when the broad public product-route surface is part of
-the test. A minimal throwaway chain must not be rejected merely because an
-unrelated optional application route is absent.
+Treat `up` as the startup-boundary qualification command. It requires
+Linux/AArch64, uid 0, KVM API version 12, and the four canonical locked Inrou
+identities. Each daemon runs an artifact-free probe of the production machine
+type and host CPU under KVM, private namespaces, cgroup limits, anonymous QMP,
+QEMU user networking, the private loopback connector, and the owner firewall.
+This does not prove guest boot, a workload, placements, or the public route;
+request the real canary workspace for those checks. `up` builds the fixed
+`local-release` binaries for the exact native target, records the `optimizations`
+HEAD plus a pre/post tracked-diff and non-ignored-untracked worktree observation,
+hashes the selected executables, and verifies live validator and CLI build
+identities. The report calls this `source_observation` and sets
+`cargo_source_consumption` to `not_proven`; ignored files, Cargo configuration,
+external build-script inputs, toolchains, and caches are outside its scope.
+`check` is read-only health/convergence inspection; it does not re-establish
+KVM, source/binary, signed-write, or Inrou-route qualification.
+
+When `--inrou-canary-dir` is used, keep the workspace outside the repository
+and disjoint from both `--dir` and the qualification Cargo target. Every
+ancestor must be direct, root-owned, and non-writable by group/other. The
+launcher pins each input identity and digest, revalidates it before cohort
+replacement, snapshots it through no-follow descriptors, and reports
+`inrou_canary_input_content_sha256`; the compiled stager consumes only that
+owner-only snapshot.
+
+Use `python3 scripts/taira_devnet.py up --full-doctor` only when the broad public
+product-route surface is part of the test. A minimal throwaway chain must not
+be rejected merely because an unrelated optional application route is absent.
 
 The generated bundle contains private keys and tokens. Do not print, move,
-archive, or commit it. On failure the command stops the failed cohort and leaves
-bounded peer logs for diagnosis. `down` retains those logs; the next `up`
-replaces the bundle.
+archive, or commit it. On failure the command attempts bounded teardown and
+leaves bounded peer logs for diagnosis; if ownership or termination cannot be
+proved, it warns instead of claiming cleanup. `down` retains those logs; the
+next `up` replaces the bundle.
+
+For the offline public-reset inventory handoff, use the single canonical
+read-only command:
+
+```bash
+python3 scripts/taira_public_reset.py preflight --inventory /private/runtime/inventory.json
+```
+
+`confirm` validates an explicit inventory-bound acknowledgement. `apply` is a
+fail-closed placeholder and always refuses because this repository has no
+authenticated public deployment executor.
 
 ## Public MCP endpoint
 

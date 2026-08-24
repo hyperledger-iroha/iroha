@@ -1,4 +1,4 @@
 
 [nexus.autoscale]
-min_lanes = 6
-max_lanes = 5
+min_lane_id = 6
+max_lane_id_exclusive = 5

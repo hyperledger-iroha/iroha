@@ -1,6 +1,8 @@
 //! Governance instruction validation tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use core::convert::TryInto;
 use iroha_core::{
@@ -243,7 +245,9 @@ fn enact_requires_approved_status() {
             created_height: 1,
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &authority, 1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -272,7 +276,7 @@ fn proposal_record_exposes_deploy_payload() {
         created_height: 42,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
-        parliament_snapshot: None,
+        parliament_snapshot: governance_fixture::single_member_parliament_snapshot(&authority, 42),
         finalization_evidence: None,
         enacted_at_height: None,
     };

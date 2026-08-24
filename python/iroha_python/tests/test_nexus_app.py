@@ -593,7 +593,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
     approval = client.await_approval(session)
     assert isinstance(approval, NexusApprovedAccount)
     with pytest.raises(TypeError):
-        tuple(approval)
+        iter(approval)
     receipt = client.transfer_with_wallet(
         approval.session,
         NexusTransferInput(

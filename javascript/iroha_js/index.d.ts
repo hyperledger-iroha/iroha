@@ -39,46 +39,11 @@ export interface KagemushaNoritoRequestV4 {
   readonly norito: Uint8Array;
 }
 
-export interface KagemushaReadinessBlocker {
-  readonly code: string;
-  readonly message: string;
-}
-
-export interface KagemushaVerifierId {
-  readonly backend: "halo2/ipa";
-  readonly name: string;
-}
-
-export interface KagemushaActiveVerifier {
-  readonly id: KagemushaVerifierId;
-  readonly version: number;
-  readonly circuit_id: string;
-  readonly commitment: string;
-  readonly public_inputs_schema_hash: string;
-  readonly max_proof_bytes: number;
-  readonly activation_height: number;
-  readonly withdrawal_height: number | null;
-}
-
-export interface KagemushaAuthenticatedArtifactSetV4 {
-  readonly generation: string;
-  readonly manifest_sha256: string;
-  readonly release_policy_sha256: string;
-  readonly release_attestation_sha256: string;
-  readonly activation_height: number;
-  readonly withdrawal_height: number;
-  readonly max_proof_bytes: number;
-  readonly asset_scale: number;
-}
-
 export interface OfflineStatus {
-  readonly mandatory: false;
   readonly cash_handoff_capability: "cash_handoff_v1";
   readonly required_bridge_abi_version: 22;
   readonly max_hops: 8;
   readonly ready: true;
-  readonly assets: readonly [];
-  readonly blockers: readonly [];
 }
 
 export type KagemushaOperationKind = Readonly<{
@@ -221,9 +186,16 @@ export const SM2_DEFAULT_DISTINGUISHED_ID: string;
 export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 22;
 
 export interface SignedTransactionResult {
+  /** Exact canonical VersionedSignedTransaction V1 bytes. */
   signedTransaction: Buffer;
   hash: Buffer;
 }
+
+/** Exact canonical VersionedSignedTransaction V1 submission bytes. */
+export type VersionedSignedTransactionV1 =
+  | Buffer
+  | ArrayBuffer
+  | ArrayBufferView;
 
 export const AccountAddressErrorCode: {
   readonly UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM";
@@ -836,7 +808,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 3 | 4;
+  readonly protocol_version: 4;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -2499,6 +2471,7 @@ export interface ToriiVpnTxInstruction {
 export interface ToriiVpnQuote {
   quoteId: string;
   leaseIdHex: string;
+  /** Canonical 16-byte session ID encoded as 32 lowercase hex characters. */
   sessionIdHex: string;
   paymentReference: string;
   accountId: string;
@@ -2529,6 +2502,7 @@ export interface ToriiVpnQuote {
 }
 
 export interface ToriiVpnSession {
+  /** Canonical 16-byte session ID encoded as 32 lowercase hex characters. */
   sessionId: string;
   accountId: string;
   exitClass: string;
@@ -2564,6 +2538,7 @@ export interface ToriiVpnSession {
 }
 
 export interface ToriiVpnReceipt {
+  /** Canonical 16-byte session ID encoded as 32 lowercase hex characters. */
   sessionId: string;
   accountId: string;
   exitClass: string;
@@ -2574,7 +2549,12 @@ export interface ToriiVpnReceipt {
   durationMs: number;
   bytesIn: number;
   bytesOut: number;
-  status: string;
+  status:
+    | "disconnected"
+    | "expired"
+    | "replaced"
+    | "settlement_pending"
+    | "settled";
   receiptSource: string;
   quoteId: string;
   paymentTxHash: string;
@@ -5171,7 +5151,6 @@ export interface ToriiStatusPayload {
   time_since_last_block_ms: number;
   time_since_last_non_empty_block_ms: number;
   commit_time_ms: number;
-  da_reschedule_total: number;
   txs_approved: number;
   txs_rejected: number;
   view_changes: number;
@@ -5193,7 +5172,6 @@ export interface ToriiStatusMetrics {
   queue_delta: number;
   time_since_last_block_ms: number;
   time_since_last_non_empty_block_ms: number;
-  da_reschedule_delta: number;
   tx_approved_delta: number;
   tx_rejected_delta: number;
   view_change_delta: number;
@@ -5239,7 +5217,6 @@ export interface ToriiPipelinePreflight {
     max_transactions: number;
   };
   pipeline: {
-    signature_batch_max: number;
     signature_batch_max_ed25519: number;
     signature_batch_max_secp256k1: number;
     signature_batch_max_pqc: number;
@@ -10642,11 +10619,11 @@ export declare class ToriiClient {
     options?: { headers?: Record<string, string>; signal?: AbortSignal },
   ): Promise<SorafsPinManifestResponse>;
   registerSorafsPinManifest(
-    signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+    signedTransaction: VersionedSignedTransactionV1,
     options?: { signal?: AbortSignal },
   ): Promise<Record<string, unknown>>;
   registerSorafsPinManifestTyped(
-    signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+    signedTransaction: VersionedSignedTransactionV1,
     options?: { signal?: AbortSignal },
   ): Promise<SorafsPinRegisterResponse>;
   fetchSorafsPayloadRange(input: {
@@ -10743,11 +10720,11 @@ export declare class ToriiClient {
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<AppApiTransactionDraft>;
   submitTransaction(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    payload: VersionedSignedTransactionV1,
     options?: { signal?: AbortSignal },
   ): Promise<unknown>;
   submitTransactionBatch(
-    payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+    payloads: ReadonlyArray<VersionedSignedTransactionV1>,
     options?: { signal?: AbortSignal },
   ): Promise<{ acceptedCount: number; route?: unknown }>;
   getTransactionStatus(
@@ -10759,7 +10736,7 @@ export declare class ToriiClient {
     options?: TransactionStatusPollOptions,
   ): Promise<ToriiPipelineTransactionStatus>;
   submitTransactionAndWait(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    payload: VersionedSignedTransactionV1,
     options: SubmitTransactionAndWaitOptions,
   ): Promise<ToriiPipelineTransactionStatus>;
   getTransactionStatusTyped(
@@ -10771,7 +10748,7 @@ export declare class ToriiClient {
     options?: TransactionStatusPollOptions,
   ): Promise<ToriiPipelineStatus | null>;
   submitTransactionAndWaitTyped(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    payload: VersionedSignedTransactionV1,
     options: SubmitTransactionAndWaitOptions,
   ): Promise<ToriiPipelineStatus | null>;
   getPipelineRecovery(
@@ -10932,19 +10909,13 @@ export declare class ToriiClient {
     },
   ): Promise<ToriiVpnSession>;
   getVpnSession(
+    /** Canonical 16-byte session ID encoded as hexadecimal text. */
     sessionId: string,
     options: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
   ): Promise<ToriiVpnSession | null>;
-  deleteVpnSession(
-    sessionId: string,
-    options: {
-      signal?: AbortSignal;
-      canonicalAuth: CanonicalRequestAuth;
-    },
-  ): Promise<ToriiVpnReceipt | null>;
   submitVpnReceipt(
     request: {
       relayReceiptHex: string;
@@ -12016,17 +11987,17 @@ export function buildHandleRefreshRequest(
 ): AxtHandleRefreshHint;
 
 export function hashSignedTransaction(
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  signedTransaction: VersionedSignedTransactionV1,
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
 export function hashSignedTransactionPayload(
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  signedTransaction: VersionedSignedTransactionV1,
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
 export function decodeSignedTransaction(
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  signedTransaction: VersionedSignedTransactionV1,
 ): Record<string, unknown>;
 
 export function encodeContractArgumentRecord(
@@ -12041,7 +12012,7 @@ export function hashInstructionBatch(
 
 export function resignSignedTransaction(
   networkId: NetworkId,
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  signedTransaction: VersionedSignedTransactionV1,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
@@ -12408,7 +12379,7 @@ export function buildFinalizeElectionTransaction(
 ): SignedTransactionResult;
 export function submitSignedTransaction(
   client: ToriiClient,
-  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+  signedTransaction: VersionedSignedTransactionV1,
   options?: {
     waitForCommit?: boolean;
     pollIntervalMs?: number;
@@ -12420,17 +12391,6 @@ export function submitSignedTransaction(
         privateKey: ArrayBufferView | ArrayBuffer | Buffer;
       }
   ),
-): Promise<{ hash: string; submission: unknown; status?: unknown }>;
-
-export function submitTransactionEntrypoint(
-  client: ToriiClient,
-  transactionEntrypoint: ArrayBufferView | ArrayBuffer | Buffer,
-  options: {
-    hashHex: string;
-    waitForCommit?: boolean;
-    pollIntervalMs?: number;
-    timeoutMs?: number;
-  },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1: 1048576;
@@ -13155,10 +13115,11 @@ export type SoracloudStorageClass = "hot" | "warm" | "cold";
 
 export interface SoracloudHfDeployDraftInput {
   repoId: string;
-  revision?: string;
+  /** Full 40-character lowercase Hugging Face commit OID. */
+  revision: string;
   modelName: string;
   serviceName: string;
-  apartmentName?: string;
+  apartmentName: string | null;
   storageClass: SoracloudStorageClass;
   leaseTermMs: number | bigint | string;
   leaseAssetDefinitionId: string;
@@ -13173,10 +13134,10 @@ export interface SoracloudManifestProvenance {
 export interface SoracloudHfDeployDraft {
   payload: {
     repo_id: string;
-    revision?: string;
+    revision: string;
     model_name: string;
     service_name: string;
-    apartment_name?: string;
+    apartment_name: string | null;
     storage_class: SoracloudStorageClass | { type: string; value?: unknown };
     lease_term_ms: number;
     lease_asset_definition_id: string;
@@ -13185,7 +13146,7 @@ export interface SoracloudHfDeployDraft {
   provenancePayloads: {
     deploy: Record<string, unknown>;
     generatedService: Record<string, unknown>;
-    generatedApartment?: Record<string, unknown>;
+    generatedApartment: Record<string, unknown> | null;
   };
 }
 
@@ -13193,65 +13154,53 @@ export interface SoracloudHfDeployRequest {
   payload: SoracloudHfDeployDraft["payload"];
   provenance: SoracloudManifestProvenance;
   generated_service_provenance: SoracloudManifestProvenance;
-  generated_apartment_provenance?: SoracloudManifestProvenance;
+  generated_apartment_provenance: SoracloudManifestProvenance | null;
 }
 
 export interface SoracloudAppInfraRouteInput {
   path: string;
-  publicHost?: string;
-  public_host?: string;
-  internalUrl?: string;
-  internal_url?: string;
+  publicHost: string | null;
+  internalUrl: string | null;
 }
 
 export interface SoracloudAppInfraLeaseVolumeInput {
   name: string;
   mountPath: string;
   maxTotalBytes: NumericLike;
-  temperature?: "hot" | "warm" | "cold";
+  temperature: "hot" | "warm" | "cold";
 }
 
 export interface SoracloudAppInfraShardInput {
   count: NumericLike;
-  shardIdEnv?: string;
-  shardCountEnv?: string;
+  shardIdEnv: string;
+  shardCountEnv: string;
 }
 
 export interface SoracloudAppInfraServiceInput {
   name: string;
-  version?: string;
-  serviceVersion?: string;
-  service_version?: string;
-  serviceManifestHash?: string;
-  service_manifest_hash?: string;
-  containerManifestHash?: string;
-  container_manifest_hash?: string;
-  runtime?: "Inrou" | "Ivm";
-  executionPlane?: "HttpService" | "DeterministicService" | "Ivm";
-  execution_plane?: "HttpService" | "DeterministicService" | "Ivm";
-  routes?: ReadonlyArray<SoracloudAppInfraRouteInput>;
-  leaseVolumes?: ReadonlyArray<SoracloudAppInfraLeaseVolumeInput>;
-  lease_volumes?: ReadonlyArray<SoracloudAppInfraLeaseVolumeInput>;
-  shards?: SoracloudAppInfraShardInput;
+  serviceVersion: string;
+  serviceManifestHash: string;
+  containerManifestHash: string;
+  runtime: "Inrou" | "Ivm";
+  executionPlane: "HttpService" | "DeterministicService";
+  routes: ReadonlyArray<SoracloudAppInfraRouteInput>;
+  leaseVolumes: ReadonlyArray<SoracloudAppInfraLeaseVolumeInput>;
+  shards: SoracloudAppInfraShardInput | null;
 }
 
 export interface SoracloudAppInfraStaticSiteInput {
   publicUrl: string;
-  contentCid?: string;
-  content_cid?: string;
-  manifestDigestHex?: string;
-  manifest_digest_hex?: string;
-  mountPath?: string;
-  apiBasePath?: string;
-  api_base_path?: string;
+  contentCid: string | null;
+  manifestDigestHex: string | null;
+  mountPath: string;
+  apiBasePath: string | null;
 }
 
 export interface SoracloudAppInfraDraftInput {
   appName: string;
-  appVersion?: string;
+  appVersion: string;
   publicUrl: string;
-  staticSite?: SoracloudAppInfraStaticSiteInput;
-  static_site?: SoracloudAppInfraStaticSiteInput;
+  staticSite: SoracloudAppInfraStaticSiteInput | null;
   services: ReadonlyArray<SoracloudAppInfraServiceInput>;
 }
 
@@ -13261,7 +13210,7 @@ export interface SoracloudAppInfraDraft {
     app_name: string;
     app_version: string;
     public_url: string;
-    static_site?: Record<string, unknown>;
+    static_site: Record<string, unknown> | null;
     services: Array<Record<string, unknown>>;
   };
   provenancePayloads: {
@@ -13323,7 +13272,7 @@ export interface SoracloudAppInfraRequest {
 export function assembleSoracloudAppInfraRequest(
   draft: SoracloudAppInfraDraft,
   provenances: { deploy: SoracloudManifestProvenance },
-  options?: { deployServices?: unknown[]; upgradeServices?: unknown[] },
+  options: { deployServices: unknown[]; upgradeServices: unknown[] },
 ): SoracloudAppInfraRequest;
 
 export function deploySoracloudAppInfraInstruction(
@@ -13341,47 +13290,36 @@ export function assembleSoracloudHfDeployRequest(
   provenances: {
     deploy: SoracloudManifestProvenance;
     generatedService: SoracloudManifestProvenance;
-    generatedApartment?: SoracloudManifestProvenance;
+    generatedApartment: SoracloudManifestProvenance | null;
   },
 ): SoracloudHfDeployRequest;
 
 export interface SoracloudPrivateArtifactRefInput {
-  schemaVersion?: number | bigint | string;
-  schema_version?: number | bigint | string;
-  sorafsManifestDigest?: string;
-  sorafs_manifest_digest?: string;
-  artifactHash?: string;
-  artifact_hash?: string;
-  ciphertextBytes?: number | bigint | string;
-  ciphertext_bytes?: number | bigint | string;
-  artifactRole?: "input" | "output";
-  artifact_role?: "input" | "output";
+  schemaVersion: number | bigint | string;
+  sorafsManifestDigest: string;
+  artifactHash: string;
+  ciphertextBytes: number | bigint | string;
+  artifactRole: "input" | "output";
 }
 
 export interface SoracloudPrivateQuantizedCpuModelInput {
-  inputLen?: number | bigint | string;
-  input_len?: number | bigint | string;
-  outputLen?: number | bigint | string;
-  output_len?: number | bigint | string;
-  weightsI8?: number[];
-  weights_i8?: number[];
-  biasI32?: number[];
-  bias_i32?: number[];
-  outputShift?: number | bigint | string;
-  output_shift?: number | bigint | string;
-  outputMin?: number;
-  output_min?: number;
-  outputMax?: number;
-  output_max?: number;
+  inputLen: number | bigint | string;
+  outputLen: number | bigint | string;
+  weightsI8: number[];
+  biasI32: number[];
+  outputShift: number | bigint | string;
+  outputMin: number;
+  outputMax: number;
 }
 
 export interface SoracloudPrivateUploadedModelExecuteInput {
   serviceName: string;
   weightVersion: string;
-  modelId?: string;
-  modelName?: string;
-  bundleRoot?: string;
+  modelId: string | null;
+  modelName: string | null;
+  bundleRoot: string | null;
   policyId: string;
+  decryptionRequestId: string | null;
   model: SoracloudPrivateQuantizedCpuModelInput;
   plaintextInputI32: number[];
   inputArtifact: SoracloudPrivateArtifactRefInput;

@@ -1763,11 +1763,11 @@ fn validate_internal_validation_receipt_v4(
         || body.authenticated_source_seal_projection_sha256
             != manifest.authenticated_source_seal_projection_sha256
         || body.tracked_cargo_lock.sha256
-            != manifest.reviewed_source_closure.ignored_cargo_lock_sha256
+            != manifest.reviewed_source_closure.tracked_cargo_lock_sha256
         || body.tracked_cargo_lock.size_bytes
             != manifest
                 .reviewed_source_closure
-                .ignored_cargo_lock_size_bytes
+                .tracked_cargo_lock_size_bytes
         || body.reviewed_cargo_binary_sha256 != manifest.reviewed_cargo_binary_sha256
         || body.reviewed_rustc_binary_sha256 != manifest.reviewed_rustc_binary_sha256
         || body.generator_binary_sha256 != manifest.generator_binary_sha256
@@ -2050,11 +2050,16 @@ impl KagemushaAuthenticatedReleaseV5 {
             approved_signers,
         })
     }
-    /// Authenticate a V5 release and hash-check its exact evidence files.
+    /// Validate the currently defined V5 release inputs, then fail closed.
+    ///
+    /// V5 does not yet bind a signed internal-validation receipt, so this
+    /// function deliberately cannot produce an authenticated release.
     ///
     /// # Errors
     ///
-    /// Returns [`KagemushaReleaseVerificationError`] when policy, signatures, or evidence fail.
+    /// Returns [`KagemushaReleaseVerificationError`] when policy, signatures, or evidence fail,
+    /// or [`KagemushaReleaseVerificationError::InvalidInternalValidationReceipt`] after all
+    /// currently defined inputs authenticate.
     pub fn verify(
         manifest: &KagemushaRecursiveSpendArtifactManifestV5,
         policy: &KagemushaRecursiveSpendReleasePolicyV1,
@@ -2106,7 +2111,10 @@ impl KagemushaAuthenticatedReleaseV5 {
         if review_signers != attested_review_signers {
             return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
         }
-        Ok(authenticated)
+        // TODO: Keep V5 authentication disabled until a signed, candidate-bound V5
+        // internal-validation receipt is threaded through the manifest, attestation
+        // subject, promotion marker, and release record and is authenticated here.
+        Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)
     }
     /// Authenticated V5 manifest selected by this runtime proof.
     #[must_use]

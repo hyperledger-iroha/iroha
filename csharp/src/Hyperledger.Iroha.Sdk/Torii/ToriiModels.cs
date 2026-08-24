@@ -742,7 +742,7 @@ public sealed record class ToriiVpnSession
     public string SessionId
     {
         get => sessionId;
-        init => sessionId = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(SessionId), 32);
+        init => sessionId = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(SessionId), 16);
     }
 
     [JsonPropertyName("account_id")]
@@ -995,7 +995,7 @@ public sealed record class ToriiVpnReceipt
     public string SessionId
     {
         get => sessionId;
-        init => sessionId = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(SessionId), 32);
+        init => sessionId = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(SessionId), 16);
     }
 
     [JsonPropertyName("account_id")]
@@ -1161,7 +1161,7 @@ public sealed record class ToriiVpnReceiptListResponse
 
 internal static class ToriiVpnDirectMetadata
 {
-    internal const int HelperTicketByteLength = 696;
+    internal const int HelperTicketByteLength = 788;
 
     internal static ulong RequirePositive(ulong value, string paramName)
     {
@@ -1322,7 +1322,7 @@ internal static class ToriiVpnDirectMetadata
 
     private static ToriiVpnReceipt RequireVpnReceipt(ToriiVpnReceipt value, string paramName)
     {
-        RequireExactSizedHex(value.SessionId, $"{paramName}.{nameof(ToriiVpnReceipt.SessionId)}", 32);
+        RequireExactSizedHex(value.SessionId, $"{paramName}.{nameof(ToriiVpnReceipt.SessionId)}", 16);
         RequireCanonicalAccountId(value.AccountId, $"{paramName}.{nameof(ToriiVpnReceipt.AccountId)}");
         RequireExactTokenText(value.ExitClass, $"{paramName}.{nameof(ToriiVpnReceipt.ExitClass)}");
         RequireExactTokenText(value.RelayEndpoint, $"{paramName}.{nameof(ToriiVpnReceipt.RelayEndpoint)}");

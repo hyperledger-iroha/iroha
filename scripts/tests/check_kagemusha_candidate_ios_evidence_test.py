@@ -366,8 +366,8 @@ class Fixture:
                 "untracked_path_mode_blob_oid_manifest_sha256": (
                     untracked_manifest_digest
                 ),
-                "ignored_cargo_lock_size_bytes": 1,
-                "ignored_cargo_lock_sha256": nonzero_digest("cargo-lock"),
+                "tracked_cargo_lock_size_bytes": 1,
+                "tracked_cargo_lock_sha256": nonzero_digest("cargo-lock"),
                 "combined_source_fingerprint_sha256": combined.hexdigest(),
             },
         )

@@ -350,7 +350,7 @@ fn session_can_emit_receipt_with_cover_bytes() {
     assert_eq!(6, receipt.cover_bytes);
     assert_eq!(6, receipt.egress_bytes);
     assert_eq!(VpnExitClassV1::Standard, receipt.exit_class);
-    assert!(receipt.uptime_secs <= 1);
+    assert_eq!(1, receipt.uptime_secs);
     let snapshot = metrics.snapshot();
     assert_eq!(2, snapshot.vpn_frames);
     assert_eq!(1, snapshot.vpn_data_frames);

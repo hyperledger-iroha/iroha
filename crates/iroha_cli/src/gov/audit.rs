@@ -1,13 +1,13 @@
 //! Audit commands for governance workflows.
+use super::shared::{
+    canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
+    resolve_contract_address_target,
+};
 use crate::{Run, RunContext};
 use eyre::Result;
 use iroha::client::Client;
 use iroha_crypto::Hash;
 use norito::json::{Map, Value};
-use super::shared::{
-    canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
-    resolve_contract_address_target,
-};
 #[derive(clap::Args, Debug)]
 pub struct AuditDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]

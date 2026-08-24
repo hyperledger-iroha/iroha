@@ -294,8 +294,8 @@ def verify_pinned_archive(archive: Path) -> None:
     expected = PINNED_ARCHIVE_SHA512.get(archive.name)
     if expected is None:
         raise SystemExit(
-            f"{archive.name} has no pinned SHA512 digest and SHA512SUMS was not GPG verified; "
-            "refusing to use unsigned Debian guest assets"
+            f"{archive.name} has no pinned SHA512 digest; refusing noncanonical "
+            "Debian guest assets"
         )
     actual = sha512(archive)
     if actual.lower() != expected.lower():
@@ -522,12 +522,12 @@ def main() -> None:
         base_url, sums, sums_signature, args.debian_keyring
     )
     download(f"{base_url}/{archive_name}", archive)
+    verify_pinned_archive(archive)
     if sums_verified:
         verify_archive(archive, sums)
-    else:
-        verify_pinned_archive(archive)
     # Never trust derived cache entries: rebuild them from the archive whose
-    # signature or pinned digest was verified immediately above.
+    # embedded digest was verified above (with signed sums checked additively
+    # whenever the pinned Debian build publishes them).
     extract_disk(archive, disk, True)
     offset, length = root_partition_range(disk)
     copy_range(disk, rootfs, offset, length, True)

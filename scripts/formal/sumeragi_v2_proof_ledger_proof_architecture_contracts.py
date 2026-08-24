@@ -4650,12 +4650,7 @@ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
             "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
         ),
     }
-    compatibility_fixed_clock_tokens = (
-        "IndexedHistoricalFixedClockTemporalLeafProperties",
-        "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
-        "IndexedHistoricalFixedClockLeavesCloseCertificateDiscoveryRank",
-        "HistoricalTemporalFixedClockLeaves",
-    )
+    broad_fixed_clock_tokens = ("HistoricalTemporalFixedClockLeaves",)
     for module, symbols in exact_historical_physical_boundaries.items():
         source = module_sources.get(module)
         if source is None:
@@ -4669,14 +4664,14 @@ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
             body, line = theorem
             forbidden = [
                 token
-                for token in compatibility_fixed_clock_tokens
+                for token in broad_fixed_clock_tokens
                 if _tla_dependency_present(body, token)
             ]
             if forbidden:
                 errors.append(
                     f"{module}.tla:{line}: {symbol} must consume the exact "
                     "five-group historical physical residual inventory, not "
-                    "the broad fixed-clock compatibility surface; "
+                    "the broad fixed-clock aggregate; "
                     f"forbidden={forbidden!r}"
                 )
     check_dedicated_open_historical_recovery_branch()

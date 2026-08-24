@@ -336,28 +336,27 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let transaction =
         vega_release_transaction_context_v1().expect("canonical Vega transaction context");
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .expect("compiled Vega profile");
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    assert_eq!(
+        compiled_privacy_profile_v1(protocol_id),
+        Err(
+            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id,
+            }
+        )
+    );
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let context = PrivacyStatementContextV1 {
-        network_id: transaction.network_id,
-        action_index: VEGA_RELEASE_ACTION_INDEX_V1,
-        transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x27; 32]),
-        parameter_id: profile.parameter_id,
-        parameter_digest: profile.parameter_digest,
-        verifier_digest: profile.verifier_digest,
-        statement_schema_digest: profile.statement_schema_digest,
-        engine_manifest_digest: profile.engine_manifest_digest,
-    };
     fixture
         .public_input
         .issuer_record
         .validate()
         .expect("canonical active Vega issuer record");
-    context
-        .validate(&limits)
-        .expect("Vega is the sole privacy action in its transaction");
     assert_eq!(VEGA_RELEASE_ACTION_INDEX_V1, 0);
+    assert_eq!(limits.max_actions_per_transaction, 1);
+    assert_eq!(
+        VEGA_RELEASE_ACTION_INDEX_V1.checked_add(1),
+        Some(limits.max_actions_per_transaction)
+    );
     assert_eq!(
         transaction.network_id,
         release_network_id_from_genesis_hash([0xa7; 32])
@@ -367,29 +366,19 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1)
     );
     assert_eq!(transaction.nonce, NonZeroU32::new(VEGA_RELEASE_NONCE_V1));
-    let mut impossible_second_action = context;
-    impossible_second_action.action_index = 1;
-    assert!(matches!(
-        impossible_second_action.validate(&limits),
-        Err(
-            iroha_data_model::privacy::PrivacyStatementValidationError::ActionIndexOutOfBounds {
-                index: 1,
-                max_actions: 1,
-            }
-        )
-    ));
 }
 #[test]
-fn vega_release_envelope_requires_the_production_native_dispatch() {
+fn vega_release_envelope_fails_closed_before_native_dispatch_while_profile_is_unavailable() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .expect("compiled Vega profile");
+    let control_profile =
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            .expect("available structural control profile");
     let authoritative_network_id = release_network_id_from_genesis_hash(fixture.genesis_hash);
     let input = fixture.public_input;
     let record = fixture.issuer_record;
     let mut statement = VegaExistingCredentialStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
-            &profile,
+            &control_profile,
             authoritative_network_id,
             VEGA_RELEASE_ACTION_INDEX_V1,
             PrivacyTransactionIntentDigestV1::new([0x27; 32]),
@@ -423,15 +412,16 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
     );
     assert_eq!(
         native_rejection,
-        Err(PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected),
-        "a canonical Vega envelope with an invalid wire must reach the native verifier"
+        Err(PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable),
+        "an unavailable Vega profile must reject before native verification"
     );
     assert_eq!(
         require_vega_release_production_native_rejection_v1(
             native_rejection,
             PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted,
         ),
-        Ok(()),
+        Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant),
+        "profile unavailability must not count as native corruption coverage"
     );
     statement.context.action_index = 1;
     refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
@@ -447,8 +437,8 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
     );
     assert_eq!(
         pre_native_rejection,
-        Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
-        "Taira's sole-action context must reject before native Vega verification"
+        Err(PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable),
+        "profile unavailability must precede statement/action-index admission"
     );
     assert_eq!(
         require_vega_release_production_native_rejection_v1(
@@ -460,8 +450,111 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
     );
 }
 #[test]
+fn vega_public_action_builder_fails_closed_with_an_otherwise_valid_fixture() {
+    let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
+    let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
+        fixture.issuer_authentication_sig_structure.clone(),
+        fixture.mobile_security_object_payload.clone(),
+        fixture.birth_date_issuer_signed_item.clone(),
+        &fixture.issuer_signature.to_bytes(),
+    )
+    .expect("canonical Vega action witness material");
+    let result = prepare_vega_privacy_action_with_rng_v1(
+        vega_release_transaction_context_v1().expect("canonical transaction context"),
+        fixture.public_input,
+        witness_material,
+        &fixture.device_signing_key,
+        fixture.genesis_hash,
+        VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+        &mut EvidenceRng06::new([0x90; 32]),
+    );
+    assert!(matches!(
+        result,
+        Err(
+            crate::privacy_engines::vega::VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable
+        )
+    ));
+}
+#[test]
+fn vega_release_stages_and_network_builder_fail_closed_without_an_activatable_profile() {
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    for case_kind in PrivacyReleaseCaseKindV1::ALL {
+        assert_eq!(
+            run_privacy_release_stage_v1(protocol_id, case_kind),
+            Err(PrivacyReleaseEvidenceErrorV1 {
+                protocol_id,
+                case_kind,
+                class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+            })
+        );
+    }
+
+    let transaction =
+        vega_release_transaction_context_v1().expect("canonical Vega transaction context");
+    let transaction_key_pair = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
+        .expect("fixed Vega transaction key");
+    let network_result = build_privacy_release_vega_network_action_v1(
+        PrivacyReleaseTransactionContextV1 {
+            network_id: transaction.network_id,
+            authority: transaction.authority,
+            creation_time: transaction.creation_time,
+            time_to_live: transaction.time_to_live,
+            nonce: transaction.nonce,
+            fee_payment: transaction.fee_payment,
+            metadata: transaction.metadata,
+            genesis_hash: [0xa7; 32],
+        },
+        [0x93; 32],
+        transaction_key_pair.private_key(),
+    );
+    assert!(matches!(
+        network_result,
+        Err(PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)
+    ));
+
+    let candidate_marker = ["vega_release_", "candidate"].concat();
+    let stage_source = include_str!("vega.rs");
+    let stage = stage_source
+        .split_once("pub(super) fn run_vega_stage_v1")
+        .expect("Vega release stage")
+        .1
+        .split_once("pub(super) fn require_vega_release_production_native_rejection_v1")
+        .expect("Vega release stage boundary")
+        .0;
+    assert!(stage.contains("compiled_privacy_profile_v1(protocol_id)"));
+    assert!(stage.contains("prepare_vega_privacy_action_with_rng_v1("));
+    assert!(!stage.contains(&candidate_marker));
+
+    let production_envelope = stage_source
+        .split_once("pub(super) fn verify_vega_release_production_envelope_v1")
+        .expect("Vega production envelope helper")
+        .1
+        .split_once("pub(super) fn refresh_vega_device_authentication_digest_v1")
+        .expect("Vega production envelope helper boundary")
+        .0;
+    assert!(production_envelope.contains("compiled_privacy_profile_v1(protocol_id)"));
+    assert!(production_envelope.contains("verify_privacy_envelope_v1("));
+    assert!(!production_envelope.contains(&candidate_marker));
+
+    let network_source = include_str!("network_actions.rs");
+    let network_builder = network_source
+        .split_once("pub fn build_privacy_release_vega_network_action_v1")
+        .expect("Vega network action builder")
+        .1
+        .split_once("/// Build one canonical network-bound Orchard action")
+        .expect("Vega network action builder boundary")
+        .0;
+    assert!(network_builder.contains("compiled_privacy_profile_v1(protocol_id)"));
+    assert!(network_builder.contains("build_signed_vega_privacy_action_with_rng_v1("));
+    assert!(!network_builder.contains(&candidate_marker));
+
+    let signed_candidate_marker = ["build_signed_vega_release_", "candidate"].concat();
+    let engine_source = include_str!("../privacy_engines/vega.rs");
+    assert!(!engine_source.contains(&signed_candidate_marker));
+}
+#[test]
 #[ignore = "release gate: proves the full native Vega Figure 9 action once"]
-fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift() {
+fn vega_candidate_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
         fixture.issuer_authentication_sig_structure.clone(),
@@ -471,7 +564,7 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
     )
     .expect("canonical Vega action witness material");
     let mut rng = EvidenceRng06::new([0x91; 32]);
-    let prepared = prepare_vega_privacy_action_with_rng_v1(
+    let prepared = prepare_vega_release_candidate_privacy_action_with_rng_v1(
         vega_release_transaction_context_v1().expect("canonical transaction context"),
         fixture.public_input,
         witness_material,

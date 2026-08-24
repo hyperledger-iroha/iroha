@@ -226,7 +226,7 @@ removing entries, and no queue operation transmits bytes to Torii.
 ### Kagemusha offline cash
 
 Production offline value flows use Kagemusha top-up, transfer, and recursive redeem.
-Torii's legacy-named `GET /v1/offline/readiness` endpoint reports universal
+Torii's `GET /v1/offline/readiness` endpoint reports universal
 protocol capability only. Offline UI and peer handoff must remain available
 without making this or any other network discovery call.
 
@@ -242,22 +242,22 @@ claim.
 
 ### Kagemusha Torii API
 
-Torii exposes the legacy-named, asset-neutral `GET /v1/offline/readiness`
+Torii exposes the asset-neutral `GET /v1/offline/readiness`
 universal capability endpoint,
 plus `POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
 `GET /v1/offline/operations/{operation_id}` for separate online consensus
 lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
 `submitKagemushaRedeem(_:)`, and
-`getKagemushaOperationStatus(operationId:)`. No selector-taking readiness
-alias is exposed.
+`getKagemushaOperationStatus(operationId:)`. Capability discovery takes no
+selector.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The
-SDK accepts only the exact ABI-21 `cash_handoff_v1` contract with maximum hop
-count 8, `mandatory: false`, `ready: true`, and empty `assets` and `blockers`.
+SDK accepts only the exact four-field ABI-21 `cash_handoff_v1` contract with
+maximum hop count 8 and `ready: true`.
 No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
 is required for an app to expose offline user interfaces. Apps must not gate
-offline UI on this network discovery call; the endpoint is only a compatibility
-check when Torii happens to be reachable.
+offline UI on this network discovery call; Torii reachability is not an
+offline-capability prerequisite.
 
 Top-up and redemption send canonical Norito archives and return a
 `KagemushaOperationReference`; follow its status URI until the tagged

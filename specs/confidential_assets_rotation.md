@@ -26,7 +26,10 @@ so governance can schedule upgrades via
 1. **Publish new parameter bundles.** Operators submit
    `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
    `iroha app zk params publish ...`) to stage new generator sets with metadata,
-   activation/deprecation windows, and status markers. The executor rejects
+   activation/deprecation windows, and status markers. Publishing or changing
+   either parameter lifecycle requires the exact canonical typed unit capability
+   `CanManageConfidentialParams`; a same-name token with any other JSON payload
+   is rejected. The executor rejects
    duplicate IDs, non-increasing versions, or bad status transitions per
    `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
    registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).

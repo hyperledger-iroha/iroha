@@ -30,16 +30,27 @@ fn soracloud_runtime_json_rejects_removed_proxy_only_field() {
 }
 #[test]
 fn soracloud_runtime_json_rejects_retired_portable_vm_selectors() {
-    for field in [
-        r#""max_concurrent_vms":1"#,
-        r#""backends":["portable_vm"]"#,
-        r#""portable_vm_acceleration":"kvm""#,
-        r#""portable_vm_supplementary_gids":[108]"#,
+    for (name, field) in [
+        ("max_concurrent_vms", r#""max_concurrent_vms":1"#),
+        ("backends", r#""backends":["portable_vm"]"#),
+        (
+            "portable_vm_acceleration",
+            r#""portable_vm_acceleration":"kvm""#,
+        ),
+        (
+            "portable_vm_supplementary_gids",
+            r#""portable_vm_supplementary_gids":[108]"#,
+        ),
     ] {
-        norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(&format!(
-            "{{{field}}}"
-        ))
+        let error = norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(
+            &format!("{{{field}}}"),
+        )
         .expect_err("retired one-value PortableVM selectors must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field") && message.contains(name),
+            "unexpected retired-selector diagnostic: {message}"
+        );
     }
 }
 #[test]
@@ -83,7 +94,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
                 "local_runner_program":"python3.12",
                 "local_runner_timeout_ms":45000,
                 "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,
@@ -160,7 +170,7 @@ fn soracloud_runtime_rejects_raw_hf_inference_credentials() {
     assert!(error.to_string().contains("inference_token"));
 }
 #[test]
-fn soracloud_runtime_hf_bridge_requires_exact_provider_binding() {
+fn soracloud_runtime_rejects_retired_hf_bridge_fallback_switch() {
     let mut table = base_table();
     let runtime = table
         .entry("soracloud_runtime")
@@ -173,12 +183,17 @@ fn soracloud_runtime_hf_bridge_requires_exact_provider_binding() {
         Value::Boolean(true),
     );
     runtime.insert("hf".into(), Value::Table(hf));
-    let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("enabled HF bridge must require a provider binding");
-    let report = format!("{error:?}");
+    let _ = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("retired HF bridge fallback switch must be an unknown TOML field");
+    let error = norito::json::from_json::<SoracloudRuntimeHuggingFace>(
+        r#"{"allow_inference_bridge_fallback":true}"#,
+    )
+    .expect_err("retired HF bridge fallback switch must be an unknown JSON field");
     assert!(
-        report.contains("requires inference_credential_provider"),
-        "{report}"
+        error
+            .to_string()
+            .contains("allow_inference_bridge_fallback"),
+        "{error}"
     );
 }
 #[test]
@@ -231,7 +246,6 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
                 "local_runner_program":"python3.12",
                 "local_runner_timeout_ms":45000,
                 "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,

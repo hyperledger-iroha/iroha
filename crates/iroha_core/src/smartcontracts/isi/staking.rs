@@ -2387,8 +2387,8 @@ mod tests {
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
         stx.nexus.autoscale.enabled = true;
-        stx.nexus.autoscale.min_lanes = nonzero!(1_u32);
-        stx.nexus.autoscale.max_lanes = nonzero!(2_u32);
+        stx.nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        stx.nexus.autoscale.max_lane_id_exclusive = nonzero!(2_u32);
         set_transaction_lane_catalog(
             &mut stx,
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), autoscale_lane])

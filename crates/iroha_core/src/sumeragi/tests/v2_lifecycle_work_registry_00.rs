@@ -132,7 +132,7 @@ impl ProductionReadyValidateDispatchRow {
     fn expected_dispatch(
         self,
         ordinal: u128,
-        reducer_fence_wait: super::super::WaitToken,
+        reducer_fence_wait: Option<super::super::WaitToken>,
         successor_ordinal: Option<u128>,
     ) -> super::super::ProductionCompletionDispatchV1 {
         use super::super::ProductionCompletionDispatchV1 as Dispatch;
@@ -140,7 +140,8 @@ impl ProductionReadyValidateDispatchRow {
         match self {
             Self::ValidatedBusy | Self::RejectedBusy => Dispatch::ReducerFenceWait {
                 ordinal,
-                wait: reducer_fence_wait,
+                wait: reducer_fence_wait
+                    .expect("busy Ready Validate row retains its exact reducer fence"),
             },
             Self::ValidatedInactive
             | Self::ValidatedNoEffect
@@ -269,7 +270,6 @@ fn owned_production_ready_validate_fixture(
 struct ProductionRecoveredApplyReadyFixture {
     owned: OwnedReadyDurableValidateFixture,
     commit_qc: wire::QuorumCertificate,
-    apply_service: crate::sumeragi::v2_apply::V2ApplyService,
     validator_keys: Vec<KeyPair>,
 }
 
@@ -282,7 +282,6 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
         body_store,
         durable,
         commit_qc,
-        apply_service,
         validator_keys,
         directory,
     } = crate::sumeragi::v2_apply::production_recovered_decision_apply_fixture_v1();
@@ -304,7 +303,6 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
     ProductionRecoveredApplyReadyFixture {
         owned,
         commit_qc,
-        apply_service,
         validator_keys,
     }
 }
@@ -468,10 +466,9 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 let ProductionRecoveredApplyReadyFixture {
                     owned,
                     commit_qc,
-                    apply_service,
                     validator_keys,
                 } = production_recovered_apply_ready_fixture(marker);
-                (owned, Some((commit_qc, apply_service, validator_keys)))
+                (owned, Some((commit_qc, validator_keys)))
             } else {
                 (owned_production_ready_validate_fixture(row, marker), None)
             };
@@ -536,7 +533,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 row,
                 marker,
                 &ready,
-                recovered_apply.as_ref().map(|(commit_qc, _, _)| commit_qc),
+                recovered_apply.as_ref().map(|(commit_qc, _)| commit_qc),
                 &mut adapter,
             );
         }
@@ -656,18 +653,20 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 let keys = &recovered_apply
                     .as_ref()
                     .expect("ValidatedApply retains its exact production fixture")
-                    .2;
+                    .1;
                 let unrelated = signed_ready_validate_timeout_vote(&context, keys, row.view(), 3);
                 executor
                     .enqueue_network(unrelated)
                     .expect("queue authenticated runtime ingress beside typed live Apply");
                 executor.runtime_queue_snapshot_for_test(now)
             });
-        let reducer_fence = executor.lifecycle_reducer_fence_observation();
-        let expected_reducer_fence_wait = super::super::WaitToken::new(
-            super::super::reducer_fence_wait_source(active_context),
-            reducer_fence.generation(),
-        );
+        let expected_reducer_fence_wait = row.is_busy().then(|| {
+            let reducer_fence = executor.lifecycle_reducer_fence_observation();
+            super::super::WaitToken::new(
+                super::super::reducer_fence_wait_source(active_context),
+                reducer_fence.generation(),
+            )
+        });
         let expected_successor_ordinal = row.successor().map(|_| {
             lifecycle_ordinal_observer
                 .next_ordinal_for_test()
@@ -737,49 +736,13 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     panic!("{row:?}: typed live Apply lost physical completion priority");
                 }
             };
-            let crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(applied) =
-                completion.result()
-            else {
-                panic!("{row:?}: live Apply fixture must produce an applied terminal")
-            };
-            let lease = owner
-                .coordinator
-                .active_lease
-                .clone()
-                .expect("live Apply completion retains its exact active lease");
-            let (transition, authority) = owner
-                .registry
-                .prepare_lifecycle_decision_apply_terminal_transition(
-                    &owner.coordinator,
-                    &lease,
-                    applied,
-                )
-                .expect("join exact live worker result to its installed carrier");
-            let adapter = executor
-                .prepare_lifecycle_decision_apply_completion(authority)
-                .expect("preview exact live Apply completion on the serialized adapter");
-            let mut staged = owner.coordinator.stage_durable_transaction();
-            staged.reduce_settle_turn(lease.clone(), super::super::TurnOutcome::Advanced, None);
-            assert!(staged.fault.is_none());
-            owner
-                .registry
-                .publish_lifecycle_decision_apply_terminal_transition(
-                    transition,
-                    &owner.coordinator,
-                    &staged,
-                    &lease,
-                    || owner.coordinator.persist_exact_staged_successor(&staged),
-                )
-                .unwrap_or_else(|_| {
-                    panic!("{row:?}: publish exact live Apply terminal through LedgerV1")
-                });
-            owner.coordinator = staged;
-            let finality = adapter.commit_after_durable_settlement();
-            let _status = executor.commit_lifecycle_decision_apply_finality(finality);
-            let settled = completion.acknowledge_after_owner_settlement();
             assert!(matches!(
-                settled,
-                crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(_)
+                super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
+                    &mut owner,
+                    &mut executor,
+                    completion,
+                ),
+                Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
             ));
             assert_eq!(
                 Some(executor.runtime_queue_snapshot_for_test(now)),

@@ -85,6 +85,23 @@ pub enum QueryOutputBatchBoxTupleError {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("cannot extend query-output batches of different types")]
 pub struct QueryOutputBatchBoxTypeMismatch;
+/// Error returned when an erased iterable query has no canonical V1 envelope mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("erased iterable query type `{type_name}` has no canonical V1 item mapping")]
+pub struct QueryWithParamsError {
+    type_name: &'static str,
+}
+impl QueryWithParamsError {
+    const fn unsupported(type_name: &'static str) -> Self {
+        Self { type_name }
+    }
+
+    /// Return the concrete erased-query type that has no canonical mapping.
+    #[must_use]
+    pub const fn type_name(self) -> &'static str {
+        self.type_name
+    }
+}
 /// Error returned when a signed query fails request or signature validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SignedQueryValidationError {
@@ -179,34 +196,24 @@ pub mod json_wrappers {
     /// JSON wrapper for iterable query parameters (roundtrip-capable).
     ///
     /// Carries the canonical iterable-query item discriminator, encoded query
-    /// components, and query parameters alongside the request. The legacy
-    /// `wire` fields remain present as empty compatibility fields.
+    /// components, and query parameters alongside the request.
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct QueryWithParamsJson {
         /// Parameters controlling pagination, sorting, and projections.
         pub params: parameters::QueryParams,
-        #[norito(default)]
-        /// Legacy erased-query identifier; canonical envelopes leave this empty.
-        pub wire: Option<String>,
-        #[norito(default)]
-        /// Legacy erased-query payload; canonical envelopes leave this empty.
-        pub payload_b64: Option<String>,
-        #[norito(default)]
         /// Query item discriminator for canonical iterable-query envelopes.
-        pub item_kind: Option<QueryItemKind>,
-        #[norito(default)]
+        pub item_kind: QueryItemKind,
         /// Base64-encoded concrete query payload.
-        pub query_payload_b64: Option<String>,
-        #[norito(default)]
+        pub query_payload_b64: String,
         /// Base64-encoded predicate fragment associated with the query, if any.
-        pub predicate_b64: Option<String>,
-        #[norito(default)]
+        pub predicate_b64: String,
         /// Base64-encoded selector fragment narrowing the result set.
-        pub selector_b64: Option<String>,
+        pub selector_b64: String,
     }
     /// JSON wrapper for `QueryRequest` enum.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,10 +292,6 @@ pub mod json_wrappers {
             QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
             QueryRequestJson::Continue(c) => Ok(QueryRequest::Continue(c)),
             QueryRequestJson::Start(s) => {
-                let item = s.item_kind.ok_or("missing item_kind")?;
-                let query_payload = s.query_payload_b64.ok_or("missing query_payload_b64")?;
-                let predicate_b64 = s.predicate_b64.ok_or("missing predicate_b64")?;
-                let selector_b64 = s.selector_b64.ok_or("missing selector_b64")?;
                 let decode = |encoded: String, invalid: &'static str| {
                     base64_decode(encoded).map_err(|error| {
                         if error.is_decode_resource_limit() {
@@ -298,13 +301,13 @@ pub mod json_wrappers {
                         }
                     })
                 };
-                let qp = decode(query_payload, "bad query_payload_b64")?;
-                let pr = decode(predicate_b64, "bad predicate_b64")?;
-                let se = decode(selector_b64, "bad selector_b64")?;
+                let qp = decode(s.query_payload_b64, "bad query_payload_b64")?;
+                let pr = decode(s.predicate_b64, "bad predicate_b64")?;
+                let se = decode(s.selector_b64, "bad selector_b64")?;
                 Ok(QueryRequest::Start(QueryWithParams {
                     query: (),
                     query_payload: qp,
-                    item,
+                    item: s.item_kind,
                     predicate_bytes: pr,
                     selector_bytes: se,
                     params: s.params,
@@ -319,12 +322,10 @@ pub mod json_wrappers {
             QueryRequest::Continue(c) => QueryRequestJson::Continue(c.clone()),
             QueryRequest::Start(qwp) => QueryRequestJson::Start(QueryWithParamsJson {
                 params: qwp.params.clone(),
-                wire: None,
-                payload_b64: None,
-                item_kind: Some(qwp.item),
-                query_payload_b64: Some(base64_encode(&qwp.query_payload)),
-                predicate_b64: Some(base64_encode(&qwp.predicate_bytes)),
-                selector_b64: Some(base64_encode(&qwp.selector_bytes)),
+                item_kind: qwp.item,
+                query_payload_b64: base64_encode(&qwp.query_payload),
+                predicate_b64: base64_encode(&qwp.predicate_bytes),
+                selector_b64: base64_encode(&qwp.selector_bytes),
             }),
         }
     }
@@ -971,11 +972,12 @@ mod model {
     }
     /// Type alias used for ergonomic query handling.
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
-    fn query_box_tuple_flags() -> u8 {
+    pub(super) const QUERY_BOX_PACKED_STRUCT_ERROR: &str = "packed-struct QueryBox layout";
+    fn query_box_tuple_flags() -> Result<u8, norito::core::Error> {
         let defaults = norito::core::default_encode_flags();
         let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
         let static_defaults = defaults & !dynamic_mask;
-        match norito::core::effective_decode_flags() {
+        let flags = match norito::core::effective_decode_flags() {
             None => defaults,
             Some(0) => 0,
             Some(current) => {
@@ -988,7 +990,13 @@ mod model {
                 };
                 current_dynamic | effective_static
             }
+        };
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return Err(norito::core::Error::UnsupportedFeature(
+                QUERY_BOX_PACKED_STRUCT_ERROR,
+            ));
         }
+        Ok(flags)
     }
     fn query_box_encoded_len(name: &str, payload_len: usize, flags: u8) -> Option<usize> {
         let name_len = name
@@ -1007,20 +1015,12 @@ mod model {
         ) -> Result<(), norito::core::Error> {
             let query = &**self;
             let name = query_wire_id(query.type_name_key());
-            let flags = query_box_tuple_flags();
-            if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                // Packed-struct is not used by the fixed v1 request path. Retain
-                // the historical owned tuple codec for callers that explicitly
-                // select that layout; its staging cost is confined to this
-                // compatibility branch.
-                let owned = (name.to_owned(), query.encode_bytes());
-                return norito::core::NoritoSerialize::serialize(&owned, writer);
-            }
+            let flags = query_box_tuple_flags()?;
             let payload_len = if let Some(exact) = query.encoded_payload_len_exact() {
                 exact
             } else {
-                // Preserve custom-query compatibility without rebuilding the full payload: count
-                // one streaming pass, then write the length-delimited field in a second pass.
+                // Count one streaming pass, then write the length-delimited field in a second
+                // pass without retaining an owned payload-sized staging buffer.
                 let mut sink = std::io::sink();
                 let mut counter = norito::core::Encoder::new(&mut sink);
                 query.encode_payload_to(&mut counter)?
@@ -1066,10 +1066,7 @@ mod model {
         fn encoded_len_exact(&self) -> Option<usize> {
             let query = &**self;
             let name = query_wire_id(query.type_name_key());
-            let flags = query_box_tuple_flags();
-            if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-                return None;
-            }
+            let flags = query_box_tuple_flags().ok()?;
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
@@ -1082,6 +1079,13 @@ mod model {
             decode_registered_query(&name, &bytes)
                 .expect("query is not registered")
                 .expect("failed to decode query")
+        }
+
+        fn try_deserialize(
+            archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
+        ) -> Result<Self, norito::core::Error> {
+            query_box_tuple_flags()?;
+            Ok(Self::deserialize(archived))
         }
     }
     /// An enum of all possible iterable query batches.
@@ -1666,7 +1670,6 @@ mod model {
             }
         }
     }
-    const INVALID_QUERY_COMPONENT: [u8; 4] = [0xFF; 4];
     impl QueryWithParams {
         /// Construct the canonical query envelope from an erased query and parameters.
         ///
@@ -1674,18 +1677,26 @@ mod model {
         /// types whose payload shapes are identical. Build seller-, buyer-, and status-filtered
         /// escrow queries through [`crate::query::builder::QueryBuilder`] (or construct this
         /// envelope with the corresponding query-specific [`QueryItemKind`]) instead.
-        pub fn new(query: &QueryBox<QueryOutputBatchBox>, params: QueryParams) -> Self {
+        ///
+        /// # Errors
+        ///
+        /// Returns [`QueryWithParamsError`] when the concrete erased query type has no canonical
+        /// V1 [`QueryItemKind`] mapping.
+        pub fn new(
+            query: &QueryBox<QueryOutputBatchBox>,
+            params: QueryParams,
+        ) -> Result<Self, QueryWithParamsError> {
             macro_rules! try_build {
                 ($item:ty, $kind:ident) => {
                     if let Some(erased) = super::iter_query_inner::<$item>(query) {
-                        return Self {
+                        return Ok(Self {
                             query: (),
                             query_payload: erased.payload().to_vec(),
                             item: QueryItemKind::$kind,
                             predicate_bytes: norito::codec::Encode::encode(erased.predicate()),
                             selector_bytes: norito::codec::Encode::encode(erased.selector()),
                             params,
-                        };
+                        });
                     }
                 };
             }
@@ -1723,17 +1734,7 @@ mod model {
             try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
             try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
             try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
-            // Keep the infallible constructor API, but encode an unsupported erased type as a
-            // deliberately noncanonical envelope. All three byte components fail decoding,
-            // and the query payload is not the canonical encoding of either domain query.
-            Self {
-                query: (),
-                query_payload: INVALID_QUERY_COMPONENT.to_vec(),
-                item: QueryItemKind::Domain,
-                predicate_bytes: INVALID_QUERY_COMPONENT.to_vec(),
-                selector_bytes: INVALID_QUERY_COMPONENT.to_vec(),
-                params,
-            }
+            Err(QueryWithParamsError::unsupported(query.type_name_key()))
         }
         /// Access the canonical iterable-query payload components.
         pub fn parts(&self) -> (QueryItemKind, &[u8], &[u8], &[u8]) {
@@ -3277,22 +3278,38 @@ mod candidate {
         use std::sync::LazyLock;
         #[cfg(feature = "json")]
         #[test]
-        fn query_with_params_json_defaults_optional_fields() {
+        fn query_with_params_json_requires_canonical_fields_and_rejects_retired_fields() {
             let params = parameters::QueryParams::default();
-            let mut map = json::Map::new();
-            map.insert(
-                "params".to_owned(),
-                json::to_value(&params).expect("params to JSON"),
+            let canonical = super::json_wrappers::QueryWithParamsJson {
+                params,
+                item_kind: crate::query::QueryItemKind::Domain,
+                query_payload_b64: String::new(),
+                predicate_b64: String::new(),
+                selector_b64: String::new(),
+            };
+            let value = json::to_value(&canonical).expect("canonical query JSON");
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("query wrapper object")
+                .remove("item_kind");
+            assert!(
+                json::from_value::<super::json_wrappers::QueryWithParamsJson>(missing).is_err(),
+                "canonical query fields must be mandatory"
             );
-            let value = json::Value::Object(map);
-            let parsed: super::json_wrappers::QueryWithParamsJson =
-                json::from_value(value).expect("missing optional fields must default");
-            assert!(parsed.wire.is_none());
-            assert!(parsed.payload_b64.is_none());
-            assert!(parsed.item_kind.is_none());
-            assert!(parsed.query_payload_b64.is_none());
-            assert!(parsed.predicate_b64.is_none());
-            assert!(parsed.selector_b64.is_none());
+
+            for retired in ["wire", "payload_b64"] {
+                let mut candidate = value.clone();
+                candidate
+                    .as_object_mut()
+                    .expect("query wrapper object")
+                    .insert(retired.to_owned(), json::Value::String(String::new()));
+                assert!(
+                    json::from_value::<super::json_wrappers::QueryWithParamsJson>(candidate)
+                        .is_err(),
+                    "retired field {retired} must be rejected"
+                );
+            }
         }
         static ALICE_ID: LazyLock<AccountId> =
             LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
@@ -3835,57 +3852,33 @@ mod json_roundtrip_tests {
         }
     }
     #[test]
-    fn query_with_params_unknown_type_is_non_executable() {
-        use crate::query::{
-            QueryItemKind,
-            domain::prelude::{FindDomains, FindDomainsByAccountId},
-        };
+    fn query_with_params_rejects_unknown_erased_type() {
         let unknown: QueryBox<QueryOutputBatchBox> =
             Box::new(ErasedIterQuery::<QueryOutputBatchBox>::new(
                 CompoundPredicate::PASS,
                 SelectorTuple::default(),
                 Vec::new(),
             ));
-        let built = QueryWithParams::new(&unknown, parameters::QueryParams::default());
-        let invalid_component = [0xFF; 4];
-        assert_eq!(built.item, QueryItemKind::Domain);
-        assert_eq!(built.query_payload, invalid_component);
-        assert_eq!(built.predicate_bytes, invalid_component);
-        assert_eq!(built.selector_bytes, invalid_component);
-        assert_ne!(
-            built.query_payload,
-            norito::codec::Encode::encode(&FindDomains),
-            "the compatibility carrier must not encode the global domain query"
-        );
-        let mut parameterized_input = built.query_payload.as_slice();
-        if let Ok(decoded) =
-            <FindDomainsByAccountId as norito::codec::Decode>::decode(&mut parameterized_input)
-        {
-            assert_ne!(
-                norito::codec::Encode::encode(&decoded),
-                built.query_payload,
-                "the compatibility carrier must not be a canonical parameterized domain query"
-            );
-        }
-        let mut predicate_input = built.predicate_bytes.as_slice();
-        assert!(
-            <CompoundPredicate<Domain> as norito::codec::Decode>::decode(&mut predicate_input)
-                .is_err(),
-            "the compatibility carrier predicate must fail closed"
+        let error = match QueryWithParams::new(&unknown, parameters::QueryParams::default()) {
+            Ok(_) => panic!("an unmapped erased query type must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.type_name(),
+            std::any::type_name::<ErasedIterQuery<QueryOutputBatchBox>>()
         );
     }
     #[test]
     fn query_with_params_maps_all_supported_item_kinds() {
-        let invalid_component = [0xFF; 4];
         let repo: QueryBox<QueryOutputBatchBox> =
             Box::new(ErasedIterQuery::<crate::repo::RepoAgreement>::new(
                 CompoundPredicate::PASS,
                 SelectorTuple::default(),
                 Vec::new(),
             ));
-        let repo = QueryWithParams::new(&repo, parameters::QueryParams::default());
+        let repo = QueryWithParams::new(&repo, parameters::QueryParams::default())
+            .expect("repository query type has a canonical mapping");
         assert_eq!(repo.item, QueryItemKind::RepoAgreement);
-        assert_ne!(repo.predicate_bytes, invalid_component);
         let defi: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<
             crate::oracle::DefiOracleAttestation,
         >::new(
@@ -3893,9 +3886,9 @@ mod json_roundtrip_tests {
             SelectorTuple::default(),
             vec![0x42],
         ));
-        let defi = QueryWithParams::new(&defi, parameters::QueryParams::default());
+        let defi = QueryWithParams::new(&defi, parameters::QueryParams::default())
+            .expect("DeFi attestation query type has a canonical mapping");
         assert_eq!(defi.item, QueryItemKind::DefiOracleAttestation);
-        assert_ne!(defi.predicate_bytes, invalid_component);
     }
     #[test]
     fn query_with_params_clone_preserves_canonical_parts() {
@@ -4272,16 +4265,23 @@ mod trait_object_tests {
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
     use norito::codec::Encode;
 
-    fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
+    fn try_bare_bytes_with_flags(
+        value: &dyn norito::core::NoritoSerialize,
+        flags: u8,
+    ) -> Result<Vec<u8>, norito::core::Error> {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
         let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
-        value.serialize(&mut encoder).expect("encode bare value");
-        bytes
+        value.serialize(&mut encoder)?;
+        Ok(bytes)
+    }
+
+    fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
+        try_bare_bytes_with_flags(value, flags).expect("encode bare value")
     }
 
     #[test]
-    fn query_box_streaming_wire_matches_owned_tuple_for_all_sequence_layouts() {
+    fn query_box_streaming_wire_is_canonical_for_supported_sequence_layouts() {
         let concrete = domain::FindDomains;
         let erased = ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
@@ -4302,22 +4302,68 @@ mod trait_object_tests {
             0,
             norito::core::header_flags::COMPACT_LEN,
             norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
-            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
-            norito::core::header_flags::PACKED_SEQ
-                | norito::core::header_flags::PACKED_STRUCT
-                | norito::core::header_flags::FIELD_BITSET
-                | norito::core::header_flags::COMPACT_LEN,
         ] {
             let actual = bare_bytes_with_flags(&query, flags);
             assert_eq!(actual, bare_bytes_with_flags(&expected, flags));
             let _flags = norito::core::DecodeFlagsGuard::enter(flags);
             let exact = norito::core::NoritoSerialize::encoded_len_exact(&query);
-            if flags & norito::core::header_flags::PACKED_STRUCT == 0 {
-                assert_eq!(exact, Some(actual.len()));
-            } else {
-                assert_eq!(exact, None);
-            }
+            assert_eq!(exact, Some(actual.len()));
         }
+    }
+
+    #[test]
+    fn query_box_rejects_retired_packed_struct_layout() {
+        let erased = ErasedIterQuery::<Domain>::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            domain::FindDomains.encode(),
+        );
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+        let packed_flags =
+            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
+        let error = try_bare_bytes_with_flags(&query, packed_flags)
+            .expect_err("packed-struct QueryBox encoding must be rejected");
+        assert!(matches!(
+            error,
+            norito::core::Error::UnsupportedFeature(message)
+                if message == model::QUERY_BOX_PACKED_STRUCT_ERROR
+        ));
+        let _flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+        assert_eq!(
+            norito::core::NoritoSerialize::encoded_len_exact(&query),
+            None
+        );
+    }
+
+    #[test]
+    fn query_box_rejects_retired_packed_struct_decode() {
+        let erased = ErasedIterQuery::<Domain>::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            domain::FindDomains.encode(),
+        );
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+        let historical = (
+            query_wire_id(query.type_name_key()).to_owned(),
+            query.encode_bytes(),
+        );
+        let packed_flags =
+            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
+        let payload = bare_bytes_with_flags(&historical, packed_flags);
+        let frame = norito::core::frame_bare_with_header_flags::<QueryBox<QueryOutputBatchBox>>(
+            &payload,
+            packed_flags,
+        )
+        .expect("frame historical packed query");
+        let error = match norito::decode_from_bytes::<QueryBox<QueryOutputBatchBox>>(&frame) {
+            Ok(_) => panic!("packed-struct QueryBox decoding must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            norito::core::Error::UnsupportedFeature(message)
+                if message == model::QUERY_BOX_PACKED_STRUCT_ERROR
+        ));
     }
     #[test]
     fn query_dyn_encode_matches_encode() {

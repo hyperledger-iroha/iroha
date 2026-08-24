@@ -619,12 +619,9 @@ KAGEMUSHA_JNI_METHODS=(
   nativePrepareRedemptionChangeV4
   nativePrepareRecipientRequestV2
   nativePrepareTopUpV4
-  nativeProjectActiveVerifierV2
-  nativeProjectAuthenticatedArtifactSetV4
   nativeProjectInitResultV4
   nativeProjectOperationStatusV4
   nativeProjectPeerPaymentV4
-  nativeProjectReadinessV4
   nativeProjectRecipientRequestV2
   nativeProjectRecipientReceiveOfferV2
   nativeProjectRedeemBuildResultV4

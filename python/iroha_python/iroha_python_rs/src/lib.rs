@@ -12906,7 +12906,10 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
 }
 #[pyfunction]
 #[pyo3(name = "privacy_vega_device_authentication_digest_v1")]
-/// Derive `H_dev` for an already prepared, explicit nonzero transaction intent.
+/// Request `H_dev` for an already prepared, explicit nonzero transaction intent.
+///
+/// This public entry point fails closed with `RuntimeError` while the exact Vega compiled profile
+/// is not governance-available; it never derives against candidate or placeholder profile material.
 #[allow(clippy::too_many_arguments)]
 fn privacy_vega_device_authentication_digest_v1_py(
     py: Python<'_>,

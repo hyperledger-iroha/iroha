@@ -508,13 +508,6 @@ fn validate_prepared_network_projection(
         path.display()
     );
     ensure!(
-        !config.network.scion.enabled
-            && config.network.scion.listen_endpoint.is_none()
-            && config.network.scion.routes.is_empty(),
-        "prepared validator config {} uses SCION routes that cannot be projected into Compose service DNS",
-        path.display()
-    );
-    ensure!(
         !config.network.tls_enabled
             && config.network.tls_listen_address.is_none()
             && !config.network.tls_inbound_only,

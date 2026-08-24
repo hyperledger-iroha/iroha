@@ -570,19 +570,16 @@ impl Ed25519Sha512 {
     ///
     /// Under `ecc-batch`, this calls dalek's transcript-derived deterministic batch verifier.
     /// Without `ecc-batch`, it verifies each tuple independently in input order.
-    /// The `seed32` parameter is reserved for API compatibility and is ignored.
     pub fn verify_batch_preparsed_deterministic(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[PublicKey],
-        seed32: [u8; 32],
     ) -> Result<(), Error> {
         if messages.is_empty()
             || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
         {
             return Err(Error::BadSignature);
         }
-        let _ = seed32;
         let mut miss_messages = Vec::new();
         let mut miss_raw_signatures = Vec::new();
         let mut miss_public_keys = Vec::new();
@@ -670,13 +667,11 @@ impl Ed25519Sha512 {
     /// Parses public keys once, then delegates to [`Self::verify_batch_preparsed_deterministic`].
     /// Under `ecc-batch`, this uses dalek's true deterministic batch verifier.
     /// Without `ecc-batch`, this retains the ordered per-signature fallback.
-    /// The `seed32` parameter is reserved for API compatibility and is ignored.
     /// Returns `Err(Error::BadSignature)` when input is empty or lengths mismatch.
     pub fn verify_batch_deterministic(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
-        seed32: [u8; 32],
     ) -> Result<(), Error> {
         if messages.is_empty()
             || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
@@ -687,12 +682,7 @@ impl Ed25519Sha512 {
             .iter()
             .map(|public_key| Self::parse_public_key(public_key).map_err(|_| Error::BadSignature))
             .collect::<Result<Vec<_>, _>>()?;
-        Self::verify_batch_preparsed_deterministic(
-            messages,
-            signatures,
-            &parsed_public_keys,
-            seed32,
-        )
+        Self::verify_batch_preparsed_deterministic(messages, signatures, &parsed_public_keys)
     }
 }
 fn validate_signature_r_for_strict_batch(signature: &[u8]) -> Result<(), Error> {
@@ -1011,13 +1001,8 @@ mod test {
         let messages = [msg_a.as_slice(), msg_b.as_slice()];
         let signatures = [sig_a.as_slice(), sig_b.as_slice()];
         let public_keys = [pk_a, pk_b];
-        Ed25519Sha512::verify_batch_preparsed_deterministic(
-            &messages,
-            &signatures,
-            &public_keys,
-            [0x75; 32],
-        )
-        .expect("colliding all-cached batch verifies");
+        Ed25519Sha512::verify_batch_preparsed_deterministic(&messages, &signatures, &public_keys)
+            .expect("colliding all-cached batch verifies");
         assert_eq!(signature_parse_calls_for_tests(), 0);
         assert_eq!(uncached_batch_verify_calls_for_tests(), 0);
     }
@@ -1275,8 +1260,8 @@ mod test {
         let msg_refs: Vec<&[u8]> = triples.iter().map(|(m, _, _)| m.as_slice()).collect();
         let sig_refs: Vec<&[u8]> = triples.iter().map(|(_, s, _)| s.as_slice()).collect();
         let pk_refs: Vec<&[u8]> = triples.iter().map(|(_, _, p)| p.as_slice()).collect();
-        // Baseline passes for any deterministic seed.
-        Ed25519Sha512::verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0xA5; 32])
+        // Baseline passes through the deterministic verifier.
+        Ed25519Sha512::verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs)
             .expect("baseline batch verification");
         // Order should not affect outcome because verification is per-signature.
         triples.reverse();
@@ -1287,7 +1272,6 @@ mod test {
             msgs_rev.as_slice(),
             sigs_rev.as_slice(),
             pks_rev.as_slice(),
-            [0x5A; 32],
         )
         .expect("reordered batch verification");
         // Tampering any signature must fail deterministically for every seed.
@@ -1309,7 +1293,6 @@ mod test {
                 .map(|(_, _, p)| p.as_slice())
                 .collect::<Vec<_>>()
                 .as_slice(),
-            [0x01; 32],
         );
         assert!(matches!(err, Err(Error::BadSignature)));
     }
@@ -1488,14 +1471,12 @@ mod test {
         let msgs: [&[u8]; 2] = [m1, m2];
         let sigs: [&[u8]; 2] = [s1.as_slice(), s2.as_slice()];
         let pks_arr: [&[u8]; 2] = [pk1.as_bytes(), pk2.as_bytes()];
-        let seed = [7u8; 32];
-        Ed25519Sha512::verify_batch_deterministic(&msgs, &sigs, &pks_arr, seed)
-            .expect("batch verify ok");
+        Ed25519Sha512::verify_batch_deterministic(&msgs, &sigs, &pks_arr).expect("batch verify ok");
         // Order invariance: reverse input order; per-signature verification is order-independent
         let msgs_r: [&[u8]; 2] = [m2, m1];
         let sigs_r: [&[u8]; 2] = [s2.as_slice(), s1.as_slice()];
         let pks_r_arr: [&[u8]; 2] = [pk2.as_bytes(), pk1.as_bytes()];
-        Ed25519Sha512::verify_batch_deterministic(&msgs_r, &sigs_r, &pks_r_arr, seed)
+        Ed25519Sha512::verify_batch_deterministic(&msgs_r, &sigs_r, &pks_r_arr)
             .expect("batch verify ok rev");
     }
     fn ed25519_batch_fixture() -> Vec<(Vec<u8>, Vec<u8>, PublicKey)> {
@@ -1535,13 +1516,8 @@ mod test {
             .iter()
             .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
-        Ed25519Sha512::verify_batch_preparsed_deterministic(
-            &messages,
-            &signatures,
-            &public_keys,
-            [0x33; 32],
-        )
-        .expect("valid preparsed batch");
+        Ed25519Sha512::verify_batch_preparsed_deterministic(&messages, &signatures, &public_keys)
+            .expect("valid preparsed batch");
         let reordered = triples.into_iter().rev().collect::<Vec<_>>();
         let messages = reordered
             .iter()
@@ -1555,13 +1531,8 @@ mod test {
             .iter()
             .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
-        Ed25519Sha512::verify_batch_preparsed_deterministic(
-            &messages,
-            &signatures,
-            &public_keys,
-            [0x44; 32],
-        )
-        .expect("reordered valid preparsed batch");
+        Ed25519Sha512::verify_batch_preparsed_deterministic(&messages, &signatures, &public_keys)
+            .expect("reordered valid preparsed batch");
     }
     #[test]
     fn ed25519_batch_preparsed_invalid_signature_rejected() {
@@ -1583,7 +1554,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x55; 32],
         )
         .expect_err("tampered signature must fail");
         assert_eq!(err, Error::BadSignature);
@@ -1642,7 +1612,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x56; 32],
         )
         .expect_err("small-order R must fail before batch verification");
         assert_eq!(err, Error::BadSignature);
@@ -1662,7 +1631,6 @@ mod test {
                 &empty_messages,
                 &empty_signatures,
                 &empty_public_keys,
-                [0; 32],
             )
             .expect_err("empty batch must fail"),
             Error::BadSignature
@@ -1686,7 +1654,6 @@ mod test {
                 &messages,
                 &signatures,
                 &public_keys,
-                [0; 32],
             )
             .expect_err("mismatched batch must fail"),
             Error::BadSignature
@@ -1711,18 +1678,12 @@ mod test {
             .iter()
             .map(|public_key| crate::ed25519_parse_public_key(public_key).expect("parse key"))
             .collect::<Vec<_>>();
-        crate::ed25519_verify_batch_deterministic(
-            &messages,
-            &signatures,
-            &raw_public_keys,
-            [0x66; 32],
-        )
-        .expect("raw batch API");
+        crate::ed25519_verify_batch_deterministic(&messages, &signatures, &raw_public_keys)
+            .expect("raw batch API");
         crate::ed25519_verify_batch_preparsed_deterministic(
             &messages,
             &signatures,
             &parsed_public_keys,
-            [0x66; 32],
         )
         .expect("preparsed batch API");
         let mut scratch = crate::Ed25519BatchScratch::default();
@@ -1730,7 +1691,6 @@ mod test {
             &messages,
             &signatures,
             &parsed_public_keys,
-            [0x66; 32],
             &mut scratch,
         )
         .expect("preparsed batch API with scratch");
@@ -1762,7 +1722,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x71; 32],
             &mut scratch,
         )
         .expect("all cached batch verifies");
@@ -1792,13 +1751,8 @@ mod test {
             .iter()
             .map(|(_, _, public_key)| *public_key)
             .collect::<Vec<_>>();
-        Ed25519Sha512::verify_batch_preparsed_deterministic(
-            &messages,
-            &signatures,
-            &public_keys,
-            [0x73; 32],
-        )
-        .expect("mixed cached batch verifies");
+        Ed25519Sha512::verify_batch_preparsed_deterministic(&messages, &signatures, &public_keys)
+            .expect("mixed cached batch verifies");
         assert!(
             signature_parse_calls_for_tests() < triples.len(),
             "cached hits should avoid parsing every tuple"
@@ -1829,13 +1783,8 @@ mod test {
             .iter()
             .map(|(_, _, public_key)| public_key.as_bytes().as_slice())
             .collect::<Vec<_>>();
-        Ed25519Sha512::verify_batch_deterministic(
-            &messages,
-            &signatures,
-            &raw_public_keys,
-            [0x74; 32],
-        )
-        .expect("raw all-cached batch verifies");
+        Ed25519Sha512::verify_batch_deterministic(&messages, &signatures, &raw_public_keys)
+            .expect("raw all-cached batch verifies");
         assert_eq!(signature_parse_calls_for_tests(), 0);
         assert_eq!(uncached_batch_verify_calls_for_tests(), 0);
     }
@@ -1871,7 +1820,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x72; 32],
             &mut scratch,
         )
         .expect_err("mixed cached/uncached batch must reject tampered signatures");
@@ -1883,7 +1831,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x72; 32],
             &mut scratch,
         )
         .expect("tampered tuple must be found");
@@ -1915,7 +1862,6 @@ mod test {
             &messages,
             &signatures,
             &public_keys,
-            [0x77; 32],
             &mut scratch,
         )
         .expect("tampered tuple must be found");

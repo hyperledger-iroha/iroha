@@ -520,17 +520,12 @@ pub struct MergeLaneSignerProof {
     /// BLS proof of possession for `public_key`.
     pub proof_of_possession: Vec<u8>,
 }
-/// Backward-compatible trailing FASTPQ evidence for one merge-lane execution.
-///
-/// Binary encoding deliberately emits no bytes for the empty value. As a flattened trailing
-/// field this lets pre-evidence lane executions decode with the default and re-encode byte for
-/// byte, while non-empty evidence remains self-delimiting and hash-bound.
-#[derive(Debug, Clone, Default, PartialEq, Eq, IntoSchema)]
+/// Canonical FASTPQ evidence for one merge-lane execution.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(decode_from_slice)]
 pub struct MergeLaneFastpqTranscripts {
     /// Canonically ordered transcript bundles keyed by lane entrypoint identity.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
     pub fastpq_transcripts: Vec<TransferTranscriptBundle>,
 }
 impl core::ops::Deref for MergeLaneFastpqTranscripts {
@@ -549,59 +544,6 @@ impl<'a> IntoIterator for &'a MergeLaneFastpqTranscripts {
     type IntoIter = core::slice::Iter<'a, TransferTranscriptBundle>;
     fn into_iter(self) -> Self::IntoIter {
         self.fastpq_transcripts.iter()
-    }
-}
-impl norito::core::NoritoSerialize for MergeLaneFastpqTranscripts {
-    fn serialize(
-        &self,
-        encoder: &mut norito::core::Encoder<'_>,
-    ) -> Result<(), norito::core::Error> {
-        if self.fastpq_transcripts.is_empty() {
-            return Ok(());
-        }
-        norito::core::NoritoSerialize::serialize(&self.fastpq_transcripts, encoder)
-    }
-    fn encoded_len_hint(&self) -> Option<usize> {
-        if self.fastpq_transcripts.is_empty() {
-            Some(0)
-        } else {
-            norito::core::NoritoSerialize::encoded_len_hint(&self.fastpq_transcripts)
-        }
-    }
-    fn encoded_len_exact(&self) -> Option<usize> {
-        if self.fastpq_transcripts.is_empty() {
-            Some(0)
-        } else {
-            norito::core::NoritoSerialize::encoded_len_exact(&self.fastpq_transcripts)
-        }
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for MergeLaneFastpqTranscripts {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (fastpq_transcripts, used) =
-            <Vec<TransferTranscriptBundle> as norito::core::DecodeFromSlice>::decode_from_slice(
-                bytes,
-            )?;
-        Ok((fastpq_transcripts.into(), used))
-    }
-}
-impl<'a> norito::core::NoritoDeserialize<'a> for MergeLaneFastpqTranscripts {
-    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("FASTPQ merge-lane transcript evidence must have canonical wire bytes")
-    }
-
-    fn try_deserialize(
-        archived: &'a norito::core::Archived<Self>,
-    ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_slice_from_ptr(ptr)?;
-        let (value, used) =
-            <Self as norito::core::DecodeFromSlice<'a>>::decode_from_slice(payload)?;
-        if used != payload.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        Ok(value)
     }
 }
 /// One commit-certified lane block and its deterministic execution transcript.
@@ -660,10 +602,9 @@ pub struct MergeLaneExecution {
     pub settlement_hash: HashOf<LaneBlockCommitment>,
     /// Canonically ordered FASTPQ transfer transcripts emitted by this lane execution.
     ///
-    /// The empty default preserves decoding of merge entries created before transcript
-    /// evidence was bound into autonomous execution. New executions include every transcript
-    /// whose entrypoint hash belongs to this lane and fail closed on any unbound remainder.
-    #[norito(flatten, default)]
+    /// Every execution encodes this field, including the canonical empty-vector value.
+    /// Executions fail closed on any transcript not bound to a lane entrypoint.
+    #[norito(flatten)]
     pub fastpq_transcripts: MergeLaneFastpqTranscripts,
 }
 /// Merge-committee-certified total-order execution batch.
@@ -1128,7 +1069,7 @@ mod tests {
         }
     }
     #[test]
-    fn trailing_fastpq_evidence_preserves_legacy_lane_sequence_bytes() {
+    fn merge_lane_fastpq_evidence_is_mandatory_on_wire() {
         #[derive(Encode)]
         struct LegacyLane {
             marker: u64,
@@ -1138,69 +1079,31 @@ mod tests {
         struct CurrentLane {
             marker: u64,
             payload: Vec<u8>,
-            #[norito(flatten, default)]
+            #[norito(flatten)]
             fastpq: MergeLaneFastpqTranscripts,
         }
-        #[derive(Encode)]
-        struct LegacyBatch {
-            lanes: Vec<LegacyLane>,
-            following_field: u64,
-        }
-        #[derive(Debug, PartialEq, Eq, Encode, Decode)]
-        struct CurrentBatch {
-            lanes: Vec<CurrentLane>,
-            following_field: u64,
-        }
-
-        let legacy_bytes = LegacyBatch {
-            lanes: vec![
-                LegacyLane {
-                    marker: 7,
-                    payload: vec![1, 2, 3],
-                },
-                LegacyLane {
-                    marker: 8,
-                    payload: vec![4, 5],
-                },
-            ],
-            following_field: 0xA5A5,
+        let legacy_bytes = LegacyLane {
+            marker: 7,
+            payload: vec![1, 2, 3],
         }
         .encode();
         let mut legacy_slice = legacy_bytes.as_slice();
-        let decoded = CurrentBatch::decode(&mut legacy_slice)
-            .expect("legacy lane sequence decodes with empty FASTPQ defaults");
-        assert!(legacy_slice.is_empty());
-        assert_eq!(decoded.following_field, 0xA5A5);
-        assert_eq!(decoded.lanes.len(), 2);
-        assert!(decoded.lanes.iter().all(|lane| lane.fastpq.is_empty()));
-        assert_eq!(decoded.encode(), legacy_bytes);
+        assert!(
+            CurrentLane::decode(&mut legacy_slice).is_err(),
+            "a lane without the mandatory FASTPQ field must be rejected"
+        );
 
-        let mixed = CurrentBatch {
-            lanes: vec![
-                CurrentLane {
-                    marker: 9,
-                    payload: vec![6],
-                    fastpq: Vec::new().into(),
-                },
-                CurrentLane {
-                    marker: 10,
-                    payload: vec![7, 8],
-                    fastpq: vec![TransferTranscriptBundle {
-                        entry_hash: sample_hash(b"mixed-fastpq-entry"),
-                        transcripts: Vec::new(),
-                    }]
-                    .into(),
-                },
-            ],
-            following_field: 0x5A5A,
+        let current = CurrentLane {
+            marker: 9,
+            payload: vec![6],
+            fastpq: Vec::new().into(),
         };
-        let mixed_bytes = mixed.encode();
-        assert_ne!(mixed_bytes, legacy_bytes);
-        let mut mixed_slice = mixed_bytes.as_slice();
-        let mixed_decoded = CurrentBatch::decode(&mut mixed_slice)
-            .expect("mixed empty and non-empty trailing evidence decodes");
-        assert!(mixed_slice.is_empty());
-        assert_eq!(mixed_decoded, mixed);
+        let current_bytes = current.encode();
+        assert!(current_bytes.len() > legacy_bytes.len());
+        let mut current_slice = current_bytes.as_slice();
+        let decoded = CurrentLane::decode(&mut current_slice).expect("canonical lane decodes");
+        assert!(current_slice.is_empty());
+        assert_eq!(decoded, current);
     }
     #[test]
     fn merge_protocol_size_limits_are_inclusive_and_reserve_entry_headroom() {

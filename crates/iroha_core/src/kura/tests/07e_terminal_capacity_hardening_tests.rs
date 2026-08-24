@@ -145,8 +145,8 @@ macro_rules! reopen_single_lifecycle_bootstrap {
         $local_peer:ident, $lane:ident, $payload:ident, $expected_stage:ident;
         $kura:ident, $generation:ident, $authority:ident
     ) => {
-        let ($kura, _) =
-            Kura::new(&$config, &$lane_config).expect(concat!($context, ": reopen Kura"));
+        let ($kura, _) = Kura::open_test_kura_with_configured_lane_config(&$config, &$lane_config)
+            .expect(concat!($context, ": reopen Kura"));
         $kura
             .bind_local_peer_id($local_peer.clone())
             .expect(concat!($context, ": bind local peer"));
@@ -327,7 +327,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     ));
     assert!(!bootstrap_path.exists());
     drop(kura);
-    assert!(Kura::new(&config, &lane_config).is_err());
+    assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
     assert!(bootstrap_atomic_temp.exists());
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("startup quarantines the real pre-rename bootstrap temporary");
@@ -427,7 +427,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let hardlink_alias = temp_dir.path().join("lifecycle-bootstrap-hardlink-alias");
     fs::hard_link(&bootstrap_path, &hardlink_alias).expect("create bootstrap hardlink alias");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a multiply linked lifecycle bootstrap",
     );
     fs::remove_file(&hardlink_alias).expect("remove bootstrap hardlink alias");
@@ -498,7 +498,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             panic!("{rejection_diagnostic}: write rejected bootstrap fixture: {error}")
         });
         assert!(
-            Kura::new(&config, &lane_config).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
             "{rejection_diagnostic}",
         );
         fs::write(&bootstrap_path, &bootstrap_bytes).unwrap_or_else(|error| {
@@ -546,7 +546,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     )
     .expect("write generation-replayed bootstrap");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "a bootstrap signature from generation one must not authorize a generation-two body",
     );
     fs::write(&process_generation_path, generation_one_bytes)
@@ -560,7 +560,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .set_len(AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES as u64 + 1)
         .expect("extend oversized bootstrap fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject an oversized bootstrap before decoding",
     );
     fs::write(&bootstrap_path, &bootstrap_bytes).expect("restore bounded bootstrap");
@@ -579,7 +579,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     ));
     fs::write(&legacy_bootstrap, &bootstrap_bytes).expect("write legacy bootstrap path");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject legacy bootstrap paths without decoding them",
     );
     fs::remove_file(&legacy_bootstrap).expect("remove legacy bootstrap path");
@@ -591,7 +591,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         fs::remove_file(&bootstrap_path).expect("remove stable bootstrap for symlink fixture");
         symlink(&symlink_target, &bootstrap_path).expect("install bootstrap symlink");
         assert!(
-            Kura::new(&config, &lane_config).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
             "startup must reject a symlinked lifecycle bootstrap",
         );
         fs::remove_file(&bootstrap_path).expect("remove bootstrap symlink");
@@ -929,8 +929,9 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             );
         }
         drop(terminal_kura);
-        let (restarted_terminal_kura, _) = Kura::new(&terminal_config, &lane_config)
-            .expect("receipt-terminal Live lifecycle unit is restart-valid");
+        let (restarted_terminal_kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&terminal_config, &lane_config)
+                .expect("receipt-terminal Live lifecycle unit is restart-valid");
         restarted_terminal_kura
             .bind_local_peer_id(local_peer.clone())
             .expect("rebind restarted terminal-bootstrap local peer");
@@ -1039,7 +1040,8 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
         .collect::<Vec<_>>();
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("canonical terminal capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("canonical terminal capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal capacity peer");
     let generation = kura
@@ -1411,7 +1413,8 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let payload = canonical_terminal_payload_for_test(&lane, height_context_id, &signer, 0x51);
     let network_id = payload.network_id;
     let epoch = payload.epoch;
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("release capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("release capacity Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind release capacity peer");
     let generation = kura
@@ -1544,7 +1547,8 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane_entry = lane_config.primary();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0xD2; 32], [0xD3; 32]);
 
     let proposal = merge_entry_with_indexed_entrypoint(entrypoint.clone())

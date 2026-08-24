@@ -592,9 +592,7 @@ impl PreparedLiveValidateApplyRegistryWork {
         digest: LifecycleDigest,
     ) -> Result<ConcreteLifecycleWork, (Self, ConcreteLifecycleWork)> {
         let parent_address = match &parent.kind {
-            ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
-                completion.address
-            }
+            ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => completion.address,
             _ => return Err((self, parent)),
         };
         if !self.validates_publication(address.owner, address.ordinal, address.slot, digest)

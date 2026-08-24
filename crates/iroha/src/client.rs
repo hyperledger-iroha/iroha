@@ -30,7 +30,8 @@ use crate::{
         },
         prelude::*,
         transaction::{
-            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
+            TransactionBuilder, TransactionEntrypoint, TransactionSubmissionReceipt,
+            error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
@@ -54,7 +55,7 @@ pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::{Algorithm, Hash, Signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     alias::AliasIndex,
@@ -80,6 +81,10 @@ use iroha_data_model::{
     },
     privacy::PrivacyExact12CapabilityManifestV1,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
+    sorafs::orderbook_submission::{
+        SorafsOrderbookSubmissionIdentityV1,
+        decode_and_verify_sorafs_orderbook_submission_receipt_v1,
+    },
     sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_logger::prelude::*;
@@ -152,7 +157,11 @@ use url::Url;
 const APPLICATION_JSON: &str = "application/json";
 const PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const NODE_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
+const SORACLOUD_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const TRANSACTION_ENTRYPOINT_HASH_HEADER: &str = "x-iroha-entrypoint-hash";
+const SIGNED_TRANSACTION_HASH_HEADER: &str = "x-iroha-signed-transaction-hash";
 const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -6557,7 +6566,7 @@ pub enum TransactionSchemaCompatibilityError {
 }
 /// Cached compatibility state for the Torii node.
 #[derive(Debug, Clone)]
-pub enum DataModelCompatibility {
+pub(crate) enum DataModelCompatibility {
     /// Compatibility check has not been performed yet.
     Unchecked,
     /// Node data model version matches the client.
@@ -6625,6 +6634,107 @@ impl SumeragiEvidenceListFilter<'_> {
         out
     }
 }
+fn secure_transaction_submission_uses_direct_loopback(url: &Url) -> Result<bool> {
+    if url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(eyre!(
+            "verified transaction submission requires an exact origin without userinfo, query, or fragment"
+        ));
+    }
+    let loopback = match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    match url.scheme() {
+        "https" => Ok(false),
+        "http" if loopback => Ok(true),
+        "http" => Err(eyre!(
+            "verified transaction submission permits cleartext HTTP only for exact localhost, 127/8, or ::1 loopback hosts"
+        )),
+        _ => Err(eyre!(
+            "verified transaction submission requires HTTPS or exact loopback HTTP"
+        )),
+    }
+}
+
+fn exact_single_response_header<'a>(
+    response: &'a Response<Vec<u8>>,
+    name: &'static str,
+) -> Result<&'a str> {
+    let mut values = response.headers().get_all(name).iter();
+    let value = values
+        .next()
+        .ok_or_else(|| eyre!("response omitted `{name}`"))?;
+    if values.next().is_some() {
+        return Err(eyre!("response duplicated `{name}`"));
+    }
+    value
+        .to_str()
+        .wrap_err_with(|| format!("response `{name}` is not canonical ASCII"))
+}
+
+/// Strict response verifier for high-assurance transaction submission.
+#[derive(Clone, Copy)]
+struct VerifiedTransactionResponseHandler;
+impl VerifiedTransactionResponseHandler {
+    fn handle(
+        response: &Response<Vec<u8>>,
+        expected_identity: &SorafsOrderbookSubmissionIdentityV1,
+        expected_receipt_signer: &PublicKey,
+    ) -> Result<TransactionSubmissionReceipt> {
+        if response.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "verified transaction response exceeds the {} byte limit",
+                TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
+            ));
+        }
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(ResponseReport::with_msg(
+                "Unexpected verified transaction response",
+                response,
+            )
+            .unwrap_or_else(core::convert::identity)
+            .into());
+        }
+        if response.headers().contains_key("x-iroha-reject-code") {
+            return Err(eyre!(
+                "accepted verified transaction response carried a rejection code"
+            ));
+        }
+        let content_type = exact_single_response_header(response, "content-type")?;
+        if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+            return Err(eyre!(
+                "verified transaction response must contain canonical Norito"
+            ));
+        }
+        let entrypoint_hash =
+            exact_single_response_header(response, TRANSACTION_ENTRYPOINT_HASH_HEADER)?;
+        if entrypoint_hash != expected_identity.entrypoint_hash.to_string() {
+            return Err(eyre!(
+                "verified transaction response entrypoint identity differs from the submitted wire"
+            ));
+        }
+        let signed_transaction_hash =
+            exact_single_response_header(response, SIGNED_TRANSACTION_HASH_HEADER)?;
+        if signed_transaction_hash != expected_identity.signed_transaction_hash.to_string() {
+            return Err(eyre!(
+                "verified transaction response signed-transaction identity differs from the submitted wire"
+            ));
+        }
+        decode_and_verify_sorafs_orderbook_submission_receipt_v1(
+            response.body(),
+            expected_identity,
+            expected_receipt_signer,
+        )
+        .wrap_err("verified transaction receipt failed canonical authentication")
+    }
+}
 /// Phantom struct that handles Transaction API HTTP response
 #[derive(Clone, Copy)]
 struct TransactionResponseHandler;
@@ -6647,19 +6757,38 @@ impl TransactionResponseHandler {
         }
     }
 }
-/// Decode a `/status` response body, preferring Norito and falling back to JSON.
-fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
+/// Decode one negotiated `/status` response under the requested wire-format policy.
+fn decode_status_response(
+    resp: &Response<Vec<u8>>,
+    preference: WireFormatPreference,
+) -> Result<Status> {
     if resp.status() != StatusCode::OK {
         return Err(ResponseReport::with_msg("Unexpected status response", resp)
             .unwrap_or_else(core::convert::identity)
             .into());
     }
     let body = resp.body();
-    let is_json = resp
+    let content_type = resp
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("application/json"));
+        .map(|value| value.split(';').next().unwrap_or(value).trim());
+    let is_json = content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_JSON));
+    let is_norito =
+        content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_NORITO));
+    match preference {
+        WireFormatPreference::NoritoOnly if !is_norito => {
+            return Err(eyre!(
+                "status response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
+            ));
+        }
+        WireFormatPreference::JsonOnly if !is_json => {
+            return Err(eyre!(
+                "status response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
+            ));
+        }
+        _ => {}
+    }
     if is_json {
         norito::json::from_slice(body).map_err(Into::into)
     } else {
@@ -7062,11 +7191,6 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
-        if status.mandatory {
-            return Err(eyre!(
-                "offline capability must not be reported as a backend-mandatory service"
-            ));
-        }
         if status.cash_handoff_capability
             != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
         {
@@ -7090,16 +7214,6 @@ impl Client {
         if !status.ready {
             return Err(eyre!(
                 "offline capability response must report the universally compiled capability as ready"
-            ));
-        }
-        if !status.assets.is_empty() {
-            return Err(eyre!(
-                "offline capability response must not contain asset-specific readiness entries"
-            ));
-        }
-        if !status.blockers.is_empty() {
-            return Err(eyre!(
-                "offline capability response must not contain backend readiness blockers"
             ));
         }
         Ok(())
@@ -7126,22 +7240,6 @@ impl Client {
         )?;
         Self::validate_offline_capability(&status)?;
         Ok(status)
-    }
-    /// Compatibility alias for clients that previously selected one asset.
-    ///
-    /// Offline capability is universal. The selector is intentionally ignored
-    /// and no query parameter is sent.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same transport, response, representation, and capability
-    /// validation errors as [`Self::get_offline_capability`].
-    #[deprecated(note = "use get_offline_capability(); offline capability is asset-neutral")]
-    pub fn get_offline_readiness(
-        &self,
-        _asset_definition_id: &AssetDefinitionId,
-    ) -> Result<OfflineStatus> {
-        self.get_offline_capability()
     }
     /// Submit a signed online-to-offline top-up operation.
     ///
@@ -7686,15 +7784,12 @@ mod offline_client_tests {
     }
     fn universal_offline_capability() -> OfflineStatus {
         OfflineStatus {
-            mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             ready: true,
-            assets: Vec::new(),
-            blockers: Vec::new(),
         }
     }
     #[test]
@@ -7710,13 +7805,10 @@ mod offline_client_tests {
             client_with_base_url(base_url()).get_offline_capability()
         })
         .expect("offline capability response");
-        assert!(!result.mandatory);
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
         assert_eq!(result.required_bridge_abi_version, 22);
         assert_eq!(result.max_hops, 8);
         assert!(result.ready);
-        assert!(result.assets.is_empty());
-        assert!(result.blockers.is_empty());
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -7728,9 +7820,6 @@ mod offline_client_tests {
     #[test]
     fn offline_capability_rejects_non_universal_claims() {
         let mut cases = Vec::new();
-        let mut mandatory = universal_offline_capability();
-        mandatory.mandatory = true;
-        cases.push(mandatory);
         let mut wrong_capability = universal_offline_capability();
         wrong_capability.cash_handoff_capability = "cash_handoff_v2".to_owned();
         cases.push(wrong_capability);
@@ -7743,14 +7832,6 @@ mod offline_client_tests {
         let mut not_ready = universal_offline_capability();
         not_ready.ready = false;
         cases.push(not_ready);
-        let mut blocked = universal_offline_capability();
-        blocked
-            .blockers
-            .push(iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "backend_gate".to_owned(),
-                message: "Backend readiness must not gate the capability.".to_owned(),
-            });
-        cases.push(blocked);
         for capability in cases {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
@@ -7950,7 +8031,6 @@ mod status_tests {
             last_non_empty_block_committed_at_ms: 0,
             time_since_last_block_ms: 0,
             time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
             crypto: CryptoStatus {
@@ -7976,7 +8056,8 @@ mod status_tests {
         let s = status_fixture();
         let body = norito::to_bytes(&s).expect("encode status");
         let resp = mk_response(StatusCode::OK, body, Some("application/x-norito"));
-        let got = decode_status_response(&resp).expect("decode");
+        let got =
+            decode_status_response(&resp, WireFormatPreference::NoritoPreferred).expect("decode");
         assert_eq!(got.peers, s.peers);
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.blocks_non_empty, s.blocks_non_empty);
@@ -8005,7 +8086,8 @@ mod status_tests {
         s.crypto.sm_openssl_preview_enabled = false;
         let body = norito::json::to_vec(&s).unwrap();
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp).expect("json decode");
+        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+            .expect("json decode");
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.queue_size, s.queue_size);
     }
@@ -8031,7 +8113,8 @@ mod status_tests {
         map.remove("build");
         let body = norito::json::to_vec(&value).expect("encode modified json");
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp).expect("json decode");
+        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+            .expect("json decode");
         assert_eq!(got.build.git_commit_sha, "");
         assert_eq!(got.build.dpn_validator_release_commit, "");
         assert_eq!(got.peers, 2);
@@ -8443,6 +8526,36 @@ mod evidence_http_tests {
             snapshot.headers
         );
         assert_eq!(accept_headers[0].1, expected);
+    }
+    #[test]
+    fn client_debug_redacts_runtime_headers_and_torii_url_secrets() {
+        let mut client = client_with_base_url(
+            Url::parse(
+                "https://debug-user:debug-password@example.com/private?auth=debug-query#fragment",
+            )
+            .expect("debug URL fixture"),
+        );
+        client.headers.insert(
+            "Authorization".to_owned(),
+            "Bearer debug-header-sentinel".to_owned(),
+        );
+
+        let rendered = format!("{client:?}");
+
+        assert!(rendered.contains("https://example.com"));
+        assert!(rendered.contains("<redacted>"));
+        for secret in [
+            "debug-user",
+            "debug-password",
+            "debug-query",
+            "fragment",
+            "debug-header-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "Client Debug exposed secret sentinel `{secret}`: {rendered}"
+            );
+        }
     }
     pub(super) fn assert_signed_headers(snapshot: &RequestSnapshot) -> HashMap<String, String> {
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
@@ -10659,11 +10772,6 @@ mod evidence_http_tests {
             assert_json_accept(&snapshot, path);
         }
         let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            client_with_base_url(base_url()).get_node_capabilities_json_for_compatibility()
-        });
-        result.expect("compatibility node capabilities JSON");
-        assert_json_accept(&snapshot, "/v1/node/capabilities");
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
             let filter = SumeragiEvidenceListFilter::default();
             client_with_base_url(base_url()).get_sumeragi_evidence_list_json(&filter)
         });
@@ -11156,7 +11264,7 @@ pub struct Client {
     /// Rollout phase controlling the default anonymity policy.
     pub rollout_phase: SorafsRolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
-    pub data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
+    pub(crate) data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
     /// Default response wire-format preference for negotiated Torii endpoints.
     pub wire_format_preference: WireFormatPreference,
 }
@@ -11182,10 +11290,11 @@ impl PreparedTransactionPayload {
 }
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let torii_origin = self.torii_url.origin().ascii_serialization();
         f.debug_struct("Client")
             .field("chain", &self.chain)
             .field("network_id", &self.network_id)
-            .field("torii_url", &self.torii_url)
+            .field("torii_url", &torii_origin)
             .field("public_key", &self.key_pair.public_key())
             .field("transaction_ttl", &self.transaction_ttl)
             .field(
@@ -11194,7 +11303,7 @@ impl fmt::Debug for Client {
             )
             .field("torii_request_timeout", &self.torii_request_timeout)
             .field("account", &self.account)
-            .field("headers", &self.headers)
+            .field("headers", &"<redacted>")
             .field(
                 "operator_public_key",
                 &self
@@ -12001,9 +12110,7 @@ impl Client {
             | DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
             DataModelCompatibility::Incompatible(err) => return Err(err.into()),
         }
-        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
-            return Ok(());
-        };
+        let capabilities = self.get_node_capabilities_json()?;
         let outcome = match parse_optional_u64(
             capabilities.get("data_model_version"),
             "node capabilities data_model_version",
@@ -12061,19 +12168,31 @@ impl Client {
         }
     }
     fn ensure_transaction_submit_compatibility(&self) -> Result<()> {
+        self.ensure_transaction_submit_compatibility_with_transport(false, false)
+    }
+    fn ensure_transaction_submit_compatibility_with_transport(
+        &self,
+        direct_loopback: bool,
+        require_fresh_probe: bool,
+    ) -> Result<()> {
         let mut cached = self
             .data_model_compatibility
             .lock()
             .expect("data model compatibility lock");
         match cached.clone() {
             DataModelCompatibility::Unchecked | DataModelCompatibility::Compatible => {}
-            DataModelCompatibility::SubmitCompatible => return Ok(()),
-            DataModelCompatibility::Incompatible(err) => return Err(err.into()),
-            DataModelCompatibility::SchemaIncompatible(err) => return Err(err.into()),
+            DataModelCompatibility::SubmitCompatible if !require_fresh_probe => return Ok(()),
+            DataModelCompatibility::SubmitCompatible => {}
+            DataModelCompatibility::Incompatible(err) if !require_fresh_probe => {
+                return Err(err.into());
+            }
+            DataModelCompatibility::Incompatible(_) => {}
+            DataModelCompatibility::SchemaIncompatible(err) if !require_fresh_probe => {
+                return Err(err.into());
+            }
+            DataModelCompatibility::SchemaIncompatible(_) => {}
         }
-        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
-            return Ok(());
-        };
+        let capabilities = self.get_node_capabilities_json_with_transport(direct_loopback)?;
         let outcome = match parse_optional_u64(
             capabilities.get("data_model_version"),
             "node capabilities data_model_version",
@@ -12140,9 +12259,8 @@ impl Client {
     /// # Errors
     /// Fails if sending transaction to peer fails, if it response with error, or if the node
     /// submit compatibility advert is missing or incompatible. On HTTP 200, the node must
-    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. If
-    /// `/v1/node/capabilities` responds with HTTP 404, HTTP 429, or transient 5xx statuses, the
-    /// compatibility probe is treated as transient and deferred.
+    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. Any
+    /// non-successful or malformed capability response aborts before transaction bytes are sent.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -12177,6 +12295,65 @@ impl Client {
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
         TransactionResponseHandler::handle(&response)?;
         Ok(hash)
+    }
+    /// Submit one exact Kagemusha lifecycle archive through its dedicated durable route.
+    ///
+    /// The capability probe and write share the same HTTPS-or-direct-loopback transport policy.
+    /// Success requires an exact `202 Accepted` response, singleton transaction-identity headers,
+    /// and a bounded canonical receipt signed by `expected_receipt_signer` over both identities.
+    ///
+    /// # Errors
+    ///
+    /// Fails before network I/O if the prepared body differs from `transaction` or the configured
+    /// origin is unsafe. Transport ambiguity and every missing, malformed, untrusted, or
+    /// identity-mismatched acknowledgement fail closed.
+    pub fn submit_prepared_kagemusha_lifecycle_payload(
+        &self,
+        transaction: &SignedTransaction,
+        payload: &PreparedTransactionPayload,
+        expected_receipt_signer: &PublicKey,
+    ) -> Result<TransactionSubmissionReceipt> {
+        let canonical = Self::prepare_transaction_payload(transaction);
+        if canonical.hash() != payload.hash() || canonical.as_bytes() != payload.as_bytes() {
+            return Err(eyre!(
+                "prepared Kagemusha lifecycle body differs from the authorized transaction wire"
+            ));
+        }
+        let direct_loopback = secure_transaction_submission_uses_direct_loopback(&self.torii_url)?;
+        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION);
+        self.ensure_transaction_submit_compatibility_with_transport(direct_loopback, true)?;
+
+        let mut headers = self.transaction_headers_without_content_type();
+        headers.retain(|name, _| {
+            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("prefer")
+        });
+        let mut request = DefaultRequestBuilder::new(HttpMethod::POST, url)
+            .headers(headers)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", APPLICATION_NORITO)
+            .body(payload.as_bytes().to_vec())
+            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+        if self.torii_request_timeout != Duration::ZERO {
+            request = request.timeout(self.torii_request_timeout);
+        }
+        if direct_loopback {
+            request = request.direct_loopback();
+        }
+        let transaction_hash = payload.hash();
+        let uncertain_context = format!(
+            "Kagemusha lifecycle submission outcome is uncertain for transaction \
+             {transaction_hash}; do not retry automatically"
+        );
+        let response = request
+            .build()?
+            .send()
+            .wrap_err_with(|| uncertain_context.clone())?;
+        let identity = SorafsOrderbookSubmissionIdentityV1 {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            signed_transaction_hash: payload.hash(),
+        };
+        VerifiedTransactionResponseHandler::handle(&response, &identity, expected_receipt_signer)
+            .wrap_err_with(|| uncertain_context)
     }
     /// Submit a prebuilt transaction with the asynchronous HTTP transport.
     ///
@@ -13226,11 +13403,11 @@ impl Client {
     }
     /// Gets network status seen from the peer
     ///
-    /// Tries Norito first (preferred, compact and stable), then gracefully falls back
-    /// to JSON if the server responds with a JSON payload.
+    /// Sends one negotiated request and decodes only that response. Strict preferences
+    /// reject a response whose declared representation differs from the requested format.
     ///
     /// # Errors
-    /// Fails if sending request or decoding fails for both Norito and JSON formats.
+    /// Fails if sending the request, enforcing the representation policy, or decoding fails.
     /// Fetch node `/status`.
     ///
     /// # Errors
@@ -13249,31 +13426,27 @@ impl Client {
             http::header::ACCEPT,
             self.wire_format_preference.accept_header(),
         ))?;
-        match decode_status_response(&resp) {
-            Ok(status) => Ok(status),
-            Err(first_err) => {
-                let json_resp = self.send_builder(
-                    self.default_request(
-                        HttpMethod::GET,
-                        join_torii_url(&self.torii_url, torii_uri::STATUS),
-                    )
-                    .header(http::header::ACCEPT, APPLICATION_JSON)
-                    .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES),
-                )?;
-                match decode_status_response(&json_resp) {
-                    Ok(status) => Ok(status),
-                    Err(json_err) => Err(eyre!(
-                        "Norito decode failed: {first}; JSON fallback failed: {second}",
-                        first = first_err,
-                        second = json_err
-                    )),
-                }
-            }
-        }
+        decode_status_response(&resp, self.wire_format_preference)
+    }
+    /// Fetch the authoritative Soracloud status using canonical account authentication.
+    ///
+    /// The status surface is account-scoped and therefore never falls back to
+    /// an unsigned request or an operator-token alias.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, construction, transport,
+    /// or bounded response reading fails.
+    pub fn get_soracloud_status_response(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/soracloud/status");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
+        )
     }
     #[cfg(test)]
     fn decode_status_for_test(resp: &Response<Vec<u8>>) -> Result<Status> {
-        decode_status_response(resp)
+        decode_status_response(resp, WireFormatPreference::NoritoPreferred)
     }
     /// Prepares http-request to implement [`Self::get_status`] on your own.
     ///
@@ -14362,14 +14535,23 @@ impl Client {
             ));
         }
         let witness_header = canonical_request_witness_header_value(witness)?;
-        let response = self.send_builder(
-            self.request_without_canonical_account_auth(HttpMethod::POST, url)
-                .header(HEADER_WITNESS, &witness_header)
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body)
-                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
-        )?;
+        let cleartext = url.scheme() == "http";
+        if !cleartext && url.scheme() != "https" {
+            return Err(eyre!("fee-quote transport requires HTTPS or local HTTP"));
+        }
+        let request = self
+            .request_without_canonical_account_auth(HttpMethod::POST, url)
+            .header(HEADER_WITNESS, &witness_header)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES);
+        let request = if cleartext {
+            request.direct_loopback()
+        } else {
+            request
+        };
+        let response = self.send_builder(request)?;
         if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
             return Err(eyre!(
                 "fee quote response exceeds the {} byte limit",
@@ -14392,23 +14574,6 @@ impl Client {
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
     pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
-        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
-    }
-    /// Compatibility helper: POST `/v1/aliases/resolve` with an account-alias literal.
-    ///
-    /// New code should prefer [`Self::resolve_account_alias_unsigned`] or
-    /// [`Self::resolve_account_alias_authenticated`] for strict typed response
-    /// substitution checks.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, JSON serialization, or the HTTP call fails.
-    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -17627,61 +17792,37 @@ impl Client {
     /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
-        let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(
-            self.account_signed_get_request(url)?
-                .header(http::header::ACCEPT, APPLICATION_JSON),
-        )?;
-        if resp.status() == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("unknown");
-            warn!(
-                "node capabilities probe was rate-limited (retry-after: {retry_after}); deferring compatibility check"
-            );
-            return Ok(None);
-        }
-        if resp.status().is_server_error() {
-            warn!(
-                "node capabilities probe returned transient server error status={}; deferring compatibility check",
-                resp.status()
-            );
-            return Ok(None);
-        }
-        if resp.status() == StatusCode::NOT_FOUND {
-            warn!("node capabilities probe returned 404; deferring compatibility check");
-            return Ok(None);
-        }
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get node capabilities",
-            " ",
-        )?;
-        Ok(Some(
-            norito::json::from_slice(resp.body())
-                .wrap_err("failed to decode node capabilities JSON")?,
-        ))
-    }
-    /// GET `/v1/node/capabilities`
-    /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
+        self.get_node_capabilities_json_with_transport(false)
+    }
+    fn get_node_capabilities_json_with_transport(
+        &self,
+        direct_loopback: bool,
+    ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(
-            self.account_signed_get_request(url)?
-                .header(http::header::ACCEPT, APPLICATION_JSON),
-        )?;
+        let request = self
+            .account_signed_get_request(url)?
+            .header(http::header::ACCEPT, APPLICATION_JSON)
+            .max_response_bytes(NODE_CAPABILITIES_RESPONSE_MAX_BYTES);
+        let request = if direct_loopback {
+            request.direct_loopback()
+        } else {
+            request
+        };
+        let resp = self.send_builder(request)?;
         Self::ensure_response_status(
             &resp,
             StatusCode::OK,
             "Failed to get node capabilities",
             " ",
         )?;
+        if !exact_single_response_header(&resp, "content-type")?
+            .eq_ignore_ascii_case(APPLICATION_JSON)
+        {
+            return Err(eyre!(
+                "node capabilities response must contain canonical JSON"
+            ));
+        }
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
     /// GET `/v1/privacy/capabilities`.
@@ -22551,6 +22692,27 @@ mod tests {
         assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
+    fn soracloud_status_read_is_bounded_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema_version":1}"#);
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_soracloud_status_response()
+                .expect("signed Soracloud status read");
+        });
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/soracloud/status");
+        assert!(snapshot.body.is_empty());
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SORACLOUD_STATUS_RESPONSE_MAX_BYTES
+        );
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+    #[test]
     fn account_permissions_page_is_exact_and_canonically_signed() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -24871,7 +25033,32 @@ mod tests {
         let store_guard = store.lock().expect("snapshot lock");
         assert_eq!(store_guard.len(), 1);
         assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            store_guard[0].max_response_bytes,
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
         assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
+    }
+    #[test]
+    fn get_node_capabilities_json_rejects_ambiguous_representation() {
+        let body = compatible_capabilities_body().into_bytes();
+        let missing = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(body.clone())
+            .unwrap();
+        let duplicated = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .header("content-type", APPLICATION_JSON)
+            .body(body)
+            .unwrap();
+        for response in [missing, duplicated] {
+            let (result, snapshots) = capture_requests(response, || {
+                client_with_base_url(base_url()).get_node_capabilities_json()
+            });
+            assert!(result.is_err());
+            assert_eq!(snapshots.len(), 1);
+        }
     }
     #[test]
     fn prepared_transaction_payload_preserves_hash_and_versioned_bytes() {
@@ -24947,12 +25134,371 @@ mod tests {
             TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
         );
     }
+    fn verified_submission_response(
+        transaction: &SignedTransaction,
+        signer: &KeyPair,
+    ) -> HttpResponse<Vec<u8>> {
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let signed_transaction_hash = transaction.hash();
+        let receipt = TransactionSubmissionReceipt::sign(
+            iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
+                entrypoint_hash: entrypoint_hash.clone(),
+                signed_transaction_hash: Some(signed_transaction_hash.clone()),
+                submitted_at_ms: 1,
+                submitted_at_height: 1,
+                signer: signer.public_key().clone(),
+            },
+            signer,
+        );
+        HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                signed_transaction_hash.to_string(),
+            )
+            .body(norito::encode_canonical(&receipt).expect("canonical receipt"))
+            .expect("receipt response")
+    }
+    #[test]
+    fn verified_lifecycle_submit_pins_direct_transport_body_and_receipt() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        *client
+            .data_model_compatibility
+            .lock()
+            .expect("compatibility cache lock") = DataModelCompatibility::SubmitCompatible;
+        let responder = {
+            let store = Arc::clone(&store);
+            let transaction = transaction.clone();
+            let receipt_signer = receipt_signer.clone();
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(if capabilities {
+                    json_response(StatusCode::OK, &compatible_capabilities_body())
+                } else {
+                    verified_submission_response(&transaction, &receipt_signer)
+                })
+            }
+        };
+        let receipt = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect("exact verified lifecycle submission");
+        assert_eq!(
+            receipt.payload.entrypoint_hash,
+            transaction.hash_as_entrypoint()
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.iter().all(|snapshot| snapshot.direct_loopback));
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
+        assert_eq!(snapshots[1].body, prepared.as_bytes());
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+        assert_single_accept_header(&snapshots[1], APPLICATION_NORITO);
+    }
+    #[test]
+    fn verified_lifecycle_submit_marks_transport_failure_outcome_uncertain() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                if capabilities {
+                    Ok(json_response(
+                        StatusCode::OK,
+                        &compatible_capabilities_body(),
+                    ))
+                } else {
+                    Err(eyre!("synthetic lifecycle transport failure"))
+                }
+            }
+        };
+
+        let error = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect_err("post-dispatch transport failure must be outcome-uncertain");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&format!(
+                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
+                 retry automatically",
+                transaction.hash()
+            )),
+            "unexpected lifecycle submission error: {rendered}"
+        );
+        assert!(rendered.contains("synthetic lifecycle transport failure"));
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+    }
+    #[test]
+    fn verified_lifecycle_submit_marks_acknowledgement_validation_outcome_uncertain() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(if capabilities {
+                    json_response(StatusCode::OK, &compatible_capabilities_body())
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::ACCEPTED)
+                        .header("content-type", APPLICATION_NORITO)
+                        .body(Vec::new())
+                        .expect("malformed acknowledgement fixture")
+                })
+            }
+        };
+
+        let error = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect_err("malformed post-POST acknowledgement must fail closed");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&format!(
+                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
+                 retry automatically",
+                transaction.hash()
+            )),
+            "unexpected lifecycle submission error: {rendered}"
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+    }
+    #[test]
+    fn verified_lifecycle_submit_rejects_unsafe_origins_before_io() {
+        for rejected in [
+            "http://example.com/",
+            "http://localhost.example/",
+            "ftp://localhost/",
+            "https://user@example.com/",
+            "https://example.com/?query=1",
+            "https://example.com/#fragment",
+        ] {
+            let client = client_with_base_url(Url::parse(rejected).expect("hostile URL"));
+            let transaction = empty_transaction(&client);
+            let prepared = Client::prepare_transaction_payload(&transaction);
+            let signer = checked_random_keypair();
+            let (result, snapshots) =
+                capture_requests(empty_response(StatusCode::ACCEPTED), || {
+                    client.submit_prepared_kagemusha_lifecycle_payload(
+                        &transaction,
+                        &prepared,
+                        signer.public_key(),
+                    )
+                });
+            assert!(result.is_err(), "unsafe origin must fail: {rejected}");
+            assert!(
+                snapshots.is_empty(),
+                "unsafe origin performed I/O: {rejected}"
+            );
+        }
+    }
+    #[test]
+    fn verified_transaction_response_rejects_missing_or_untrusted_evidence() {
+        let client = client_with_base_url(base_url());
+        let transaction = empty_transaction(&client);
+        let signer = checked_random_keypair();
+        let identity = SorafsOrderbookSubmissionIdentityV1 {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            signed_transaction_hash: transaction.hash(),
+        };
+        let valid = verified_submission_response(&transaction, &signer);
+        VerifiedTransactionResponseHandler::handle(&valid, &identity, signer.public_key())
+            .expect("valid receipt response");
+
+        let empty = HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                identity.entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                identity.signed_transaction_hash.to_string(),
+            )
+            .body(Vec::new())
+            .unwrap();
+        assert!(
+            VerifiedTransactionResponseHandler::handle(&empty, &identity, signer.public_key())
+                .is_err()
+        );
+
+        let mut missing_header = verified_submission_response(&transaction, &signer);
+        missing_header
+            .headers_mut()
+            .remove(TRANSACTION_ENTRYPOINT_HASH_HEADER);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &missing_header,
+                &identity,
+                signer.public_key(),
+            )
+            .is_err()
+        );
+
+        let wrong_signer = checked_random_keypair();
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &valid,
+                &identity,
+                wrong_signer.public_key(),
+            )
+            .is_err()
+        );
+        let mut noncanonical = verified_submission_response(&transaction, &signer);
+        noncanonical.body_mut().push(0);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &noncanonical,
+                &identity,
+                signer.public_key(),
+            )
+            .is_err()
+        );
+        let ok = verified_submission_response(&transaction, &signer);
+        let (mut parts, body) = ok.into_parts();
+        parts.headers.append(
+            TRANSACTION_ENTRYPOINT_HASH_HEADER,
+            identity.entrypoint_hash.to_string().parse().unwrap(),
+        );
+        let duplicate = HttpResponse::from_parts(parts, body);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(&duplicate, &identity, signer.public_key(),)
+                .is_err()
+        );
+    }
     fn empty_transaction(client: &Client) -> SignedTransaction {
         client.build_transaction(
             Vec::<InstructionBox>::new(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
+    }
+    #[test]
+    fn fresh_submit_compatibility_probe_replaces_cached_failures() {
+        let stale_states = [
+            DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
+                expected: DATA_MODEL_VERSION,
+                actual: DATA_MODEL_VERSION + 1,
+            }),
+            DataModelCompatibility::SchemaIncompatible(
+                TransactionSchemaCompatibilityError::Missing {
+                    expected: signed_transaction_schema_hash_hex(),
+                },
+            ),
+        ];
+        for stale in stale_states {
+            let client = client_with_base_url(base_url());
+            *client
+                .data_model_compatibility
+                .lock()
+                .expect("compatibility cache lock") = stale;
+            let (result, snapshots) = capture_requests(
+                json_response(StatusCode::OK, &compatible_capabilities_body()),
+                || client.ensure_transaction_submit_compatibility_with_transport(false, true),
+            );
+
+            result.expect("fresh probe should recover from stale incompatibility");
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("compatibility cache lock"),
+                DataModelCompatibility::SubmitCompatible
+            ));
+        }
+    }
+    #[test]
+    fn ordinary_submit_compatibility_preserves_cached_failures_without_io() {
+        let stale_states = [
+            DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
+                expected: DATA_MODEL_VERSION,
+                actual: DATA_MODEL_VERSION + 1,
+            }),
+            DataModelCompatibility::SchemaIncompatible(
+                TransactionSchemaCompatibilityError::Missing {
+                    expected: signed_transaction_schema_hash_hex(),
+                },
+            ),
+        ];
+        for stale in stale_states {
+            let client = client_with_base_url(base_url());
+            *client
+                .data_model_compatibility
+                .lock()
+                .expect("compatibility cache lock") = stale;
+            let (result, snapshots) = capture_requests(empty_response(StatusCode::OK), || {
+                client.ensure_transaction_submit_compatibility_with_transport(false, false)
+            });
+
+            let _ = result.expect_err("cached incompatibility should remain a no-I/O fast failure");
+            assert!(snapshots.is_empty());
+            assert!(!matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("compatibility cache lock"),
+                DataModelCompatibility::SubmitCompatible
+            ));
+        }
     }
     fn rejected_transaction_submission(capabilities_body: &str) -> eyre::Report {
         let (result, snapshots) =
@@ -24968,12 +25514,7 @@ mod tests {
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
         result.expect_err("transaction submission should fail")
     }
-    fn assert_transient_capability_probe(
-        status: StatusCode,
-        response_body: &'static [u8],
-        submit_message: &str,
-        cache_message: &str,
-    ) {
+    fn assert_rejected_capability_probe(status: StatusCode, response_body: &'static [u8]) {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -24992,9 +25533,22 @@ mod tests {
         };
         with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
-            client
+            let error = client
                 .submit_transaction(&empty_transaction(&client))
-                .expect(submit_message);
+                .expect_err("failed capability probe must reject transaction submission");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains("Failed to get node capabilities"),
+                "unexpected error: {rendered}"
+            );
+            assert!(
+                rendered.contains(&status.to_string()),
+                "error did not include status {status}: {rendered}"
+            );
+            assert!(
+                rendered.contains(std::str::from_utf8(response_body).expect("UTF-8 test body")),
+                "error did not include response body: {rendered}"
+            );
             let cached = client
                 .data_model_compatibility
                 .lock()
@@ -25002,17 +25556,16 @@ mod tests {
                 .clone();
             assert!(
                 matches!(cached, DataModelCompatibility::Unchecked),
-                "{cache_message}"
+                "failed probe must leave compatibility unchecked"
             );
         });
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(
             snapshots.len(),
-            2,
-            "expected node capabilities + transaction requests"
+            1,
+            "failed capability probe must not send transaction bytes"
         );
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_rejects_mismatched_data_model_version() {
@@ -25110,31 +25663,73 @@ mod tests {
         );
     }
     #[test]
-    fn submit_transaction_tolerates_rate_limited_capabilities_probe() {
-        assert_transient_capability_probe(
-            StatusCode::TOO_MANY_REQUESTS,
-            b"rate limited",
-            "transaction submission should proceed despite transient capability throttling",
-            "rate-limited probe must not mark compatibility state as checked",
-        );
+    fn submit_transaction_rejects_rate_limited_capabilities_probe() {
+        assert_rejected_capability_probe(StatusCode::TOO_MANY_REQUESTS, b"rate limited");
     }
     #[test]
-    fn submit_transaction_tolerates_missing_capabilities_probe() {
-        assert_transient_capability_probe(
-            StatusCode::NOT_FOUND,
-            b"not found",
-            "transaction submission should proceed when the capability advert is unavailable",
-            "404 probe must not mark compatibility state as checked",
-        );
+    fn submit_transaction_rejects_missing_capabilities_probe() {
+        assert_rejected_capability_probe(StatusCode::NOT_FOUND, b"not found");
     }
     #[test]
-    fn submit_transaction_tolerates_server_error_capabilities_probe() {
-        assert_transient_capability_probe(
+    fn submit_transaction_rejects_server_error_capabilities_probe() {
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::BAD_GATEWAY,
-            b"bad gateway",
-            "transaction submission should proceed despite transient capability server errors",
-            "server-error probe must not mark compatibility state as checked",
-        );
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert_rejected_capability_probe(status, b"server unavailable");
+        }
+    }
+    #[test]
+    fn submit_transaction_reprobes_after_failed_capabilities_probe() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let capability_attempts = Arc::new(Mutex::new(0_u8));
+        let responder = {
+            let store = Arc::clone(&store);
+            let capability_attempts = Arc::clone(&capability_attempts);
+            let compatible_capabilities = compatible_capabilities_body();
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                store.lock().expect("snapshot lock").push(snapshot);
+                if path == "/v1/node/capabilities" {
+                    let mut attempts = capability_attempts.lock().expect("attempt lock");
+                    *attempts += 1;
+                    if *attempts == 1 {
+                        Ok(json_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "temporarily unavailable",
+                        ))
+                    } else {
+                        Ok(json_response(StatusCode::OK, &compatible_capabilities))
+                    }
+                } else {
+                    Ok(empty_response(StatusCode::OK))
+                }
+            }
+        };
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let transaction = empty_transaction(&client);
+            let _ = client
+                .submit_transaction(&transaction)
+                .expect_err("first capability probe must fail closed");
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("data model compatibility lock"),
+                DataModelCompatibility::Unchecked
+            ));
+            client
+                .submit_transaction(&transaction)
+                .expect("recovered capability probe should permit submission");
+        });
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(snapshots[1].url.path(), "/v1/node/capabilities");
+        assert_eq!(snapshots[2].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout() {
@@ -25673,7 +26268,6 @@ mod tests {
             last_non_empty_block_committed_at_ms: 0,
             time_since_last_block_ms: 0,
             time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
             stack: StackStatus::default(),

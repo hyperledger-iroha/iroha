@@ -1,7 +1,7 @@
 
 [nexus.autoscale]
-min_lanes = 0
-max_lanes = 0
+min_lane_id = 0
+max_lane_id_exclusive = 0
 target_block_ms = 0
 scale_out_window_blocks = 0
 scale_in_window_blocks = 0

@@ -101,7 +101,6 @@ fn ensure_controller_allowed_for_implicit_admission(
     Ok(())
 }
 fn load_account_admission_policy(
-    _destination: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AccountAdmissionPolicy, InstructionExecutionError> {
     let from_chain = state_transaction
@@ -267,7 +266,7 @@ pub(super) fn ensure_receiving_account(
     if state_transaction.world.account(destination).is_ok() {
         return Ok(false);
     }
-    let policy = load_account_admission_policy(destination, state_transaction)?;
+    let policy = load_account_admission_policy(state_transaction)?;
     if policy.mode != AccountAdmissionMode::ImplicitReceive {
         return Err(AccountAdmissionError::ImplicitAccountCreationDisabled.into());
     }
@@ -348,19 +347,12 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        account::{ACCOUNT_ADMISSION_POLICY_METADATA_KEY, admission::ImplicitAccountCreationFee},
-        parameter::Parameters,
+        account::admission::ImplicitAccountCreationFee, parameter::Parameters,
         permission::Permissions,
     };
     use iroha_test_samples::ALICE_ID;
-    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use std::collections::BTreeMap;
-    static POLICY_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
-        ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-            .parse()
-            .expect("account admission policy metadata key must be a valid Name")
-    });
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("account admission fixture key generation should succeed")
@@ -377,12 +369,8 @@ mod tests {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("fixture seed must derive a valid keypair")
     }
-    fn open_domain(domain_id: DomainId, policy: AccountAdmissionPolicy) -> Domain {
-        let mut metadata = Metadata::default();
-        metadata.insert((*POLICY_METADATA_KEY).clone(), Json::new(policy));
-        Domain::new(domain_id)
-            .with_metadata(metadata)
-            .build(&ALICE_ID)
+    fn open_domain(domain_id: DomainId) -> Domain {
+        Domain::new(domain_id).build(&ALICE_ID)
     }
     fn build_account_in_domain(
         account_id: AccountId,
@@ -391,30 +379,11 @@ mod tests {
     ) -> iroha_data_model::account::Account {
         iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
     }
-    fn test_state(mut world: World) -> State {
-        let mut policy = None::<AccountAdmissionPolicy>;
-        for (_, domain) in world.domains.view().iter() {
-            let Some(raw) = domain.metadata().get(&*POLICY_METADATA_KEY) else {
-                continue;
-            };
-            let decoded = raw
-                .try_into_any_norito::<AccountAdmissionPolicy>()
-                .expect("domain metadata policy must decode in tests");
-            if let Some(current) = policy.as_ref() {
-                assert_eq!(
-                    current, &decoded,
-                    "all test domains must carry the same admission policy metadata"
-                );
-            } else {
-                policy = Some(decoded);
-            }
-        }
-        if let Some(policy) = policy {
-            let custom = policy.into_custom_parameter();
-            let mut params = Parameters::default();
-            params.custom.insert(custom.id.clone(), custom);
-            world.parameters = mv::cell::Cell::new(params);
-        }
+    fn test_state(mut world: World, policy: AccountAdmissionPolicy) -> State {
+        let custom = policy.into_custom_parameter();
+        let mut params = Parameters::default();
+        params.custom.insert(custom.id.clone(), custom);
+        world.parameters = mv::cell::Cell::new(params);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(world, kura, query)
@@ -460,17 +429,15 @@ mod tests {
     #[test]
     fn transfer_asset_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -490,7 +457,7 @@ mod tests {
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -540,17 +507,15 @@ mod tests {
     #[test]
     fn transfer_asset_batch_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -570,7 +535,7 @@ mod tests {
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -607,17 +572,15 @@ mod tests {
     #[test]
     fn mint_asset_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -635,7 +598,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -666,22 +629,20 @@ mod tests {
     #[test]
     fn transfer_nft_creates_destination_account_in_open_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let nft_id: NftId = "n0$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [alice_account], [], [], [nft]);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -714,17 +675,15 @@ mod tests {
     #[test]
     fn transfer_asset_rejects_missing_destination_in_explicit_domain() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ExplicitOnly,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ExplicitOnly,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -744,7 +703,7 @@ mod tests {
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -767,8 +726,7 @@ mod tests {
         );
     }
     #[test]
-    fn chain_default_policy_disables_implicit_receive_without_domain_metadata() {
-        use iroha_data_model::parameter::Parameters;
+    fn global_policy_disables_implicit_receive() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
@@ -789,8 +747,7 @@ mod tests {
         .build(&ALICE_ID);
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(100_u32));
-        let mut world =
-            World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
+        let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
         let policy = AccountAdmissionPolicy {
             mode: AccountAdmissionMode::ExplicitOnly,
             max_implicit_creations_per_tx: None,
@@ -799,11 +756,7 @@ mod tests {
             min_initial_amounts: BTreeMap::new(),
             default_role_on_create: None,
         };
-        let custom = policy.into_custom_parameter();
-        let mut params = Parameters::default();
-        params.custom.insert(custom.id.clone(), custom);
-        world.parameters = mv::cell::Cell::new(params);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -828,17 +781,15 @@ mod tests {
     #[test]
     fn implicit_creation_cap_is_enforced_per_transaction() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: Some(1),
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: Some(1),
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -856,7 +807,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -887,17 +838,15 @@ mod tests {
     #[test]
     fn implicit_creation_cap_is_enforced_per_block_across_transactions() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: Some(1),
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: Some(1),
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -915,7 +864,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let dest1 = random_account_id();
@@ -956,21 +905,19 @@ mod tests {
                 "rose".parse().unwrap(),
             );
         let fee_sink = random_account_id();
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                    asset_definition_id: asset_def_id.clone(),
-                    amount: Quantity::from(5_u32),
-                    destination: ImplicitAccountFeeDestination::Account(fee_sink.clone()),
-                }),
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: Some(ImplicitAccountCreationFee {
+                asset_definition_id: asset_def_id.clone(),
+                amount: Quantity::from(5_u32),
+                destination: ImplicitAccountFeeDestination::Account(fee_sink.clone()),
+            }),
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let fee_sink_account =
             build_account_in_domain(fee_sink.clone(), domain_id.clone(), &fee_sink);
@@ -993,7 +940,7 @@ mod tests {
             [alice_asset],
             [],
         );
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1034,21 +981,19 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                    asset_definition_id: asset_def_id.clone(),
-                    amount: Quantity::from(5_u32),
-                    destination: ImplicitAccountFeeDestination::Burn,
-                }),
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: Some(ImplicitAccountCreationFee {
+                asset_definition_id: asset_def_id.clone(),
+                amount: Quantity::from(5_u32),
+                destination: ImplicitAccountFeeDestination::Burn,
+            }),
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def = {
             let __asset_definition_id = asset_def_id.clone();
@@ -1063,7 +1008,7 @@ mod tests {
         let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(3_u32));
         let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1103,17 +1048,15 @@ mod tests {
             );
         let mut min_initial_amounts = BTreeMap::new();
         min_initial_amounts.insert(asset_def_id.clone(), Quantity::from(10_u32));
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts,
-                default_role_on_create: None,
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts,
+            default_role_on_create: None,
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def = {
             let __asset_definition_id = asset_def_id.clone();
@@ -1126,7 +1069,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         let world = World::with([domain], [alice_account], [asset_def]);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1159,17 +1102,15 @@ mod tests {
     fn default_role_is_assigned_on_implicit_creation() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let role_id: RoleId = "baseline_user".parse().expect("role id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: Some(role_id.clone()),
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: Some(role_id.clone()),
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -1193,7 +1134,7 @@ mod tests {
             permission_epochs: BTreeMap::new(),
         };
         world.roles.insert(role_id.clone(), role);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1235,20 +1176,18 @@ mod tests {
     fn default_role_missing_rejects_implicit_creation() {
         let domain_id: DomainId = DomainId::try_new("missing-role", "world").expect("domain id");
         let role_id: RoleId = "starter".parse().expect("role id");
-        let domain = open_domain(
-            domain_id.clone(),
-            AccountAdmissionPolicy {
-                mode: AccountAdmissionMode::ImplicitReceive,
-                max_implicit_creations_per_tx: None,
-                max_implicit_creations_per_block: None,
-                implicit_creation_fee: None,
-                min_initial_amounts: BTreeMap::new(),
-                default_role_on_create: Some(role_id.clone()),
-            },
-        );
+        let policy = AccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::new(),
+            default_role_on_create: Some(role_id.clone()),
+        };
+        let domain = open_domain(domain_id.clone());
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let world = World::with([domain], [alice_account], []);
-        let state = test_state(world);
+        let state = test_state(world, policy);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();

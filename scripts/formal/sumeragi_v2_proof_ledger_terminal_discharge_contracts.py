@@ -1155,13 +1155,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "e8b29ea914e6cacf0fa728eb35d6ed5bee903cacdf01e847e60873de6c8c2488"
+        "c3b414a8241b2b72afaee95f1436a67a9143299caed9015380e6ef5c38b69725"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"
+        "fe5c54e2fd78e2aeec7990b55107f774c4e9ba5b03716c9ea32668dc1a56ec18"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "b7f8c2c1b36458d844247e4d84f8179d38b0c77bde4d200ad74b9bcb87ea504c"
+        "3b217f914c6af3452be842036751330234a219554e25dcb508407ef4f97f407c"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
@@ -1827,6 +1827,13 @@ if decision_round.context_id != self.context.id()
         "durable Decision is outside the frozen height context".to_owned(),
     ));
 }
+let projected_recovered_decision_seal = self
+    .durable_validate_retry_seals
+    .get(&decision_body)
+    .map(|seal| seal.project_recovered_commitment_ceiling(decision_commitment))
+    .transpose()
+    .map_err(EffectExecutorError::Contract)?
+    .flatten();
 match self.protected_decision {
 """,
                 "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",

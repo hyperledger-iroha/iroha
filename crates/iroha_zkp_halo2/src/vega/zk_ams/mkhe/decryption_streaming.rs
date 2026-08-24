@@ -23,8 +23,7 @@ use super::super::{
     cpk_relation::{
         ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkRelationErrorV1,
         ZkAmsMkhePreparedCollectivePublicAContextV1,
-        active_collective_public_a_limb_frame_bytes_v1, derive_active_collective_public_a_limb_v1,
-        prepare_active_collective_public_a_v1,
+        active_collective_public_a_limb_frame_bytes_v1, prepare_active_collective_public_a_v1,
     },
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1, ZkAmsMkheDirectObjectCasPublicationV1,
@@ -1539,15 +1538,6 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
         }
         Ok(())
     }
-    fn derive_common_a_limb(
-        &self,
-        profile: &BgvProfile,
-        limb: usize,
-    ) -> Result<Vec<u64>, ZkAmsMkheErrorV1> {
-        let (roster, cpk_transcript_digest) = self.persistent_context.streaming_public_axes_v1();
-        derive_active_collective_public_a_limb_v1(profile, roster, cpk_transcript_digest, limb)
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)
-    }
     fn prepare_common_a_context(
         &self,
         profile: &BgvProfile,
@@ -2524,8 +2514,8 @@ where
         party_index,
         publisher,
         &mut transcript,
-        Some(common_a_context),
-        Some(remaining_common_a_candidates),
+        common_a_context,
+        remaining_common_a_candidates,
     )?;
     snapshot.observe(&party_b_relation_receipt)?;
     let share_relation_receipt = reconstruct_share_commitment_and_aggregate_v1(
@@ -3490,15 +3480,12 @@ fn reconstruct_public_key_commitment_v1<P>(
     party_index: usize,
     provider: &mut P,
     transcript: &mut Keccak256,
-    prepared_common_a: Option<&ZkAmsMkhePreparedCollectivePublicAContextV1>,
-    mut remaining_common_a_candidates: Option<&mut u64>,
+    prepared_common_a: &ZkAmsMkhePreparedCollectivePublicAContextV1,
+    remaining_common_a_candidates: &mut u64,
 ) -> Result<ZkAmsMkheDirectObjectReadReceiptV1, ZkAmsMkheErrorV1>
 where
     P: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
 {
-    if prepared_common_a.is_some() != remaining_common_a_candidates.is_some() {
-        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
-    }
     update_streamed_rns_header(transcript, profile)?;
     let mut party_b = StreamingRnsObjectReaderV1::begin(
         ZkAmsMkheDirectObjectKindV1::CpkPartyB,
@@ -3508,16 +3495,11 @@ where
     )?;
     for limb in 0..profile.moduli.len() {
         let modulus = profile.moduli[limb];
-        let common_a = match (
+        let common_a = derive_prepared_common_a_limb_v1(
             prepared_common_a,
-            remaining_common_a_candidates.as_deref_mut(),
-        ) {
-            (Some(context), Some(remaining)) => {
-                derive_prepared_common_a_limb_v1(context, limb, remaining)?
-            }
-            (None, None) => statement.derive_common_a_limb(profile, limb)?,
-            _ => return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
-        };
+            limb,
+            remaining_common_a_candidates,
+        )?;
         let secret_response = proof.secret_limb(modulus)?;
         let mut commitment = negacyclic_multiply_staged_v1(
             &common_a,
@@ -3625,9 +3607,9 @@ where
 /// Verify one native share relation without materializing native `a`/`b_i`
 /// polynomials or full RNS response vectors.
 ///
-/// The legacy reference wrapper still receives already-decoded shares, but
-/// its public key inputs remain canonical wire objects.  Reconstructing each
-/// commitment limb-by-limb keeps the wrapper on the same bounded arithmetic
+/// This test reference receives already-decoded shares, while its public key
+/// inputs remain canonical wire objects. Reconstructing each commitment
+/// limb-by-limb keeps the reference on the same bounded arithmetic
 /// corridor as the seekable verifier: ciphertext `(c_0,c_1)` and aggregate
 /// are the only complete native payloads retained by the caller.
 #[cfg(test)]
@@ -3953,6 +3935,18 @@ where
     set_hash.update(DECRYPTION_SET_DOMAIN_V1);
     set_hash.update(&statement.roster.roster_digest());
     set_hash.update(&statement.ciphertext_digest());
+    let common_a_context = statement
+        .prepare_common_a_context(&profile)
+        .map_err(|_| binding_abort(0))?;
+    let common_a_limb_derivations = profile
+        .moduli
+        .len()
+        .checked_mul(manifests.len())
+        .and_then(|count| count.checked_mul(2))
+        .ok_or_else(|| binding_abort(0))?;
+    let mut remaining_common_a_candidates = common_a_context
+        .candidate_budget_for_limbs_v1(common_a_limb_derivations)
+        .map_err(|_| binding_abort(0))?;
     for (party_index, manifest) in manifests.iter().enumerate() {
         let proof_pointer = direct_pointer_from_manifest(manifest.proof())
             .map_err(|_| binding_abort(party_index))?;
@@ -4002,9 +3996,12 @@ where
         update_streamed_rns_header(&mut transcript, &profile)
             .map_err(|_| binding_abort(party_index))?;
         for limb in 0..profile.moduli.len() {
-            let common_a = statement
-                .derive_common_a_limb(&profile, limb)
-                .map_err(|_| binding_abort(party_index))?;
+            let common_a = derive_prepared_common_a_limb_v1(
+                &common_a_context,
+                limb,
+                &mut remaining_common_a_candidates,
+            )
+            .map_err(|_| binding_abort(party_index))?;
             update_residue_limb(&mut transcript, &common_a);
         }
         let party_b_receipt = hash_streamed_polynomial_v1(
@@ -4052,8 +4049,8 @@ where
             party_index,
             provider,
             &mut transcript,
-            None,
-            None,
+            &common_a_context,
+            &mut remaining_common_a_candidates,
         )
         .map_err(|_| {
             identifiable_abort(

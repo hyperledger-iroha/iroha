@@ -292,8 +292,6 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineOperationReference.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineOperationState.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineOperationStatus.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadinessBlocker.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineRedeemRequest.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineTopUpRequest.java"
@@ -538,7 +536,6 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelope.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeAdapter.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/offline/OfflineSigningEnvelopeCodec.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
@@ -879,8 +876,7 @@ jobs:
       - run: cargo test -p iroha_data_model --lib --features transparent_api kagemusha_post_canary_validator_liveness -- --nocapture
       - run: cargo test -p iroha_data_model receiver_snapshot --lib
       - run: cargo test -p iroha_core kagemusha_v4 --lib
-      - run: cargo test -p iroha_core direct_ordinary_multisig_cancel_executes_exact_staged_transition --lib -- --nocapture
-      - run: cargo test -p iroha_core direct_ordinary_multisig_deactivate_executes_exact_enabled_transition --lib -- --nocapture
+      - run: cargo test -p iroha_core --lib kagemusha_ -- --nocapture
       - run: cargo test -p iroha_core production_proposal_validation_enforces_kagemusha_runtime_projection --lib -- --nocapture
       - run: cargo test -p iroha_core production_commit_apply_enforces_kagemusha_runtime_projection --lib -- --nocapture
       - run: cargo test -p iroha_core production_vote_worker_rejects_missing_and_mismatched_kagemusha_projection --lib -- --nocapture
@@ -907,13 +903,15 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_kagami --bin kagami atomic_activation_
-      - run: cargo test -p iroha_kagami --bin kagami lifecycle_ -- --nocapture
+      - run: cargo test -p iroha_kagami --bin kagami kagemusha::tests:: -- --nocapture
       - run: cargo test -p iroha_kagami --bin kagami backing_
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
       - run: cargo test -p iroha_torii --lib bridge_finality_attestation_route_tests -- --nocapture
+      - run: cargo test -p iroha_torii kagemusha_lifecycle -- --nocapture
+      - run: cargo test -p iroha_torii_shared --lib kagemusha_lifecycle -- --nocapture
       - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
       - run: cargo test -p iroha_torii offline_commands --lib -- --nocapture
@@ -922,6 +920,8 @@ jobs:
       - run: cargo test -p connect_norito_bridge recursive_spend_v4
       - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
       - run: cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture
+      - run: cargo test -p iroha_cli --bin iroha kagemusha_lifecycle -- --nocapture
+      - run: cargo test -p iroha --lib http_default::tests:: -- --nocapture
 
   swift:
     name: Swift lifecycle surface

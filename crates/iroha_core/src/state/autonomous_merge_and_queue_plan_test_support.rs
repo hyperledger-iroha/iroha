@@ -647,12 +647,12 @@ fn autonomous_merge_commit_authorization_fixture_inner(
                 expiry_height: 1,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: false,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         let mut world = state.world.block();

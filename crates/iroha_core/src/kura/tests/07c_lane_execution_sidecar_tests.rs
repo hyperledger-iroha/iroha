@@ -122,7 +122,8 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         "lane execution input index file missing"
     );
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen kura");
     assert_eq!(
         reloaded.read_lane_block_execution_input(lane_id, lane_block_height),
         Some(input)

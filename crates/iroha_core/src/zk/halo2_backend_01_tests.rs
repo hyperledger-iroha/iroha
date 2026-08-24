@@ -36,16 +36,41 @@ fn vote_bool_commit_merkle8_mock_prover_succeeds() {
     prover.assert_satisfied();
 }
 
-#[cfg(all(
-    feature = "zk-halo2",
-    not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
-))]
 #[test]
-fn fallback_commit_open_rejects_additive_placeholder_commitment() {
+fn constrained_pow5_vote_membership_rejects_a_forged_commitment() {
+    use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
+
+    let circuit = crate::zk::pow5_depth::VoteBoolCommitMerklePow5::<8>::default();
+    let commitment =
+        crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(1), Scalar::from(12_345));
+    let mut root = commitment;
+    for level in 0u64..8 {
+        root = crate::zk::pasta_tiny::constrained_pow5_pair(root, Scalar::from(20 + level));
+    }
+    let prover =
+        MockProver::run(8, &circuit, vec![vec![commitment], vec![root]]).expect("mock prover");
+    prover.assert_satisfied();
+
+    let forged = MockProver::run(
+        8,
+        &circuit,
+        vec![vec![commitment + Scalar::from(1)], vec![root]],
+    )
+    .expect("mock prover");
+    assert!(
+        forged.verify().is_err(),
+        "the Pow5 commitment must be constrained to the private vote and blinding"
+    );
+}
+
+#[cfg(feature = "zk-halo2")]
+#[test]
+fn commit_open_rejects_additive_placeholder_commitment() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     let circuit = crate::zk::pasta_tiny::CommitOpen::default();
-    let commitment = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(11), Scalar::from(31));
+    let commitment =
+        crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(11), Scalar::from(31));
     let prover = MockProver::run(5, &circuit, vec![vec![commitment]]).expect("mock prover");
     prover.assert_satisfied();
 
@@ -54,21 +79,18 @@ fn fallback_commit_open_rejects_additive_placeholder_commitment() {
         .expect("mock prover");
     assert!(
         stale.verify().is_err(),
-        "fallback commit-open must not accept the old additive placeholder commitment"
+        "commit-open must not accept the old additive placeholder commitment"
     );
 }
 
-#[cfg(all(
-    feature = "zk-halo2",
-    not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
-))]
+#[cfg(feature = "zk-halo2")]
 #[test]
-fn fallback_tiny_merkle2_rejects_additive_placeholder_root() {
+fn tiny_merkle2_rejects_additive_placeholder_root() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     let circuit = crate::zk::pasta_tiny::Merkle2::default();
-    let first = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(9), Scalar::from(5));
-    let root = crate::zk::pasta_tiny::poseidon_pair(first, Scalar::from(7));
+    let first = crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(9), Scalar::from(5));
+    let root = crate::zk::pasta_tiny::constrained_pow5_pair(first, Scalar::from(7));
     let prover = MockProver::run(5, &circuit, vec![vec![root]]).expect("mock prover");
     prover.assert_satisfied();
 
@@ -77,16 +99,13 @@ fn fallback_tiny_merkle2_rejects_additive_placeholder_root() {
         MockProver::run(5, &circuit, vec![vec![additive_placeholder_root]]).expect("mock prover");
     assert!(
         stale.verify().is_err(),
-        "fallback Merkle2 must not accept the old additive placeholder root"
+        "Merkle2 must not accept the old additive placeholder root"
     );
 }
 
-#[cfg(all(
-    feature = "zk-halo2",
-    not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
-))]
+#[cfg(feature = "zk-halo2")]
 #[test]
-fn fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
+fn anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     fn unshifted_pow5_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
@@ -100,11 +119,12 @@ fn fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
     }
 
     let circuit = crate::zk::pasta_tiny::AnonTransfer2x2Commit::default();
-    let cm_in0 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(7), Scalar::from(11));
-    let cm_in1 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(5), Scalar::from(13));
-    let cm_out0 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(6), Scalar::from(17));
-    let cm_out1 = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(6), Scalar::from(19));
-    let nullifier = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(1_234_567), Scalar::from(42));
+    let cm_in0 = crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(7), Scalar::from(11));
+    let cm_in1 = crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(5), Scalar::from(13));
+    let cm_out0 = crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(6), Scalar::from(17));
+    let cm_out1 = crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(6), Scalar::from(19));
+    let nullifier =
+        crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(1_234_567), Scalar::from(42));
     let public_inputs = vec![
         vec![cm_in0],
         vec![cm_in1],
@@ -130,22 +150,20 @@ fn fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment() {
     .expect("mock prover");
     assert!(
         stale.verify().is_err(),
-        "fallback anon-transfer must not accept the old unshifted placeholder commitment"
+        "anon-transfer must not accept the old unshifted placeholder commitment"
     );
 }
 
-#[cfg(all(
-    feature = "zk-halo2",
-    not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))
-))]
+#[cfg(feature = "zk-halo2")]
 #[test]
-fn fallback_vote_bool_merkle2_rejects_stale_merkle_shortcut() {
+fn vote_bool_merkle2_rejects_stale_merkle_shortcut() {
     use halo2_proofs::{dev::MockProver, halo2curves::pasta::Fp as Scalar};
 
     let circuit = crate::zk::pasta_tiny::VoteBoolCommitMerkle2::default();
-    let commit = crate::zk::pasta_tiny::poseidon_pair(Scalar::from(1), Scalar::from(12_345));
-    let first = crate::zk::pasta_tiny::poseidon_pair(commit, Scalar::from(5));
-    let root = crate::zk::pasta_tiny::poseidon_pair(first, Scalar::from(7));
+    let commit =
+        crate::zk::pasta_tiny::constrained_pow5_pair(Scalar::from(1), Scalar::from(12_345));
+    let first = crate::zk::pasta_tiny::constrained_pow5_pair(commit, Scalar::from(5));
+    let root = crate::zk::pasta_tiny::constrained_pow5_pair(first, Scalar::from(7));
     let prover = MockProver::run(6, &circuit, vec![vec![commit], vec![root]]).expect("mock prover");
     prover.assert_satisfied();
 
@@ -154,22 +172,18 @@ fn fallback_vote_bool_merkle2_rejects_stale_merkle_shortcut() {
         .expect("mock prover");
     assert!(
         stale.verify().is_err(),
-        "fallback vote Merkle2 must not accept the old additive shortcut root"
+        "vote Merkle2 must not accept the old additive shortcut root"
     );
 }
 
-#[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-#[test]
-fn vote_bool_commit_merkle8_poseidon_mock_prover() {
-    use halo2_proofs::dev::MockProver;
-
-    let circuit = VoteBoolCommitMerkle8::default();
-    let (v_val, rho_val, sibling_vals, dir_vals) = vote_bool_commit_merkle8_sample_inputs();
-    let (commit, _witnesses, root) =
-        vote_bool_commit_merkle8_witnesses(v_val, rho_val, sibling_vals, dir_vals);
-    let public_inputs = vec![vec![commit], vec![root]];
-    let prover = MockProver::run(8, &circuit, public_inputs).expect("mock prover");
-    prover.assert_satisfied();
+#[cfg(all(
+    feature = "halo2-dev-tests",
+    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
+))]
+#[allow(dead_code)]
+fn backend_tag_vote_bool_commit_merkle(depth: usize, use_pow5: bool) -> String {
+    let algorithm = if use_pow5 { "-pow5" } else { "" };
+    format!("halo2/pasta/ipa/vote-bool-commit-merkle{depth}{algorithm}")
 }
 
 #[cfg(all(
@@ -177,19 +191,9 @@ fn vote_bool_commit_merkle8_poseidon_mock_prover() {
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 #[allow(dead_code)]
-fn backend_tag_vote_bool_commit_merkle(depth: usize, use_poseidon: bool) -> String {
-    let algo = if use_poseidon { "-poseidon" } else { "" };
-    format!("halo2/pasta/ipa/vote-bool-commit-merkle{depth}{algo}")
-}
-
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
-#[allow(dead_code)]
-fn backend_tag_anon_transfer_merkle(depth: usize, use_poseidon: bool) -> String {
-    let algo = if use_poseidon { "-poseidon" } else { "" };
-    format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algo}")
+fn backend_tag_anon_transfer_merkle(depth: usize, use_pow5: bool) -> String {
+    let algorithm = if use_pow5 { "-pow5" } else { "" };
+    format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algorithm}")
 }
 #[cfg(all(
     feature = "halo2-dev-tests",
@@ -298,11 +302,7 @@ fn packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen() {
     );
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn zk1_envelope_pasta_ipa_verify_add_public() {
     use halo2_proofs::{
@@ -876,11 +876,7 @@ fn halo2_verify_id_public_kzg_with_and_without_inst() {
     assert!(super::verify_halo2(backend, &prf_box2, Some(&vk_box2)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_ipa_acceptance_variants() {
     use halo2_proofs::{
@@ -970,11 +966,7 @@ fn halo2_verify_ipa_acceptance_variants() {
     assert!(super::verify_halo2_ipa(b_id, &pr_id_box, Some(&vk_id_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add_2rows_ipa() {
     use halo2_proofs::{
@@ -1023,11 +1015,7 @@ fn halo2_verify_add_2rows_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add3_ipa() {
     use halo2_proofs::{

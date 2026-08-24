@@ -195,7 +195,6 @@ jobs:
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/cargo_fast_test.py \
-            scripts/tests/profile_build_test.py \
             scripts/tests/profile_cargo_build_test.py \
             scripts/tests/check_musubi_fixture_owner_test.py \
             scripts/tests/check_compile_time_table_assets_test.py \

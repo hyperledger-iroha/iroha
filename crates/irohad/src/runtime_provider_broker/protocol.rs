@@ -2174,8 +2174,10 @@ fn decode_bootle_lantern_issue_request(
 }
 define_broker_wire_struct!(copy SoracloudSignerQualificationWireV1 { revision: u64, policy_digest: [u8; 32], active: bool, test_only: bool, });
 define_broker_wire_struct!(owned SoracloudProvenanceSignRequestWireV1 { purpose: u8, preimage: Vec<u8>, });
-define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceRequestWireV1 { url: String, content_type: String, accept: Option<String>, body: Vec<u8>, maximum_response_bytes: u64, });
+define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceRequestWireV1 { repo_id: String, resolved_revision: String, url: String, content_type: String, accept: Option<String>, body: Vec<u8>, maximum_response_bytes: u64, });
 impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceRequestWireV1 as value {
+    "repo_id_len" => value.repo_id.len(),
+    "has_exact_revision" => !value.resolved_revision.is_empty(),
     "url_len" => value.url.len(),
     "content_type_len" => value.content_type.len(),
     "has_accept" => value.accept.is_some(),
@@ -2183,8 +2185,10 @@ impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceRequestWireV1 as valu
     "maximum_response_bytes" => value.maximum_response_bytes,
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceRequestWireV1 { body });
-define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceResponseWireV1 { status: u16, content_type: Option<String>, content_encoding: Option<String>, body: Vec<u8>, });
+define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceResponseWireV1 { served_repo_id: String, served_revision: String, status: u16, content_type: Option<String>, content_encoding: Option<String>, body: Vec<u8>, });
 impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceResponseWireV1 as value {
+    "served_repo_id_len" => value.served_repo_id.len(),
+    "has_exact_served_revision" => !value.served_revision.is_empty(),
     "status" => value.status,
     "has_content_type" => value.content_type.is_some(),
     "has_content_encoding" => value.content_encoding.is_some(),

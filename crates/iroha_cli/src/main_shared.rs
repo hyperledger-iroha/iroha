@@ -29,15 +29,6 @@ mod sumeragi;
 mod taira;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
-use iroha_i18n::{Bundle, Localizer, detect_language};
-use std::{
-    fmt::Display,
-    fs,
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    sync::LazyLock,
-    time::Duration,
-};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
 use futures::{TryStreamExt, stream::TryStream};
@@ -49,8 +40,17 @@ use iroha::{
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_i18n::{Bundle, Localizer, detect_language};
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
+use std::{
+    fmt::Display,
+    fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    sync::LazyLock,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
@@ -1232,6 +1232,12 @@ fn run() -> ReportResult<(), MainError> {
             i18n.t_with("info.configuration_dump", &[("config", rendered.as_str())])
         );
     }
+    let _chain_guard = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
+    if let Command::Offline(command) = &args.command {
+        command
+            .preflight_before_operator_key_load()
+            .map_err(|error| Report::new(MainError::Command(error.to_string())))?;
+    }
     let operator_key_pair = args
         .operator_private_key_file
         .as_deref()
@@ -1242,17 +1248,16 @@ fn run() -> ReportResult<(), MainError> {
                 .attach("failed to load runtime operator signing key")
                 .attach(error.to_string())
         })?;
-    let output_format = effective_output_format(&args);
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
         config,
         operator_key_pair,
         transaction_metadata: None,
+        output_format: effective_output_format(&args),
         fee_payment: args.fee_payment,
         input_instructions: args.input,
         output_instructions: args.output,
-        output_format,
         i18n: i18n.clone(),
     };
     if let Some(path) = args.metadata {
@@ -1266,8 +1271,6 @@ fn run() -> ReportResult<(), MainError> {
             .map_err(|report| report.change_context(MainError::TransactionMetadata))?;
         context.transaction_metadata = Some(metadata);
     }
-    let _account_chain_discriminant =
-        ChainDiscriminantGuard::enter(context.config.account_chain_discriminant);
     args.command
         .run(&mut context)
         .into_report()
@@ -1548,9 +1551,9 @@ fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
 mod filter {
-    use iroha::data_model::query::dsl::CompoundPredicate;
     use super::*;
     use crate::list_support::{CommonArgs, FilterArgs};
+    use iroha::data_model::query::dsl::CompoundPredicate;
     #[derive(clap::Args, Debug)]
     pub struct DomainFilter {
         /// Filtering condition specified as a JSON string
@@ -1691,8 +1694,8 @@ fn listen_blocks_message(
     )
 }
 mod events {
-    use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
     use super::*;
+    use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Duration to listen for events.
@@ -1792,8 +1795,8 @@ mod events {
     }
 }
 mod blocks {
-    use std::num::NonZeroU64;
     use super::*;
+    use std::num::NonZeroU64;
     #[derive(clap::Args, Debug)]
     pub struct Args {
         /// Block height from which to start streaming blocks
@@ -1980,8 +1983,8 @@ mod domain {
     }
 }
 mod account {
-    use std::fmt::Debug;
     use super::*;
+    use std::fmt::Debug;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read and write account roles
@@ -2478,12 +2481,12 @@ mod asset {
         ))
     }
     mod definition {
+        use super::*;
         use iroha::{
             data_model::asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
             data_model::sorafs_uri::SorafsUri,
         };
         use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
-        use super::*;
         fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
             scale.map_or_else(
                 || Ok(NumericSpec::unconstrained()),
@@ -3236,11 +3239,11 @@ mod nft {
     }
 }
 mod rwa {
+    use super::*;
     use iroha::data_model::isi::rwa::{
         ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
         SetRwaControls, TransferRwa, UnfreezeRwa,
     };
-    use super::*;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Retrieve details of a specific RWA lot
@@ -3607,14 +3610,14 @@ mod peer {
     }
 }
 mod multisig {
+    use super::*;
     use core::convert::TryFrom;
+    use iroha::executor_data_model::isi::multisig::*;
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
-    use iroha::executor_data_model::isi::multisig::*;
-    use super::*;
     type ProposalKey = HashOf<Vec<InstructionBox>>;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -4521,6 +4524,7 @@ mod query {
     }
 }
 mod transaction {
+    use super::*;
     use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
     use std::{
         sync::{
@@ -4530,7 +4534,6 @@ mod transaction {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
-    use super::*;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Read the typed pipeline status of a submitted transaction
@@ -5529,9 +5532,6 @@ mod trigger {
         /// Hard cap on blocks scanned, including when --from-height is supplied.
         #[arg(long, default_value_t = 1_000)]
         pub scan_limit_blocks: u64,
-        /// Deprecated compatibility flag; `list` is historical and does not wait.
-        #[arg(long, hide = true)]
-        pub timeout_ms: Option<u64>,
     }
     #[derive(clap::Args, Debug)]
     pub struct CompletedWatch {
@@ -6710,7 +6710,6 @@ mod repo {
     }
 }
 mod settlement {
-    use std::collections::BTreeSet;
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
@@ -6730,6 +6729,7 @@ mod settlement {
         prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
+    use std::collections::BTreeSet;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// Create a delivery-versus-payment instruction
@@ -8376,49 +8376,55 @@ mod cli_integration_harness_tests {
         type Item = Domain;
 
         fn ranked_three() -> Vec<Self::Item> {
-            [("d1", Some(2), 0x10), ("d2", Some(1), 0x11), ("d3", None, 0x12)]
-                .into_iter()
-                .map(|(name, rank, seed)| {
-                    let owner = sample_account_id("land", seed);
-                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
-                        .build(owner.account());
-                    if let Some(rank) = rank {
-                        domain.metadata_mut().insert(
-                            "rank".parse().unwrap(),
-                            Json::from(norito::json!(rank)),
-                        );
-                    }
+            [
+                ("d1", Some(2), 0x10),
+                ("d2", Some(1), 0x11),
+                ("d3", None, 0x12),
+            ]
+            .into_iter()
+            .map(|(name, rank, seed)| {
+                let owner = sample_account_id("land", seed);
+                let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
+                    .build(owner.account());
+                if let Some(rank) = rank {
                     domain
-                })
-                .collect()
+                        .metadata_mut()
+                        .insert("rank".parse().unwrap(), Json::from(norito::json!(rank)));
+                }
+                domain
+            })
+            .collect()
         }
 
         fn ranked_five(seed: u8) -> Vec<Self::Item> {
-            [("d0", Some(2)), ("d1", Some(4)), ("d2", None), ("d3", Some(1)), ("d4", Some(3))]
-                .into_iter()
-                .map(|(name, rank)| {
-                    let owner = sample_account_id("universal", seed);
-                    let mut domain = Domain::new(DomainId::try_new(name, "universal").unwrap())
-                        .build(&owner);
-                    if let Some(rank) = rank {
-                        domain.metadata_mut().insert(
-                            "rank".parse().unwrap(),
-                            Json::from(norito::json!(rank)),
-                        );
-                    }
+            [
+                ("d0", Some(2)),
+                ("d1", Some(4)),
+                ("d2", None),
+                ("d3", Some(1)),
+                ("d4", Some(3)),
+            ]
+            .into_iter()
+            .map(|(name, rank)| {
+                let owner = sample_account_id("universal", seed);
+                let mut domain =
+                    Domain::new(DomainId::try_new(name, "universal").unwrap()).build(&owner);
+                if let Some(rank) = rank {
                     domain
-                })
-                .collect()
+                        .metadata_mut()
+                        .insert("rank".parse().unwrap(), Json::from(norito::json!(rank)));
+                }
+                domain
+            })
+            .collect()
         }
 
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             (0..5)
                 .map(|index| {
                     let owner = sample_account_id("universal", seed + index as u8);
-                    Domain::new(
-                        DomainId::try_new(&format!("d{index}"), "universal").unwrap(),
-                    )
-                    .build(&owner)
+                    Domain::new(DomainId::try_new(&format!("d{index}"), "universal").unwrap())
+                        .build(&owner)
                 })
                 .collect()
         }
@@ -8480,10 +8486,9 @@ mod cli_integration_harness_tests {
                 .map(|index| {
                     let id = sample_account_id("land", seed + index as u8);
                     let mut account = Account::new(id.clone()).build(&id);
-                    account.metadata.insert(
-                        "pos".parse().unwrap(),
-                        Json::from(norito::json!(index)),
-                    );
+                    account
+                        .metadata
+                        .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
                     account
                 })
                 .collect()
@@ -8542,10 +8547,9 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             let mut definitions = Self::definitions(seed);
             for (index, definition) in definitions.iter_mut().enumerate() {
-                definition.metadata_mut().insert(
-                    "pos".parse().unwrap(),
-                    Json::from(norito::json!(index)),
-                );
+                definition
+                    .metadata_mut()
+                    .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
             }
             definitions
         }
@@ -8594,9 +8598,7 @@ mod cli_integration_harness_tests {
             nfts[0]
                 .content
                 .insert(key.clone(), Json::from(norito::json!(2)));
-            nfts[1]
-                .content
-                .insert(key, Json::from(norito::json!(1)));
+            nfts[1].content.insert(key, Json::from(norito::json!(1)));
             nfts
         }
 
@@ -8614,10 +8616,8 @@ mod cli_integration_harness_tests {
         fn positioned_five(seed: u8) -> Vec<Self::Item> {
             let mut nfts = Self::nfts(seed);
             for (index, nft) in nfts.iter_mut().enumerate() {
-                nft.content.insert(
-                    "pos".parse().unwrap(),
-                    Json::from(norito::json!(index)),
-                );
+                nft.content
+                    .insert("pos".parse().unwrap(), Json::from(norito::json!(index)));
             }
             nfts
         }
@@ -8637,11 +8637,8 @@ mod cli_integration_harness_tests {
             let owner = sample_account_id("art", seed);
             (0..5)
                 .map(|index| {
-                    Nft::new(
-                        format!("n{index}$art").parse().unwrap(),
-                        Default::default(),
-                    )
-                    .build(owner.account())
+                    Nft::new(format!("n{index}$art").parse().unwrap(), Default::default())
+                        .build(owner.account())
                 })
                 .collect()
         }
@@ -9275,11 +9272,8 @@ mod cli_integration_harness_tests {
         use iroha::data_model::query::parameters::{FetchSize, Pagination, SortOrder};
         PSN_ASC_STARTS.store(0, Ordering::SeqCst);
         PSN_ASC_CONTS.store(0, Ordering::SeqCst);
-        let exec = HarnessQueryExecutor::<NftFixture>::ranked_five(
-            0x71,
-            &PSN_ASC_STARTS,
-            &PSN_ASC_CONTS,
-        );
+        let exec =
+            HarnessQueryExecutor::<NftFixture>::ranked_five(0x71, &PSN_ASC_STARTS, &PSN_ASC_CONTS);
         let sorting = Sorting {
             sort_by_metadata_key: Some("rank".parse().unwrap()),
             order: Some(SortOrder::Asc),
@@ -9413,7 +9407,6 @@ mod cli_integration_harness_tests {
 #[cfg(all(test, feature = "cli_integration_harness"))]
 mod cli_integration_harness {
     use super::*;
-    use std::collections::BTreeMap;
     use eyre::eyre;
     use iroha::crypto::KeyPair;
     #[cfg(feature = "ids_projection")]
@@ -9435,6 +9428,7 @@ mod cli_integration_harness {
     use iroha_crypto::{Algorithm, Hash};
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
+    use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")

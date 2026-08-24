@@ -8,9 +8,11 @@
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 #[cfg(feature = "privacy-release-evidence")]
+use crate::privacy_profiles::zk_x509_release_candidate_profile_material_v1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_profiles::{
     validate_compiled_privacy_activation_against_profile_v1,
-    zk_x509_release_candidate_profile_material_v1,
+    vega_release_candidate_profile_material_v1,
 };
 use crate::{
     privacy_engines::{
@@ -526,6 +528,33 @@ pub(crate) fn verify_privacy_envelope_v1(
             PrivacyCompiledActivationFailureV1 { source },
         ))
     })?;
+    verify_privacy_envelope_after_compiled_activation_v1(envelope, context)
+}
+/// Verify a Vega release candidate through the production envelope path before governance
+/// availability is enabled.
+///
+/// This entry point is restricted to tests and release-evidence builds. It derives the candidate
+/// profile internally, applies the same exact activation binding comparison as consensus
+/// admission, and then joins the common verifier below. It cannot expose the candidate profile to
+/// governance or make the public admission path available.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn verify_vega_release_candidate_envelope_v1(
+    envelope: &PrivacyProofEnvelopeV1,
+    context: PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
+    let candidate = vega_release_candidate_profile_material_v1().map_err(|source| {
+        PrivacyVerificationErrorV1::CompiledActivation(Box::new(
+            PrivacyCompiledActivationFailureV1 {
+                source: CompiledPrivacyProfileValidationErrorV1::Profile(source),
+            },
+        ))
+    })?;
+    validate_compiled_privacy_activation_against_profile_v1(context.activation, &candidate)
+        .map_err(|source| {
+            PrivacyVerificationErrorV1::CompiledActivation(Box::new(
+                PrivacyCompiledActivationFailureV1 { source },
+            ))
+        })?;
     verify_privacy_envelope_after_compiled_activation_v1(envelope, context)
 }
 /// Verify an X.509 release candidate through the production envelope path
@@ -2292,6 +2321,7 @@ mod tests {
         },
         privacy_profiles::{
             CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
+            vega_release_candidate_profile_material_v1,
             zk_x509_release_candidate_profile_material_v1,
         },
         privacy_state::{
@@ -3015,8 +3045,8 @@ mod tests {
         NetworkId,
         PrivacyVegaIssuerRecordV1,
     ) {
-        let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("compiled Vega");
+        let compiled =
+            vega_release_candidate_profile_material_v1().expect("Vega candidate profile material");
         let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
             PrivacyActiveLifecycleV1 {
                 proposed_at_height: 1,
@@ -6390,7 +6420,7 @@ mod tests {
         let (envelope, activation, network_id, issuer_record) = vega_invalid_proof_fixture();
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, context),
+            verify_vega_release_candidate_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::Context(detail))
                 if detail.code
                     == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
@@ -6404,7 +6434,7 @@ mod tests {
             ]));
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&oversized, context),
+            verify_vega_release_candidate_envelope_v1(&oversized, context),
             Err(PrivacyVerificationErrorV1::NativeVega(_))
         ));
         for bytes in [Vec::new(), vec![0; 1], vec![0; 32]] {
@@ -6413,7 +6443,7 @@ mod tests {
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(bytes));
             let context = vega_verification_context(&activation, &network_id, &issuer_record);
             assert!(matches!(
-                verify_privacy_envelope_v1(&malformed, context),
+                verify_vega_release_candidate_envelope_v1(&malformed, context),
                 Err(PrivacyVerificationErrorV1::Envelope(_))
             ));
         }
@@ -6423,7 +6453,7 @@ mod tests {
         let (envelope, activation, network_id, issuer_record) = vega_invalid_proof_fixture();
         let context = verification_context(&activation, &network_id);
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, context),
+            verify_vega_release_candidate_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::MissingTrustedIssuer
         ));
@@ -6432,7 +6462,7 @@ mod tests {
         refresh_statement_digest(&mut unknown);
         let context = verification_context(&activation, &network_id);
         assert!(matches!(
-            verify_privacy_envelope_v1(&unknown, context),
+            verify_vega_release_candidate_envelope_v1(&unknown, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::MissingTrustedIssuer
         ));
@@ -6451,7 +6481,7 @@ mod tests {
         .expect("canonical terminal Vega issuer record");
         let context = vega_verification_context(&activation, &network_id, &revoked);
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, context),
+            verify_vega_release_candidate_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::IssuerRevoked
         ));
@@ -6460,7 +6490,7 @@ mod tests {
         refresh_statement_digest(&mut stale_epoch);
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&stale_epoch, context),
+            verify_vega_release_candidate_envelope_v1(&stale_epoch, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::IssuerEpochMismatch
         ));
@@ -6469,7 +6499,7 @@ mod tests {
         refresh_statement_digest(&mut wrong_digest);
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&wrong_digest, context),
+            verify_vega_release_candidate_envelope_v1(&wrong_digest, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::IssuerRecordDigestMismatch
         ));
@@ -6478,7 +6508,7 @@ mod tests {
         refresh_statement_digest(&mut wrong_key);
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&wrong_key, context),
+            verify_vega_release_candidate_envelope_v1(&wrong_key, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::IssuerPublicKeyMismatch
         ));
@@ -6486,7 +6516,7 @@ mod tests {
         corrupt.record_digest.0[0] ^= 1;
         let context = vega_verification_context(&activation, &network_id, &corrupt);
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, context),
+            verify_vega_release_candidate_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
                 if detail.code == PrivacyVegaStateFailureCodeV1::InvalidTrustedIssuer
         ));
@@ -6501,7 +6531,7 @@ mod tests {
             let mut context = vega_verification_context(&activation, &network_id, &issuer_record);
             context.block_timestamp_ms = timestamp;
             assert!(matches!(
-                verify_privacy_envelope_v1(&envelope, context),
+                verify_vega_release_candidate_envelope_v1(&envelope, context),
                 Err(PrivacyVerificationErrorV1::NativeVega(_))
             ));
         }
@@ -6512,7 +6542,7 @@ mod tests {
         refresh_statement_digest(&mut changed_device);
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&changed_device, context),
+            verify_vega_release_candidate_envelope_v1(&changed_device, context),
             Err(PrivacyVerificationErrorV1::NativeVega(_))
         ));
         let mut replayed_intent = envelope.clone();
@@ -6523,7 +6553,7 @@ mod tests {
         refresh_statement_digest(&mut replayed_intent);
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&replayed_intent, context),
+            verify_vega_release_candidate_envelope_v1(&replayed_intent, context),
             Err(PrivacyVerificationErrorV1::NativeVega(detail))
                 if detail.source == VegaMdlError::DeviceAuthenticationDigestMismatch
         ));
@@ -6531,7 +6561,7 @@ mod tests {
             vega_verification_context(&activation, &network_id, &issuer_record);
         changed_genesis.genesis_hash[0] ^= 1;
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, changed_genesis),
+            verify_vega_release_candidate_envelope_v1(&envelope, changed_genesis),
             Err(PrivacyVerificationErrorV1::NativeVega(_))
         ));
         let mut cross_suite = envelope.clone();
@@ -6539,14 +6569,14 @@ mod tests {
             PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0x51]));
         let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&cross_suite, context),
+            verify_vega_release_candidate_envelope_v1(&cross_suite, context),
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
         let mut altered_activation = activation;
         altered_activation.verifier_digest.0[0] ^= 1;
         let context = vega_verification_context(&altered_activation, &network_id, &issuer_record);
         assert!(matches!(
-            verify_privacy_envelope_v1(&envelope, context),
+            verify_vega_release_candidate_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
     }

@@ -4,15 +4,15 @@ mod council;
 mod deploy;
 mod shared;
 mod vote;
-pub(crate) use shared::parse_governance_selector_v1;
 use self::council::CouncilArgs;
 use crate::{Run, RunContext};
-use eyre::Result;
 pub use audit::AuditDeployArgs;
 pub use deploy::{
     DeployMetaArgs, EnactArgs, FinalizeArgs, ProposeDeployArgs, ProtectedApplyArgs,
     ProtectedGetArgs, ProtectedSetArgs,
 };
+use eyre::Result;
+pub(crate) use shared::parse_governance_selector_v1;
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
 };

@@ -1,4 +1,8 @@
 //! Governance voting and query helpers.
+use super::shared::{
+    canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
+    print_with_summary,
+};
 use crate::{
     Run, RunContext,
     json_utils::{json_object, json_value},
@@ -13,10 +17,6 @@ use iroha::data_model::isi::{
 };
 use iroha_crypto::Hash as CryptoHash;
 use norito::{decode_from_bytes, json};
-use super::shared::{
-    canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
-    print_with_summary,
-};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
 pub enum VoteMode {

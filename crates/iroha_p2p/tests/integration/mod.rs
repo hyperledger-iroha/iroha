@@ -78,7 +78,6 @@ fn test_network_config(
         quic_datagram_receive_buffer_bytes: network_defaults::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES
             .get(),
         quic_datagram_send_buffer_bytes: network_defaults::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        scion: iroha_config::parameters::actual::ScionConfig::default(),
         tls_enabled: false,
         tls_fallback_to_plain: true,
         tls_listen_address: None,

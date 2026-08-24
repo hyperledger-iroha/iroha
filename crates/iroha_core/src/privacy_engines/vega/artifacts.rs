@@ -358,7 +358,8 @@ impl VegaMdlFigure9ArtifactLengthMismatchV1 {
 }
 
 /// Fail-closed manifest, source, authentication, or installation failure.
-#[allow(variant_size_differences)] // Exact artifact lengths remain inline and allocation-free.
+// Keep exact length diagnostics inline and allocation-free on this failure path.
+#[allow(variant_size_differences)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlFigure9ArtifactQualificationErrorV1 {
     /// Manifest schema name or version differs from the sole released schema.

@@ -58,7 +58,7 @@ duplicate commitments fail closed.
 
 ## Direct Torii API
 
-The lifecycle uses exactly four Torii routes:
+The lifecycle operator and payment submission surfaces use these five Torii routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -66,6 +66,7 @@ The lifecycle uses exactly four Torii routes:
 | `POST` | `/v1/offline/top-up` | Submit `OfflineTopUpRequest` |
 | `POST` | `/v1/offline/redeem` | Submit `OfflineRedeemRequest` |
 | `GET` | `/v1/offline/operations/{operation_id}` | Observe durable operation state and finality |
+| `POST` | `/v1/offline/kagemusha/lifecycle-v4/transactions` | Submit one exact governed V4 release-lifecycle transaction archive |
 
 Top-up and redemption accept only the canonical typed value with
 `Content-Type: application/x-norito`. They do not accept JSON request bodies or
@@ -94,8 +95,10 @@ schema-specific nesting limits. A compressed length field, forged collection
 count, oversized unshield proof, or structurally decodable non-canonical
 representation therefore fails within its body and allocation ceilings.
 
-Readiness and operation responses support Torii's typed response negotiation.
-The readiness response advertises the protocol-level ABI and handoff
+Capability and operation responses support Torii's typed response negotiation.
+The capability response contains exactly
+`cash_handoff_capability`, `required_bridge_abi_version`, `max_hops`, and
+`ready`. It advertises the protocol-level ABI and handoff
 capability on every deployment; it is not an asset enrollment list and does
 not gate `/health`, `/readyz`, Torii startup, consensus, or block production.
 Asset scale, verifier windows, release material, authorization, and balances
@@ -548,7 +551,15 @@ release for that exact `NetworkId`, qualify it, and use
 `prepare-activation-v4` to prepare the governed height-two activation. The
 command takes the domain-separated digest of the complete unanimous
 four-validator runtime projection; this is not a caller-selected release tag.
-base-genesis check replays every mint, burn, and transfer of the backing asset
+Kagami is also the sole typed JSON preparation surface for later lifecycle
+transitions: `prepare-enable-issuance-v4` consumes the exact canonical
+staged-to-enabled witness, `prepare-cancel-release-v4` consumes the exact
+predecessor-bound staged-release cancellation, and
+`prepare-deactivate-issuance-v4` consumes the exact predecessor-bound enabled-
+issuance deactivation. Each command publishes one bounded, no-replace JSON
+array containing exactly one native instruction for the direct lifecycle
+corridor; it does not sign or submit a transaction. The base-genesis check
+replays every mint, burn, and transfer of the backing asset
 in instruction order and requires a nonzero final balance. An unsupported
 instruction that could conceal a balance change fails closed; historical mint
 activity alone is not backing liquidity. The
@@ -751,6 +762,32 @@ The legacy `ignored_cargo_lock_*` descriptor field names retain their V1 wire
 spelling but bind this tracked file. The complete clean closure is hash-bound
 throughout the candidate, native build, device transcript, and signed evidence.
 Dirty closures have no compatibility admission path.
+
+The candidate-bound V1 internal-validation receipt treats the top-level
+`fuzz/Cargo.toml` package as a separate locked workspace. Its runner-signed
+body must carry the tracked mode-`100644` `fuzz/Cargo.lock` Git-blob identity,
+SHA-256, and byte length, then repeat both that lock digest and the root-lock
+digest after each mandatory fuzz campaign. The two Kagemusha campaigns invoke
+the byte-authenticated `cargo-fuzz` executable directly at exactly version
+`0.13.2`; cargo-fuzz's hard-coded `cargo` lookup must resolve through a closed
+`PATH` to a separately authenticated proxy that forces locked, offline Cargo
+metadata/build/run behavior. Fuzzing uses a separately byte-authenticated
+nightly sanitizer compiler, with its complete `rustc -Vv` output bound by the
+receipt rather than borrowing the stable candidate-rustc identity. Target,
+corpus, and libFuzzer artifact paths are fixed below a sibling private runtime
+root outside the immutable source projection. Its closed environment also puts
+`TMPDIR`, `HOME`, `CARGO_HOME`, cache locks, and compiler temporaries there,
+forbids `RUSTC_BOOTSTRAP` and compiler wrappers, and remeasures the source tree
+after each campaign.
+
+Repository policy currently forbids changing any `Cargo.lock`, and this source
+tree has no tracked `fuzz/Cargo.lock`, authenticated proxy, cargo-fuzz
+executable, or production validation runner. Consequently these receipt fields
+are mandatory unavailable candidate inputs: they fail closed and are not local
+execution evidence. Adding the standalone lock requires an explicit
+release-owner exception authorizing only `fuzz/Cargo.lock` and its ignore-rule
+exception in a newly reviewed, signed source commit; the root `Cargo.lock` must
+remain byte-identical.
 
 The V4 candidate manifest additionally binds
 `authenticated_source_seal_projection_sha256`,
@@ -1303,7 +1340,88 @@ enforce the 64 MiB ceiling before any complete receipt re-encoding or signature
 hash allocation. The 64 MiB value is an encoded-input ceiling, not a peak-memory
 promise.
 
-The phase-separated local operator surface is
+The transaction-construction surface is
+`iroha offline kagemusha lifecycle-v4`. Its six phases are `prepare`,
+`sign-fee-quote`, `finalize-fee-quote`, `sign-transaction`,
+`assemble-transaction`, and `submit-transaction`. `prepare` accepts exactly one
+Kagami-produced Stage, Enable, Cancel, or Deactivate instruction and freezes an
+`Ordinary` direct-instruction payload under the independently supplied I105
+governance authority. Stage additionally requires an independently trusted,
+already-finalized `--trusted-anchor-height`; `prepare` synthesizes the exclusive
+`expires_at_height = anchor + 4096 + 1`, requires any supplied value to equal
+that result, and rejects a missing anchor, overflow, or use of the flag for any
+other lifecycle kind. The fee-quote and transaction signatures are detached,
+canonically ordered, verified policy members; both boundaries require at least
+two distinct signers as well as the policy weight threshold. The fee-quote
+witness binds the exact network, authority, payload, configured Torii route,
+request body, nonce, and 60-second timestamp window. Non-loopback fee-quote
+origins must use HTTPS; development HTTP is accepted only for exact `localhost`,
+IPv4 `127/8`, or IPv6 `::1` hosts. Cleartext loopback requests use a dedicated
+redirect-free, retry-free, proxy-disabled transport; `localhost` resolution is
+pinned to IPv4 and IPv6 loopback, while HTTPS retains the ordinary proxy-capable
+transport. Before either detached signing phase accesses
+the operator key, it checks an independently supplied NetworkId and the exact
+raw-file SHA-256: `sign-fee-quote` requires `--expected-network-id` and
+`--expected-draft-sha256`, while `sign-transaction` requires
+`--expected-network-id` and `--expected-payload-sha256`. These checks do not
+consult live client configuration. The root dispatcher performs the complete
+bounded-read, digest, canonical decode, NetworkId, lifecycle, and authority
+preflight under the configured I105 chain discriminant before it opens the
+operator-key file; the signing command repeats the same validation against a
+fresh stable read before using the loaded key. The two signing phases retain
+their air-gapped fallback-config behavior. Every artifact is bounded, canonical,
+no-replace, and read-only. On Unix, output publication pins a trusted
+parent chain by descriptor, writes and syncs a private mode-`0600` staging
+inode, changes and resyncs it at mode `0400`, verifies its exact inode and
+content, and atomically renames it with `NOREPLACE`. It then verifies the same
+final inode and bytes before and after syncing the pinned parent. Failure before
+that rename is explicitly pre-commit. If the rename syscall reports an error,
+the publisher reconciles both descriptor-relative names and reports pre-commit
+only when the exact staging inode is still owned, the destination is absent or
+foreign, and exact staging cleanup plus parent sync succeeds; an owned final
+inode or missing, changing, or uninspectable namespace evidence is
+commit-uncertain. Any verification or durability failure after a reported
+rename success is likewise commit-uncertain and must not be retried
+automatically. Platforms
+without the required descriptor-relative no-replace APIs reject production
+publication. Assembly re-verifies the exact frozen payload and submission
+compares the canonical signed wire with the prepared HTTP body byte-for-byte
+before I/O. `submit-transaction` posts those exact prepared bytes only to
+`/v1/offline/kagemusha/lifecycle-v4/transactions`. Torii repeats Core's closed
+carrier predicate: the entrypoint must be external, signature-bound
+`Ordinary`, contain exactly one directly executed native Stage, Enable, Cancel,
+or Deactivate instruction, carry no proof attachments, and have at least two
+verified distinct governance signers. Sealed, scheduled, QueuePlanSynced,
+batch, IVM, contract, multi-instruction, attached, and single-signer carriers
+fail closed.
+
+Before acknowledging, the dedicated route uses authenticated P2P transport to
+collect an exact `f + 1` certificate over validator-local durable journal
+claims for the same network, transaction, routing plan, and authority context.
+Those journal claims remain globally unbound. The certificate is transport-only
+evidence: it is not a QueuePlan global-admission identity, registry entry,
+published QueuePlan certificate, autonomous reservation, merge certificate, or
+Sumeragi QueuePlan wake. A build without an authenticated peer transport cannot
+serve this production route.
+
+The capability preflight and submission share one origin policy: HTTPS is
+required except for exact `localhost`, IPv4 `127/8`, or IPv6 `::1` HTTP. The
+cleartext loopback case uses direct, proxy-disabled, redirect-free,
+transport-retry-free connections with loopback-pinned resolution. Success
+requires exact `202 Accepted`, canonical Norito, singleton entrypoint and signed
+transaction identity headers equal to the prepared wire, no contradictory
+reject header, and a bounded canonical submission receipt signed by the
+independently configured `--expected-receipt-signer`. The signer returned by
+Torii cannot select or replace that trust anchor. The command then canonically
+encodes the verified receipt and publishes it at the absent
+`--receipt-output` with the same no-replace durability rules before printing
+the transaction hash. `submit-transaction` additionally requires explicit
+`--write-authorized`; no phase rebuilds or single-key-signs an authorized
+archive. A transport failure, ambiguous response, missing or invalid receipt,
+identity mismatch, or uncertain receipt publication is outcome-uncertain and
+must not be retried automatically or treated as lifecycle evidence.
+
+The subsequent evidence-closeout surface is
 `iroha offline kagemusha rollout-v4`, with `create-expectations`, `submit`,
 `finalize-receipt`, `create-canary-authorization`,
 `submit-canary-authorization`, `submit-canary`, `finalize-canary-evidence`, and

@@ -3,7 +3,9 @@ fn eviction_requires_distinct_matching_replica_adverts() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
@@ -62,7 +64,9 @@ fn deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let artifact = kura
@@ -115,7 +119,9 @@ fn nonkeeper_replica_advert_probe_never_reads_the_complete_body() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let artifact = kura
@@ -150,7 +156,11 @@ fn selected_keeper_invalid_index_missing_body_and_corrupt_body_fail_closed() {
         let temp_dir = TempDir::new().expect("temporary selected-keeper Kura");
         populate_store(&temp_dir, 4);
         let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let height = nonzero!(2_usize);
         finalize_chain_through_for_eviction(&kura, height);
         let artifact = kura
@@ -243,7 +253,9 @@ fn authenticated_replica_admission_rejects_forgery_non_qc_peer_and_alternate_fin
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let artifact = kura
@@ -372,7 +384,9 @@ fn authenticated_replica_admission_rejects_outside_the_active_horizon_before_mut
     populate_store(&temp_dir, 4);
     let mut config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     config.replica_advert.evictable_window = NonZeroUsize::new(1).expect("non-zero");
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let artifact = kura
@@ -440,7 +454,9 @@ fn eviction_query_prunes_expired_and_out_of_horizon_replica_observations() {
     populate_store(&temp_dir, 4);
     let mut config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     config.replica_advert.evictable_window = NonZeroUsize::new(1).expect("non-zero");
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     finalize_chain_through_for_eviction(&kura, nonzero!(2_usize));
     let peer = checked_peer_id();
     let fresh = Instant::now();
@@ -491,7 +507,9 @@ fn replica_adverts_ignore_zero_height_and_payload_len() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
@@ -541,8 +559,11 @@ fn replica_registry_capacity_preserves_the_configured_evictable_height_window() 
 #[test]
 fn invalid_replica_advert_runtime_geometry_fails_before_store_creation() {
     fn assert_rejected(config: KuraConfig, store_root: &Path, expected: &str) {
-        let error = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect_err("invalid replica-advert runtime geometry must fail");
+        let error = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect_err("invalid replica-advert runtime geometry must fail");
         assert!(
             matches!(
                 error,
@@ -581,8 +602,11 @@ fn invalid_replica_advert_runtime_geometry_fails_before_store_creation() {
     let minimum_refresh_root = parent.path().join("minimum-refresh");
     let mut minimum_refresh = kura_config_for_path(&minimum_refresh_root, BLOCKS_IN_MEMORY);
     minimum_refresh.replica_advert.refresh_interval = Duration::from_millis(1);
-    let _ = Kura::new(&minimum_refresh, &RuntimeLaneConfig::default())
-        .expect("the exact one-millisecond refresh floor must be accepted");
+    let _ = Kura::open_test_kura_with_configured_lane_config(
+        &minimum_refresh,
+        &RuntimeLaneConfig::default(),
+    )
+    .expect("the exact one-millisecond refresh floor must be accepted");
     let floor_root = parent.path().join("invalid-floor");
     let mut invalid_floor = kura_config_for_path(&floor_root, BLOCKS_IN_MEMORY);
     invalid_floor.replica_advert.eviction_required_replicas = NonZeroUsize::new(
@@ -611,7 +635,9 @@ fn nonselected_or_wrong_length_replica_observations_do_not_count() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     finalize_chain_through_for_eviction(&kura, height);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
@@ -653,7 +679,9 @@ fn expired_replica_adverts_do_not_allow_eviction() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
     let expired_at = Instant::now()
@@ -708,7 +736,9 @@ fn replica_adverts_expiring_during_compaction_block_stage_publication() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let (_block_hash, payload_len) = advertise_required_replicas(&kura, height);
     kura.pause_next_eviction_before_stage_publication_for_tests();
@@ -780,7 +810,9 @@ fn evict_block_bodies_zero_request_is_noop() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     advertise_required_replicas(&kura, nonzero!(2_usize));
     let before_indices = {
         let mut store = kura.block_store.lock();
@@ -809,7 +841,9 @@ fn evict_block_bodies_is_idempotent_for_already_evicted_body() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let (_block_hash, payload_len) = advertise_required_replicas(&kura, height);
     let first = kura
@@ -834,7 +868,9 @@ fn remote_only_status_requires_canonical_hash_and_exact_length() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let (block_hash, payload_len) = advertise_required_replicas(&kura, height);
     let freed = kura
@@ -897,7 +933,9 @@ fn eviction_keeps_genesis_and_retained_tail_inline() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     for height in [nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)] {
         advertise_required_replicas(&kura, height);
     }
@@ -933,7 +971,9 @@ fn eviction_keeps_genesis_and_retained_tail_inline() {
 fn bench_eviction_helper_requires_a_finalized_remote_eviction_fixture() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     store_dummy_block_arcs(&kura, 3);
     let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
     let freed = kura
@@ -945,7 +985,9 @@ fn bench_eviction_helper_requires_a_finalized_remote_eviction_fixture() {
 fn canonical_rewrite_purges_equal_length_stale_sidecar_before_reeviction() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 3);
     let height = nonzero!(2_usize);
     let original_sidecar = blocks[1].encode_wire().expect("encode original block wire");
@@ -1038,7 +1080,9 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         lane_history_retention: LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let mut blocks = DummyBlocks::new();
     for _ in 0..3 {
         let block = blocks.next();
@@ -1095,7 +1139,9 @@ fn evict_block_bodies_releases_block_store_lock_while_compacting() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let (_block_hash, evict_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
     kura.pause_next_eviction_after_snapshot_for_tests();
     let evict_kura = Arc::clone(&kura);
@@ -1129,7 +1175,7 @@ fn evict_block_bodies_releases_block_store_lock_while_compacting() {
 fn evicted_block_caches_after_remote_rehydrate() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let (kura, _) = Kura::new(
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
@@ -1187,7 +1233,9 @@ fn evicted_block_status_becomes_local_sidecar_after_cache() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let block = kura
         .get_block(height)
@@ -1220,7 +1268,9 @@ fn evicted_block_status_becomes_local_sidecar_after_cache() {
 fn inline_body_status_is_available_after_memory_eviction() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 3);
     let height = nonzero!(2_usize);
     let block_hash = blocks[1].hash();
@@ -1242,7 +1292,9 @@ fn inline_body_status_is_available_after_memory_eviction() {
 fn zero_length_index_entry_makes_payload_unavailable() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 3);
     let height = nonzero!(2_usize);
     let block_hash = blocks[1].hash();
@@ -1267,7 +1319,9 @@ fn zero_length_index_entry_makes_payload_unavailable() {
 fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let block_hash = blocks[1].hash();
@@ -1298,7 +1352,9 @@ fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
 fn get_block_rejects_hash_mismatched_local_sidecar() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let block_hash = blocks[1].hash();
@@ -1328,7 +1384,9 @@ fn get_block_rejects_hash_mismatched_local_sidecar() {
 fn recent_disk_loaded_body_is_cached_after_read() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(2).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(3_usize);
     let block_hash = blocks[2].hash();
@@ -1352,7 +1410,9 @@ fn recent_disk_loaded_body_is_cached_after_read() {
 fn concurrent_index_eviction_cannot_reinsert_inline_body_into_memory_cache() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(4_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     let blocks = store_dummy_block_arcs(&kura, 2);
     let canonical = Arc::clone(&blocks[1]);
     let height = nonzero!(2_usize);
@@ -1404,7 +1464,9 @@ fn concurrent_index_eviction_cannot_reinsert_inline_body_into_memory_cache() {
 fn cache_block_body_is_idempotent_for_existing_local_sidecar() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let block = Arc::clone(&blocks[1]);
@@ -1447,7 +1509,9 @@ fn cache_block_body_is_idempotent_for_existing_local_sidecar() {
 fn cache_block_body_is_noop_for_inline_block() {
     let temp_dir = TempDir::new().unwrap();
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let block = store_dummy_block_arcs(&kura, 1)
         .pop()
         .expect("stored block");

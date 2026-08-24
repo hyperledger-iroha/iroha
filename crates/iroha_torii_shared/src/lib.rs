@@ -151,6 +151,9 @@ pub mod uri {
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.
     pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to submit one exact ordinary Kagemusha V4 lifecycle transaction.
+    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: &str =
+        crate::route_catalog::offline::KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;

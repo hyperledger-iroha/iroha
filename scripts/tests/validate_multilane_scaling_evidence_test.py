@@ -291,8 +291,10 @@ class EvidenceBundle:
                 "lanes": lane_ids,
                 "workload_seed": seed,
                 "inputs": {
-                    "status_file": lifecycle.name,
+                    "lifecycle_file": lifecycle.name,
                     "metrics_file": metrics.name,
+                    "telemetry_file": None,
+                    "alias_migrations": [],
                 },
             },
         )
@@ -676,6 +678,19 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         raw["artifacts"]["nexus_load_test_manifest"] = self.bundle.ref(artifact_path)
         self.bundle.replace_raw(3, "four_lane", raw)
         self.assert_invalid("manifest lanes do not match active execution lanes")
+
+    def test_rejects_retired_nexus_status_file_input(self) -> None:
+        raw = self.bundle.load_raw(3, "four_lane")
+        artifact_path = (
+            self.bundle.root / raw["artifacts"]["nexus_load_test_manifest"]["path"]
+        )
+        nexus_manifest = json.loads(artifact_path.read_text(encoding="utf-8"))
+        inputs = nexus_manifest["inputs"]
+        inputs["status_file"] = inputs.pop("lifecycle_file")
+        self.bundle.write_json(artifact_path, nexus_manifest)
+        raw["artifacts"]["nexus_load_test_manifest"] = self.bundle.ref(artifact_path)
+        self.bundle.replace_raw(3, "four_lane", raw)
+        self.assert_invalid("manifest inputs fields differ from schema")
 
     def test_rejects_unmatched_actual_offered_count(self) -> None:
         replacement = self.bundle.raw_run(

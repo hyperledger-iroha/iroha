@@ -9655,8 +9655,12 @@ impl Iroha {
             Report::new(StartError::StartTorii)
                 .attach(format!("failed to derive Torii receipt signer: {err}"))
         })?;
-        let vpn_relay_trust = if config.network.soranet_vpn.enabled {
+        let (vpn_relay_trust, vpn_operator_signer) = if config.network.soranet_vpn.enabled {
             let vpn = &config.network.soranet_vpn;
+            let operator_signer = vpn.operator_key_pair.clone().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN operator signer missing after configuration validation")
+            })?;
             let snapshot_path = vpn.guard_directory_path.as_ref().ok_or_else(|| {
                 Report::new(StartError::StartTorii)
                     .attach("VPN guard directory path missing after configuration validation")
@@ -9695,9 +9699,9 @@ impl Iroha {
                 at_unix,
             )
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
-            Some(trust)
+            (Some(trust), Some(operator_signer))
         } else {
-            None
+            (None, None)
         };
         let musubi_publication_context =
             musubi_publication_service::MusubiPublicationPrivateServiceContextV1::new(
@@ -9711,8 +9715,12 @@ impl Iroha {
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
-            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret)
             .with_vpn_relay_trust(vpn_relay_trust);
+        let runtime_deps = if let Some(signer) = vpn_operator_signer {
+            runtime_deps.with_vpn_operator_signer(signer)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(registry) = bootle_lantern_issuance_provider_registry {
             runtime_deps.with_bootle_lantern_issuance_provider_registry(registry)
         } else {

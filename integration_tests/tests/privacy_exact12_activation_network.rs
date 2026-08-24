@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator governance lifecycle coverage for the complete canonical
-//! first-release exact-12 privacy registry. Ten executable profiles retain
-//! positive governance coverage; ZK-ACE and ZK-AMS remain explicitly
-//! unavailable and fail closed on every validator.
+//! first-release exact-12 privacy registry. Eight executable profiles retain
+//! positive governance coverage; ZK-ACE, ZK-AMS, Vega, and ZK-X509 remain
+//! explicitly unavailable and fail closed on every validator.
 //!
 //! This scenario deliberately does not construct privacy proofs. The isolated
 //! release-evidence runner owns native-engine proof coverage; this test proves
@@ -26,6 +26,7 @@ use iroha_core::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
         zk_ams_release_candidate_profile_material_v1,
+        zk_x509_release_candidate_profile_material_v1,
     },
 };
 use iroha_data_model::{
@@ -46,7 +47,7 @@ use iroha_data_model::{
         privacy_exact12_fixture_bundle_v1,
     },
     query::transaction::prelude::FindTransactions,
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -63,7 +64,14 @@ const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 2] = [ZK_ACE_PROTOCOL, ZK_AMS_PROTOCOL];
+const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 4] = [
+    ZK_ACE_PROTOCOL,
+    ZK_AMS_PROTOCOL,
+    VEGA_PROTOCOL,
+    ZK_X509_PROTOCOL,
+];
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
     protocol_id: PrivacyProtocolIdV1,
@@ -365,6 +373,37 @@ fn instruction_transaction(
 ) -> SignedTransaction {
     client.build_transaction([instruction.into()], no_fee(), Metadata::default())
 }
+fn intent_bound_privacy_transaction(
+    client: &Client,
+    mut envelope: PrivacyProofEnvelopeV1,
+) -> Result<SignedTransaction> {
+    // Keep one exact client-owned payload while deriving the self-referential fields. Building a
+    // second client transaction would change its time/nonce and stale the resulting intent.
+    let draft = instruction_transaction(client, SubmitPrivacyProofV1::new(envelope.clone()));
+    let payload = draft.payload().clone();
+    let intent = payload
+        .privacy_transaction_intent_digest_v1()
+        .wrap_err("derive unavailable-protocol transaction intent")?;
+    envelope.statement.context_mut().transaction_intent_digest = intent;
+    envelope.statement_digest = envelope
+        .statement
+        .digest()
+        .wrap_err("derive unavailable-protocol statement digest")?;
+    let transaction = TransactionBuilder::from_payload(payload)
+        .wrap_err("reopen unavailable-protocol payload")?
+        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+        .try_sign(client.key_pair.private_key())
+        .wrap_err("sign unavailable-protocol transaction")?;
+    ensure!(
+        transaction
+            .payload()
+            .validate_privacy_transaction_intent_binding_v1()
+            .wrap_err("validate unavailable-protocol transaction intent")?
+            == intent,
+        "unavailable-protocol transaction retained a foreign intent"
+    );
+    Ok(transaction)
+}
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -575,7 +614,7 @@ async fn wait_for_identical_unreleased_profiles(
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> {
+async fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     for protocol_id in UNAVAILABLE_PROTOCOLS {
@@ -596,6 +635,8 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
     }
     let zk_ams_candidate = zk_ams_release_candidate_profile_material_v1()
         .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
+    let zk_x509_candidate = zk_x509_release_candidate_profile_material_v1()
+        .wrap_err("derive deterministic but non-activatable ZK-X509 candidate profile")?;
     let mut zk_ace_candidate = compiled_available_profiles()?
         .into_iter()
         .next()
@@ -604,6 +645,14 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
     zk_ace_candidate.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
     zk_ace_candidate.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
     zk_ace_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
+    // This is a structurally valid activation probe, not a Vega profile candidate. The real
+    // candidate stays sealed inside the release-evidence boundary until its authenticated keys
+    // and independent vectors exist.
+    let mut vega_candidate = zk_ace_candidate;
+    vega_candidate.protocol_id = VEGA_PROTOCOL;
+    vega_candidate.proof_system_id = PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
+    vega_candidate.engine_id = PrivacyEngineIdV1::NativeVega;
+    vega_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -612,7 +661,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let context = stringify!(zk_ace_and_zk_ams_fail_closed_across_four_peer_restart);
+    let context = stringify!(all_unreleased_profiles_fail_closed_across_four_peer_restart);
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
@@ -634,7 +683,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             initial_height,
-            "ZK-ACE and ZK-AMS must begin unavailable and unregistered",
+            "ZK-ACE, ZK-AMS, Vega, and ZK-X509 must begin unavailable and unregistered",
         )
         .await?;
         let grant = instruction_transaction(
@@ -652,7 +701,12 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             "unavailable-profile governance grant convergence",
         )
         .await?;
-        for candidate in [zk_ace_candidate, zk_ams_candidate] {
+        for candidate in [
+            zk_ace_candidate,
+            zk_ams_candidate,
+            vega_candidate,
+            zk_x509_candidate,
+        ] {
             let proposal_height = next_incoming_height(&client)?;
             let activation_height = proposal_height
                 .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -707,7 +761,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
                         protocol_id.canonical_label()
                     )
                 })?;
-            let action = instruction_transaction(&client, SubmitPrivacyProofV1::new(envelope));
+            let action = intent_bound_privacy_transaction(&client, envelope)?;
             let action_error = submit_signed_transaction(
                 &client,
                 &action,
@@ -782,7 +836,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             final_height,
-            "ZK-ACE and ZK-AMS closed status must survive validator restart",
+            "ZK-ACE, ZK-AMS, Vega, and ZK-X509 closed status must survive validator restart",
         )
         .await?;
         let restarted_client = bounded_client(restart_peer.client());
@@ -805,7 +859,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             );
         }
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ace_and_zk_ams_fail_closed_across_four_peer_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::all_unreleased_profiles_fail_closed_across_four_peer_restart:passed"
         );
         Ok(())
     }
@@ -850,7 +904,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             initial_height,
             &absent,
-            "available profiles must begin inactive while ZK-ACE and ZK-AMS remain unavailable",
+            "available profiles must begin inactive while ZK-ACE, ZK-AMS, Vega, and ZK-X509 remain unavailable",
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;

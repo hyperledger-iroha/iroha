@@ -52,6 +52,13 @@ impl Command {
             Self::Petal(_) => true,
         }
     }
+
+    pub(crate) fn preflight_before_operator_key_load(&self) -> Result<()> {
+        match self {
+            Self::Kagemusha(command) => command.preflight_before_operator_key_load(),
+            Self::Petal(_) => Ok(()),
+        }
+    }
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -79,6 +86,13 @@ impl KagemushaCommand {
             self,
             Self::RolloutV4(args) if args.allows_fallback_config()
         )
+    }
+
+    fn preflight_before_operator_key_load(&self) -> Result<()> {
+        match self {
+            Self::LifecycleV4(args) => args.preflight_before_operator_key_load(),
+            Self::RolloutV4(_) => Ok(()),
+        }
     }
 }
 impl Run for KagemushaCommand {

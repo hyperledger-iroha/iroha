@@ -13,8 +13,7 @@ use iroha_crypto::soranet::pow::TicketRevocationStoreLimits;
 use iroha_crypto::soranet::{
     handshake::{
         HarnessError, RuntimeParams, build_client_hello, client_handle_relay_hello,
-        parse_capabilities, process_client_hello, relay_finalize_handshake,
-        validate_client_capability_vector,
+        parse_capabilities, process_client_hello, validate_client_capability_vector,
     },
     pow::{
         self, ChallengeBinding as PowBinding, Parameters as PowParameters, SignedTicket,
@@ -13731,7 +13730,7 @@ mod state {
                             iroha_logger::warn!(
                                 %err,
                                 peer=%peer_addr,
-                                "SCION-preferred dial failed; falling back to legacy dial strategy"
+                                "SCION-preferred dial failed; continuing with the standard dial strategy"
                             );
                         }
                     }
@@ -13944,7 +13943,7 @@ mod state {
             ));
         }
         #[tokio::test(flavor = "current_thread")]
-        async fn scion_preference_falls_back_to_legacy_when_unavailable() {
+        async fn scion_preference_uses_standard_strategy_when_unavailable() {
             let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
             let mut connecting =
                 connecting_to(addr, /*tls_enabled=*/ false, /*fallback=*/ true);
@@ -14093,10 +14092,9 @@ mod state {
             let (client_hello, client_state) = build_client_hello(&runtime_params, &mut rng)
                 .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
             let admission_transcript = pow::derive_admission_transcript(&client_hello);
-            let (minted, resumed_rng) =
+            let (minted, _resumed_rng) =
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
-            rng = resumed_rng;
             if let Some(mut minted) = minted {
                 let mut send_result = Ok(());
                 for frame in &minted.frames {
@@ -14110,12 +14108,11 @@ mod state {
             }
             write_handshake_frame(&mut connection.write, &client_hello).await?;
             let relay_hello = read_handshake_frame(&mut connection.read).await?;
-            let (client_finish, secrets) = match client_handle_relay_hello(
+            let secrets = match client_handle_relay_hello(
                 client_state,
                 &relay_hello,
                 &verified_transport_delegation.transport_public_key,
                 &runtime_params,
-                &mut rng,
             ) {
                 Ok(success) => success,
                 Err(HarnessError::Downgrade {
@@ -14148,9 +14145,6 @@ mod state {
                 }
                 Err(err) => return Err(Error::HandshakeSoranet(err.to_string())),
             };
-            if let Some(client_finish) = client_finish {
-                write_handshake_frame(&mut connection.write, &client_finish).await?;
-            }
             if !secrets.warnings.is_empty() {
                 iroha_logger::warn!(
                     warnings = ?secrets
@@ -14261,7 +14255,7 @@ mod state {
                 )
                 .await?;
             }
-            let (relay_hello, relay_state) = match process_client_hello(
+            let (relay_hello, secrets) = match process_client_hello(
                 &client_hello,
                 &runtime_params,
                 &soranet_transport_key_pair,
@@ -14299,14 +14293,6 @@ mod state {
                 Err(err) => return Err(Error::HandshakeSoranet(err.to_string())),
             };
             write_handshake_frame(&mut connection.write, &relay_hello).await?;
-            let secrets = if relay_state.requires_client_finish() {
-                let client_finish = read_handshake_frame(&mut connection.read).await?;
-                relay_finalize_handshake(relay_state, &client_finish, &soranet_transport_key_pair)
-                    .map_err(|err| Error::HandshakeSoranet(err.to_string()))?
-            } else {
-                relay_finalize_handshake(relay_state, &[], &soranet_transport_key_pair)
-                    .map_err(|err| Error::HandshakeSoranet(err.to_string()))?
-            };
             if !secrets.warnings.is_empty() {
                 iroha_logger::warn!(
                     warnings = ?secrets

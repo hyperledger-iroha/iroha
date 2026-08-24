@@ -437,6 +437,9 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
   const dist = read("javascript/iroha_js/dist/toriiClient.js");
   const transactionSrc = read("javascript/iroha_js/src/transaction.js");
   const transactionDist = read("javascript/iroha_js/dist/transaction.js");
+  const indexSrc = read("javascript/iroha_js/src/index.js");
+  const indexDist = read("javascript/iroha_js/dist/index.js");
+  const nativeHost = read("crates/iroha_js_host/src/lib.rs");
   const dts = read("javascript/iroha_js/index.d.ts");
   const tests = read("javascript/iroha_js/test/toriiClient.test.js");
   const transactionTests = read("javascript/iroha_js/test/transactionBuilder.test.js");
@@ -460,13 +463,17 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
     )?.[0];
     assert.ok(method, "signed pin-register method missing");
     assert.match(method, /"\/v1\/sorafs\/pin\/register"/);
-    assert.match(method, /toVersionedTransactionPayload/);
+    assert.match(method, /encodeCanonicalVersionedSignedTransactionV1/);
     assert.match(method, /"Content-Type": APPLICATION_NORITO/);
     assert.match(method, /Accept: APPLICATION_JSON/);
     assert.match(method, /_expectStatus\(response, \[202\]\)/);
     assert.doesNotMatch(method, /private_key|manifest_payload|JSON\.stringify/);
     assert.match(text, /normalizeSorafsPinRegisterResponse/);
     assert.doesNotMatch(text, /function buildSorafsPinRegisterPayload/);
+    assert.doesNotMatch(
+      text,
+      /encodeSignedTransactionNorito|toVersionedTransactionPayload|unwrapNrt0NoritoFrame/,
+    );
   }
   for (const text of [transactionSrc, transactionDist]) {
     assert.match(text, /function buildRegisterPinManifestInstruction\(input\)/);
@@ -474,14 +481,23 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
     assert.match(text, /instructions: \[instruction\]/);
     assert.match(text, /quoteAndSignTransaction/);
     assert.match(text, /no longer accepts a submitted epoch/);
+    assert.doesNotMatch(text, /submitTransactionEntrypoint/);
   }
+  for (const text of [indexSrc, indexDist]) {
+    assert.doesNotMatch(text, /submitTransactionEntrypoint/);
+  }
+  assert.match(nativeHost, /fn decode_canonical_signed_transaction_v1/);
+  assert.doesNotMatch(
+    nativeHost,
+    /encode_signed_transaction_norito|try_decode_signed_transaction_adaptive_with_flags|try_decode_signed_transaction_versioned/,
+  );
   assert.match(dts, /registerSorafsPinManifest\(/);
   assert.match(dts, /registerSorafsPinManifestTyped\(/);
-  assert.match(dts, /signedTransaction: Buffer \| ArrayBuffer \| ArrayBufferView/);
+  assert.match(dts, /signedTransaction: VersionedSignedTransactionV1/);
   assert.match(dts, /buildRegisterPinManifestInstruction/);
   assert.match(dts, /buildRegisterPinManifestTransaction/);
   assert.doesNotMatch(dts, /interface SorafsPinRegisterRequest/);
-  assert.match(tests, /posts only a versioned signed transaction/);
+  assert.match(tests, /posts only an exact canonical V1 transaction/);
   assert.match(tests, /rejects legacy secret-bearing request objects/);
   assert.match(tests, /rejects pre-finality fee or custody claims/);
   assert.match(transactionTests, /quotes and signs exactly one instruction/);

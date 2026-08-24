@@ -50,11 +50,6 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineActiveRecursiveStepEpVerifier,
-    OfflineActiveRecursiveStepEqVerifier,
-    OfflineActiveTopUpShieldVerifier,
-    OfflineActiveTransferVerifier,
-    OfflineActiveUnshieldVerifier,
     OfflineAppliedOperation,
     OfflineAppliedResult,
     OfflineAssetScale,
@@ -80,8 +75,6 @@ from iroha_torii_client.client import (
     OfflineProofBackend,
     OfflineProofBoxJson,
     OfflineQueueErrorDetails,
-    OfflineReadiness,
-    OfflineReadinessBlocker,
     OfflineStatus,
     OfflineRecursiveSpendBundleJson,
     OfflineRecursiveSpendProofJson,
@@ -110,7 +103,6 @@ from iroha_torii_client.client import (
     OfflineVerifiedFoldRecordBundleJson,
     OfflineVerifiedFoldStepJson,
     OfflineVerifiedFoldVerifierRecordJson,
-    OfflineVerifierId,
     OfflineVerifierKeyId,
     OfflineVerifierKeyIdJson,
     OfflineVerifierStatus,
@@ -8234,78 +8226,6 @@ class TriggerCompletionList:
 
 
 @dataclass(frozen=True)
-class SumeragiRbcEviction:
-    """Evicted RBC payload metadata retained for status telemetry consumers."""
-
-    block_hash: Optional[str]
-    height: Optional[int]
-    view: Optional[int]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcEviction":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC eviction entry must be an object")
-        block_hash = payload.get("block_hash")
-        if block_hash is not None and not isinstance(block_hash, str):
-            raise TypeError("RBC eviction `block_hash` must be a string when present")
-        height_val = payload.get("height")
-        view_val = payload.get("view")
-        try:
-            height = None if height_val is None else int(height_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `height` must be numeric when present") from exc
-        try:
-            view = None if view_val is None else int(view_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `view` must be numeric when present") from exc
-        return cls(block_hash=block_hash, height=height, view=view)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcStoreStatus:
-    """RBC on-disk store health retained as typed status telemetry."""
-
-    sessions: int
-    bytes: int
-    pressure_level: int
-    backpressure_deferrals_total: int
-    persist_drops_total: int
-    evictions_total: int
-    recent_evictions: List[SumeragiRbcEviction]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcStoreStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC store payload must be an object")
-        try:
-            sessions = int(payload.get("sessions", 0))
-            bytes_used = int(payload.get("bytes", 0))
-            pressure_level = int(payload.get("pressure_level", 0))
-            backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
-            persist_drops_total = int(payload.get("persist_drops_total", 0))
-            evictions_total = int(payload.get("evictions_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC store counters must be numeric") from exc
-        raw_evictions = payload.get("recent_evictions", [])
-        if raw_evictions is None:
-            evictions_payload: List[Any] = []
-        elif isinstance(raw_evictions, list):
-            evictions_payload = raw_evictions
-        else:
-            raise TypeError("RBC store `recent_evictions` must be a list when present")
-        recent_evictions = [SumeragiRbcEviction.from_payload(entry) for entry in evictions_payload]
-        return cls(
-            sessions=sessions,
-            bytes=bytes_used,
-            pressure_level=pressure_level,
-            backpressure_deferrals_total=backpressure_deferrals_total,
-            persist_drops_total=persist_drops_total,
-            evictions_total=evictions_total,
-            recent_evictions=recent_evictions,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiEvidenceRecord:
     """Evidence record returned by `/v1/sumeragi/evidence`."""
 
@@ -10857,7 +10777,6 @@ class ToriiStatusMetrics:
     queue_delta: int
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
-    da_reschedule_delta: int
     tx_approved_delta: int
     tx_rejected_delta: int
     view_change_delta: int
@@ -10877,7 +10796,6 @@ class ToriiStatusMetrics:
                 queue_delta=0,
                 time_since_last_block_ms=current.time_since_last_block_ms,
                 time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
-                da_reschedule_delta=0,
                 tx_approved_delta=0,
                 tx_rejected_delta=0,
                 view_change_delta=0,
@@ -10890,7 +10808,6 @@ class ToriiStatusMetrics:
             queue_delta=current.queue_size - previous.queue_size,
             time_since_last_block_ms=current.time_since_last_block_ms,
             time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
-            da_reschedule_delta=max(0, current.da_reschedule_total - previous.da_reschedule_total),
             tx_approved_delta=max(0, current.txs_approved - previous.txs_approved),
             tx_rejected_delta=max(0, current.txs_rejected - previous.txs_rejected),
             view_change_delta=max(0, current.view_changes - previous.view_changes),
@@ -10904,7 +10821,6 @@ class ToriiStatusMetrics:
             value
             for value in (
                 self.queue_delta,
-                self.da_reschedule_delta,
                 self.tx_approved_delta,
                 self.tx_rejected_delta,
                 self.view_change_delta,
@@ -11039,7 +10955,6 @@ class ToriiStatusPayload:
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
     commit_time_ms: int
-    da_reschedule_total: int
     txs_approved: int
     txs_rejected: int
     view_changes: int
@@ -11429,7 +11344,6 @@ class ToriiStatusPayload:
             time_since_last_block_ms=_coerce_int("time_since_last_block_ms"),
             time_since_last_non_empty_block_ms=_coerce_int("time_since_last_non_empty_block_ms"),
             commit_time_ms=_coerce_int("commit_time_ms"),
-            da_reschedule_total=_coerce_int("da_reschedule_total"),
             txs_approved=_coerce_int("txs_approved"),
             txs_rejected=_coerce_int("txs_rejected"),
             view_changes=_coerce_int("view_changes"),
@@ -11983,11 +11897,6 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
-    "OfflineActiveTransferVerifier",
-    "OfflineActiveTopUpShieldVerifier",
-    "OfflineActiveUnshieldVerifier",
-    "OfflineActiveRecursiveStepEqVerifier",
-    "OfflineActiveRecursiveStepEpVerifier",
     "OfflineStatus",
     "NodeCapabilities",
     "NodeAdminSnapshot",
@@ -12028,8 +11937,6 @@ __all__ = [
     "SubscriptionActionResult",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
-    "SumeragiRbcEviction",
-    "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
     "SumeragiDiagnosticsSnapshot",

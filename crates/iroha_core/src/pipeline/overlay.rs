@@ -625,7 +625,6 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
         debug_trace_scheduler_inputs: defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
         debug_trace_tx_eval: defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
         signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
         signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
         signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,

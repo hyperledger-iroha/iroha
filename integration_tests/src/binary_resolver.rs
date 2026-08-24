@@ -17,7 +17,7 @@ pub fn iroha_program() -> eyre::Result<PathBuf> {
 ///
 /// Unlike [`iroha_program`], this helper returns an existing compatible CLI binary immediately
 /// without forcing a freshness rebuild. When no reusable binary is available it falls back to the
-/// normal resolver so exact CLI tests remain self-contained on cold targets.
+/// normal resolver; callers running under Cargo must provide a top-level prebuilt binary.
 pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
     prepare_iroha_cli_test_environment();
     if let Some(path) = find_existing_cli_binary_path() {
@@ -29,7 +29,7 @@ pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
 }
 /// Prepare CLI integration tests to reuse already-built binaries when requested.
 pub fn prepare_iroha_cli_test_environment() {
-    enable_reentrant_builds_for_tests();
+    configure_build_profile_for_tests();
     configure_program_overrides_from_existing_binaries();
 }
 /// Return the build-profile override used by CLI integration tests.
@@ -150,10 +150,9 @@ pub fn binary_supports_training_job_commands(path: &Path) -> bool {
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
-fn enable_reentrant_builds_for_tests() {
+fn configure_build_profile_for_tests() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
         if let Some(profile) = iroha_cli_test_build_profile_override(
             std::env::var("IROHA_TEST_BUILD_PROFILE").ok().as_deref(),
         ) {

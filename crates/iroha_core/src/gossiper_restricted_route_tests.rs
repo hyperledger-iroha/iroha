@@ -14,7 +14,9 @@ async fn gossip_accepts_restricted_route_match() {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
     };
-    let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+            .expect("init kura");
     let live_query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
     let restricted_dataspace = DataSpaceId::new(7);

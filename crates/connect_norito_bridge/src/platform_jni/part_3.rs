@@ -862,9 +862,6 @@ kagemusha_sdk_android_forwarders! {
     nativePrepareAcknowledgementV2 { request bytes, payment bytes, accepted_at_ms long } -> JniObjectArray = java_native_kagemusha_prepare_acknowledgement_v2;
     nativeCreateAcknowledgementV2 { payload bytes, signature bytes, request bytes, payment bytes } -> JniByteArray = java_native_kagemusha_create_acknowledgement_v2;
     nativeVerifyAcknowledgementV2 { acknowledgement bytes, request bytes, payment bytes } -> JniObjectArray = java_native_kagemusha_verify_acknowledgement_v2;
-    nativeProjectReadinessV4 { readiness bytes } -> JniObjectArray = java_native_kagemusha_project_readiness_v4;
-    nativeProjectAuthenticatedArtifactSetV4 { artifact_set bytes } -> JniObjectArray = java_native_kagemusha_project_authenticated_artifact_set_v4;
-    nativeProjectActiveVerifierV2 { verifier bytes } -> JniObjectArray = java_native_kagemusha_project_active_verifier_v2;
     #[allow(clippy::too_many_arguments)]
     nativePrepareAuthorizationV2 {
         authority bytes, chain_discriminant int, device_id bytes, asset_definition_id bytes,

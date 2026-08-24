@@ -9,7 +9,9 @@ Usage:
     --candidate-sha256 <hex> \
     --stage-sha256 <hex> \
     --source-commit <git-hex> \
-    --source-tree-sha256 <hex>
+    --source-tree-sha256 <hex> \
+    --reviewed-source-closure <canonical-json> \
+    --reviewed-source-closure-sha256 <hex>
 
 Builds the non-shipping ARM64 Android connect_norito_bridge directly from the
 current checkout with `--features kagemusha-candidate-evidence-lab`. The build
@@ -23,6 +25,8 @@ CANDIDATE_SHA256=""
 STAGE_SHA256=""
 SOURCE_COMMIT=""
 SOURCE_TREE_SHA256=""
+REVIEWED_SOURCE_CLOSURE=""
+REVIEWED_SOURCE_CLOSURE_SHA256=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +44,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --source-tree-sha256)
       SOURCE_TREE_SHA256="${2:-}"
+      shift 2
+      ;;
+    --reviewed-source-closure)
+      REVIEWED_SOURCE_CLOSURE="${2:-}"
+      shift 2
+      ;;
+    --reviewed-source-closure-sha256)
+      REVIEWED_SOURCE_CLOSURE_SHA256="${2:-}"
       shift 2
       ;;
     --help|-h)
@@ -70,6 +82,23 @@ if [[ ! "$SOURCE_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "[kagemusha-candidate-native] ERROR: --source-tree-sha256 must be lowercase SHA-256" >&2
   exit 64
 fi
+if [[ ! "$REVIEWED_SOURCE_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ \
+  || "$REVIEWED_SOURCE_CLOSURE_SHA256" == "$(printf '0%.0s' {1..64})" ]]; then
+  echo "[kagemusha-candidate-native] ERROR: --reviewed-source-closure-sha256 must be non-zero lowercase SHA-256" >&2
+  exit 64
+fi
+if [[ "$REVIEWED_SOURCE_CLOSURE" != /* \
+  || "$REVIEWED_SOURCE_CLOSURE" == */./* \
+  || "$REVIEWED_SOURCE_CLOSURE" == */../* \
+  || "$REVIEWED_SOURCE_CLOSURE" == */ \
+  || "$REVIEWED_SOURCE_CLOSURE" == *//* ]]; then
+  echo "[kagemusha-candidate-native] ERROR: --reviewed-source-closure must be one canonical absolute path" >&2
+  exit 64
+fi
+if [[ ! -f "$REVIEWED_SOURCE_CLOSURE" || -L "$REVIEWED_SOURCE_CLOSURE" ]]; then
+  echo "[kagemusha-candidate-native] ERROR: --reviewed-source-closure must be one regular non-symlink file" >&2
+  exit 66
+fi
 
 CARGO_BINARY="$(command -v cargo 2>/dev/null || true)"
 RUSTC_BINARY="$(command -v rustc 2>/dev/null || true)"
@@ -93,7 +122,7 @@ SHASUM_BINARY="$(command -v shasum 2>/dev/null || true)"
   echo "[kagemusha-candidate-native] ERROR: python3, git, and shasum are required" >&2
   exit 69
 }
-if ! "$CARGO_NDK_BINARY" --version >/dev/null 2>&1; then
+if ! CARGO="$CARGO_BINARY" "$CARGO_NDK_BINARY" --version >/dev/null 2>&1; then
   echo "[kagemusha-candidate-native] ERROR: cargo-ndk is not executable" >&2
   exit 69
 fi
@@ -138,7 +167,7 @@ for path_text, expected, label in (
 PY
 
 "$PYTHON3_BINARY" - "$ROOT_DIR" "$EVIDENCE_ROOT" "$CANDIDATE_SHA256" "$STAGE_SHA256" \
-  "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" <<'PY'
+  "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" "$REVIEWED_SOURCE_CLOSURE_SHA256" <<'PY'
 from pathlib import Path
 import sys
 
@@ -151,6 +180,7 @@ validate_kagemusha_candidate_stage_manifest_v2(
     stage_sha256=sys.argv[4],
     source_commit=sys.argv[5],
     source_tree_sha256=sys.argv[6],
+    reviewed_source_closure_descriptor_sha256=sys.argv[7],
 )
 PY
 
@@ -206,7 +236,10 @@ source_commit() {
 }
 
 source_fingerprint() {
-  "$PYTHON3_BINARY" "$SOURCE_SEAL" fingerprint --root "$ROOT_DIR"
+  "$PYTHON3_BINARY" -I "$SOURCE_SEAL" fingerprint \
+    --root "$ROOT_DIR" \
+    --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+    --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256"
 }
 
 COMMIT_BEFORE="$(source_commit)"
@@ -246,7 +279,7 @@ trap cleanup EXIT
 }
 CARGO_NDK_SHA256_BEFORE="$("$SHASUM_BINARY" -a 256 "$CARGO_NDK_BINARY")"
 CARGO_NDK_SHA256_BEFORE="${CARGO_NDK_SHA256_BEFORE%% *}"
-CARGO_NDK_VERSION_BEFORE="$("$CARGO_NDK_BINARY" --version)"
+CARGO_NDK_VERSION_BEFORE="$(CARGO="$CARGO_BINARY" "$CARGO_NDK_BINARY" --version)"
 NDK_ROOT="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 NDK_SOURCE_PROPERTIES="$NDK_ROOT/source.properties"
 [[ -f "$NDK_SOURCE_PROPERTIES" && ! -L "$NDK_SOURCE_PROPERTIES" ]] || {
@@ -285,7 +318,8 @@ CARGO_NDK_SHA256_AFTER="${CARGO_NDK_SHA256_AFTER%% *}"
   echo "[kagemusha-candidate-native] ERROR: cargo-ndk changed during the build" >&2
   exit 1
 }
-[[ "$("$CARGO_NDK_BINARY" --version)" == "$CARGO_NDK_VERSION_BEFORE" ]] || {
+[[ "$(CARGO="$CARGO_BINARY" "$CARGO_NDK_BINARY" --version)" == \
+    "$CARGO_NDK_VERSION_BEFORE" ]] || {
   echo "[kagemusha-candidate-native] ERROR: cargo-ndk version changed during the build" >&2
   exit 1
 }

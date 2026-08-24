@@ -15,8 +15,6 @@ use super::{
     transcript::VegaTranscriptV1,
 };
 use core::ops::{Deref, DerefMut};
-#[cfg(test)]
-use std::collections::VecDeque;
 use std::sync::Arc;
 use thiserror::Error;
 pub(super) const MASKED_RELAXED_COMMITMENT_COLUMNS_V1: usize = 1024;
@@ -225,30 +223,6 @@ pub(super) struct MaskedRelaxedPrecomputationV1 {
     pub(super) folded_instance: RelaxedInstance,
     folded_witness: SecretRelaxedWitness,
 }
-/// Own all caller-supplied circuit witnesses before the first fallible check.
-///
-/// Processed witnesses are moved into narrower RAII owners; any unprocessed
-/// witness remains here and is erased on success, error, or unwind.
-#[cfg(test)]
-struct SecretCircuitAssignmentsV1(VecDeque<CircuitAssignment>);
-#[cfg(test)]
-impl SecretCircuitAssignmentsV1 {
-    fn new(assignments: Vec<CircuitAssignment>) -> Self {
-        Self(assignments.into())
-    }
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-    fn first(&self) -> Option<&CircuitAssignment> {
-        self.0.front()
-    }
-    fn iter(&self) -> std::collections::vec_deque::Iter<'_, CircuitAssignment> {
-        self.0.iter()
-    }
-    fn take_next(&mut self) -> Option<CircuitAssignment> {
-        self.0.pop_front()
-    }
-}
 /// Own the sole materialized strict witness for one streaming fold step.
 ///
 /// No later assignment is requested until this owner has transferred its
@@ -290,48 +264,6 @@ impl MaskedRelaxedPrecomputationV1 {
         let folded_witness = self.folded_witness.take();
         (self.folded_instance, folded_witness)
     }
-}
-/// Build the complete producer-side masked Nova history from strict circuit
-/// assignments. This is the canonical source of the transcript schedule used
-/// by plaintext KATs and by the encrypted Phase-II/III conformance oracle.
-///
-/// This compatibility wrapper is intended only for small callers that already
-/// own every witness. Release paths should call the streaming factory below.
-#[cfg(test)]
-pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
-    domain: &'static [u8],
-    context_frame: &[u8],
-    commitment_key_label: &[u8],
-    assignments: Vec<CircuitAssignment>,
-    worker_count: usize,
-    random: &mut R,
-) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
-    let mut assignments = SecretCircuitAssignmentsV1::new(assignments);
-    validate_count(assignments.len())?;
-    let shape = assignments
-        .first()
-        .map(|assignment| Arc::clone(&assignment.shape))
-        .ok_or(MaskedRelaxedErrorV1::InvalidProfile)?;
-    let public_inputs = assignments
-        .iter()
-        .map(|assignment| assignment.public_inputs.clone())
-        .collect::<Vec<_>>();
-    precompute_masked_relaxed_stream_v1(
-        MaskedRelaxedStreamConfigV1::new(
-            domain,
-            context_frame,
-            commitment_key_label,
-            shape,
-            &public_inputs,
-            worker_count,
-        ),
-        |_| {
-            assignments
-                .take_next()
-                .ok_or(MaskedRelaxedErrorV1::InvalidProfile)
-        },
-        random,
-    )
 }
 /// Build the masked Nova history while materializing at most one strict
 /// circuit assignment at a time.
@@ -1524,12 +1456,11 @@ mod tests {
             folded_witness,
         }
     }
-    fn strict_assignment(value: u64) -> CircuitAssignment {
-        let shape = Arc::new(precomputed_test_shape());
+    fn strict_assignment(shape: &Arc<Shape>, value: u64) -> CircuitAssignment {
         let mut witness = vec![Scalar::zero(); shape.variable_count()];
         witness[0] = s(value);
         let assignment = CircuitAssignment {
-            shape,
+            shape: Arc::clone(shape),
             witness,
             public_inputs: vec![s(value)],
         };
@@ -1576,10 +1507,7 @@ mod tests {
             .split("#[cfg(test)]\nmod tests")
             .next()
             .expect("production masked-relaxed source");
-        assert!(source.contains(
-            "#[cfg(test)]\nstruct SecretCircuitAssignmentsV1(VecDeque<CircuitAssignment>)"
-        ));
-        assert!(source.contains("#[cfg(test)]\npub(super) fn precompute_masked_relaxed_v1"));
+        assert!(!source.contains("fn precompute_masked_relaxed_v1"));
         assert!(!source.contains("fn prove_masked_relaxed_v1"));
         assert!(source.contains("self.0.pop_front()"));
         assert!(production.contains("Arc::ptr_eq(&assignment.shape, &shape)"));
@@ -1686,12 +1614,18 @@ mod tests {
         let scalars_before = secret_scalars_zeroized_drop_count_v1();
         let witness_before = secret_witness_zeroized_drop_count_v1();
         let mut random = CounterRandom(0x1f83_d9ab_fb41_bd6b);
-        let precomputation = precompute_masked_relaxed_v1(
-            TEST_DOMAIN,
-            TEST_CONTEXT,
-            TEST_KEY_LABEL,
-            vec![strict_assignment(13)],
-            1,
+        let shape = Arc::new(precomputed_test_shape());
+        let strict_public_inputs = vec![vec![s(13)]];
+        let precomputation = precompute_masked_relaxed_stream_v1(
+            MaskedRelaxedStreamConfigV1::new(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                Arc::clone(&shape),
+                &strict_public_inputs,
+                1,
+            ),
+            |_| Ok(strict_assignment(&shape, 13)),
             &mut random,
         )
         .expect("precomputation succeeds");
@@ -1712,13 +1646,19 @@ mod tests {
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let witness_before = secret_witness_zeroized_drop_count_v1();
         arm_error_after_strict_witness_handoff_v1();
+        let shape = Arc::new(precomputed_test_shape());
+        let strict_public_inputs = vec![vec![s(17)]];
         assert!(matches!(
-            precompute_masked_relaxed_v1(
-                TEST_DOMAIN,
-                TEST_CONTEXT,
-                TEST_KEY_LABEL,
-                vec![strict_assignment(17)],
-                1,
+            precompute_masked_relaxed_stream_v1(
+                MaskedRelaxedStreamConfigV1::new(
+                    TEST_DOMAIN,
+                    TEST_CONTEXT,
+                    TEST_KEY_LABEL,
+                    Arc::clone(&shape),
+                    &strict_public_inputs,
+                    1,
+                ),
+                |_| Ok(strict_assignment(&shape, 17)),
                 &mut CounterRandom(0x5be0_cd19_137e_2179),
             ),
             Err(MaskedRelaxedErrorV1::Random(
@@ -1733,13 +1673,19 @@ mod tests {
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
         let witness_before = secret_witness_zeroized_drop_count_v1();
         arm_panic_after_strict_witness_handoff_v1();
+        let shape = Arc::new(precomputed_test_shape());
+        let strict_public_inputs = vec![vec![s(18)]];
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = precompute_masked_relaxed_v1(
-                TEST_DOMAIN,
-                TEST_CONTEXT,
-                TEST_KEY_LABEL,
-                vec![strict_assignment(18)],
-                1,
+            let _ = precompute_masked_relaxed_stream_v1(
+                MaskedRelaxedStreamConfigV1::new(
+                    TEST_DOMAIN,
+                    TEST_CONTEXT,
+                    TEST_KEY_LABEL,
+                    Arc::clone(&shape),
+                    &strict_public_inputs,
+                    1,
+                ),
+                |_| Ok(strict_assignment(&shape, 18)),
                 &mut CounterRandom(0xa54f_f53a_5f1d_36f1),
             );
         }));
@@ -1750,13 +1696,19 @@ mod tests {
         );
         assert_eq!(secret_witness_zeroized_drop_count_v1(), witness_before + 1);
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let shape = Arc::new(precomputed_test_shape());
+        let strict_public_inputs = vec![vec![s(19)]];
         assert!(matches!(
-            precompute_masked_relaxed_v1(
-                TEST_DOMAIN,
-                TEST_CONTEXT,
-                TEST_KEY_LABEL,
-                vec![strict_assignment(19)],
-                1,
+            precompute_masked_relaxed_stream_v1(
+                MaskedRelaxedStreamConfigV1::new(
+                    TEST_DOMAIN,
+                    TEST_CONTEXT,
+                    TEST_KEY_LABEL,
+                    Arc::clone(&shape),
+                    &strict_public_inputs,
+                    1,
+                ),
+                |_| Ok(strict_assignment(&shape, 19)),
                 &mut FailureRandom,
             ),
             Err(MaskedRelaxedErrorV1::Random(
@@ -1768,13 +1720,19 @@ mod tests {
             assignment_before + 1
         );
         let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let shape = Arc::new(precomputed_test_shape());
+        let strict_public_inputs = vec![vec![s(23)]];
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = precompute_masked_relaxed_v1(
-                TEST_DOMAIN,
-                TEST_CONTEXT,
-                TEST_KEY_LABEL,
-                vec![strict_assignment(23)],
-                1,
+            let _ = precompute_masked_relaxed_stream_v1(
+                MaskedRelaxedStreamConfigV1::new(
+                    TEST_DOMAIN,
+                    TEST_CONTEXT,
+                    TEST_KEY_LABEL,
+                    Arc::clone(&shape),
+                    &strict_public_inputs,
+                    1,
+                ),
+                |_| Ok(strict_assignment(&shape, 23)),
                 &mut PanicRandom,
             );
         }));

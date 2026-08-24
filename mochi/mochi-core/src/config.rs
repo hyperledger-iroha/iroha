@@ -18,11 +18,6 @@ pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
 /// High-level presets exposed directly to the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfilePreset {
-    /// Historical preset name retained for saved-config compatibility.
-    ///
-    /// Revision 4 launches the same four-validator committee as [`ProfilePreset::FourPeerBft`]; it
-    /// never creates a single-validator network.
-    SinglePeer,
     /// Four peers to exercise Sumeragi BFT locally.
     FourPeerBft,
 }
@@ -30,21 +25,18 @@ impl ProfilePreset {
     /// Default peer count for the preset.
     pub const fn peer_count(self) -> usize {
         match self {
-            ProfilePreset::SinglePeer => 4,
             ProfilePreset::FourPeerBft => 4,
         }
     }
     /// Short slug used in filesystem paths.
     pub const fn slug(self) -> &'static str {
         match self {
-            ProfilePreset::SinglePeer => "single-peer",
             ProfilePreset::FourPeerBft => "four-peer-bft",
         }
     }
     /// Human-friendly label used in UI surfaces.
     pub const fn label(self) -> &'static str {
         match self {
-            ProfilePreset::SinglePeer => "Legacy single-peer name (4 validators)",
             ProfilePreset::FourPeerBft => "Four Peer BFT",
         }
     }
@@ -94,10 +86,10 @@ impl GenesisProfile {
 impl std::str::FromStr for GenesisProfile {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "iroha3-dev" | "iroha3dev" | "iroha3_dev" => Ok(GenesisProfile::Iroha3Dev),
-            "iroha3-testus" | "iroha3testus" | "iroha3_testus" => Ok(GenesisProfile::Iroha3Testus),
-            "iroha3-nexus" | "iroha3nexus" | "iroha3_nexus" => Ok(GenesisProfile::Iroha3Nexus),
+        match value {
+            "iroha3-dev" => Ok(GenesisProfile::Iroha3Dev),
+            "iroha3-testus" => Ok(GenesisProfile::Iroha3Testus),
+            "iroha3-nexus" => Ok(GenesisProfile::Iroha3Nexus),
             other => Err(format!("invalid genesis profile `{other}`")),
         }
     }
@@ -385,10 +377,6 @@ mod tests {
     }
     #[test]
     fn profile_topology_matches_preset() {
-        let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
-        assert_eq!(legacy.topology.peer_count, 4);
-        assert_eq!(legacy.preset, Some(ProfilePreset::SinglePeer));
-        assert_eq!(legacy.consensus_mode, SumeragiConsensusMode::Permissioned);
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.topology.peer_count, 4);
         assert_eq!(four.preset, Some(ProfilePreset::FourPeerBft));
@@ -396,8 +384,6 @@ mod tests {
     }
     #[test]
     fn profile_cadence_gives_every_committee_persistence_headroom() {
-        let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
-        assert_eq!(legacy.signed_block_cadence_ms().get(), 1_000);
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.signed_block_cadence_ms().get(), 1_000);
         let custom_multi = NetworkProfile::custom(7, SumeragiConsensusMode::Permissioned).unwrap();
@@ -434,19 +420,26 @@ mod tests {
         );
     }
     #[test]
-    fn genesis_profile_parses_aliases() {
+    fn genesis_profile_accepts_only_exact_names() {
         assert_eq!(
             "iroha3-dev".parse::<GenesisProfile>().unwrap(),
             GenesisProfile::Iroha3Dev
         );
         assert_eq!(
-            "iroha3_testus".parse::<GenesisProfile>().unwrap(),
+            "iroha3-testus".parse::<GenesisProfile>().unwrap(),
             GenesisProfile::Iroha3Testus
         );
-        assert!(
-            "unknown".parse::<GenesisProfile>().is_err(),
-            "invalid profiles should error"
-        );
+        for invalid in [
+            "unknown",
+            "iroha3_testus",
+            "iroha3testus",
+            " IROHA3-TESTUS ",
+        ] {
+            assert!(
+                invalid.parse::<GenesisProfile>().is_err(),
+                "invalid profile `{invalid}` should error"
+            );
+        }
     }
     #[test]
     fn genesis_profile_defaults_are_available() {

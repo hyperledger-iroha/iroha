@@ -3885,6 +3885,8 @@ mod tests {
             crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
         > {
             crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                request.repo_id(),
+                request.resolved_revision(),
                 200,
                 Some("application/json".to_owned()),
                 None,

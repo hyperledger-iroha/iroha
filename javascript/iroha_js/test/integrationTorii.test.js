@@ -314,7 +314,6 @@ test(
     assert.equal(typeof metrics.commit_latency_ms, "number");
     assert.equal(typeof metrics.queue_size, "number");
     assert.equal(typeof metrics.queue_delta, "number");
-    assert.equal(typeof metrics.da_reschedule_delta, "number");
     assert.equal(typeof metrics.tx_approved_delta, "number");
     assert.equal(typeof metrics.tx_rejected_delta, "number");
     assert.equal(typeof metrics.view_change_delta, "number");

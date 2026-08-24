@@ -76,6 +76,13 @@ pub(super) fn vega_release_transaction_context_v1()
 pub(super) fn run_vega_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            protocol_id: unavailable,
+        } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+        _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+    })?;
     let fixture = vega_release_fixture_v1()?;
     let VegaReleaseFixtureV1 {
         public_input,
@@ -110,7 +117,12 @@ pub(super) fn run_vega_stage_v1(
         VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
         &mut proof_rng,
     )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    .map_err(|error| match error {
+        crate::privacy_engines::vega::VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable => {
+            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+        }
+        _ => PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected,
+    })?;
     let (statement, proof) = {
         let (intent, submission) = prepared
             .release_evidence_payload_v1()
@@ -564,8 +576,13 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            protocol_id: unavailable,
+        } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+        _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+    })?;
     let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
         PrivacyActiveLifecycleV1 {
             proposed_at_height: 1,

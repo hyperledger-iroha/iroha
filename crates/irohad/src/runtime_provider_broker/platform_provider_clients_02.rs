@@ -2376,6 +2376,8 @@ impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
         self.live_qualification()
             .map_err(|error| self.operation_error(error))?;
         let wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
+            repo_id: request.repo_id().to_owned(),
+            resolved_revision: request.resolved_revision().to_owned(),
             url: request.url().to_owned(),
             content_type: request.content_type().to_owned(),
             accept: request.accept().map(ToOwned::to_owned),
@@ -2398,6 +2400,8 @@ impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
         .map_err(|error| self.operation_error(error))?;
         let response =
             crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                std::mem::take(&mut response.served_repo_id),
+                std::mem::take(&mut response.served_revision),
                 response.status,
                 response.content_type.take(),
                 response.content_encoding.take(),
@@ -2409,6 +2413,13 @@ impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
                 crate::soracloud_hf_credential::
                     SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse
             })?;
+        if response.served_repo_id() != request.repo_id()
+            || response.served_revision() != request.resolved_revision()
+        {
+            self.session.poison();
+            return Err(crate::soracloud_hf_credential::
+                SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse);
+        }
         self.live_qualification()
             .map_err(|error| self.operation_error(error))?;
         Ok(response)

@@ -67,11 +67,14 @@ This crate hosts cross-component tests for Iroha.
   builders are non-shipping and require the explicit feature. Run the
   enforced release gate with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart -- --exact --nocapture --test-threads=1`.
-- Canonical native ZK-AMS and Vega proving, governed activation, corrupted
-  statement/proof rejection, exact replay, four-validator finality, and
-  restarted-validator recovery live in
-  `tests/privacy_exact12_zk_ams_vega_network.rs`. The test is an enforced
-  release-evidence gate (not ignored) and runs with
+- The retained positive ZK-AMS/Vega acceptance suite in
+  `tests/privacy_exact12_zk_ams_vega_network.rs` covers canonical native
+  proving, governed activation, corrupted statement/proof rejection, exact
+  replay, four-validator finality, and restarted-validator recovery once both
+  compiled profiles are releasable. It remains an enforced release-evidence
+  gate (not ignored): while either production profile is unavailable, the
+  required-network command must fail at the compiled-profile boundary before
+  activation or a passing evidence marker. Run that gate with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_zk_ams_vega_network::canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - Governed ZK-X509 trust-anchor, certificate-policy, and signed-CRL dependency
   ordering, unavailable-profile activation refusal, candidate-action refusal,

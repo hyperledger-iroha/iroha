@@ -675,7 +675,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES
                 .get(),
-            scion: A::ScionConfig::default(),
             tls_enabled: false,
             tls_fallback_to_plain: false,
             tls_listen_address: None,
@@ -962,7 +961,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 dedupe_ttl: defaults::connect::DEDUPE_TTL,
                 dedupe_cap: defaults::connect::DEDUPE_CAP,
                 relay_enabled: defaults::connect::RELAY_ENABLED,
-                relay_strategy: defaults::connect::RELAY_STRATEGY,
+                relay_strategy: A::ConnectRelayStrategy::Broadcast,
                 p2p_ttl_hops: defaults::connect::P2P_TTL_HOPS,
             },
             iso_bridge: A::IsoBridge {
@@ -1066,7 +1065,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
             debug_trace_scheduler_inputs: defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
             debug_trace_tx_eval: defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-            signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
             signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
             signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
             signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,

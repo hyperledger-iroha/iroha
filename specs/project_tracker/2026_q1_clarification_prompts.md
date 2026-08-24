@@ -11,4 +11,4 @@ bracketed placeholders, and attach any local diffs or logs before routing to
 
 ## NPoS Sumeragi — Restart & Randomness Acceptance Gates
 
-*(Completed: restart liveness and pacemaker telemetry coverage landed; RBC cold-start recovery and downtime resume tests now backstop Milestone A3. See `integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart` and `integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`. VRF acceptance for Milestone A4 shipped alongside the telemetry/runbook updates referenced in `status.md`.)*
+*(Completed: signed DA recovery and pacemaker telemetry coverage landed; authenticated chunk-hold healing and downtime resume tests now backstop Milestone A3. See `integration_tests/tests/sumeragi_da.rs::authenticated_payload_chunk_hold_heals_and_converges_four_peers` and `integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`. VRF acceptance for Milestone A4 shipped alongside the telemetry/runbook updates referenced in `status.md`.)*

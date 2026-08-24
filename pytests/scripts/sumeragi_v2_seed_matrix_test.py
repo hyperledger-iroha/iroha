@@ -164,14 +164,13 @@ esac
     cargo.write_text(
         f"""#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$*" \
   "${{IROHA_TEST_REQUIRE_NETWORK-<unset>}}" \
   "${{IROHA_TEST_NETWORK_START_ATTEMPTS-<unset>}}" \
   "${{IROHA_TEST_NETWORK_BASE_SEED-<unset>}}" \
   "${{TEST_NETWORK_BIN_IROHAD-<unset>}}" \
   "${{IROHA_TEST_SKIP_BUILD-<unset>}}" \
-  "${{IROHA_TEST_ALLOW_REENTRANT_BUILD-<unset>}}" \
   "${{IROHA_RELEASE_SOURCE_MANIFEST_SHA256-<unset>}}" \
   "${{CARGO_TARGET_DIR-<unset>}}" \
   "${{IROHA_TEST_TARGET_DIR-<unset>}}" \
@@ -448,7 +447,6 @@ def _expected_seed_command(
         "IROHA_TEST_REQUIRE_NETWORK=1 "
         "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
         "IROHA_TEST_SKIP_BUILD=1 "
-        "IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "
         "IROHA_TEST_BUILD_PROFILE=release "
         "PROFILE=release "
         "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
@@ -482,7 +480,6 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     env["IROHA_TEST_NETWORK_START_ATTEMPTS"] = "99"
     env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/inherited-stale-iroha3d"
     env["IROHA_TEST_SKIP_BUILD"] = "1"
-    env["IROHA_TEST_ALLOW_REENTRANT_BUILD"] = "0"
     env["IROHA_RELEASE_SEALED_WORKTREE"] = "1"
     completion_pointer = (
         Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
@@ -508,11 +505,11 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     assert all(row[1:3] == ["1", "1"] for row in rows)
     expected_program_target = Path(env["IROHA_TEST_TARGET_DIR"])
     assert all(
-        row[4:7]
-        == [str(expected_program_target / "release" / "iroha3d"), "1", "0"]
+        row[4:6]
+        == [str(expected_program_target / "release" / "iroha3d"), "1"]
         for row in rows
     )
-    source_manifests = {row[7] for row in rows}
+    source_manifests = {row[6] for row in rows}
     assert source_manifests == {SOURCE_MANIFEST}
     source_manifest = SOURCE_MANIFEST
     expected_source_root = (
@@ -521,9 +518,9 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         / source_manifest
     )
     expected_cargo_target = Path(env["CARGO_TARGET_DIR"])
-    assert all(row[8] == str(expected_cargo_target) for row in rows)
-    assert all(row[9] == str(expected_program_target) for row in rows)
-    assert all(row[10:] == ["3600", "300", "300"] for row in rows)
+    assert all(row[7] == str(expected_cargo_target) for row in rows)
+    assert all(row[8] == str(expected_program_target) for row in rows)
+    assert all(row[9:] == ["3600", "300", "300"] for row in rows)
     expected_seeds = [
         seed
         for scenario in SCENARIOS

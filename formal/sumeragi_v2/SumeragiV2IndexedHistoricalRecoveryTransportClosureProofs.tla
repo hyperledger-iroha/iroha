@@ -2075,46 +2075,12 @@ PROOF
            IndexedHistoricalTransport!
              HistoricalDiscoveryFixedClockNonPacketServiceProperty
 
-\* Compatibility surface for callers which still package all three leaves.
-\* The non-packet conjunct is now a theorem of IndexedChainSpec; only the
-\* exact packet corridor/identity budget remains an explicit residual.
-IndexedHistoricalFixedClockTemporalLeafProperties ==
-  \A initialContext \in AdmissibleContextRecords:
-    IndexedHistoricalTransport(initialContext)!
-      HistoricalTemporalFixedClockLeaves(IndexedChainSpec)
-
 IndexedHistoricalFixedClockPrerequisiteSurface ==
   /\ IndexedHistoricalFixedClockIdentityBridgeProperty
   /\ \A initialContext \in AdmissibleContextRecords:
        IndexedHistoricalTransport(initialContext)!
          HistoricalDiscoveryFixedClockTemporalPrerequisites(
            IndexedChainSpec)
-
-THEOREM IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface ==
-  /\ IndexedChainSpec
-  /\ IndexedHistoricalFixedClockTemporalLeafProperties
-  => IndexedHistoricalFixedClockPrerequisiteSurface
-PROOF
-  <1>1. ASSUME IndexedChainSpec,
-                IndexedHistoricalFixedClockTemporalLeafProperties
-         PROVE IndexedHistoricalFixedClockPrerequisiteSurface
-    <2>1. IndexedHistoricalFixedClockIdentityBridgeProperty
-      BY <1>1,
-         IndexedChainSpecProvidesHistoricalFixedClockIdentityBridge
-    <2>2. ASSUME NEW initialContext \in AdmissibleContextRecords
-           PROVE IndexedHistoricalTransport(initialContext)!
-                   HistoricalDiscoveryFixedClockTemporalPrerequisites(
-                     IndexedChainSpec)
-      <3>1. IndexedHistoricalTransport(initialContext)!
-               HistoricalTemporalFixedClockLeaves(IndexedChainSpec)
-        BY <1>1, <2>2
-           DEF IndexedHistoricalFixedClockTemporalLeafProperties
-      <3> QED BY <3>1,
-           IndexedHistoricalTransport(initialContext)!
-             HistoricalTemporalFixedClockLeavesAreExact
-    <2> QED BY <2>1, <2>2
-         DEF IndexedHistoricalFixedClockPrerequisiteSurface
-  <1> QED BY <1>1
 
 THEOREM IndexedHistoricalFixedClockExactResidualsEstablishPrerequisiteSurface ==
   /\ IndexedChainSpec
@@ -11656,10 +11622,10 @@ Action selection is already a theorem of the frozen indexed state.  Candidate
 causal-DAG service is conditional on the route-neutral starvation residual;
 fixed-kind Serve service is the theorem above.  The release residual therefore
 retains the concrete packet action from the selected packet tail through its
-lifecycle goal and the neutral Candidate starvation lift.  The compatibility
-theorem reconstructs the older three-conjunct corridor for internal rank
-compositions without presenting replenishment as progress or silently using
-historical-only fairness for a current-voter owner.
+lifecycle goal and the neutral Candidate starvation lift.  The composition
+theorem derives the complete three-conjunct corridor from those exact inputs
+for internal rank proofs without presenting replenishment as progress or
+silently using historical-only fairness for a current-voter owner.
 ***************************************************************************)
 
 IndexedHistoricalFixedClockPacketConcreteActionServiceResidual ==

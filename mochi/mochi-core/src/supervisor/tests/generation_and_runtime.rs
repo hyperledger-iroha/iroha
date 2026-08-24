@@ -54,7 +54,7 @@ fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let error = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let error = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .with_post_commit_faults_for_test(PublicationFaultPoint::AfterPointerRename)
         .build()
@@ -78,7 +78,7 @@ fn builder_early_reconciliation_failure_preserves_publication_uncertainty() {
     }
     let paths = NetworkPaths::from_root(
         temp.path(),
-        &NetworkProfile::from_preset(ProfilePreset::SinglePeer),
+        &NetworkProfile::from_preset(ProfilePreset::FourPeerBft),
     );
     let selected = current_generation_id(paths.root())
         .expect("read committed selection")
@@ -94,7 +94,7 @@ fn selected_storage_lease_blocks_writers_until_every_clone_drops() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -123,7 +123,7 @@ fn selected_storage_resolver_rejects_pointer_change_before_shared_lock() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut initial = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut initial = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build initial supervisor");
@@ -158,7 +158,7 @@ fn selected_storage_resolver_fails_fast_while_writer_holds_exclusive_lock() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -182,7 +182,7 @@ fn session_info_fails_fast_while_writer_holds_exclusive_lock() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -207,7 +207,7 @@ fn supervisor_respects_explicit_kagami_override() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = StandaloneKagamiStub::create(temp.path());
-    SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .kagami_path(stub.script_path())
         .build()
@@ -227,7 +227,7 @@ fn supervisor_runs_kagami_verify_for_profile() {
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = StandaloneKagamiStub::create(temp.path());
     let _guard = EnvVarGuard::set("MOCHI_KAGAMI", stub.script_path().as_os_str());
-    let _supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let _supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .build()
@@ -254,7 +254,7 @@ fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
     }
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
-    let slug = NetworkProfile::from_preset(ProfilePreset::SinglePeer).slug();
+    let slug = NetworkProfile::from_preset(ProfilePreset::FourPeerBft).slug();
     let root = temp.path().join(slug);
     let peer_dir = root.join("peers").join("peer0");
     let stale_file = peer_dir.join("stale.bin");
@@ -265,7 +265,7 @@ fn existing_peer_directories_preserve_unmanaged_artifacts_during_build() {
         "stale file should exist before supervisor build"
     );
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -320,14 +320,14 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let current = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let current = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build current supervisor");
     let current_generation = current.generation_id().to_owned();
     let current_config = current.peers()[0].config_path().to_path_buf();
     let current_config_bytes = fs::read(&current_config).expect("read current config");
-    let error = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let error = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect_err("second supervisor must not share a live runtime root");
@@ -341,7 +341,7 @@ fn second_supervisor_cannot_publish_until_current_owner_drops() {
         current_config_bytes
     );
     drop(current);
-    let replacement = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let replacement = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("dropping the current owner releases the runtime root");
@@ -355,12 +355,12 @@ fn consuming_same_root_replacement_transfers_ownership() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let previous = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let previous = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build previous supervisor");
     let previous_generation = previous.generation_id().to_owned();
-    let replacement = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let replacement = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build_replacing(previous)
         .expect("consume previous owner into replacement");
@@ -374,12 +374,12 @@ fn consuming_replacement_returns_previous_only_after_precommit_failure() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let previous = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let previous = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build previous supervisor");
     let generation = previous.generation_id().to_owned();
-    let failure = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let failure = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .nexus_lane_count(2)
         .build_replacing(previous)
@@ -402,12 +402,12 @@ fn consuming_cross_root_replacement_keeps_old_owner_only_until_success() {
     let old_data = temp.path().join("old");
     let new_data = temp.path().join("new");
     let _kagami = KagamiStub::install(temp.path());
-    let previous = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let previous = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(&old_data)
         .build()
         .expect("build old root");
     let old_root = previous.paths().root().to_path_buf();
-    let replacement = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let replacement = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(&new_data)
         .build_replacing(previous)
         .expect("build independently owned new root");
@@ -422,11 +422,11 @@ fn consuming_postcommit_failure_permanently_retires_previous() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let previous = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let previous = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build previous supervisor");
-    let failure = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let failure = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .with_post_commit_faults_for_test(PublicationFaultPoint::AfterPointerRename)
         .build_replacing(previous)
@@ -447,7 +447,7 @@ fn overlay_rejects_retained_storage_symlink_before_publication() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -476,7 +476,7 @@ fn overlay_rejects_retained_streaming_symlink_before_publication() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -873,7 +873,7 @@ fn precommit_failure_guard_blocks_competing_writer_through_peer_restoration() {
     let _stub = KagamiStub::install(temp.path());
     let irohad = write_long_running_irohad_stub(temp.path());
     let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1127,7 +1127,7 @@ fn genesis_topology_matches_peer_configuration_across_presets() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+    for preset in [ProfilePreset::FourPeerBft] {
         let supervisor = SupervisorBuilder::new(preset)
             .data_root(temp.path())
             .build()
@@ -1509,7 +1509,7 @@ fn supervisor_omits_retired_nexus_availability_switch() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1523,7 +1523,7 @@ fn supervisor_allows_canonical_nexus_with_permissioned_consensus() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("canonical one-lane Nexus is valid with permissioned consensus");
@@ -1537,7 +1537,7 @@ fn supervisor_rejects_custom_nexus_topology_without_npos_consensus() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("temp dir");
     let _stub = KagamiStub::install(temp.path());
-    let err = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let err = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .nexus_lane_count(2)
         .build()
@@ -1570,7 +1570,7 @@ fn supervisor_exposes_config_overrides() {
         toml::Value::String("127.0.0.1:8080".to_owned()),
     );
     let supervisor =
-        SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::SinglePeer))
+        SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::FourPeerBft))
             .data_root(temp.path())
             .nexus_config(nexus)
             .sumeragi_config(sumeragi)
@@ -2356,7 +2356,7 @@ fn peer_spec_config_header_includes_lane_paths() {
 }
 #[cfg(unix)]
 fn onboarding_test_paths(root: &Path, name: &str) -> NetworkPaths {
-    let profile = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+    let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
     let paths = NetworkPaths::from_root(root.join(name), &profile);
     paths.ensure().expect("create onboarding test paths");
     paths
@@ -2723,7 +2723,7 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
     let workspace_root = temp.path().join("workspace");
     let sandbox_root = workspace_root.join(".mochi").join("sandbox");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(&sandbox_root)
         .build()
         .expect("build supervisor");
@@ -2732,7 +2732,7 @@ fn supervisor_session_info_reports_workspace_and_mcp_urls() {
         info.workspace_root.as_deref(),
         Some(workspace_root.as_path())
     );
-    assert!(info.sandbox_root.ends_with(Path::new("single-peer")));
+    assert!(info.sandbox_root.ends_with(Path::new("four-peer-bft")));
     assert_eq!(info.torii_url, "http://127.0.0.1:8080");
     assert_eq!(info.mcp_url, "http://127.0.0.1:8080/v1/mcp");
     assert!(info.account_id.is_some());
@@ -2756,7 +2756,7 @@ fn managed_block_stream_unknown_peer_errors() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2774,7 +2774,7 @@ fn managed_block_stream_returns_handle_for_peer() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2872,7 +2872,7 @@ exit 1
         fs::set_permissions(&irohad_stub, perms).expect("set stub perms");
     }
     let _irohad_guard = EnvVarGuard::set("MOCHI_IROHAD", irohad_stub.as_os_str());
-    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .restart_policy(RestartPolicy::OnFailure {
             max_restarts: 2,
@@ -2932,7 +2932,7 @@ fn supervisor_exposes_log_stream() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2949,7 +2949,7 @@ fn start_peer_unknown_alias_errors() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .torii_base_port(20000)
         .p2p_base_port(30000)
@@ -2977,7 +2977,7 @@ fn stop_peer_unknown_alias_errors() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = match SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .torii_base_port(20000)
         .p2p_base_port(30000)

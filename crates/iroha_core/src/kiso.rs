@@ -807,7 +807,6 @@ mod tests {
                 p2p_no_proxy: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
-                scion: iroha_config::parameters::actual::ScionConfig::default(),
                 quic_enabled: false,
                 quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
                 quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES
@@ -1058,7 +1057,8 @@ mod tests {
                     dedupe_ttl: std::time::Duration::from_secs(60),
                     dedupe_cap: 1024,
                     relay_enabled: false,
-                    relay_strategy: "broadcast",
+                    relay_strategy:
+                        iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
                     p2p_ttl_hops: 0,
                 },
                 iso_bridge: IsoBridge {
@@ -1214,7 +1214,6 @@ mod tests {
                     .expect("non-zero push topics cap"),
                     fcm_project_id: None,
                     fcm_service_account_path: None,
-                    fcm_api_key: None,
                     apns_environment:
                         iroha_config::parameters::defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),
                     apns_topic: None,
@@ -1222,7 +1221,6 @@ mod tests {
                     apns_key_id: None,
                     apns_private_key_path: None,
                     apns_endpoint: None,
-                    apns_auth_token: None,
                 },
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
@@ -1302,8 +1300,6 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
                 debug_trace_tx_eval:
                     iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-                signature_batch_max:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
                 signature_batch_max_ed25519:
                     iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
                 signature_batch_max_secp256k1:

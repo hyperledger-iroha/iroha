@@ -222,11 +222,11 @@ fn completed_qpcs_v1(
     )
 }
 
-fn bind_claimed_root_v1(
-    schedule: &mut RelationScheduleV1,
+fn claimed_relation_fixture_v1(
+    schedule: RelationScheduleV1,
     claimed_root: [u8; DIGEST_BYTES_V1],
     context: u16,
-) -> ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {
+) -> RnsNativeCrossFieldRlweClaimedRelationV1 {
     let prior = schedule
         .bound
         .completed_qpcs
@@ -239,10 +239,9 @@ fn bind_claimed_root_v1(
         transcript_digest_fixture_v1(context, 901),
     )
     .expect("claimed terminal roots");
-    let (claim, _) = roots.into_cross_field_claim_v1();
     schedule
-        .bind_claimed_cross_field_root_v1(claim)
-        .expect("provisional cross-field transcript")
+        .bind_claimed_terminal_roots_v1(roots)
+        .expect("atomic claimed terminal chronology")
 }
 
 fn relation_schedule_fixture_v1() -> RelationScheduleV1 {
@@ -262,8 +261,10 @@ fn claim_equality_pending_fixture_v1<'a>(
     successor: &'a [u8],
     context: u16,
 ) -> RnsNativeCrossFieldRlweClaimEqualityPendingVerifiedV1<'a> {
-    let mut schedule = relation_schedule_fixture_v1();
-    let _ = bind_claimed_root_v1(&mut schedule, claimed_root, context);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        mut schedule,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(relation_schedule_fixture_v1(), claimed_root, context);
     let cross_field_root_equality_obligation = schedule
         .take_cross_field_root_equality_obligation_v1()
         .expect("sole claimed-root equality obligation");
@@ -446,14 +447,6 @@ impl RnsNativeCrossFieldQuotientOpeningCursorV1 for TouchSourceV1<'_> {
         _quotient_bits: &mut [Scalar],
     ) -> Result<(), RnsNativeCrossFieldRlweDirectErrorV1> {
         self.fail_v1()
-    }
-}
-
-struct UntouchedRandomV1;
-
-impl ProofRandomSource for UntouchedRandomV1 {
-    fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), GeneralizedBulletproofErrorV1> {
-        panic!("preflight must reject before RNG use")
     }
 }
 
@@ -1041,9 +1034,11 @@ fn completed_qpcs_lineage_rejects_wrong_session_and_is_one_shot() {
 
 #[test]
 fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
-    let mut wrong = relation_schedule_fixture_v1();
     let claimed = digest_v1(91);
-    let _ = bind_claimed_root_v1(&mut wrong, claimed, 720);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule: mut wrong,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(relation_schedule_fixture_v1(), claimed, 720);
     assert!(matches!(
         wrong
             .take_cross_field_root_equality_obligation_v1()
@@ -1059,8 +1054,10 @@ fn claimed_cross_field_root_mismatch_rejects_and_obligation_is_consumed() {
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     ));
 
-    let mut matching = relation_schedule_fixture_v1();
-    let _ = bind_claimed_root_v1(&mut matching, claimed, 721);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule: mut matching,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(relation_schedule_fixture_v1(), claimed, 721);
     matching
         .take_cross_field_root_equality_obligation_v1()
         .expect("matching equality obligation")
@@ -1121,8 +1118,10 @@ fn concrete_direct_root_bridge_is_matching_mismatch_and_one_shot() {
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     ));
 
-    let mut schedule = relation_schedule_fixture_v1();
-    let _ = bind_claimed_root_v1(&mut schedule, claimed_root, 727);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        mut schedule,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(relation_schedule_fixture_v1(), claimed_root, 727);
     let obligation = schedule
         .take_cross_field_root_equality_obligation_v1()
         .expect("one-shot concrete equality obligation");
@@ -1266,31 +1265,6 @@ fn claimed_frame_requires_the_inventorys_exact_terminal_transcript() {
         validate_claimed_inventory_transcript_v1(&claimed, [0; DIGEST_BYTES_V1]),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
     );
-}
-
-#[test]
-fn direct_claim_rejects_a_foreign_qpcs_session_and_fails_closed() {
-    let mut schedule = relation_schedule_fixture_v1();
-    let foreign_prior = qpcs_transcript_fixture_v1(722).binding_digest();
-    let foreign_roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
-        foreign_prior,
-        digest_v1(93),
-        transcript_digest_fixture_v1(722, 900),
-        transcript_digest_fixture_v1(722, 901),
-    )
-    .expect("foreign terminal roots");
-    let (foreign_claim, _) = foreign_roots.into_cross_field_claim_v1();
-    assert!(matches!(
-        schedule.bind_claimed_cross_field_root_v1(foreign_claim),
-        Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext)
-    ));
-    assert!(
-        !schedule
-            .bound
-            .completed_qpcs
-            .has_unconsumed_qpcs_transcript_v1()
-    );
-    assert!(!schedule.has_claimed_cross_field_root_v1());
 }
 
 #[test]
@@ -1478,8 +1452,13 @@ fn full_gbp_typed_bind_seal_verify_discharge_and_mutations() {
     let wire = bound.seal_v1(&successor).expect("typed successor seal");
     assert_eq!(wire.len(), OWNED_WIRE_BYTES_V1 + successor.len());
 
-    let mut verifier_schedule = full_relation_schedule_v1();
-    let verifier_cross_field = bind_claimed_root_v1(&mut verifier_schedule, claimed_root, 600);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule: verifier_schedule,
+        terminal_chronology: verifier_chronology,
+    } = claimed_relation_fixture_v1(full_relation_schedule_v1(), claimed_root, 600);
+    let verifier_pre_global = verifier_chronology.pre_global_lookup_capability_v1();
+    let verifier_cross_binding = verifier_pre_global.test_post_cross_field_binding_digest_v1();
+    let verifier_global_challenge = verifier_pre_global.test_global_lookup_challenge_seed_v1();
     let verifier_source = FullZeroSourceV1::new_v1(&verifier_schedule).expect("verifier source");
     let equality_pending = verify_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(
         verifier_schedule,
@@ -1494,11 +1473,8 @@ fn full_gbp_typed_bind_seal_verify_discharge_and_mutations() {
         .expect("concrete direct-root equality");
     assert_eq!(verified.successor(), successor.as_slice());
     assert_ne!(verified.binding_digest(), [0; DIGEST_BYTES_V1]);
-    assert_eq!(verifier_cross_field.binding_digest(), prover_cross_binding);
-    assert_eq!(
-        verifier_cross_field.global_lookup_challenge_seed(),
-        prover_global_challenge
-    );
+    assert_eq!(verifier_cross_binding, prover_cross_binding);
+    assert_eq!(verifier_global_challenge, prover_global_challenge);
 
     let mut mutated_proof = wire.clone();
     let first_scalar =
@@ -1515,8 +1491,10 @@ fn full_gbp_typed_bind_seal_verify_discharge_and_mutations() {
     let codec_offset = OWNED_WIRE_BYTES_V1 - CODEC_DIGEST_BYTES_V1;
     let repaired_codec = codec_digest_v1(&mutated_proof[..codec_offset]);
     mutated_proof[codec_offset..OWNED_WIRE_BYTES_V1].copy_from_slice(&repaired_codec);
-    let mut mutated_schedule = full_relation_schedule_v1();
-    let _ = bind_claimed_root_v1(&mut mutated_schedule, claimed_root, 601);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule: mutated_schedule,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(full_relation_schedule_v1(), claimed_root, 601);
     let mutated_source = FullZeroSourceV1::new_v1(&mutated_schedule).expect("mutation source");
     assert!(
         verify_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(
@@ -1527,8 +1505,10 @@ fn full_gbp_typed_bind_seal_verify_discharge_and_mutations() {
         .is_err()
     );
 
-    let mut algebra_schedule = full_relation_schedule_v1();
-    let _ = bind_claimed_root_v1(&mut algebra_schedule, claimed_root, 602);
+    let RnsNativeCrossFieldRlweClaimedRelationV1 {
+        schedule: algebra_schedule,
+        terminal_chronology: _,
+    } = claimed_relation_fixture_v1(full_relation_schedule_v1(), claimed_root, 602);
     let algebra_source = FullZeroSourceV1::new_v1(&algebra_schedule)
         .expect("algebra source")
         .with_algebra_fault_v1(0);
@@ -1643,14 +1623,8 @@ fn pending_owner_seal_and_frame_preflight_roundtrip_are_mutation_sensitive() {
 #[test]
 fn source_independent_preflight_rejects_before_source_or_rng_touch() {
     let touches = Cell::new(0);
-    let mut rng = UntouchedRandomV1;
     assert!(matches!(
-        prove_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _, _>(
-            relation_schedule_fixture_v1(),
-            TouchSourceV1 { touches: &touches },
-            &[],
-            &mut rng,
-        ),
+        SuccessorPreflightV1::new_v1(&[]),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidHeader)
     ));
     assert_eq!(touches.get(), 0);
@@ -1658,12 +1632,7 @@ fn source_independent_preflight_rejects_before_source_or_rng_touch() {
     let oversized_successor =
         vec![0_u8; RNS_NATIVE_CROSS_FIELD_RLWE_DIRECT_SUCCESSOR_MAX_BYTES_V1 + 1];
     assert!(matches!(
-        prove_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _, _>(
-            relation_schedule_fixture_v1(),
-            TouchSourceV1 { touches: &touches },
-            &oversized_successor,
-            &mut rng,
-        ),
+        SuccessorPreflightV1::new_v1(&oversized_successor),
         Err(RnsNativeCrossFieldRlweDirectErrorV1::ProofCapExceeded)
     ));
     assert_eq!(touches.get(), 0);
@@ -1784,33 +1753,27 @@ fn claimed_relation_surface_is_atomic_move_only_and_source_ordered() {
         .split_once("pub(super) fn bind_claimed_terminal_roots_v1(")
         .expect("atomic claimed-root transition")
         .1
-        .split_once("/// Bind the authenticated claimed root before the successor chain")
+        .split_once("    const fn has_claimed_cross_field_root_v1")
         .expect("atomic claimed-root transition boundary")
         .0;
     assert!(transition.contains("        mut self,"));
     assert!(!transition.contains("&mut self"));
     assert!(!transition.contains("ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1"));
+    let terminal = transition
+        .find(".bind_provisional_terminal_chronology_v1(roots)")
+        .expect("atomic terminal chronology");
     let split = transition
-        .find("roots.into_cross_field_claim_v1()")
-        .expect("typed terminal split");
-    let claim = transition
-        .find(".bind_claimed_cross_field_root_v1(claim)")
-        .expect("typed claim bind");
-    let successors = transition
-        .find(".bind_remaining_terminal_roots_v1(remaining_roots)")
-        .expect("ordered successor bind");
+        .find(".into_cross_field_obligation_and_global_pending_v1()")
+        .expect("typed cross-field obligation split");
     let obligation = transition
         .find("self.cross_field_root_equality_obligation = Some(equality_obligation)")
         .expect("retained equality obligation");
     let owner = transition
         .find("Ok(RnsNativeCrossFieldRlweClaimedRelationV1")
         .expect("atomic claimed-relation owner");
-    assert!(split < claim && claim < successors && successors < obligation && obligation < owner);
+    assert!(terminal < split && split < obligation && obligation < owner);
 
-    let legacy = source
-        .find("pub(super) fn bind_claimed_cross_field_root_v1(")
-        .expect("test compatibility split helper");
-    assert!(source[legacy.saturating_sub(32)..legacy].contains("#[cfg(test)]"));
+    assert!(!source.contains("pub(super) fn bind_claimed_cross_field_root_v1("));
 
     let frame_declaration = source
         .find("pub(super) struct RnsNativeCrossFieldRlweClaimedFramePreflightV1")
@@ -1952,7 +1915,7 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
         )
         .expect("provisional q-mask inventory projection")
         .1
-        .split_once("/// Ephemeral adapter")
+        .split_once("/// Private authenticated-inventory projection")
         .expect("provisional q-mask inventory projection boundary")
         .0;
     for exact_projection_step in [
@@ -1979,7 +1942,11 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
             "provisional q-mask owner gained authority: {forbidden_authority}"
         );
     }
-    let normalized_source = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized_source = source
+        .replace("///", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for forbidden_impl in [
         "impl RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
         "impl RnsNativeCrossFieldAuthoritativeSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
@@ -2005,7 +1972,7 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
         .split_once("impl<S, N> RnsNativeCrossFieldAuthenticatedPublicPointSourceV1")
         .expect("public-point membership projection")
         .1
-        .split_once("/// Prover extension")
+        .split_once("/// The two opening owners attached to each direct relation")
         .expect("public-point projection boundary")
         .0;
     for exact_owner in [
@@ -2055,6 +2022,57 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
 }
 
 #[test]
+fn authenticated_difference_low_alias_is_borrowed_then_retained_for_source_packing() {
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let adapter = source
+        .split_once("struct RnsNativeMembershipBackedDirectSourceV1")
+        .expect("membership-backed direct adapter")
+        .1
+        .split_once("impl<S, N> RnsNativeCrossFieldNumericCursorV1")
+        .expect("membership-backed direct adapter boundary")
+        .0;
+    assert!(
+        adapter.contains("existing_radix: &'owner RnsNativeExistingRadixDirectAliasV1<'proof>")
+    );
+
+    let claimed = source
+        .split_once("pub(super) fn verify_rns_native_cross_field_rlwe_claimed_with_alias_v2")
+        .expect("claimed direct verifier")
+        .1
+        .split_once("#[cfg(test)]")
+        .expect("claimed direct verifier boundary")
+        .0;
+    let borrowed = claimed
+        .find("existing_radix: &existing_radix")
+        .expect("borrowed direct alias");
+    let retained = claimed
+        .find("existing_radix,")
+        .expect("retained direct alias");
+    assert!(borrowed < retained);
+    assert!(!claimed.contains("existing_radix.clone("));
+    assert!(!claimed.contains("to_vec("));
+
+    let all_roots = source
+        .split_once("pub(super) struct RnsNativeCrossFieldRlweAllRootsVerifiedV2")
+        .expect("all-roots owner")
+        .1
+        .split_once("impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .expect("all-roots owner boundary")
+        .0;
+    assert!(all_roots.contains("existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>"));
+    let projection = source
+        .split_once("pub(super) fn source_packing_difference_low_commitment_v2")
+        .expect("purpose-bound D-low projection")
+        .1
+        .split_once("/// Borrow the exact live source snapshot")
+        .expect("purpose-bound D-low projection boundary")
+        .0;
+    assert!(projection.contains("difference_low_commitment_v1(group, digit)"));
+    assert!(!projection.contains("inventory"));
+    assert!(!projection.contains("from_raw"));
+}
+
+#[test]
 fn source_and_transcript_privacy_invariants_are_source_settled() {
     let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
     for needle in [
@@ -2089,7 +2107,6 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "pub(super) struct RnsNativePreDirectInventoryCandidateAxesV1",
         "pub(super) fn bind_to_terminal_transcript_v1(",
         "pub(super) fn bind_claimed_terminal_roots_v1(",
-        "pub(super) fn bind_claimed_cross_field_root_v1(",
         "pub(super) fn prove_rns_native_cross_field_rlwe_direct_pending_v1<",
         "pub(super) fn seal_v1(",
         "const PRE_QPCS_Q_MASK_TOKEN_INTEGRATED_V1: bool = false;",
@@ -2252,14 +2269,7 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         .expect("pending owner implementation boundary")
         .0;
     assert!(!pending_impl.contains("pub(super) fn seal_v1("));
-    assert!(pending_impl.contains("fn seal_preflighted_v1("));
-    let compatibility_seal = pending_impl
-        .find("fn seal_preflighted_v1(")
-        .expect("test-only compatibility seal");
-    assert!(
-        pending_impl[compatibility_seal.saturating_sub(24)..compatibility_seal]
-            .contains("#[cfg(test)]")
-    );
+    assert!(!pending_impl.contains("fn seal_preflighted_v1("));
     let typed_bind = source
         .split_once("pub(super) fn bind_to_terminal_transcript_v1(")
         .expect("typed terminal bind")
@@ -2369,6 +2379,11 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
             "post-qPCS axis leaked into q-mask root: {post_qpcs_axis}"
         );
     }
+    let normalized_source = source
+        .replace("///", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for required_inventory_no_go in [
         "current inventory `prior_context_digest_v1` and canonical inventory root",
         "cross-field, global-lookup, and zero-padding roots",
@@ -2378,7 +2393,7 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "current-inventory-prior-context-and-canonical-root-must-not-be-adapted",
     ] {
         assert!(
-            source.contains(required_inventory_no_go),
+            normalized_source.contains(required_inventory_no_go),
             "missing current-inventory NO-GO contract: {required_inventory_no_go}"
         );
     }
@@ -2483,26 +2498,8 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
     assert!(final_binding.contains("view.successor_digest"));
     assert!(final_binding.contains("cross_field_core_root"));
 
-    let legacy_prover = source
-        .split_once("fn prove_kernel_for_suite_v1")
-        .expect("legacy prover")
-        .1
-        .split_once("fn verify_kernel_for_suite_v1")
-        .expect("legacy prover boundary")
-        .0;
-    let successor_preflight = legacy_prover
-        .find("SuccessorPreflightV1::new_v1(successor)")
-        .expect("successor preflight");
-    let pending_proof = legacy_prover
-        .find("prove_pending_kernel_for_suite_v1")
-        .expect("pending proof");
-    assert!(successor_preflight < pending_proof);
-    let legacy_declaration = source
-        .find("fn prove_kernel_for_suite_v1")
-        .expect("legacy declaration");
-    assert!(
-        source[legacy_declaration.saturating_sub(24)..legacy_declaration].contains("#[cfg(test)]")
-    );
+    assert!(!source.contains("fn prove_kernel_for_suite_v1"));
+    assert!(!source.contains("fn seal_preflighted_v1"));
     assert!(!source.contains("pub(super) fn prove_rns_native_cross_field_rlwe_direct_v1"));
 
     let verifier = source

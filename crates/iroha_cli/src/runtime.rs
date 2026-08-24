@@ -1,6 +1,6 @@
 //! Runtime upgrade helpers for CLI
-use eyre::Result;
 use crate::{CliOutputFormat, Run, RunContext};
+use eyre::Result;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Runtime ABI helpers

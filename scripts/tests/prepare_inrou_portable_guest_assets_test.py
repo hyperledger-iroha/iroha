@@ -533,7 +533,7 @@ def test_verify_pinned_archive_rejects_unpinned_archive(tmp_path: Path) -> None:
         MODULE.verify_pinned_archive(archive)
     except SystemExit as error:
         assert "no pinned SHA512 digest" in str(error)
-        assert "refusing to use unsigned Debian guest assets" in str(error)
+        assert "refusing noncanonical Debian guest assets" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("unsigned unpinned archive was accepted")
 
@@ -985,7 +985,9 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
     ]
 
 
-def test_main_uses_verified_sums_when_signature_is_available(monkeypatch, tmp_path: Path) -> None:
+def test_main_requires_pinned_digest_even_when_signature_is_available(
+    monkeypatch, tmp_path: Path
+) -> None:
     output_dir = tmp_path / "assets"
     calls = []
 
@@ -1012,7 +1014,7 @@ def test_main_uses_verified_sums_when_signature_is_available(monkeypatch, tmp_pa
     monkeypatch.setattr(
         MODULE,
         "verify_pinned_archive",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("pinned fallback should not run")),
+        lambda archive: calls.append(("verify_pinned", archive.name)),
     )
     monkeypatch.setattr(
         MODULE,
@@ -1042,6 +1044,7 @@ def test_main_uses_verified_sums_when_signature_is_available(monkeypatch, tmp_pa
     assert calls == [
         ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
         ("download", f"https://images.example/base/{archive_name}", archive_name),
+        ("verify_pinned", archive_name),
         ("verify_archive", archive_name, "SHA512SUMS"),
         ("extract_disk", True),
         ("copy_range", True),

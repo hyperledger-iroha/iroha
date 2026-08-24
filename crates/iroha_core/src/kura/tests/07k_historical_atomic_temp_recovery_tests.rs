@@ -52,7 +52,8 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
         &signer,
         b"atomic-temp-obsolete",
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical atomic-temp Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical atomic-temp Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
     persist_historical_atomic_temp_dependencies(&kura, &first_payload);
     persist_historical_atomic_temp_dependencies(&kura, &second_payload);
@@ -88,10 +89,11 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
     );
     assert!(!first_stable.exists() && !second_stable.exists());
     drop(kura);
-    let startup_error = match Kura::new(&config, &lane_config) {
-        Ok(_) => panic!("startup must reject an obsolete historical publication residue"),
-        Err(error) => error,
-    };
+    let startup_error =
+        match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject an obsolete historical publication residue"),
+            Err(error) => error,
+        };
     assert!(
         startup_error
             .to_string()
@@ -105,7 +107,7 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
     assert!(dedicated_temp.exists() && obsolete_temp.exists());
 
     std::fs::remove_file(&obsolete_temp).expect("remove rejected obsolete residue");
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("startup promotes the authenticated current-format residue");
     assert_eq!(
         std::fs::read(&first_stable).expect("read recovered dedicated stable seal"),
@@ -117,8 +119,9 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
     );
     assert!(!dedicated_temp.exists());
     drop(reopened);
-    let (reopened_again, _) = Kura::new(&config, &lane_config)
-        .expect("historical atomic-temp recovery is restart-idempotent");
+    let (reopened_again, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("historical atomic-temp recovery is restart-idempotent");
     assert!(
         reopened_again
             .historical_autonomous_lane_recovery_record_matches(&first)
@@ -157,7 +160,8 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
         &signer,
         b"atomic-temp-linked",
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical duplicate Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical duplicate Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &duplicate_payload);
     persist_historical_atomic_temp_dependencies(&kura, &duplicate_payload);
     persist_historical_atomic_temp_dependencies(&kura, &linked_payload);
@@ -180,7 +184,7 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
     ));
     std::fs::hard_link(&linked_stable, &linked_temp)
         .expect("create stable/temporary two-link publication boundary");
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("startup cleans exact and two-link historical retries");
     assert!(!duplicate_temp.exists() && !linked_temp.exists());
     for record in [&duplicate, &linked] {
@@ -214,7 +218,8 @@ fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion()
         &signer,
         b"atomic-temp-whole-inventory",
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical preflight Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical preflight Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_atomic_temp_dependencies(&kura, &payload);
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
@@ -236,7 +241,7 @@ fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion()
     );
     drop(kura);
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "a late malformed item must reject the complete startup reconciliation",
     );
     assert!(!stable.exists());
@@ -265,7 +270,8 @@ fn historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation(
         &signer,
         b"atomic-temp-duplicate-target",
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("duplicate-temp residue Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("duplicate-temp residue Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let first = write_historical_atomic_temp_fixture(
@@ -309,7 +315,8 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
         let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
-        let (kura, _) = Kura::new(&config, &lane_config).expect("oversized residue Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("oversized residue Kura");
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         std::fs::create_dir_all(&directory).expect("create oversized residue directory");
@@ -325,7 +332,7 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         .expect("size oversized residue");
         drop(file);
         drop(kura);
-        assert!(Kura::new(&config, &lane_config).is_err());
+        assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
         assert!(oversized.exists());
     }
     #[cfg(unix)]
@@ -334,7 +341,8 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
         let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
-        let (kura, _) = Kura::new(&config, &lane_config).expect("symlink residue Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("symlink residue Kura");
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         std::fs::create_dir_all(&directory).expect("create symlink residue directory");
@@ -345,7 +353,7 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         ));
         std::os::unix::fs::symlink(&target, &symlink).expect("create historical residue symlink");
         drop(kura);
-        assert!(Kura::new(&config, &lane_config).is_err());
+        assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
         assert!(
             std::fs::symlink_metadata(&symlink)
                 .expect("symlink residue retained")
@@ -371,7 +379,8 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
             &signer,
             b"atomic-temp-extraneous-hardlink",
         );
-        let (kura, _) = Kura::new(&config, &lane_config).expect("hardlink residue Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("hardlink residue Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
@@ -385,7 +394,7 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         ));
         std::fs::hard_link(&first, &second).expect("create extraneous temporary hardlink pair");
         drop(kura);
-        assert!(Kura::new(&config, &lane_config).is_err());
+        assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
         assert!(first.exists() && second.exists());
     }
 }
@@ -421,7 +430,8 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
             &signer,
             b"atomic-temp-conflict-b",
         );
-        let (kura, _) = Kura::new(&config, &lane_config).expect("conflicting residues Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("conflicting residues Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
@@ -467,7 +477,8 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
             &signer,
             b"atomic-temp-stale-incarnation",
         );
-        let (kura, _) = Kura::new(&config, &lane_config).expect("stale residue Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("stale residue Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
         persist_historical_atomic_temp_dependencies(&kura, &payload);
         let directory =

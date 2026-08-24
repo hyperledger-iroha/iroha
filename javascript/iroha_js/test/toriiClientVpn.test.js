@@ -36,7 +36,7 @@ function sampleAccountId() {
 
 const SAMPLE_ACCOUNT_ID = sampleAccountId();
 
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(688)}`;
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(780)}`;
 const SAMPLE_VPN_RELAY_ID_HEX =
   "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
 
@@ -87,7 +87,7 @@ function sampleVpnProfilePayload() {
 }
 
 function sampleVpnSessionPayload(helperTicketHex = SAMPLE_VPN_HELPER_TICKET_HEX) {
-  const sessionId = "ab".repeat(32);
+  const sessionId = "ab".repeat(16);
   const quoteId = "cd".repeat(32);
   return {
     session_id: sessionId,
@@ -183,7 +183,7 @@ function sampleVpnReceiptPayload() {
 }
 
 async function parseVpnTestResponse(kind, payload) {
-  const status = kind === "quote" || kind === "session-create" ? 201 : 200;
+  const status = kind === "quote" || kind === "session-create" || kind === "receipt" ? 201 : 200;
   const fetchImpl = async () =>
     createResponse({
       status,
@@ -206,9 +206,12 @@ async function parseVpnTestResponse(kind, payload) {
         { canonicalAuth },
       );
     case "session":
-      return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+      return client.getVpnSession("ab".repeat(16), { canonicalAuth });
     case "receipt":
-      return client.deleteVpnSession("ab".repeat(32), { canonicalAuth });
+      return client.submitVpnReceipt(
+        { relayReceiptHex: "abcd", clientVoucherHex: "beef" },
+        { canonicalAuth },
+      );
     case "list":
       return client.listVpnReceipts({ canonicalAuth });
     default:
@@ -539,7 +542,7 @@ test("VPN requests reject unknown fields before dispatch", async () => {
 });
 
 test("VPN session paths normalize hex before signing and reject malformed IDs", async () => {
-  const normalizedSessionId = "ab".repeat(32);
+  const normalizedSessionId = "ab".repeat(16);
   const inputSessionId = `0X${normalizedSessionId.toUpperCase()}`;
   const privateKey = Buffer.alloc(32, 10);
   const captured = [];
@@ -558,11 +561,7 @@ test("VPN session paths normalize hex before signing and reject malformed IDs", 
     await client.getVpnSession(inputSessionId, { canonicalAuth }),
     null,
   );
-  assert.equal(
-    await client.deleteVpnSession(inputSessionId, { canonicalAuth }),
-    null,
-  );
-  assert.equal(captured.length, 2);
+  assert.equal(captured.length, 1);
   for (const { url, init } of captured) {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, `/v1/vpn/sessions/${normalizedSessionId}`);
@@ -583,13 +582,13 @@ test("VPN session paths normalize hex before signing and reject malformed IDs", 
 
   await assert.rejects(
     () => client.getVpnSession("not-hex", { canonicalAuth }),
-    /sessionId must be a 32-byte hex string/u,
+    /sessionId must be a 16-byte hex string/u,
   );
   await assert.rejects(
-    () => client.deleteVpnSession("ab", { canonicalAuth }),
-    /sessionId must be a 32-byte hex string/u,
+    () => client.getVpnSession("ab".repeat(32), { canonicalAuth }),
+    /sessionId must be a 16-byte hex string/u,
   );
-  assert.equal(captured.length, 2);
+  assert.equal(captured.length, 1);
 });
 
 test("VPN session responses reject unknown fields and noncanonical IDs or hashes", async () => {
@@ -607,11 +606,12 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
         headers: { "content-type": "application/json" },
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+    return client.getVpnSession("ab".repeat(16), { canonicalAuth });
   };
   const invalidResponses = [
     ["unknown field", (payload) => { payload.unexpected = true; }],
     ["prefixed session id", (payload) => { payload.session_id = `0x${payload.session_id}`; }],
+    ["overlong session id", (payload) => { payload.session_id = "ab".repeat(32); }],
     ["uppercase quote id", (payload) => { payload.quote_id = payload.quote_id.toUpperCase(); }],
     ["prefixed payment hash", (payload) => { payload.payment_tx_hash = `0X${payload.payment_tx_hash}`; }],
     ["uppercase SPKI hash", (payload) => {
@@ -622,7 +622,7 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
   for (const [caseName, mutate] of invalidResponses) {
     await assert.rejects(
       () => requestSession(mutate),
-      /contains unsupported fields|exact lowercase 32-byte hex string/u,
+      /contains unsupported fields|exact lowercase (?:16|32)-byte hex string/u,
       caseName,
     );
   }
@@ -785,6 +785,29 @@ test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
   }
 });
 
+test("VPN receipt parser accepts only exact lifecycle status values", async () => {
+  const statuses = [
+    "disconnected",
+    "expired",
+    "replaced",
+    "settlement_pending",
+    "settled",
+  ];
+  for (const status of statuses) {
+    const payload = sampleVpnReceiptPayload();
+    payload.status = status;
+    const receipt = await parseVpnTestResponse("receipt", payload);
+    assert.equal(receipt.status, status);
+  }
+
+  const padded = sampleVpnReceiptPayload();
+  padded.status = "settlement_pending ";
+  await assert.rejects(
+    () => parseVpnTestResponse("receipt", padded),
+    /status/u,
+  );
+});
+
 test("createVpnQuote returns the native lease-open instruction", async () => {
   const canonicalAuth = {
     accountId: CANONICAL_AUTH_ALIAS,
@@ -883,7 +906,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     privateKey: Buffer.alloc(32, 7),
   };
   const quoteId = "66".repeat(32);
-  const sessionId = "55".repeat(32);
+  const sessionId = "55".repeat(16);
   const paymentTxHash = "b7".repeat(32);
   const meteringPublicKeyHex = "a8".repeat(32);
   const fetchImpl = async (url, init = {}) => {
@@ -976,7 +999,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
   });
 });
 
-test("VPN session responses require an exact lowercase 696-byte helper ticket", async () => {
+test("VPN session responses require an exact lowercase 788-byte helper ticket", async () => {
   const canonicalAuth = {
     accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 7),
@@ -989,23 +1012,24 @@ test("VPN session responses require an exact lowercase 696-byte helper ticket", 
         headers: { "content-type": "application/json" },
       });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
-    return client.getVpnSession("55".repeat(32), { canonicalAuth });
+    return client.getVpnSession("55".repeat(16), { canonicalAuth });
   };
 
   const session = await requestSession(SAMPLE_VPN_HELPER_TICKET_HEX);
   assert.equal(session.helperTicketHex, SAMPLE_VPN_HELPER_TICKET_HEX);
-  assert.equal(session.helperTicketHex.length, 1392);
+  assert.equal(session.helperTicketHex.length, 1576);
 
   const invalidTickets = [
     ["prefix", `0x${SAMPLE_VPN_HELPER_TICKET_HEX}`],
     ["uppercase", SAMPLE_VPN_HELPER_TICKET_HEX.toUpperCase()],
+    ["previous 728-byte length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, 1456)],
     ["odd length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -1)],
     ["wrong even length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -2)],
   ];
   for (const [caseName, helperTicketHex] of invalidTickets) {
     await assert.rejects(
       () => requestSession(helperTicketHex),
-      /helper_ticket_hex must contain exactly 1392 lowercase hexadecimal characters/u,
+      /helper_ticket_hex must contain exactly 1576 lowercase hexadecimal characters/u,
       caseName,
     );
   }
@@ -1023,40 +1047,14 @@ test("createVpnSession requires canonical auth options", async () => {
   );
 });
 
-test("deleteVpnSession returns null when the session is already missing", async () => {
-  const requestedSessionId = "13".repeat(32);
-  const canonicalAuth = {
-    accountId: CANONICAL_AUTH_ALIAS,
-    privateKey: Buffer.alloc(32, 9),
-  };
-  const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
-    assert.equal(init.method, "DELETE");
-    assert.equal(init.headers.Accept, "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
-    return createResponse({
-      status: 404,
-      jsonData: {
-        session_id: requestedSessionId,
-        status: "not_found",
-        disconnected_at_ms: 1_700_000_000_000,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
-  assert.equal(result, null);
-});
-
 test("getVpnSession and listVpnReceipts normalize authenticated responses", async () => {
   const canonicalAuth = {
     accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 5),
   };
   const quoteId = "aa".repeat(32);
-  const sessionId = "cc".repeat(32);
-  const requestedSessionId = "de".repeat(32);
+  const sessionId = "cc".repeat(16);
+  const requestedSessionId = "de".repeat(16);
   const paymentTxHash = "bb".repeat(32);
   let callCount = 0;
   const fetchImpl = async (url, init = {}) => {
@@ -1199,82 +1197,13 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
   });
 });
 
-test("deleteVpnSession normalizes canonical receipts", async () => {
-  const requestedSessionId = "79".repeat(32);
-  const canonicalAuth = {
-    accountId: CANONICAL_AUTH_ALIAS,
-    privateKey: Buffer.alloc(32, 6),
-  };
-  const quoteId = "dd".repeat(32);
-  const sessionId = "ff".repeat(32);
-  const paymentTxHash = "ee".repeat(32);
-  const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
-    assert.equal(init.method, "DELETE");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        session_id: sessionId,
-        account_id: SAMPLE_ACCOUNT_ID,
-        exit_class: "high-security",
-        relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
-        meter_family: "soranet.vpn.high-security",
-        connected_at_ms: 1_699_999_700_000,
-        disconnected_at_ms: 1_700_000_000_000,
-        duration_ms: 300000,
-        bytes_in: 99,
-        bytes_out: 33,
-        status: "disconnected",
-        receipt_source: "torii",
-        quote_id: quoteId,
-        payment_tx_hash: paymentTxHash,
-        fee_asset_id: "xor#universal.universal",
-        escrow_account_id: "vpn_escrow",
-        operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee: "1000000.25",
-        earned_fee: "0",
-        refunded_fee: "1000000.25",
-        lease_id_hex: quoteId,
-        settle_lease_instruction: null,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const receipt = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
-  assert.deepEqual(receipt, {
-    sessionId,
-    accountId: SAMPLE_ACCOUNT_ID,
-    exitClass: "high-security",
-    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
-    meterFamily: "soranet.vpn.high-security",
-    connectedAtMs: 1_699_999_700_000,
-    disconnectedAtMs: 1_700_000_000_000,
-    durationMs: 300000,
-    bytesIn: 99,
-    bytesOut: 33,
-    status: "disconnected",
-    receiptSource: "torii",
-    quoteId,
-    paymentTxHash,
-    feeAssetId: "xor#universal.universal",
-    escrowAccountId: "vpn_escrow",
-    operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFee: "1000000.25",
-    earnedFee: "0",
-    refundedFee: "1000000.25",
-    leaseIdHex: quoteId,
-    settleLeaseInstruction: null,
-  });
-});
-
 test("submitVpnReceipt posts metering evidence and exposes settlement instructions", async () => {
   const canonicalAuth = {
     accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 4),
   };
   const quoteId = "12".repeat(32);
-  const sessionId = "56".repeat(32);
+  const sessionId = "56".repeat(16);
   const paymentTxHash = "34".repeat(32);
   const settleInstruction = {
     wire_id: "SettleVpnLease",
@@ -1305,7 +1234,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
         duration_ms: 300000,
         bytes_in: 99,
         bytes_out: 33,
-        status: "settled",
+        status: "settlement_pending",
         receipt_source: "relay",
         quote_id: quoteId,
         payment_tx_hash: paymentTxHash,
@@ -1343,7 +1272,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     durationMs: 300000,
     bytesIn: 99,
     bytesOut: 33,
-    status: "settled",
+    status: "settlement_pending",
     receiptSource: "relay",
     quoteId,
     paymentTxHash,

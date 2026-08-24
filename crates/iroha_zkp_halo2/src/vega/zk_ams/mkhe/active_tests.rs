@@ -126,20 +126,22 @@ fn prepared_common_a_rejects_a_valid_roster_under_a_different_profile() {
     ));
 }
 #[test]
-#[ignore = "release-size native/prepared common-a parity exercise; isolated resource job only"]
-fn prepared_common_a_is_byte_identical_to_the_native_whole_polynomial() {
+#[ignore = "release-size canonical common-a streaming exercise; isolated resource job only"]
+fn canonical_public_a_wire_matches_the_prepared_limb_stream() {
     let fixture = fixture(b"prepared-common-a-release-parity", 402);
     let profile = release_profile_v1();
     let transcript = keccak256(b"prepared-common-a-release-parity-transcript");
-    let native = derive_active_collective_public_a(&profile, &fixture.roster, transcript)
-        .expect("native whole common-a");
+    let canonical = zk_ams_mkhe_active_collective_public_a_v1(&fixture.roster, transcript)
+        .expect("canonical common-a wire");
     let prepared = super::super::cpk_relation::prepare_active_collective_public_a_v1(
         &profile,
         &fixture.roster,
         transcript,
     )
     .expect("prepared common-a");
-    let mut remaining_candidates = u64::MAX;
+    let mut remaining_candidates = prepared
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .expect("exact common-a candidate budget");
     let mut coefficients = Vec::with_capacity(profile.ring_degree * profile.moduli.len());
     for limb in 0..profile.moduli.len() {
         coefficients.extend(
@@ -148,9 +150,7 @@ fn prepared_common_a_is_byte_identical_to_the_native_whole_polynomial() {
                 .expect("prepared common-a limb"),
         );
     }
-    let staged = super::super::RnsPolynomial::from_flat(&profile, coefficients)
-        .expect("prepared whole common-a");
-    assert_eq!(staged, native);
+    assert_eq!(coefficients.as_slice(), canonical.residues());
 }
 #[test]
 fn every_public_witness_debug_representation_is_redacted() {

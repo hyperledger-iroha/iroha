@@ -129,6 +129,158 @@ fn service_validate_accepts_valid_manifest() {
     let manifest = sample_service(vec![sample_binding("session"), sample_binding("profiles")]);
     assert!(manifest.validate().is_ok(), "valid manifest should pass");
 }
+#[cfg(feature = "json")]
+#[test]
+fn staged_service_and_container_v1_records_reject_unknown_fields() {
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+        }};
+    }
+
+    let service = sample_service(vec![sample_binding("session")]);
+    assert_unknown_rejected!(service, SoraServiceManifestV1, "service manifest");
+    assert_unknown_rejected!(
+        service.container,
+        SoraContainerManifestRefV1,
+        "container manifest reference"
+    );
+    assert_unknown_rejected!(
+        service.route.clone().expect("sample route"),
+        SoraRouteTargetV1,
+        "route target"
+    );
+    assert_unknown_rejected!(service.rollout, SoraRolloutPolicyV1, "rollout policy");
+    assert_unknown_rejected!(
+        service.economics.clone(),
+        SoraHttpServiceEconomicsV1,
+        "service economics"
+    );
+    assert_unknown_rejected!(
+        service.state_bindings[0].clone(),
+        SoraStateBindingV1,
+        "state binding"
+    );
+    assert_unknown_rejected!(
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: NonZeroU64::new(1024).expect("nonzero"),
+        },
+        SoraLeaseVolumeBindingV1,
+        "lease volume binding"
+    );
+    assert_unknown_rejected!(
+        service.handlers[0].clone(),
+        SoraServiceHandlerV1,
+        "service handler"
+    );
+    assert_unknown_rejected!(
+        SoraMailboxContractV1 {
+            queue_name: "updates".parse().expect("valid name"),
+            max_pending_messages: NonZeroU32::new(8).expect("nonzero"),
+            max_message_bytes: NonZeroU64::new(1024).expect("nonzero"),
+            retention_blocks: NonZeroU32::new(64).expect("nonzero"),
+        },
+        SoraMailboxContractV1,
+        "mailbox contract"
+    );
+    assert_unknown_rejected!(
+        service.artifacts[0].clone(),
+        SoraArtifactRefV1,
+        "artifact reference"
+    );
+
+    let container = sample_container();
+    assert_unknown_rejected!(
+        SoraNetworkAllowlistEntryV1::new("api.sora.org", [443]),
+        SoraNetworkAllowlistEntryV1,
+        "network allowlist entry"
+    );
+    assert_unknown_rejected!(
+        container.capabilities.clone(),
+        SoraCapabilityPolicyV1,
+        "capability policy"
+    );
+    assert_unknown_rejected!(container.resources, SoraResourceLimitsV1, "resource limits");
+    assert_unknown_rejected!(
+        container.lifecycle.clone(),
+        SoraLifecycleHooksV1,
+        "lifecycle hooks"
+    );
+    assert_unknown_rejected!(
+        SoraConfigExportV1 {
+            config_name: "runtime/theme".to_owned(),
+            target: SoraConfigExportTargetV1::File("runtime/theme.json".to_owned()),
+        },
+        SoraConfigExportV1,
+        "config export"
+    );
+
+    let bundle_container = sample_container();
+    let mut bundle_service = sample_service(vec![sample_binding("session")]);
+    bundle_service.container.manifest_hash = Hash::new(Encode::encode(&bundle_container));
+    assert_unknown_rejected!(
+        SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: bundle_container,
+            service: bundle_service,
+        },
+        SoraDeploymentBundleV1,
+        "deployment bundle"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn staged_service_and_container_v1_records_require_nullable_keys() {
+    macro_rules! assert_missing_rejected {
+        ($value:expr, $field:literal, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            let removed = value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .remove($field);
+            assert!(removed.is_some(), "fixture must contain `{}`", $field);
+            norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must require its nullable key"));
+        }};
+    }
+
+    let service = sample_service(vec![sample_binding("session")]);
+    assert_missing_rejected!(service, "route", SoraServiceManifestV1, "service manifest");
+    assert_missing_rejected!(
+        service.handlers[0].clone(),
+        "route_path",
+        SoraServiceHandlerV1,
+        "service handler"
+    );
+    assert_missing_rejected!(
+        service.handlers[0].clone(),
+        "mailbox",
+        SoraServiceHandlerV1,
+        "service handler"
+    );
+    assert_missing_rejected!(
+        service.artifacts[0].clone(),
+        "handler_name",
+        SoraArtifactRefV1,
+        "artifact reference"
+    );
+    assert_missing_rejected!(
+        sample_container().lifecycle,
+        "healthcheck_path",
+        SoraLifecycleHooksV1,
+        "lifecycle hooks"
+    );
+}
 #[test]
 fn service_validate_rejects_uncertified_query_handler() {
     let mut manifest = sample_service(vec![sample_binding("session")]);
@@ -858,7 +1010,7 @@ fn assert_inrou_distribution_field_is_required(canonical: &Value, field: &str) {
     let error = norito::json::from_value::<SoraInrouManifestV1>(value)
         .expect_err("first-release distribution fields must not be omitted");
     assert!(
-        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
         "missing distribution `{field}` reported the wrong error: {error:?}"
     );
 }
@@ -877,11 +1029,141 @@ fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &
     let error = norito::json::from_value::<SoraInrouManifestV1>(value)
         .expect_err("first-release published-artifact fields must not be omitted");
     assert!(
-        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
         "missing published-artifact `{field}` reported the wrong error: {error:?}"
     );
 }
 
+#[cfg(feature = "json")]
+#[test]
+fn inrou_v1_tagged_enum_envelopes_reject_unknown_fields() {
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown envelope fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong error: {error:?}",
+                $label
+            );
+        }};
+    }
+
+    assert_unknown_rejected!(
+        SoraContainerRuntimeV1::Inrou,
+        SoraContainerRuntimeV1,
+        "container runtime"
+    );
+    assert_unknown_rejected!(
+        SoraInrouGuestOsV1::DebianSlim,
+        SoraInrouGuestOsV1,
+        "Inrou guest OS"
+    );
+    assert_unknown_rejected!(
+        SoraInrouGuestIsaV1::Aarch64,
+        SoraInrouGuestIsaV1,
+        "Inrou guest ISA"
+    );
+    assert_unknown_rejected!(
+        SoraArtifactDistributionTargetV1::Global,
+        SoraArtifactDistributionTargetV1,
+        "Inrou artifact distribution target"
+    );
+    assert_unknown_rejected!(
+        SoraNetworkPolicyV1::Isolated,
+        SoraNetworkPolicyV1,
+        "Inrou network policy"
+    );
+    assert_unknown_rejected!(
+        SoraConfigExportTargetV1::Env("APP_CONFIG_JSON".to_owned()),
+        SoraConfigExportTargetV1,
+        "Inrou config export target"
+    );
+    assert_unknown_rejected!(
+        SoraRouteVisibilityV1::Public,
+        SoraRouteVisibilityV1,
+        "Inrou route visibility"
+    );
+    assert_unknown_rejected!(SoraTlsModeV1::Required, SoraTlsModeV1, "Inrou TLS mode");
+    assert_unknown_rejected!(
+        SoraServiceExecutionPlaneV1::HttpService,
+        SoraServiceExecutionPlaneV1,
+        "Inrou service execution plane"
+    );
+    assert_unknown_rejected!(
+        SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+        SoraLeaseVolumeKindV1,
+        "Inrou lease volume kind"
+    );
+    assert_unknown_rejected!(
+        SoraServiceHealthStatusV1::Healthy,
+        SoraServiceHealthStatusV1,
+        "Inrou replica health status"
+    );
+    assert_unknown_rejected!(
+        SecretEnvelopeEncryptionV1::ClientCiphertext,
+        SecretEnvelopeEncryptionV1,
+        "Inrou secret-envelope encryption"
+    );
+    assert_unknown_rejected!(
+        StorageClass::Warm,
+        StorageClass,
+        "Inrou lease-volume storage class"
+    );
+    assert_unknown_rejected!(
+        SoraArtifactKindV1::Bundle,
+        SoraArtifactKindV1,
+        "Inrou service artifact kind"
+    );
+    assert_unknown_rejected!(
+        SoraServiceLifecycleActionV1::Deploy,
+        SoraServiceLifecycleActionV1,
+        "Soracloud service lifecycle action"
+    );
+    assert_unknown_rejected!(
+        SoraStateMutationOperationV1::Upsert,
+        SoraStateMutationOperationV1,
+        "Soracloud state mutation operation"
+    );
+    assert_unknown_rejected!(
+        SoraRolloutStageV1::Canary,
+        SoraRolloutStageV1,
+        "Soracloud rollout stage"
+    );
+    assert_unknown_rejected!(
+        SoraServiceLeaseStatusV1::Active,
+        SoraServiceLeaseStatusV1,
+        "Soracloud service lease status"
+    );
+    assert_unknown_rejected!(
+        SoraStateScopeV1::ServiceState,
+        SoraStateScopeV1,
+        "Soracloud state scope"
+    );
+    assert_unknown_rejected!(
+        SoraStateMutabilityV1::ReadWrite,
+        SoraStateMutabilityV1,
+        "Soracloud state mutability"
+    );
+    assert_unknown_rejected!(
+        SoraStateEncryptionV1::FheCiphertext,
+        SoraStateEncryptionV1,
+        "Soracloud state encryption"
+    );
+    assert_unknown_rejected!(
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        BfvCiphertextBoundModeV1,
+        "Soracloud BFV ciphertext bound mode"
+    );
+}
 #[cfg(feature = "json")]
 #[test]
 fn inrou_manifest_json_requires_the_exact_v1_shape() {
@@ -927,21 +1209,26 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_distribution_field_is_required(&canonical, field);
     }
-    let mut unknown_distribution = canonical.clone();
-    unknown_distribution
-        .get_mut("guest_images")
-        .and_then(Value::as_object_mut)
-        .and_then(|images| images.get_mut("x86_64"))
-        .and_then(|guest| guest.get_mut("distribution"))
-        .and_then(Value::as_object_mut)
-        .expect("x86_64 distribution object")
-        .insert("future_distribution".to_owned(), Value::Bool(true));
-    let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_distribution)
-        .expect_err("unknown first-release distribution fields must be rejected");
-    assert!(matches!(
-        error,
-        json::Error::UnknownField { ref field } if field == "future_distribution"
-    ));
+    for (field, value) in [
+        ("future_distribution", Value::Bool(true)),
+        ("legacy_target", Value::Null),
+    ] {
+        let mut unknown_distribution = canonical.clone();
+        unknown_distribution
+            .pointer_mut("/guest_images/x86_64/distribution")
+            .and_then(Value::as_object_mut)
+            .expect("x86_64 distribution object")
+            .insert(field.to_owned(), value);
+        let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_distribution)
+            .expect_err("first-release distribution fields must reject unknown keys");
+        assert!(
+            matches!(
+                &error,
+                json::Error::UnknownField { field: reported } if reported == field
+            ),
+            "unknown distribution field `{field}` reported the wrong error: {error:?}"
+        );
+    }
 
     let mut published_manifest = sample_inrou_manifest();
     published_manifest
@@ -959,21 +1246,26 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_published_artifact_field_is_required(&published, field);
     }
-    let mut unknown_published = published;
-    unknown_published
-        .get_mut("guest_images")
-        .and_then(Value::as_object_mut)
-        .and_then(|images| images.get_mut("x86_64"))
-        .and_then(|guest| guest.get_mut("published_artifact"))
-        .and_then(Value::as_object_mut)
-        .expect("published guest-image artifact object")
-        .insert("future_artifact".to_owned(), Value::Bool(true));
-    let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_published)
-        .expect_err("unknown first-release published-artifact fields must be rejected");
-    assert!(matches!(
-        error,
-        json::Error::UnknownField { ref field } if field == "future_artifact"
-    ));
+    for (field, value) in [
+        ("future_artifact", Value::Bool(true)),
+        ("legacy_manifest_id", Value::Null),
+    ] {
+        let mut unknown_artifact = published.clone();
+        unknown_artifact
+            .pointer_mut("/guest_images/x86_64/published_artifact")
+            .and_then(Value::as_object_mut)
+            .expect("published guest-image artifact object")
+            .insert(field.to_owned(), value);
+        let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_artifact)
+            .expect_err("first-release published-artifact fields must reject unknown keys");
+        assert!(
+            matches!(
+                &error,
+                json::Error::UnknownField { field: reported } if reported == field
+            ),
+            "unknown published-artifact field `{field}` reported the wrong error: {error:?}"
+        );
+    }
 }
 #[cfg(feature = "json")]
 #[test]
@@ -1364,6 +1656,242 @@ fn deployment_bundle_validate_accepts_present_required_service_materials() {
         "required materials present in the effective deployment state must pass"
     );
 }
+#[cfg(feature = "json")]
+#[test]
+fn secret_envelope_v1_requires_explicit_nullable_aad_and_closed_fields() {
+    let envelope = SecretEnvelopeV1 {
+        schema_version: SECRET_ENVELOPE_VERSION_V1,
+        encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+        key_id: "kms://tenant/db".to_owned(),
+        key_version: NonZeroU32::new(1).expect("nonzero"),
+        nonce: vec![1, 2, 3],
+        ciphertext: vec![4, 5, 6],
+        commitment: sample_hash(201),
+        aad_digest: None,
+    };
+    let canonical = norito::json::to_value(&envelope).expect("serialize secret envelope");
+    assert!(
+        canonical
+            .get("aad_digest")
+            .is_some_and(norito::json::Value::is_null),
+        "canonical nullable aad_digest must be emitted as null"
+    );
+    assert_eq!(
+        norito::json::from_value::<SecretEnvelopeV1>(canonical.clone())
+            .expect("explicit null aad_digest must decode"),
+        envelope
+    );
+
+    let mut missing = canonical.clone();
+    assert!(
+        missing
+            .as_object_mut()
+            .expect("secret envelope JSON object")
+            .remove("aad_digest")
+            .is_some()
+    );
+    norito::json::from_value::<SecretEnvelopeV1>(missing)
+        .expect_err("omitted aad_digest must be rejected");
+
+    let mut unknown = canonical;
+    unknown
+        .as_object_mut()
+        .expect("secret envelope JSON object")
+        .insert("retired_v0".to_owned(), norito::json!(true));
+    let error = norito::json::from_value::<SecretEnvelopeV1>(unknown)
+        .expect_err("secret envelope must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "unexpected secret-envelope unknown-field rejection: {error}"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn service_state_entry_v1_requires_explicit_nullable_fhe_metadata_and_closed_fields() {
+    let entry = sample_state_entry();
+    let canonical = norito::json::to_value(&entry).expect("serialize service state entry");
+    for field in [
+        "fhe_public_key_digest",
+        "fhe_residual_multiple_bound",
+        "fhe_bound_mode",
+    ] {
+        assert!(
+            canonical
+                .get(field)
+                .is_some_and(norito::json::Value::is_null),
+            "canonical nullable `{field}` must be emitted as null"
+        );
+    }
+    assert_eq!(
+        norito::json::from_value::<SoraServiceStateEntryV1>(canonical.clone())
+            .expect("explicit null FHE metadata must decode"),
+        entry
+    );
+
+    for field in [
+        "fhe_public_key_digest",
+        "fhe_residual_multiple_bound",
+        "fhe_bound_mode",
+    ] {
+        let mut missing = canonical.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("service state entry JSON object")
+                .remove(field)
+                .is_some()
+        );
+        norito::json::from_value::<SoraServiceStateEntryV1>(missing)
+            .expect_err("omitted nullable FHE metadata must be rejected");
+    }
+
+    let mut unknown = canonical;
+    unknown
+        .as_object_mut()
+        .expect("service state entry JSON object")
+        .insert("retired_v0".to_owned(), norito::json!(true));
+    let error = norito::json::from_value::<SoraServiceStateEntryV1>(unknown)
+        .expect_err("service state entry must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "unexpected service-state unknown-field rejection: {error}"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
+    let economics = SoraHttpServiceEconomicsV1::default();
+    let lease = SoraServiceLeaseStateV1 {
+        schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        status: SoraServiceLeaseStatusV1::Active,
+        quota_class: economics.quota_class,
+        deployment_deposit: economics.deployment_deposit,
+        prepaid_runtime_balance: economics.prepaid_runtime_balance,
+        runtime_price_per_sequence: economics.runtime_price_per_sequence,
+        storage_price_per_gib_sequence: economics.storage_price_per_gib_sequence,
+        egress_price_per_mib: economics.egress_price_per_mib,
+        lease_started_sequence: 1,
+        lease_expires_sequence: 100,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
+        egress_reporter_checkpoints: Vec::new(),
+        accounted_egress_bytes: 0,
+        last_status_reason: None,
+    };
+    let volume = SoraServiceLeaseVolumeStateV1 {
+        schema_version: SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+        volume_name: "root".parse().expect("valid volume name"),
+        kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+        storage_class: StorageClass::Warm,
+        mount_path: "/".to_owned(),
+        max_total_bytes: 8 * 1024 * 1024 * 1024,
+        lease_started_sequence: 1,
+        lease_expires_sequence: 100,
+        authoritative_generation: 1,
+        last_materialized_sequence: None,
+    };
+    let checkpoint = SoraServiceLeaseEgressCheckpointV1 {
+        reporting_epoch: 1,
+        active_service_version: "1.0.0".to_owned(),
+        replica_slot: 1,
+        validator_account_id: sample_account_id(202),
+        accounted_egress_bytes: 0,
+        finalize_reporter: false,
+    };
+
+    let lease_json = norito::json::to_value(&lease).expect("serialize service lease state");
+    assert!(
+        lease_json
+            .get("last_status_reason")
+            .is_some_and(norito::json::Value::is_null),
+        "canonical lease status reason must be an explicit null"
+    );
+    assert_eq!(
+        lease_json
+            .get("egress_reporter_checkpoints")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "canonical empty reporter checkpoint list must be explicit"
+    );
+    assert_eq!(
+        norito::json::from_value::<SoraServiceLeaseStateV1>(lease_json.clone())
+            .expect("explicit-null, explicit-empty lease must decode"),
+        lease
+    );
+    for field in ["last_status_reason", "egress_reporter_checkpoints"] {
+        let mut missing = lease_json.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("service lease JSON object")
+                .remove(field)
+                .is_some()
+        );
+        norito::json::from_value::<SoraServiceLeaseStateV1>(missing)
+            .expect_err("omitted service lease V1 fields must be rejected");
+    }
+
+    let volume_json = norito::json::to_value(&volume).expect("serialize lease volume state");
+    assert!(
+        volume_json
+            .get("last_materialized_sequence")
+            .is_some_and(norito::json::Value::is_null),
+        "canonical last materialized sequence must be an explicit null"
+    );
+    assert_eq!(
+        norito::json::from_value::<SoraServiceLeaseVolumeStateV1>(volume_json.clone())
+            .expect("explicit-null lease volume must decode"),
+        volume
+    );
+    let mut missing_materialized = volume_json.clone();
+    assert!(
+        missing_materialized
+            .as_object_mut()
+            .expect("lease volume JSON object")
+            .remove("last_materialized_sequence")
+            .is_some()
+    );
+    norito::json::from_value::<SoraServiceLeaseVolumeStateV1>(missing_materialized)
+        .expect_err("omitted last materialized sequence must be rejected");
+
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong error: {error:?}",
+                $label
+            );
+        }};
+    }
+    assert_unknown_rejected!(lease, SoraServiceLeaseStateV1, "service lease state");
+    assert_unknown_rejected!(
+        volume,
+        SoraServiceLeaseVolumeStateV1,
+        "service lease volume state"
+    );
+    assert_unknown_rejected!(
+        checkpoint,
+        SoraServiceLeaseEgressCheckpointV1,
+        "service lease egress checkpoint"
+    );
+}
 #[test]
 fn service_runtime_state_validate_rejects_load_out_of_range() {
     let runtime_state = SoraServiceRuntimeStateV1 {
@@ -1405,6 +1933,47 @@ fn inrou_host_capability_record_validate_rejects_zero_capacity() {
         .validate()
         .expect_err("zero-capacity adverts must fail");
     assert_soracloud_invalid_field(error, "max_hosted_replica_capacity");
+}
+#[test]
+fn inrou_host_capability_record_validate_rejects_capacity_above_v1() {
+    let mut capability = sample_inrou_host_capability_record();
+    capability.max_hosted_replica_capacity = SORA_INROU_HOSTED_REPLICA_CAPACITY_V1 + 1;
+    let error = capability
+        .validate()
+        .expect_err("multi-replica Inrou host adverts must fail in V1");
+    assert_soracloud_invalid_field(error, "max_hosted_replica_capacity");
+    assert!(
+        !capability.can_host_replicas_at(capability.advertised_at_ms),
+        "invalid multi-replica adverts must never remain placement-eligible"
+    );
+}
+#[test]
+fn inrou_host_capability_record_validate_rejects_multiple_guest_isas() {
+    let mut capability = sample_inrou_host_capability_record();
+    capability
+        .supported_guest_isas
+        .insert(SoraInrouGuestIsaV1::Aarch64);
+    let error = capability
+        .validate()
+        .expect_err("one Inrou V1 host advert cannot alias multiple guest ISAs");
+    assert_soracloud_invalid_field(error, "supported_guest_isas");
+    assert!(
+        !capability.can_host_replicas_at(capability.advertised_at_ms),
+        "invalid multi-ISA adverts must never remain placement-eligible"
+    );
+}
+#[test]
+fn inrou_host_capability_record_validate_rejects_noncanonical_peer_id() {
+    let mut capability = sample_inrou_host_capability_record();
+    capability.peer_id = "12D3KooWLegacyAlias".to_owned();
+    let error = capability
+        .validate()
+        .expect_err("noncanonical Inrou peer aliases must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
+    assert!(
+        !capability.can_host_replicas_at(capability.advertised_at_ms),
+        "an invalid peer route must never remain placement-eligible"
+    );
 }
 #[test]
 fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
@@ -1461,8 +2030,8 @@ fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
     assert_soracloud_invalid_field(error, "traffic_percent");
 }
 #[test]
-fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
-    let deployment = SoraServiceDeploymentStateV1 {
+fn service_deployment_state_validate_requires_exact_active_canary_relation() {
+    let mut deployment = SoraServiceDeploymentStateV1 {
         schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
         service_name: "portal".parse().expect("valid name"),
         current_service_version: "1.1.0".to_string(),
@@ -1498,6 +2067,95 @@ fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
         .validate()
         .expect_err("active rollout must remain in canary state");
     assert_soracloud_invalid_field(error, "active_rollout.stage");
+
+    let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
+    active_rollout.stage = SoraRolloutStageV1::Canary;
+    active_rollout.traffic_percent = 25;
+    active_rollout.candidate_version = "1.2.0".to_owned();
+    let error = deployment
+        .validate()
+        .expect_err("active rollout candidate must equal the current revision");
+    assert_soracloud_invalid_field(error, "active_rollout.candidate_version");
+
+    let current_version = deployment.current_service_version.clone();
+    let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
+    active_rollout.candidate_version = current_version.clone();
+    active_rollout.baseline_version = None;
+    let error = deployment
+        .validate()
+        .expect_err("active rollout must name its baseline revision");
+    assert_soracloud_invalid_field(error, "active_rollout.baseline_version");
+
+    let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
+    active_rollout.baseline_version = Some(current_version);
+    let error = deployment
+        .validate()
+        .expect_err("active rollout baseline and candidate must differ");
+    assert_soracloud_invalid_field(error, "active_rollout.baseline_version");
+
+    let active_rollout = deployment.active_rollout.as_mut().expect("active rollout");
+    active_rollout.baseline_version = Some("1.0.0".to_owned());
+    active_rollout.traffic_percent = 0;
+    let error = deployment
+        .validate()
+        .expect_err("active canary traffic may not be zero");
+    assert_soracloud_invalid_field(error, "traffic_percent");
+
+    deployment
+        .active_rollout
+        .as_mut()
+        .expect("active rollout")
+        .traffic_percent = 25;
+    deployment
+        .validate()
+        .expect("exact active canary relation must pass");
+
+    #[cfg(feature = "json")]
+    {
+        let canonical = norito::json::to_value(&deployment).expect("serialize deployment state");
+        for field in [
+            "config_generation",
+            "secret_generation",
+            "service_configs",
+            "service_secrets",
+            "active_rollout",
+            "last_rollout",
+            "service_lease",
+            "lease_volume_states",
+        ] {
+            let mut missing = canonical.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("deployment JSON object")
+                    .remove(field)
+                    .is_some(),
+                "canonical deployment must emit `{field}`"
+            );
+            norito::json::from_value::<SoraServiceDeploymentStateV1>(missing)
+                .expect_err("deployment state must reject every omitted V1 field");
+        }
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("deployment JSON object")
+            .insert("retired_v0".to_owned(), norito::json!(true));
+        norito::json::from_value::<SoraServiceDeploymentStateV1>(unknown)
+            .expect_err("deployment state must reject unknown fields");
+
+        let rollout = deployment.active_rollout.as_ref().expect("active rollout");
+        let mut missing_baseline =
+            norito::json::to_value(rollout).expect("serialize rollout state");
+        assert!(
+            missing_baseline
+                .as_object_mut()
+                .expect("rollout JSON object")
+                .remove("baseline_version")
+                .is_some()
+        );
+        norito::json::from_value::<SoraServiceRolloutStateV1>(missing_baseline)
+            .expect_err("rollout state must require the nullable baseline key");
+    }
 }
 zero_prehash_field_rejection_test! {
     service_deployment_state_validate_rejects_zero_prehash_manifest_hash_sentinels,
@@ -1531,6 +2189,7 @@ fn service_audit_event_validate_rejects_zero_sequence() {
         consent_evidence_hash: None,
         break_glass: None,
         break_glass_reason: None,
+        lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
     let error = event
@@ -1682,6 +2341,7 @@ fn service_audit_event_validate_requires_break_glass_reason_when_enabled() {
         consent_evidence_hash: None,
         break_glass: Some(true),
         break_glass_reason: None,
+        lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
     let error = event
@@ -1822,6 +2482,93 @@ fn agent_apartment_manifest_validate_rejects_duplicate_tool_capabilities() {
         error,
         SoracloudManifestError::DuplicateToolCapability { .. }
     ));
+}
+#[cfg(feature = "json")]
+#[test]
+fn signed_agent_deploy_and_service_handler_v1_json_is_closed_and_requires_collections() {
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong unknown-field error: {error:?}",
+                $label
+            );
+        }};
+    }
+
+    let populated = sample_agent_apartment_manifest();
+    assert_unknown_rejected!(
+        populated.clone(),
+        AgentApartmentManifestV1,
+        "agent apartment manifest"
+    );
+    assert_unknown_rejected!(
+        populated.tool_capabilities[0].clone(),
+        AgentToolCapabilityV1,
+        "agent tool capability"
+    );
+    assert_unknown_rejected!(
+        populated.spend_limits[0].clone(),
+        AgentSpendLimitV1,
+        "agent spend limit"
+    );
+    assert_unknown_rejected!(
+        AgentUpgradePolicyV1::Governed,
+        AgentUpgradePolicyV1,
+        "agent upgrade policy"
+    );
+    assert_unknown_rejected!(
+        SoraServiceHandlerClassV1::PrivateUpdate,
+        SoraServiceHandlerClassV1,
+        "service handler class"
+    );
+    assert_unknown_rejected!(
+        SoraCertifiedResponsePolicyV1::AuditReceipt,
+        SoraCertifiedResponsePolicyV1,
+        "certified response policy"
+    );
+
+    let mut empty = populated;
+    empty.tool_capabilities.clear();
+    empty.policy_capabilities.clear();
+    empty.spend_limits.clear();
+    let canonical =
+        norito::json::to_value(&empty).expect("serialize canonical empty apartment policy");
+    assert_eq!(
+        norito::json::from_value::<AgentApartmentManifestV1>(canonical.clone())
+            .expect("decode explicit empty apartment policy collections"),
+        empty
+    );
+    for field in ["tool_capabilities", "policy_capabilities", "spend_limits"] {
+        assert_eq!(
+            canonical
+                .get(field)
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "canonical empty apartment policy must emit `{field}`"
+        );
+        let mut missing = canonical.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("agent apartment manifest JSON object")
+                .remove(field)
+                .is_some()
+        );
+        norito::json::from_value::<AgentApartmentManifestV1>(missing)
+            .expect_err("agent apartment manifest must reject omitted V1 collections");
+    }
 }
 #[test]
 fn agent_apartment_manifest_validate_rejects_excessive_per_tx_limit() {

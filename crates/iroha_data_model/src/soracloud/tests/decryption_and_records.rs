@@ -952,6 +952,29 @@ fn hf_source_record_validation_accepts_consistent_state() {
     sample_hf_source_record().validate().expect("valid source");
 }
 #[test]
+fn hf_source_record_validation_requires_full_lowercase_commit_oid() {
+    for mutable_or_noncanonical in [
+        "main",
+        "4f9d72c",
+        "4F9D72C4F9D72C4F9D72C4F9D72C4F9D72C4F9D",
+        "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9g",
+    ] {
+        let mut source = sample_hf_source_record();
+        source.resolved_revision = mutable_or_noncanonical.to_owned();
+        let error = source
+            .validate()
+            .expect_err("mutable or noncanonical HF revision must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora hf source record",
+                field: "resolved_revision",
+                ..
+            }
+        ));
+    }
+}
+#[test]
 fn hf_source_record_validation_rejects_zero_prehash_digest_sentinels() {
     let zero_digest = zero_prehash_statement_hash();
     let mut source = sample_hf_source_record();
