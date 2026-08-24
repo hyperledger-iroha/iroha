@@ -60,6 +60,42 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: kotodama-js-native
+      - name: Prime and bind the audited JavaScript native build envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+          cargo_lock="$workspace/Cargo.lock"
+          [[ -f "$cargo_lock" && ! -L "$cargo_lock" ]]
+
+          cargo_path="$(rustup which --toolchain 1.93.1 cargo)"
+          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          [[ "$("$cargo_path" --version)" == cargo\ 1.93.1\ * ]]
+          [[ "$("$rustc_path" --version)" == rustc\ 1.93.1\ * ]]
+
+          # The authenticated native build is deliberately offline. Prime the
+          # exact tracked lock before sealing that environment.
+          env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS \
+            CARGO_NET_OFFLINE=false \
+            "$cargo_path" fetch --locked --manifest-path "$workspace/Cargo.toml"
+
+          cargo_target="$RUNNER_TEMP/iroha-kotodama-js-native-cargo"
+          mkdir -p "$cargo_target"
+          cargo_target="$(cd "$cargo_target" && pwd -P)"
+          [[ "$cargo_target" != "$workspace"/* ]]
+
+          {
+            echo "CARGO_BUILD_JOBS=1"
+            echo "CARGO_INCREMENTAL=0"
+            echo "CARGO_NET_OFFLINE=true"
+            echo "CARGO_TARGET_DIR=$cargo_target"
+            echo "IROHA_JS_CARGO_LOCKFILE_PATH=$cargo_lock"
+            echo "IROHA_JS_CARGO_PATH=$cargo_path"
+            echo "RUSTC=$rustc_path"
+            echo "RUSTC_BOOTSTRAP=1"
+            echo "RUSTDOC=$rustdoc_path"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
@@ -67,8 +103,15 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Build the JavaScript SDK distribution
+        run: npm run build:dist --prefix javascript/iroha_js
       - name: Build the Rust native binding and run the zero-skip hermetic JavaScript suite
-        run: npm test --prefix javascript/iroha_js
+        # setup-rust-toolchain injects CARGO_PROFILE_DEV_DEBUG=0 and
+        # RUSTFLAGS=-D warnings. The native builder rejects profile overrides,
+        # while its feature-reduced iroha-core graph contains test-only dead
+        # code. Remove both action defaults instead of changing the artifact
+        # profile or promoting those upstream warnings into build failures.
+        run: env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test --prefix javascript/iroha_js
 
   javascript-provenance-platforms:
     name: JavaScript native provenance (${{ matrix.os }})

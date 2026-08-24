@@ -7,7 +7,7 @@ fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Resu
         )
     })?;
     validate_relative_path(relative)?;
-    let root_metadata = fs::symlink_metadata(store_root)
+    let root_metadata = secure_file_metadata::from_path(store_root)
         .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(Error::IO(
@@ -26,7 +26,7 @@ fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Resu
     for component in components.iter().take(components.len().saturating_sub(1)) {
         cursor.push(component.as_os_str());
         expected.push(component.as_os_str());
-        let metadata = match fs::symlink_metadata(&cursor) {
+        let metadata = match secure_file_metadata::from_path(&cursor) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => break,
             Err(error) => return Err(Error::IO(error, cursor)),
@@ -69,7 +69,7 @@ fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> R
     for component in relative.components() {
         let parent = cursor.clone();
         let parent_before =
-            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+            secure_file_metadata::from_path(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
         if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -95,7 +95,7 @@ fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> R
             ));
         }
         let parent_after =
-            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+            secure_file_metadata::from_path(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
         if checked_geometry_file_identity(&parent_before, &parent)?
             != checked_geometry_file_identity(&parent_after, &parent)?
         {
@@ -113,7 +113,7 @@ fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> R
 }
 fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool) -> Result<()> {
     let before =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        secure_file_metadata::from_path(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !bootstrap_validate_path_kind(store_root, path, directory)? {
         return Err(Error::IO(
             std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry source is missing"),
@@ -124,8 +124,7 @@ fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool)
         sync_dir(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     } else {
         let file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if checked_geometry_file_identity(&before, path)?
             != checked_geometry_file_identity(&opened, path)?
@@ -141,7 +140,7 @@ fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool)
         file.sync_all()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     }
-    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let after = secure_file_metadata::from_path(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if checked_geometry_file_identity(&before, path)?
         != checked_geometry_file_identity(&after, path)?
     {
@@ -163,13 +162,12 @@ fn bootstrap_open_geometry_parent(store_root: &Path, parent: &Path) -> Result<Fi
         ));
     }
     let before =
-        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        secure_file_metadata::from_path(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
     let directory = File::open(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-    let opened = directory
-        .metadata()
+    let opened = secure_file_metadata::from_file(&directory)
         .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
     let after =
-        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        secure_file_metadata::from_path(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
     if before.file_type().is_symlink()
         || !before.is_dir()
         || checked_geometry_file_identity(&before, parent)?

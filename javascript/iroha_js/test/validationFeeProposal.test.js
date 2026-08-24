@@ -39,7 +39,8 @@ const plainElectorateRules = Object.freeze({
 });
 const validationFeeNetworkId = NetworkId.fromBytes(
   Buffer.from("13".repeat(32), "hex"),
-).toString();
+);
+const validationFeeNetworkIdLiteral = validationFeeNetworkId.toString();
 
 function withNativeBinding(native, body) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -58,7 +59,7 @@ function withNativeBinding(native, body) {
 test("validation-fee proposal fingerprint delegates exact native policy and lifecycle bytes", () => {
   const policy = Object.freeze({
     schema_version: 1,
-    network_id: validationFeeNetworkId,
+    network_id: validationFeeNetworkIdLiteral,
   });
   const lifecycleId = "56".repeat(32);
   const fingerprint = withNativeBinding(
@@ -236,7 +237,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   }).toI105();
   const policy = {
     schema_version: 1,
-    network_id: validationFeeNetworkId,
+    network_id: validationFeeNetworkIdLiteral,
     policy_version: "1",
     previous_policy_hash: null,
     ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -291,7 +292,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   );
 
   const draft = buildTransactionPayload({
-    chainId: "validation-fee-js-test",
+    networkId: validationFeeNetworkId,
     authority,
     instructions: [decoded],
     feePayment: { payer: "authority", chargeLimits: [] },

@@ -68,6 +68,23 @@ export function createRegisterAssetDefinitionInstructionBuilder({
       assetDefinition.assetDefinitionId,
       "assetDefinition.assetDefinitionId",
     );
+    if (typeof assetDefinition.name !== "string") {
+      throw new TypeError("assetDefinition.name is required and must be a string");
+    }
+    const name = assetDefinition.name;
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0) {
+      throw new TypeError("assetDefinition.name must not be blank");
+    }
+    if (new TextEncoder().encode(trimmedName).byteLength > 128) {
+      throw new TypeError("assetDefinition.name must not exceed 128 UTF-8 bytes");
+    }
+    if (name.includes("#") || name.includes("@")) {
+      throw new TypeError("assetDefinition.name must not contain '#' or '@'");
+    }
+    if (/\p{Cc}/u.test(name)) {
+      throw new TypeError("assetDefinition.name must not contain control characters");
+    }
     if (
       Object.prototype.hasOwnProperty.call(assetDefinition, "confidentialPolicy") ||
       Object.prototype.hasOwnProperty.call(assetDefinition, "confidential_policy")
@@ -80,6 +97,7 @@ export function createRegisterAssetDefinitionInstructionBuilder({
       Register: {
         AssetDefinition: {
           id: assetDefinitionId,
+          name,
           logo: assetDefinition.logo ?? null,
           metadata: assetDefinition.metadata ?? {},
           mintable: assetDefinition.mintable ?? "Infinitely",

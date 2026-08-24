@@ -563,8 +563,24 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
             for line in raw_symbols.splitlines()
             if line.strip()
         }
+        raw_undefined_symbols = _run_native_tool(nm, ["-guj", str(binary)])
+        undefined_symbols = {
+            line.strip().removeprefix("_")
+            for line in raw_undefined_symbols.splitlines()
+            if line.strip()
+        }
         missing = sorted(required_symbols - symbols)
         forbidden = sorted(forbidden_symbols & symbols)
+        missing_bundled_dependencies = sorted(
+            symbol
+            for symbol in undefined_symbols - symbols
+            if symbol.startswith(validator.EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES)
+        )
+        arm64_shake_x2_symbols = {
+            symbol
+            for symbol in symbols
+            if re.fullmatch(r"shake(?:128|256)x2(?:_absorb|_squeezeblocks)?", symbol)
+        }
         actual_kagemusha = {
             symbol
             for symbol in symbols
@@ -580,6 +596,18 @@ def _validate_native_binaries(snapshot: Path, validator: object) -> None:
             fail(
                 f"XCFramework {identifier} exports forbidden native symbols: "
                 + ", ".join(forbidden)
+            )
+        if (
+            "arm64" in expected["architectures"]
+            and arm64_shake_x2_symbols != validator.EXPECTED_ARM64_SHAKE_X2_SYMBOLS
+        ):
+            fail(
+                f"XCFramework {identifier} arm64 SHAKE x2 symbol inventory is not exact"
+            )
+        if missing_bundled_dependencies:
+            fail(
+                f"XCFramework {identifier} has unresolved bundled native symbols: "
+                + ", ".join(missing_bundled_dependencies)
             )
         if retired_or_extra_kagemusha:
             fail(

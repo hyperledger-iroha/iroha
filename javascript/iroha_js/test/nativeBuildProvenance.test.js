@@ -252,12 +252,12 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
     assert.notEqual(lockChanged.sourceTreeSha256, base.sourceTreeSha256);
     writeFileSync(lockPath, "version = 4\n");
 
-    chmodSync(trackedPath, 0o755);
-    const modeChanged = readNativeBuildSourceState(repoRoot);
-    assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
-    chmodSync(trackedPath, 0o644);
-
     if (process.platform !== "win32") {
+      chmodSync(trackedPath, 0o755);
+      const modeChanged = readNativeBuildSourceState(repoRoot);
+      assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
+      chmodSync(trackedPath, 0o644);
+
       symlinkSync("tracked.txt", linkPath);
       const linkA = readNativeBuildSourceState(repoRoot);
       unlinkSync(linkPath);
@@ -657,8 +657,14 @@ test("source seal rejects inventory and content mutations during observation", (
   });
 });
 
-test("source seal rejects unresolved index stages before reading source files", () => {
-  const run = (_command, args) => {
+test("source seal uses a Git-compatible config sink and rejects unresolved index stages", () => {
+  let gitCalls = 0;
+  const run = (_command, args, options) => {
+    gitCalls += 1;
+    assert.equal(
+      options.env.GIT_CONFIG_GLOBAL,
+      process.platform === "win32" ? "NUL" : os.devNull,
+    );
     if (args.includes("rev-parse")) {
       return { status: 0, stdout: Buffer.from(`${REVISION}\n`) };
     }
@@ -677,6 +683,7 @@ test("source seal rejects unresolved index stages before reading source files", 
     () => readNativeBuildSourceState("/unused-test-repo", { run }),
     /unsupported mode or unresolved stage/u,
   );
+  assert.equal(gitCalls, 3);
 });
 
 test("source seal rejects Git repository, index, and config redirection", () => {

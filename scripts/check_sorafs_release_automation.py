@@ -392,13 +392,20 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "test_consumer_drop_in_hardlink_is_rejected",
     ),
     "crates/irohad/src/runtime_provider_broker.rs": (
+        'include!("runtime_provider_broker/protocol.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform.rs": (
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+        'include!("pop_recipient_client.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs": (
         "endpoint_recovery::prepare_endpoint",
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1",
         "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
         "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
-        'include!("runtime_provider_broker/pop_recipient_client.rs");',
     ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
         "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",
@@ -481,6 +488,11 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
         "--credential",
     ),
     "crates/irohad/src/runtime_provider_broker.rs": (
+        "OPERATION_POP_RUNTIME_RESOLVE_V1",
+        "HybridSecretKey",
+        *POP_BROKER_RETIRED_SECRET_MARKERS,
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_operation_dispatch.rs": (
         "OPERATION_POP_RUNTIME_RESOLVE_V1",
         "HybridSecretKey",
         *POP_BROKER_RETIRED_SECRET_MARKERS,
@@ -1463,6 +1475,10 @@ def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
 
     relative_sources = {
         "broker": "crates/irohad/src/runtime_provider_broker.rs",
+        "broker_dispatch": (
+            "crates/irohad/src/runtime_provider_broker/"
+            "platform_operation_dispatch.rs"
+        ),
         "protocol": (
             "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
         ),
@@ -1509,6 +1525,7 @@ def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
 
     ipc_sources = (
         sources["broker"],
+        sources["broker_dispatch"],
         sources["protocol"],
         sources["validator"],
         sources["recipient_client"],

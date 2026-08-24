@@ -1,9 +1,10 @@
 #[test]
 fn pop_broker_sources_never_export_recipient_private_keys() {
     let broker = include_str!("../runtime_provider_broker.rs");
+    let broker_dispatch = include_str!("platform_operation_dispatch.rs");
     let protocol = include_str!("protocol_primitives.rs");
     let recipient_client = include_str!("pop_recipient_client.rs");
-    let joined = [broker, protocol, recipient_client].join("\n");
+    let joined = [broker, broker_dispatch, protocol, recipient_client].join("\n");
     for forbidden in [
         "PopCredentialRuntimeSecretsV1",
         "PopRuntimeResolveResultWireV1",

@@ -1047,20 +1047,28 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
     authenticated_controller = t[AC]
     pp = t[KP]
     pl = t[PL]
-    rp(
-        authenticated_controller,
-        AC,
-        e,
-        (
-            r"fn entrypoint\(arguments: Vec<OsString>\).*?"
-            r'match arguments\[1\]\.to_str\(\).*?'
-            r'Some\("promote-kagemusha-release-v4"\)\s*=>\s*\{\s*'
-            r"kagemusha_promotion_publisher::promote\(&arguments\[2\.\.\]\)\s*"
-            r"\}.*?_\s*=>\s*Err\(ControllerError::policy\("
-            r'"unsupported subcommand"\)\)'
-        ),
-        "exact authenticated promotion-publisher controller dispatch",
+    authenticated_promotion_dispatch_pattern = (
+        r"fn entrypoint\(arguments: Vec<OsString>\).*?"
+        r'match arguments\[1\]\.to_str\(\).*?'
+        r'Some\("promote-kagemusha-release-v4"\)\s*=>\s*\{\s*'
+        r"kagemusha_promotion_publisher::promote\(&arguments\[2\.\.\]\)\s*"
+        r"\}.*?_\s*=>\s*Err\(ControllerError::policy\("
+        r'"unsupported subcommand"\)\)'
     )
+    if (
+        len(
+            re.findall(
+                authenticated_promotion_dispatch_pattern,
+                authenticated_controller,
+                flags=re.DOTALL,
+            )
+        )
+        != 2
+    ):
+        e.append(
+            f"{AC}: expected exactly two exact authenticated "
+            "promotion-publisher controller dispatches"
+        )
     publisher_parse = pp.split(
         "fn parse_request(arguments: &[OsString])", 1
     )[-1].split("fn normalized_absolute_path(", 1)[0]

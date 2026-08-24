@@ -7169,6 +7169,8 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Explicit human-readable asset name. */
+    name: string;
     /** Immutable ownership intent; null means intentionally unowned global. */
     owningDomain: string | null;
     metadata?: object;

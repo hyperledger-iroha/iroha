@@ -18032,8 +18032,11 @@ fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), ey
         1,
         ALICE_ID.clone(),
     );
-    let placement =
-        sample_inrou_service_placement_record_for(service_name, service_version, &runtime_state);
+    let placement = sample_inrou_service_placement_record_for(
+        service_name.clone(),
+        service_version,
+        &runtime_state,
+    );
     stx.world.soracloud_inrou_service_placements.insert(
         (
             placement.service_name.as_ref().to_owned(),

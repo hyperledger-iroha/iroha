@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -26,12 +27,38 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
+
+
+def _load_adjacent_workspace_source_manifest() -> Callable[[Path], str]:
+    """Load the reviewed sibling helper when isolated mode hides script paths."""
+
+    helper = Path(__file__).resolve(strict=True).with_name(
+        "compute_workspace_source_manifest.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "_iroha_workspace_source_manifest",
+        helper,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load the workspace source manifest helper")
+    module = importlib.util.module_from_spec(spec)
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+    helper_function = getattr(module, "workspace_source_manifest", None)
+    if not callable(helper_function):
+        raise RuntimeError("workspace source manifest helper has no callable entrypoint")
+    return cast(Callable[[Path], str], helper_function)
+
 
 if __package__:
     from .compute_workspace_source_manifest import workspace_source_manifest
 else:
-    from compute_workspace_source_manifest import workspace_source_manifest
+    workspace_source_manifest = _load_adjacent_workspace_source_manifest()
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"

@@ -94,8 +94,7 @@ const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_SYSTEM_COMMAND_STDOUT_BYTES: usize = 256 * 1024;
 const MAX_SYSTEM_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
-const SYSTEM_COMMAND_CGROUP_PATH: &str =
-    "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
+const SYSTEM_COMMAND_CGROUP_PATH: &str = "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const TUNNEL_LAUNCH_FRAME_MAGIC: &[u8; 8] = b"SVPNTUN1";
@@ -5901,9 +5900,7 @@ fn ensure_system_command_cgroup() -> Result<PathBuf, ControllerError> {
     let root = Path::new("/sys/fs/cgroup");
     let controllers = root.join("cgroup.controllers");
     let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-        ControllerError::CommandCustody(format!(
-            "Linux cgroup-v2 root is unavailable: {error}"
-        ))
+        ControllerError::CommandCustody(format!("Linux cgroup-v2 root is unavailable: {error}"))
     })?;
     validate_system_command_cgroup_directory(root, &root_metadata)?;
     let controllers_metadata = fs::symlink_metadata(&controllers).map_err(|error| {
@@ -6005,9 +6002,8 @@ fn system_command_cgroup_populated(path: &Path) -> Result<bool, ControllerError>
             "failed to open fixed command cgroup events: {error}"
         ))
     })?;
-    let bytes = read_bounded(&mut events, 4 * 1024, "fixed command cgroup events").map_err(
-        |error| ControllerError::CommandCustody(error.to_string()),
-    )?;
+    let bytes = read_bounded(&mut events, 4 * 1024, "fixed command cgroup events")
+        .map_err(|error| ControllerError::CommandCustody(error.to_string()))?;
     let events = std::str::from_utf8(&bytes).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "fixed command cgroup events are not UTF-8: {error}"

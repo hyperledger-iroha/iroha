@@ -5,45 +5,84 @@
 //! registry representation. Release policy comes from canonical configured
 //! Norito; consensus state can select material, but cannot select its signers.
 use super::{Error, StateTransaction, kagemusha_v2_marker, labeled_invariant};
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use crate::zk::kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use crate::zk::kagemusha_recursion_adapter::{
+    KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5, kagemusha_artifact_encoding_sizes_v4,
+};
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 use crate::zk::{
     kagemusha_artifact_source_v4::{
         KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
-        KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
         qualify_kagemusha_authenticated_artifact_source_v4,
     },
     kagemusha_artifact_v4::{
         KagemushaAuthenticatedArtifactInspectionV4, inspect_kagemusha_pasta_cycle_artifact_v4,
-        kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
+        read_kagemusha_pasta_cycle_artifact_v4,
     },
     kagemusha_recursion_adapter::{
-        KAGEMUSHA_PK_STREAM_AUTHENTICATION_BUFFER_BYTES_V5, KagemushaQualificationMemoryContractV4,
-        kagemusha_artifact_encoding_sizes_v4, verify_candidate_recursive_step_two_receipt_v4,
+        KagemushaQualificationMemoryContractV4, verify_candidate_recursive_step_two_receipt_v4,
+    },
+};
+use crate::zk::{
+    kagemusha_artifact_source_v4::{
+        KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
     },
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
 use iroha_crypto::Hash;
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+use iroha_data_model::offline::{
+    KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4, KagemushaRecursiveSpendCandidateV4,
+    KagemushaRecursiveSpendQualificationReceiptV4,
+};
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
+use iroha_data_model::offline::{
+    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4, KagemushaPastaCycleArtifactKindV4,
+    KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
+};
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_MAX_BYTES_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
-        KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
-        KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
-        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
-        KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendQualificationReceiptV4,
-        KagemushaRecursiveSpendReleaseActivationV4, KagemushaRecursiveSpendReleaseAttestationV4,
-        KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
-        kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
+        KAGEMUSHA_RECURSIVE_SPEND_QUALIFICATION_RECEIPT_FILE_NAME_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
+        KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactV4,
+        KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
+        KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendReleaseActivationV4,
+        KagemushaStepCircuitParamsV4, kagemusha_recursive_spend_verifier_owner_manifest_id_v4,
         kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},
@@ -82,12 +121,61 @@ const KAGEMUSHA_V4_PROMOTION_ID_DOMAIN: &str = "kagemusha-v4-promotion-id";
 const VERIFIER_OWNER_MANIFEST_PREFIX_V4: &str = "kagemusha-v4-";
 const STEP_EQ_VERIFIER_CURVE_V4: &str = "vesta";
 const STEP_EP_VERIFIER_CURVE_V4: &str = "pallas";
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MAX_POLICY_BYTES: usize = 64 * 1024;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MAX_ATTESTATION_BYTES: usize = 1024 * 1024;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MANIFEST_FILE_NAME_V4: &str = "manifest.norito";
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MANIFEST_JSON_FILE_NAME_V4: &str = "manifest.json";
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const MANIFEST_SHA256_FILE_NAME_V4: &str = "manifest.norito.sha256";
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
 const KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();
@@ -98,6 +186,13 @@ const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_VERSION_V1: u16 = 1;
 pub const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_PATHS_V1: usize = 1024;
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_RELEASES_V1: usize = 16;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_BUILD_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:catalog-qualification-seal:build:v1\0";
 #[cfg(test)]
@@ -125,8 +220,22 @@ const MAX_CATALOG_AGGREGATE_BYTES_V4: u64 = 12 * 1024 * 1024 * 1024;
 /// Default decoded-resident ceiling used by non-daemon catalog callers.
 pub const DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4: u64 = 256 * 1024 * 1024;
 /// `ParamsIPA` retains two vectors of 64-byte Pasta affine points per domain row.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const PARSED_PARAMS_BYTES_PER_ROW_V4: u64 = 2 * 64;
 /// Conservative expansion from compressed verifier-key bytes to parsed points.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const PARSED_VERIFYING_KEY_EXPANSION_V4: u64 = 2;
 /// Conservative retained cost of Halo2's verifier-key evaluation domain.
 ///
@@ -134,8 +243,22 @@ const PARSED_VERIFYING_KEY_EXPANSION_V4: u64 = 2;
 /// domains. Charging 512 bytes per base-domain row covers those tables, their vector metadata, and
 /// construction scratch without pretending that the tiny serialized VK is representative of its
 /// decoded footprint.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4: u64 = 512;
 /// Small authenticated objects retained in several catalog/verifier owners.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
     + MAX_ATTESTATION_BYTES
     + KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
@@ -143,6 +266,13 @@ const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTE
     + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
     as u64;
 /// Metadata parsing scratch that can overlap verifier parsing.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
     + MAX_POLICY_BYTES
     + MAX_ATTESTATION_BYTES
@@ -151,7 +281,21 @@ const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
     + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
     as u64;
 /// Extra allocator/metadata headroom applied to decoded catalog estimates.
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4: u64 = 5;
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4: u64 = 4;
 /// Readiness-safe identity derived only from an authenticated V4 release.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -180,6 +324,13 @@ pub(crate) struct ResolvedKagemushaTerminalVerifierV4 {
     pinned_source: Arc<KagemushaCatalogPinnedArtifactSourceV4>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 struct KagemushaCatalogMemoryEstimateV4 {
     persistent_bytes: u64,
     peak_load_bytes: u64,
@@ -314,6 +465,13 @@ impl KagemushaCatalogQualificationSealV1 {
     }
 }
 impl KagemushaCatalogSealedParityQualificationV1 {
+    #[cfg(any(
+        test,
+        all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )
+    ))]
     fn from_qualified(
         qualified: &KagemushaQualifiedParityMetadataV4,
         compiled_protocol_structure_sha256: [u8; 32],
@@ -370,11 +528,26 @@ impl KagemushaCatalogSealedParityQualificationV1 {
 /// One startup-authenticated ABI-21 release retained for consensus execution.
 pub(crate) struct KagemushaCachedReleaseV4 {
     release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     qualification_receipt_sha256: [u8; 32],
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     qualified_candidate_sha256: [u8; 32],
     resolved: ResolvedKagemushaTerminalVerifierV4,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 struct KagemushaCatalogReleaseConsensusIdentityV1 {
     manifest_sha256: [u8; 32],
     release_record_sha256: [u8; 32],
@@ -382,6 +555,13 @@ struct KagemushaCatalogReleaseConsensusIdentityV1 {
     qualified_candidate_sha256: [u8; 32],
 }
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 struct KagemushaCatalogConsensusIdentityV1 {
     version: u16,
     configured_policy_sha256: [u8; 32],
@@ -1325,6 +1505,13 @@ fn current_kagemusha_catalog_executable_path_v1() -> Result<PathBuf, String> {
     validate_absolute_catalog_path(&canonical, "current executable")?;
     Ok(canonical)
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn current_kagemusha_catalog_build_fingerprint_v1() -> [u8; 32] {
     fn update_framed(hasher: &mut Sha256, value: &[u8]) {
         hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
@@ -2312,6 +2499,13 @@ fn read_bounded_opened_file(
     }
     Ok(bytes)
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn decode_canonical_manifest(
     bytes: &[u8],
 ) -> Result<KagemushaRecursiveSpendArtifactManifestV4, String> {
@@ -2326,6 +2520,13 @@ fn decode_canonical_manifest(
     manifest.validate().map_err(|error| error.to_string())?;
     Ok(manifest)
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn decode_canonical_attestation(
     bytes: &[u8],
 ) -> Result<KagemushaRecursiveSpendReleaseAttestationV4, String> {
@@ -2339,6 +2540,13 @@ fn decode_canonical_attestation(
     }
     Ok(attestation)
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn decode_canonical_promotion(
     bytes: &[u8],
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendPromotedReleaseV4, String> {
@@ -2455,6 +2663,13 @@ fn verify_exact_release_inventory_v4(
     }
     Ok(aggregate_bytes)
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn checked_decoded_estimate_headroom_v4(bytes: u64) -> Result<u64, String> {
     bytes
         .checked_mul(DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4)
@@ -2464,6 +2679,13 @@ fn checked_decoded_estimate_headroom_v4(bytes: u64) -> Result<u64, String> {
         .and_then(|value| value.checked_div(DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4))
         .ok_or_else(|| "Kagemusha V4 decoded catalog memory estimate overflowed".to_owned())
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn profile_artifact_payload_bytes_v4(
     profile: &iroha_data_model::offline::KagemushaPastaCycleProofProfileV4,
     kind: KagemushaPastaCycleArtifactKindV4,
@@ -2479,6 +2701,13 @@ fn profile_artifact_payload_bytes_v4(
             )
         })
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn validate_catalog_artifact_encoding_sizes_v4(
     manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<(), String> {
@@ -2519,6 +2748,13 @@ fn validate_catalog_artifact_encoding_sizes_v4(
     }
     Ok(())
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn estimate_catalog_release_memory_v4(
     manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<KagemushaCatalogMemoryEstimateV4, String> {
@@ -2576,6 +2812,13 @@ fn estimate_catalog_release_memory_v4(
         peak_load_bytes: checked_decoded_estimate_headroom_v4(peak_load_bytes)?,
     })
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn validate_sealed_release_qualification_v1(
     sealed: &KagemushaCatalogSealedReleaseQualificationV1,
     authenticated: &KagemushaAuthenticatedReleaseV4,
@@ -3143,6 +3386,13 @@ pub(crate) fn verifier_public_inputs_schema_hash(
     kagemusha_recursive_spend_verifier_public_inputs_schema_hash_v4(manifest, parity)
         .map_err(|error| error.to_string())
 }
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn decode_trusted_policy(bytes: &[u8]) -> Result<KagemushaRecursiveSpendReleasePolicyV1, String> {
     if bytes.is_empty() || bytes.len() > MAX_POLICY_BYTES || bytes.iter().all(|byte| *byte == 0) {
         return Err("Kagemusha V4 trusted release policy is empty or exceeds its bound".to_owned());

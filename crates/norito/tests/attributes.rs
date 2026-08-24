@@ -197,7 +197,7 @@ fn malformed_present_default_field_is_rejected_in_all_layouts() {
         let mut payload = encode_bare_with_flags(&value, flags);
         let nested_tag = payload
             .len()
-            .checked_sub(size_of::<u32>())
+            .checked_sub(core::mem::size_of::<u32>())
             .expect("outer and nested enum discriminants");
         assert_eq!(&payload[nested_tag..], &1_u32.to_le_bytes());
         payload[nested_tag..].copy_from_slice(&u32::MAX.to_le_bytes());

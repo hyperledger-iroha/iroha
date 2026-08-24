@@ -2006,11 +2006,11 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
-        tx_count: 1,
-        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
-        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
-        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
-        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
+        tx_count: 0,
+        total_local_amount: "0".parse().expect("valid settlement quantity"),
+        total_xor_due: "0".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -2032,6 +2032,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
             b"iroha-js-lane-relay-fixture-descriptor-v1",
         )))
         .with_manifest_root(Some([0x42; 32]));
+    envelope.verify().map_err(norito_to_napi)?;
     let valid =
         Buffer::from(norito::to_bytes(&envelope).map_err(|err| norito_to_napi(format!("{err}")))?);
     let mut tampered = valid.to_vec();
@@ -14042,6 +14043,12 @@ seiyaku Privacy {
             lane_relay_envelope_sample().expect("checked validator generation for relay sample");
         assert!(!sample.valid.is_empty());
         assert!(!sample.tampered.is_empty());
+        verify_lane_relay_envelope(Uint8Array::from(sample.valid.to_vec()))
+            .expect("generated relay sample must verify");
+        assert!(
+            verify_lane_relay_envelope(Uint8Array::from(sample.tampered.to_vec())).is_err(),
+            "tampered relay sample must fail verification"
+        );
     }
     #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
