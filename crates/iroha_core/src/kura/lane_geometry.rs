@@ -38,6 +38,7 @@ use super::{
     OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry, SidecarIndexLayout,
     V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
 };
+use crate::secure_file_metadata::{self, SecureMetadata};
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -563,7 +564,7 @@ fn configured_catalog_preflight_error(
     )
 }
 fn configured_catalog_store_root_identity(store_root: &Path) -> Result<GeometryFileIdentity> {
-    let metadata = fs::symlink_metadata(store_root)
+    let metadata = secure_file_metadata::from_path(store_root)
         .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
         return Err(configured_catalog_preflight_error(
@@ -593,11 +594,10 @@ fn configured_catalog_store_root_lock_identity(
     lock_file: &File,
 ) -> Result<GeometryFileIdentity> {
     let lock_path = store_root.join(super::STORE_ROOT_LOCK_FILE_NAME);
-    let opened_metadata = lock_file
-        .metadata()
+    let opened_metadata = secure_file_metadata::from_file(&lock_file)
         .map_err(|error| Error::IO(error, lock_path.clone()))?;
-    let path_metadata =
-        fs::symlink_metadata(&lock_path).map_err(|error| Error::IO(error, lock_path.clone()))?;
+    let path_metadata = secure_file_metadata::from_path(&lock_path)
+        .map_err(|error| Error::IO(error, lock_path.clone()))?;
     let opened_identity = geometry_file_identity(&opened_metadata);
     if opened_metadata.file_type().is_symlink()
         || !opened_metadata.file_type().is_file()
@@ -631,7 +631,7 @@ fn read_configured_catalog_journal_for_preflight(
         ));
     }
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
-    let path_metadata = match fs::symlink_metadata(path) {
+    let path_metadata = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(Error::IO(error, path.to_path_buf())),
@@ -656,8 +656,7 @@ fn read_configured_catalog_journal_for_preflight(
     }
     let expected_identity = checked_geometry_file_identity(&path_metadata, path)?;
     let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let opened_metadata = file
-        .metadata()
+    let opened_metadata = secure_file_metadata::from_file(&file)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened_metadata.is_file()
         || checked_geometry_file_identity(&opened_metadata, path)? != expected_identity
@@ -709,11 +708,10 @@ fn read_configured_catalog_journal_for_preflight(
             path.to_path_buf(),
         ));
     }
-    let final_opened_metadata = file
-        .metadata()
+    let final_opened_metadata = secure_file_metadata::from_file(&file)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let final_path_metadata =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let final_path_metadata = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !final_opened_metadata.is_file()
         || checked_geometry_file_identity(&final_opened_metadata, path)? != expected_identity
         || final_opened_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
@@ -792,7 +790,7 @@ fn preflight_configured_geometry_path(
             unreachable!("validated normal path component")
         };
         current.push(component);
-        let metadata = match fs::symlink_metadata(&current) {
+        let metadata = match secure_file_metadata::from_path(&current) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 configured_catalog_require_store_root_identity(store_root, root_identity)?;
@@ -841,8 +839,8 @@ fn configured_geometry_path_identity(
     if !preflight_configured_geometry_path(store_root, root_identity, path, directory)? {
         return Ok(None);
     }
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let metadata = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     let file_type = metadata.file_type();
     if file_type.is_symlink()
         || if directory {
@@ -870,7 +868,7 @@ fn preflight_configured_store_tree(
     let mut entries_seen = 0_usize;
     while let Some((directory, depth, expected_directory_identity)) = pending.pop() {
         configured_catalog_require_store_root_identity(store_root, root_identity)?;
-        let before = fs::symlink_metadata(&directory)
+        let before = secure_file_metadata::from_path(&directory)
             .map_err(|error| Error::IO(error, directory.clone()))?;
         if before.file_type().is_symlink()
             || !before.file_type().is_dir()
@@ -903,8 +901,8 @@ fn preflight_configured_store_tree(
                 ));
             }
             let path = entry.path();
-            let metadata =
-                fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             let file_type = metadata.file_type();
             if file_type.is_symlink() {
                 return Err(Error::IO(
@@ -934,11 +932,10 @@ fn preflight_configured_store_tree(
                 pending.push((path, child_depth, identity));
             } else if file_type.is_file() {
                 let file = File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
-                let opened = file
-                    .metadata()
+                let opened = secure_file_metadata::from_file(&file)
                     .map_err(|error| Error::IO(error, path.clone()))?;
-                let final_path =
-                    fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+                let final_path = secure_file_metadata::from_path(&path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
                 if !opened.is_file()
                     || final_path.file_type().is_symlink()
                     || !final_path.file_type().is_file()
@@ -963,7 +960,7 @@ fn preflight_configured_store_tree(
                 ));
             }
         }
-        let after = fs::symlink_metadata(&directory)
+        let after = secure_file_metadata::from_path(&directory)
             .map_err(|error| Error::IO(error, directory.clone()))?;
         if after.file_type().is_symlink()
             || !after.file_type().is_dir()
@@ -987,8 +984,8 @@ fn read_preflight_file_bounded_with_identity(
     path: &Path,
     max_bytes: u64,
 ) -> Result<(Vec<u8>, GeometryFileIdentity)> {
-    let path_metadata =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let path_metadata = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
         return Err(Error::IO(
             std::io::Error::new(
@@ -1009,8 +1006,7 @@ fn read_preflight_file_bounded_with_identity(
     }
     let expected_identity = geometry_file_identity(&path_metadata);
     let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let opened_metadata = file
-        .metadata()
+    let opened_metadata = secure_file_metadata::from_file(&file)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened_metadata.is_file() || geometry_file_identity(&opened_metadata) != expected_identity {
         return Err(Error::IO(
@@ -1035,10 +1031,9 @@ fn read_preflight_file_bounded_with_identity(
             path.to_path_buf(),
         ));
     }
-    let final_path_metadata =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let final_open_metadata = file
-        .metadata()
+    let final_path_metadata = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let final_open_metadata = secure_file_metadata::from_file(&file)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if final_path_metadata.file_type().is_symlink()
         || !final_path_metadata.file_type().is_file()
@@ -1122,8 +1117,8 @@ fn empty_geometry_merge_digest() -> Hash {
     Hash::prehashed(*hasher.finalize().as_bytes())
 }
 fn preflight_empty_lane_artifact_directory(path: &Path) -> Result<()> {
-    let before =
-        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let before = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if before.file_type().is_symlink() || !before.is_dir() {
         return Err(Error::IO(
             std::io::Error::new(
@@ -1135,8 +1130,7 @@ fn preflight_empty_lane_artifact_directory(path: &Path) -> Result<()> {
     }
     let identity = checked_geometry_file_identity(&before, path)?;
     let directory = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let opened = directory
-        .metadata()
+    let opened = secure_file_metadata::from_file(&directory)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened.is_dir() || checked_geometry_file_identity(&opened, path)? != identity {
         return Err(Error::IO(
@@ -1183,10 +1177,10 @@ fn preflight_empty_lane_artifact_directory(path: &Path) -> Result<()> {
             path.to_path_buf(),
         ));
     }
-    let opened_after = directory
-        .metadata()
+    let opened_after = secure_file_metadata::from_file(&directory)
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let after = secure_file_metadata::from_path(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened_after.is_dir()
         || checked_geometry_file_identity(&opened_after, path)? != identity
         || after.file_type().is_symlink()
@@ -1376,8 +1370,7 @@ fn require_pristine_configured_catalog_root(
         let path = entry.path();
         if path == lock_path && authenticated_lock_identity.is_some() {
             let expected = authenticated_lock_identity.expect("authenticated lock identity exists");
-            let metadata = entry
-                .metadata()
+            let metadata = secure_file_metadata::from_path(&path)
                 .map_err(|error| Error::IO(error, path.clone()))?;
             let file_type = entry
                 .file_type()
@@ -1399,8 +1392,7 @@ fn require_pristine_configured_catalog_root(
         }
         if allowed_path.as_deref() == Some(path.as_path()) {
             let expected = allowed_publication_temp.expect("allowed path has a preflight value");
-            let metadata = entry
-                .metadata()
+            let metadata = secure_file_metadata::from_path(&path)
                 .map_err(|error| Error::IO(error, path.clone()))?;
             let file_type = entry
                 .file_type()
@@ -1457,8 +1449,7 @@ fn write_initial_configured_catalog_temp(
         .open(temp_path)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     let identity = checked_geometry_file_identity(
-        &file
-            .metadata()
+        &secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?,
         temp_path,
     )?;
@@ -1466,7 +1457,7 @@ fn write_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     file.sync_all()
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
-    let path_metadata = fs::symlink_metadata(temp_path)
+    let path_metadata = secure_file_metadata::from_path(temp_path)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.file_type().is_file()
@@ -1502,7 +1493,7 @@ fn configured_catalog_reserved_temp_identity(
         ));
     }
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
-    let metadata = match fs::symlink_metadata(temp_path) {
+    let metadata = match secure_file_metadata::from_path(temp_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(Error::IO(error, temp_path.to_path_buf())),
@@ -1554,7 +1545,7 @@ fn promote_initial_configured_catalog_temp(
     expected_bytes: &[u8],
 ) -> Result<()> {
     configured_catalog_require_store_root_identity(store_root, root_identity)?;
-    let temp_metadata = fs::symlink_metadata(temp_path)
+    let temp_metadata = secure_file_metadata::from_path(temp_path)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if temp_metadata.file_type().is_symlink()
         || !temp_metadata.file_type().is_file()
@@ -1589,7 +1580,7 @@ fn promote_initial_configured_catalog_temp(
         }
         Err(error) => return Err(Error::IO(error, journal_path.to_path_buf())),
     }
-    let journal_metadata = fs::symlink_metadata(journal_path)
+    let journal_metadata = secure_file_metadata::from_path(journal_path)
         .map_err(|error| Error::IO(error, journal_path.to_path_buf()))?;
     if journal_metadata.file_type().is_symlink()
         || !journal_metadata.file_type().is_file()
@@ -1604,7 +1595,7 @@ fn promote_initial_configured_catalog_temp(
         ));
     }
     sync_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-    let final_temp_metadata = fs::symlink_metadata(temp_path)
+    let final_temp_metadata = secure_file_metadata::from_path(temp_path)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if final_temp_metadata.file_type().is_symlink()
         || !final_temp_metadata.file_type().is_file()
@@ -1925,7 +1916,7 @@ impl Kura {
                 preflight_configured_geometry_path(store_root, root_identity, &marker_path, false)?;
             if marker_exists {
                 let blocks_identity = geometry_file_identity(
-                    &fs::symlink_metadata(&blocks)
+                    &secure_file_metadata::from_path(&blocks)
                         .map_err(|error| Error::IO(error, blocks.clone()))?,
                 );
                 let bytes = read_preflight_file_bounded(&marker_path, MAX_LANE_MARKER_BYTES)?;
@@ -1944,7 +1935,7 @@ impl Kura {
                         marker_path,
                     ));
                 }
-                let final_blocks_metadata = fs::symlink_metadata(&blocks)
+                let final_blocks_metadata = secure_file_metadata::from_path(&blocks)
                     .map_err(|error| Error::IO(error, blocks.clone()))?;
                 if final_blocks_metadata.file_type().is_symlink()
                     || !final_blocks_metadata.file_type().is_dir()
@@ -1960,7 +1951,7 @@ impl Kura {
                 }
             } else {
                 preflight_empty_block_store_without_marker(&blocks, Some(expected), false)?;
-                if fs::symlink_metadata(&merge)
+                if secure_file_metadata::from_path(&merge)
                     .map_err(|error| Error::IO(error, merge.clone()))?
                     .len()
                     != 0
@@ -2001,7 +1992,7 @@ impl Kura {
                 preflight_empty_block_store_without_marker(&blocks, None, false)?;
             }
             if merge_exists
-                && fs::symlink_metadata(&merge)
+                && secure_file_metadata::from_path(&merge)
                     .map_err(|error| Error::IO(error, merge.clone()))?
                     .len()
                     != 0
@@ -4474,8 +4465,7 @@ impl Kura {
                 .read(true)
                 .open(&path)
                 .map_err(|error| Error::IO(error, path.clone()))?;
-            let opened_metadata = file
-                .metadata()
+            let opened_metadata = secure_file_metadata::from_file(&file)
                 .map_err(|error| Error::IO(error, path.clone()))?;
             if !Self::sidecar_file_metadata_unchanged(&before.metadata.file, &opened_metadata) {
                 return Err(Error::IO(
@@ -4547,7 +4537,7 @@ impl Kura {
                 directory,
             ));
         }
-        let before = fs::symlink_metadata(&directory)
+        let before = secure_file_metadata::from_path(&directory)
             .map_err(|error| Error::IO(error, directory.clone()))?;
         if before.file_type().is_symlink()
             || !before.file_type().is_dir()
@@ -4568,7 +4558,7 @@ impl Kura {
             entry_limit,
             aggregate_byte_limit,
             |path| {
-                let metadata = fs::symlink_metadata(path)
+                let metadata = secure_file_metadata::from_path(path)
                     .map_err(|error| Error::IO(error, path.to_path_buf()))?;
                 Ok((metadata.clone(), metadata))
             },
@@ -4645,7 +4635,7 @@ impl Kura {
         }
         self.validate_historical_autonomous_recovery_inventory_collisions(&records)?;
         sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
-        let after = fs::symlink_metadata(&directory)
+        let after = secure_file_metadata::from_path(&directory)
             .map_err(|error| Error::IO(error, directory.clone()))?;
         if after.file_type().is_symlink()
             || !after.file_type().is_dir()
@@ -7514,8 +7504,7 @@ impl Kura {
                     let mut file =
                         File::open(&path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
                     kura.verify_open_geometry_file(&path, &file)?;
-                    let initial_len = file
-                        .metadata()
+                    let initial_len = secure_file_metadata::from_file(&file)
                         .map_err(|error| Error::IO(error, path.to_path_buf()))?
                         .len();
                     hasher.update(&initial_len.to_le_bytes());
@@ -7539,8 +7528,7 @@ impl Kura {
                                 })?;
                         hasher.update(&buffer[..read]);
                     }
-                    let final_len = file
-                        .metadata()
+                    let final_len = secure_file_metadata::from_file(&file)
                         .map_err(|error| Error::IO(error, path.to_path_buf()))?
                         .len();
                     kura.verify_open_geometry_file(&path, &file)?;
@@ -7578,8 +7566,7 @@ impl Kura {
         let identity = self.geometry_path_identity(merge, false)?;
         let mut file = File::open(merge).map_err(|error| Error::IO(error, merge.to_path_buf()))?;
         self.verify_open_geometry_file(merge, &file)?;
-        let initial_len = file
-            .metadata()
+        let initial_len = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, merge.to_path_buf()))?
             .len();
         let mut hasher = blake3::Hasher::new();
@@ -7597,8 +7584,7 @@ impl Kura {
             bytes_read = bytes_read.saturating_add(u64::try_from(read)?);
             hasher.update(&buffer[..read]);
         }
-        let final_len = file
-            .metadata()
+        let final_len = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, merge.to_path_buf()))?
             .len();
         self.verify_open_geometry_file(merge, &file)?;
@@ -8102,8 +8088,7 @@ impl Kura {
                         .map_err(std::io::Error::from)
                         .map_err(|error| Error::IO(error, child_path.clone()))?,
                     );
-                    let opened = child
-                        .metadata()
+                    let opened = secure_file_metadata::from_file(&child)
                         .map_err(|error| Error::IO(error, child_path.clone()))?;
                     if !opened.is_dir()
                         || checked_geometry_file_identity(&opened, &child_path)? != before_identity
@@ -8192,8 +8177,7 @@ impl Kura {
             .map_err(std::io::Error::from)
             .map_err(|error| Error::IO(error, display_path.to_path_buf()))?,
         );
-        let opened = root
-            .metadata()
+        let opened = secure_file_metadata::from_file(&root)
             .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
         if !opened.is_dir()
             || checked_geometry_file_identity(&opened, display_path)? != expected_identity
@@ -9622,8 +9606,8 @@ impl Kura {
                 ));
             }
             let path = entry.path();
-            let metadata =
-                fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             let file_type = metadata.file_type();
             let kind = if file_type.is_file() {
                 BoundProgressDirectoryEntryKind::File
@@ -9816,8 +9800,8 @@ impl Kura {
                     "autonomous attempt namespace exceeds its bounded entry limit",
                 ));
             }
-            let metadata =
-                fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)
@@ -10554,7 +10538,7 @@ impl Kura {
         &self,
         directory: &BoundProgressDirectory,
     ) -> bool {
-        let Ok(opened) = directory.file.metadata() else {
+        let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
             return false;
         };
         opened.is_dir()
@@ -10584,7 +10568,7 @@ impl Kura {
                     directory,
                 ));
             }
-            let metadata = fs::symlink_metadata(&directory)
+            let metadata = secure_file_metadata::from_path(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
             if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
                 return Err(Error::IO(
@@ -11164,8 +11148,7 @@ impl Kura {
         let identity = self.geometry_path_identity(path, false)?;
         let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         self.verify_open_geometry_file(path, &file)?;
-        let length = file
-            .metadata()
+        let length = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?
             .len();
         if length > MAX_LANE_MARKER_BYTES {
@@ -11361,7 +11344,7 @@ impl Kura {
     }
     fn validate_path_kind(&self, path: &Path, directory: bool) -> Result<bool> {
         self.validate_geometry_ancestors(path)?;
-        let metadata = match fs::symlink_metadata(path) {
+        let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(Error::IO(error, path.to_path_buf())),
@@ -11388,8 +11371,8 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let metadata =
-            fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let metadata = secure_file_metadata::from_path(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let file_type = metadata.file_type();
         if file_type.is_symlink()
             || (directory && !file_type.is_dir())
@@ -11427,8 +11410,7 @@ impl Kura {
         let before = self.geometry_path_identity(parent, true)?;
         let directory =
             File::open(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        let opened = directory
-            .metadata()
+        let opened = secure_file_metadata::from_file(&directory)
             .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         if !opened.is_dir()
             || checked_geometry_file_identity(&opened, parent)? != before
@@ -11446,8 +11428,7 @@ impl Kura {
     }
     fn verify_open_geometry_file(&self, path: &Path, file: &File) -> Result<()> {
         let path_identity = self.geometry_path_identity(path, false)?;
-        let metadata = file
-            .metadata()
+        let metadata = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !metadata.is_file() || checked_geometry_file_identity(&metadata, path)? != path_identity
         {
@@ -11462,7 +11443,7 @@ impl Kura {
         Ok(())
     }
     fn validate_geometry_ancestors(&self, path: &Path) -> Result<()> {
-        let root_metadata = fs::symlink_metadata(&self.store_root)
+        let root_metadata = secure_file_metadata::from_path(&self.store_root)
             .map_err(|error| Error::IO(error, self.store_root.clone()))?;
         if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
             return Err(Error::IO(
@@ -11487,7 +11468,7 @@ impl Kura {
         let components = relative.components().collect::<Vec<_>>();
         for component in components.iter().take(components.len().saturating_sub(1)) {
             cursor.push(component.as_os_str());
-            match fs::symlink_metadata(&cursor) {
+            match secure_file_metadata::from_path(&cursor) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
                     return Err(Error::IO(
                         std::io::Error::new(
@@ -11519,8 +11500,7 @@ impl Kura {
         }
         let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         self.verify_open_geometry_file(path, &file)?;
-        let initial_metadata = file
-            .metadata()
+        let initial_metadata = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let file_len = initial_metadata.len();
         let identity = geometry_file_identity(&initial_metadata);
@@ -11539,8 +11519,7 @@ impl Kura {
             .take(MAX_GEOMETRY_JOURNAL_BYTES.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let final_len = file
-            .metadata()
+        let final_len = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?
             .len();
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_GEOMETRY_JOURNAL_BYTES
@@ -12150,7 +12129,7 @@ impl Kura {
         }
         self.validate_geometry_ancestors(path)?;
         self.validate_geometry_ancestors(temp)?;
-        match fs::symlink_metadata(path) {
+        match secure_file_metadata::from_path(path) {
             Ok(metadata)
                 if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
             {
@@ -12179,7 +12158,7 @@ impl Kura {
             self.validate_path_kind(parent, true)?;
             self.sync_geometry_parent(Some(parent))?;
         }
-        let file = match fs::symlink_metadata(temp) {
+        let file = match secure_file_metadata::from_path(temp) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                     return Err(Error::IO(
@@ -12532,7 +12511,7 @@ fn bootstrap_validate_path_kind(store_root: &Path, path: &Path, directory: bool)
     })?;
     validate_relative_path(relative)?;
     bootstrap_validate_existing_ancestors(store_root, path)?;
-    let metadata = match fs::symlink_metadata(path) {
+    let metadata = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(Error::IO(error, path.to_path_buf())),

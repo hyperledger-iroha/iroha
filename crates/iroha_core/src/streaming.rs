@@ -5,7 +5,10 @@
 //! available to higher-level components.
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StreamingTelemetry;
-use crate::{IrohaNetwork, NetworkMessage};
+use crate::{
+    IrohaNetwork, NetworkMessage,
+    secure_file_metadata::{self, SecureMetadata},
+};
 use blake3::Hasher as Blake3Hasher;
 use data_events::{
     DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,
@@ -3101,7 +3104,7 @@ fn read_snapshot_bytes_with_limit(
     path: &Path,
     max_bytes: usize,
 ) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
-    let path_before = match fs::symlink_metadata(path) {
+    let path_before = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -3135,7 +3138,7 @@ fn read_snapshot_bytes_with_limit(
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = secure_file_metadata::from_file(&file)?;
     if !snapshot_file_metadata_unchanged(&path_before, &opened_before) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -3160,8 +3163,8 @@ fn read_snapshot_bytes_with_limit(
             max_bytes,
         ));
     }
-    let opened_after = file.metadata()?;
-    let path_after = fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let path_after = secure_file_metadata::from_path(path)?;
     if path_after.file_type().is_symlink()
         || !path_after.is_file()
         || !snapshot_file_metadata_unchanged(&opened_before, &opened_after)
@@ -3200,7 +3203,7 @@ fn decode_snapshot_bytes(
     Ok(file)
 }
 #[cfg(unix)]
-fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn snapshot_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.is_file()
         && right.is_file()
@@ -3213,8 +3216,7 @@ fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn snapshot_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.is_file()
         && right.is_file()
         && left.volume_serial_number().is_some()
@@ -3226,7 +3228,7 @@ fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn snapshot_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn snapshot_file_metadata_unchanged(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
     false
 }
 fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
