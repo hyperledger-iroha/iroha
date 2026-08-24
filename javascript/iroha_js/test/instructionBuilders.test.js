@@ -3266,6 +3266,9 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
   const ciphertext = Buffer.from(payload.ciphertext);
   assert.equal(ciphertext.toString("base64"), Buffer.from("encrypted").toString("base64"));
   assert.equal(payload.ballot_proof.backend, "halo2/ipa");
+  assert.equal(payload.ballot_proof.vk_commitment, null);
+  assert.equal(payload.ballot_proof.envelope_hash, null);
+  assert.equal(payload.ballot_proof.lane_privacy, null);
 });
 
 test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
@@ -3346,6 +3349,9 @@ test("buildFinalizeElectionInstruction serializes tally entries", () => {
   });
   const payload = encodeAndDecode(instruction).zk.FinalizeElection;
   assert.deepEqual(payload.tally, [1, 2]);
+  assert.equal(payload.tally_proof.vk_commitment, null);
+  assert.equal(payload.tally_proof.envelope_hash, null);
+  assert.equal(payload.tally_proof.lane_privacy, null);
 });
 
 baseTest("proof attachments support lane privacy merkle witnesses", () => {

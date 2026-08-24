@@ -101,6 +101,19 @@ function pipelineTransactionStatus(hashBytes, kind, content = null) {
 
 const test = makeNativeTest(baseTest);
 
+function canonicalTransactionCodecNative(overrides = {}) {
+  return {
+    encodeSignedTransactionVersioned: (payload) => {
+      const bytes = Buffer.from(payload);
+      if (bytes.length === 0 || bytes[0] !== 1) {
+        throw new Error("test payload is not VersionedSignedTransaction V1");
+      }
+      return bytes;
+    },
+    ...overrides,
+  };
+}
+
 function i105FromEd25519AccountId(raw) {
   const trimmed = raw.trim();
   const atIndex = trimmed.lastIndexOf("@");
@@ -229,8 +242,8 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
 });
 
 test("submitSignedTransaction submits payload and polls status until terminal", async () => {
-  const txBytes = Buffer.from([0xaa]);
-  const signedBytes = Buffer.from([0xbb]);
+  const txBytes = Buffer.from([0x01, 0xaa]);
+  const signedBytes = Buffer.from([0x01, 0xbb]);
   const hashBytes = Buffer.alloc(32, 0x10);
   const submissionResponse = createResponse({
     status: 202,
@@ -266,7 +279,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     }
     if (url.endsWith("/v1/pipeline/transactions")) {
       assert.ok(Buffer.isBuffer(init.body));
-      assert.deepEqual([...init.body.values()], [0x01, ...signedBytes.values()]);
+      assert.deepEqual([...init.body.values()], [...signedBytes.values()]);
       return submissionResponse;
     }
     return statusQueue.shift() ?? statusQueue[statusQueue.length - 1];
@@ -277,14 +290,14 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
     fetchImpl,
     localSigningContext: LOCAL_SIGNING_CONTEXT,
   });
-  const binding = {
+  const binding = canonicalTransactionCodecNative({
     hashSignedTransaction: () => hashBytes,
     signTransaction: (networkId, tx) => {
       assert.deepEqual(Buffer.from(networkId), Buffer.from(NETWORK_ID.toBytes()));
       assert.deepEqual([...tx.values()], [...txBytes.values()]);
       return signedBytes;
     },
-  };
+  });
 
   const result = await withNativeBinding(binding, () =>
     submitSignedTransaction(client, txBytes, {
@@ -366,11 +379,11 @@ test("submitSignedTransaction rejects even null removed scope", async () => {
 });
 
 test("submitSignedTransaction times out when no terminal status", async () => {
-  const txBytes = Buffer.from([0x99]);
-  const binding = {
+  const txBytes = Buffer.from([0x01, 0x99]);
+  const binding = canonicalTransactionCodecNative({
     hashSignedTransaction: () => Buffer.alloc(32, 0x42),
     signTransaction: () => txBytes,
-  };
+  });
   const fetchImpl = async (url) => {
     if (url.endsWith("/v1/node/capabilities")) {
       return createResponse({
@@ -415,12 +428,12 @@ test("submitSignedTransaction times out when no terminal status", async () => {
 });
 
 test("submitSignedTransaction rejects a deceptive non-canonical status envelope", async () => {
-  const txBytes = Buffer.from([0x44]);
-  const signedBytes = Buffer.from([0x55]);
-  const binding = {
+  const txBytes = Buffer.from([0x01, 0x44]);
+  const signedBytes = Buffer.from([0x01, 0x55]);
+  const binding = canonicalTransactionCodecNative({
     hashSignedTransaction: () => Buffer.alloc(32, 0x33),
     signTransaction: () => signedBytes,
-  };
+  });
   const submissionResponse = createResponse({
     status: 202,
     jsonData: { status: "Accepted" },

@@ -36,7 +36,7 @@ export const SUMERAGI_DIAGNOSTICS_CONTRACT_TESTS = Object.freeze([
   "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound",
   "getSumeragiStatusTyped rejects unsupported protocol and invalid frozen contexts",
   "getSumeragiStatusTyped rejects malformed liveness diagnostics",
-  "retired aggregate Sumeragi telemetry, RBC, and collector helpers are absent",
+  "retired Sumeragi compatibility helpers are absent",
   "getSumeragiStatusTyped rejects inconsistent or under-quorum commits",
   "getSumeragiDiagnosticsTyped rejects impossible queue snapshots",
   "getSumeragiDiagnosticsTyped requires every canonical lane array",
