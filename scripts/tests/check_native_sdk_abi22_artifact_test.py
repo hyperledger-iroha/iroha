@@ -1700,3 +1700,14 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane
+    for marker in (
+        'BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/',
+        'NATIVE_LIBRARY_DIR="$BUILD_SESSION/c-jni-native"',
+        'NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/${BUILT_NATIVE_LIBRARY##*/}"',
+        '/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"',
+        'chmod 0700 "$NATIVE_LIBRARY"',
+    ):
+        assert marker in jni_lane
+    assert jni_lane.index('/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"') < (
+        jni_lane.index('"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record')
+    )

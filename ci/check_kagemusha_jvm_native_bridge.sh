@@ -645,13 +645,19 @@ printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
+  *-windows-*) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
+  *) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
-NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
+[[ -f "$BUILT_NATIVE_LIBRARY" && ! -L "$BUILT_NATIVE_LIBRARY" ]] \
+  || fail "fresh host bridge library is missing: $BUILT_NATIVE_LIBRARY"
+# Cargo may hard-link the top-level debug artifact into its dependency tree.
+# Authenticate and load a private copy so the evidence path has no mutable alias.
+NATIVE_LIBRARY_DIR="$BUILD_SESSION/c-jni-native"
+mkdir "$NATIVE_LIBRARY_DIR"
+NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/${BUILT_NATIVE_LIBRARY##*/}"
+/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"
+chmod 0700 "$NATIVE_LIBRARY"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
