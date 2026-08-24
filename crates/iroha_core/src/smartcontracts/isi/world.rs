@@ -98,9 +98,8 @@ pub mod isi {
             AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1,
             GovernanceExpectedHeadV1, GovernanceFinalizationEvidence,
-            ParliamentAggregateTallyV1, ParliamentBallotFailureKindV1, ParliamentBody,
-            ParliamentDecisionModeV1, ProposalKind, RequiredParliamentBodyV1, RiskTierV1,
-            RuntimeUpgradeProposal,
+            ParliamentAggregateTallyV1, ParliamentBody, ParliamentDecisionModeV1, ProposalKind,
+            RequiredParliamentBodyV1, RiskTierV1, RuntimeUpgradeProposal,
             SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
@@ -9204,43 +9203,6 @@ pub mod isi {
         Ok(count)
     }
 
-    fn fail_parliament_ballot_with_derived_kind_v1(
-        attempt: &mut crate::governance::parliament::ParliamentAttemptStateV1,
-        governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
-        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
-        failure_root: [u8; 32],
-        current_height: u64,
-    ) -> Result<(), Error> {
-        use crate::governance::parliament::ParliamentReducerErrorV1;
-
-        for failure_kind in [
-            ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
-            ParliamentBallotFailureKindV1::SurvivorDeadlineExpired,
-            ParliamentBallotFailureKindV1::CommitmentDeadlineExpired,
-            ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
-            ParliamentBallotFailureKindV1::AggregateOpeningFailed,
-        ] {
-            let mut candidate = attempt.clone();
-            match candidate.fail_ballot_no_result(
-                governance_attempt_id,
-                ballot_attempt_id,
-                failure_kind,
-                failure_root,
-                current_height,
-            ) {
-                Ok(()) => {
-                    *attempt = candidate;
-                    return Ok(());
-                }
-                Err(ParliamentReducerErrorV1::BallotFailureKindMismatch) => {}
-                Err(error) => return Err(parliament_reducer_error(error)),
-            }
-        }
-        Err(parliament_reducer_error(
-            ParliamentReducerErrorV1::BallotFailureKindMismatch,
-        ))
-    }
-
     fn validate_parliament_transition_digest_bound_v1(
         transition: &gov::ParliamentLifecycleTransitionV1,
     ) -> Result<(), Error> {
@@ -9652,13 +9614,14 @@ pub mod isi {
                         .map_err(parliament_reducer_error)?;
                 }
                 gov::ParliamentLifecycleTransitionV1::FailBallotNoResult(payload) => {
-                    fail_parliament_ballot_with_derived_kind_v1(
-                        &mut attempt,
-                        governance_attempt_id,
-                        payload.ballot_attempt_id,
-                        payload.failure_root,
-                        current_height,
-                    )?;
+                    attempt
+                        .fail_ballot_no_result(
+                            governance_attempt_id,
+                            payload.ballot_attempt_id,
+                            payload.failure_root,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
                 }
                 gov::ParliamentLifecycleTransitionV1::ConstructCertificate(payload) => {
                     let certificate = attempt

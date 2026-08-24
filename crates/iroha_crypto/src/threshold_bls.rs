@@ -6,13 +6,41 @@
 //! timelock release protocol, while keeping their keys distinct at the Rust
 //! type level.
 //!
-//! [`AdaptiveThresholdBlsPublicTranscript`] implements the cryptographic
-//! validation backend for a Das--Ren-compatible, triple-generator Pedersen DKG
-//! and adaptive partial-signature proof. The surrounding consensus state
-//! machine remains responsible for authenticated private-share transport,
-//! complaint deadlines, qualified-set agreement, and timely erasure. The
-//! older [`ThresholdBlsPublicTranscript`] cannot establish those invariants and
-//! deliberately remains fail closed for adaptive readiness.
+//! [`AdaptiveThresholdBlsPublicTranscript`] implements Iroha's fixed profile of
+//! the three-polynomial Das--Ren construction: coefficient commitments are
+//! `g^s h^r v^u` with unblinded constants, partial signatures are
+//! `H0(m)^s H1(m)^r`, and each partial carries the paper's two-equation
+//! representation proof. The Fiat--Shamir transcript contains every paper
+//! statement element `(x, y, pk_i, sigma_i, m)` plus the typed Iroha session,
+//! qualified-transcript, participant-seat, and parameter bindings.
+//!
+//! # Security model and limits
+//!
+//! “Adaptive” in public type names identifies this protocol profile; it is not
+//! a claim of adaptive security under generic or standard assumptions. The
+//! original [Das--Ren analysis](https://eprint.iacr.org/2023/1553) is in the
+//! random-oracle model and relies on the structure of its three correlated
+//! polynomials and independent generators. Subsequent
+//! [Ciampi--Crites--Komlo--Maller work](https://eprint.iacr.org/2025/943)
+//! rules out broad classes of full-adaptive reductions for *key-unique*
+//! threshold signatures. This profile deliberately has non-key-unique public
+//! shares `g^s h^r v^u`, so accepting the representation proof on every
+//! partial is mandatory. Its reconstructed standard BLS signature remains
+//! unique and is tested to be independent of the threshold subset.
+//!
+//! V1 fixes `n = 3f + 1`, signing threshold `f + 1`, and a lifetime budget of
+//! at most `f` distinct exposed signing shares for one unrefreshed key session.
+//! It implements no proactive/mobile-adversary refresh: exceeding that
+//! cumulative budget requires a fresh DKG and a purpose-distinct new session.
+//! Secret buffers are zeroizing defense in depth, not a compiler/OS/hardware
+//! erasure guarantee. The surrounding protocol remains responsible for
+//! authenticated private-share transport, complaint deadlines, qualified-set
+//! agreement, retirement of dealer contributions and proof nonces, and key
+//! rotation. [`AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready`]
+//! attests only that these public cryptographic checks ran; it is not a theorem
+//! certificate or an operational release approval. The older
+//! [`ThresholdBlsPublicTranscript`] lacks even that evidence and remains fail
+//! closed for this readiness check.
 
 use core::{fmt, marker::PhantomData};
 use std::{collections::HashSet, vec::Vec};
@@ -34,6 +62,8 @@ pub const THRESHOLD_BLS_MIN_COMMITTEE_SIZE_V1: u16 = 4;
 pub const THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1: u16 = 31;
 /// Maximum caller payload incorporated into one signing transcript.
 pub const THRESHOLD_BLS_MAX_MESSAGE_PAYLOAD_BYTES_V1: usize = 16 * 1024;
+/// V1 has no proactive share-refresh protocol; rotate through a fresh DKG instead.
+pub const THRESHOLD_BLS_PROACTIVE_REFRESH_SUPPORTED_V1: bool = false;
 /// Canonical compressed width of a public key in G2.
 pub const THRESHOLD_BLS_PUBLIC_KEY_BYTES: usize = 96;
 /// Canonical compressed width of a signature in G1.
@@ -136,7 +166,7 @@ pub enum ThresholdBlsError {
     /// The caller requested a public share which is not in the frozen transcript.
     #[error("threshold-BLS public share is not in the frozen transcript")]
     UnknownParticipant,
-    /// The adaptive DKG/signing construction has not passed its release gate.
+    /// The transcript lacks the complete triple-generator DKG/signing evidence.
     #[error("legacy threshold-BLS transcript lacks verified adaptive DKG evidence")]
     AdaptiveProtocolNotReady,
     /// HKDF expansion failed for a fixed-size output.
@@ -261,6 +291,16 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsSession<P> {
     #[must_use]
     pub const fn threshold(&self) -> u16 {
         self.threshold
+    }
+
+    /// Return the lifetime bound on distinct exposed shares without key rotation.
+    ///
+    /// V1 has no proactive refresh. This `f = threshold - 1` budget is
+    /// cumulative for the complete key-session lifetime, not reset per block,
+    /// epoch, payload, or signing round.
+    #[must_use]
+    pub const fn maximum_distinct_share_exposures_without_rotation(&self) -> u16 {
+        self.threshold - 1
     }
 
     /// Build the exact byte string hashed to G1 for a caller payload.
@@ -1450,7 +1490,11 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
         &self.transcript_hash
     }
 
-    /// Confirm that this value came from the complete verified adaptive path.
+    /// Confirm that this value came from the complete verified three-scalar path.
+    ///
+    /// This is a structural cryptographic-readiness check only. It does not
+    /// certify authenticated transport, corruption accounting, secure erasure,
+    /// side-channel resistance, or a generic adaptive-security theorem.
     ///
     /// # Errors
     ///

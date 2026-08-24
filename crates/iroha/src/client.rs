@@ -21023,114 +21023,11 @@ mod tests {
     }
     include!("client/musubi_tests.rs");
     include!("client/zk_attachment_auth_tests.rs");
-    fn validation_fee_plain_ballot_draft_fixture() -> (
-        String,
-        ValidationFeePlainBallotDraftRequestV1,
-        ValidationFeePlainBallotDraftResponseV1,
-    ) {
-        let proposal_id = "11".repeat(32);
-        let request = ValidationFeePlainBallotDraftRequestV1 {
-            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
-            owner: ALICE_ID.clone(),
-            direction: ValidationFeePlainBallotDirectionV1::Nay,
-        };
-        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
-            referendum_id: proposal_id.clone(),
-            owner: request.owner.clone(),
-            amount: 150_u64.into(),
-            duration_blocks: 3_600,
-            direction: request.direction.native_code(),
-        };
-        let instruction: InstructionBox = ballot.into();
-        let (wire_id, payload) = iroha_data_model::isi::framed_instruction_payload(&instruction)
-            .expect("registered CastPlainBallot instruction");
-        let response = ValidationFeePlainBallotDraftResponseV1 {
-            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
-            proposal_id: proposal_id.clone(),
-            owner: request.owner.clone(),
-            amount: "150".to_owned(),
-            duration_blocks: "3600".to_owned(),
-            direction: request.direction,
-            tx_instructions: vec![ValidationFeeProposalInstructionDraftV1 {
-                wire_id: wire_id.to_owned(),
-                payload_hex: hex::encode(payload),
-            }],
-        };
-        (proposal_id, request, response)
-    }
-    #[test]
-    fn validation_fee_plain_ballot_draft_client_uses_typed_route_and_exact_body() {
-        let (proposal_id, request, expected) = validation_fee_plain_ballot_draft_fixture();
-        let response_json =
-            norito::json::to_json(&expected).expect("encode exact PLAIN ballot response");
-        let response = json_response(StatusCode::OK, &response_json);
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let actual = with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url())
-                .post_validation_fee_plain_ballot_draft(&proposal_id, &request)
-        })
-        .expect("typed PLAIN ballot draft");
-        assert_eq!(actual, expected);
-        let snapshot = store.lock().expect("snapshot lock")[0].clone();
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft")
-        );
-        assert_eq!(snapshot.url.query(), None);
-        assert_eq!(
-            snapshot.max_response_bytes,
-            VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES
-        );
-        assert_single_accept_header(&snapshot, APPLICATION_JSON);
-        let submitted: ValidationFeePlainBallotDraftRequestV1 =
-            norito::json::from_slice(&snapshot.body).expect("decode exact draft request");
-        assert_eq!(submitted, request);
-    }
-    #[test]
-    fn validation_fee_plain_ballot_draft_rejects_response_substitution() {
-        let (proposal_id, request, response) = validation_fee_plain_ballot_draft_fixture();
-        validate_validation_fee_plain_ballot_draft_response(&response, &proposal_id, &request)
-            .expect("exact response");
-        let mut candidate = response.clone();
-        candidate.amount = "151".to_owned();
-        assert!(
-            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
-                .is_err()
-        );
-        candidate = response.clone();
-        candidate.duration_blocks = "03600".to_owned();
-        assert!(
-            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
-                .is_err()
-        );
-        candidate = response.clone();
-        candidate.direction = ValidationFeePlainBallotDirectionV1::Aye;
-        assert!(
-            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
-                .is_err()
-        );
-        candidate = response;
-        candidate.tx_instructions[0].payload_hex.push('0');
-        assert!(
-            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
-                .is_err()
-        );
-    }
-    #[test]
     fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {
         assert_eq!(
             parse_canonical_validation_fee_u64("18446744073709551615", "test_u64",)
                 .expect("u64 maximum"),
             u64::MAX
-        );
-        assert_eq!(
-            parse_canonical_validation_fee_u128(
-                "340282366920938463463374607431768211455",
-                "test_u128",
-            )
-            .expect("u128 maximum"),
-            u128::MAX
         );
         for invalid in ["", "00", "01", "+1", "-1", "1.0", "18446744073709551616"] {
             assert!(

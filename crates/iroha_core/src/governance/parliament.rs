@@ -3373,6 +3373,7 @@ impl ParliamentAttemptStateV1 {
 
         let mut ballot_sequences =
             BTreeMap::<BodyInstanceId, BTreeMap<u32, BallotAttemptId>>::new();
+        let mut frozen_ballot_policy = None;
         for (id, ballot) in &self.ballots {
             if *id != ballot.attempt.id
                 || *id
@@ -3390,6 +3391,27 @@ impl ParliamentAttemptStateV1 {
                 .is_some()
             {
                 return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
+            }
+            let policy = ballot_policy(ballot);
+            if frozen_ballot_policy.is_some_and(|expected| expected != policy) {
+                return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
+            }
+            frozen_ballot_policy = Some(policy);
+            let (
+                registration_close_height,
+                survivor_freeze_height,
+                commitment_close_height,
+                expected_release_height,
+            ) = timed_ballot_schedule(ballot.registered_at_height, policy)?;
+            if ballot.registration_close_height != registration_close_height
+                || ballot.survivor_freeze_height != survivor_freeze_height
+                || ballot.commitment_close_height != commitment_close_height
+                || ballot.release_height != Some(expected_release_height)
+            {
+                return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
+            }
+            if ballot.attempt.sequence > ballot.max_ballot_retries {
+                return Err(ParliamentReducerErrorV1::BallotRetryLimitExceeded);
             }
             let body = self
                 .bodies
@@ -3441,16 +3463,40 @@ impl ParliamentAttemptStateV1 {
             if let Some(registered) = ballot.registered_voters {
                 let excluded = u32::try_from(body.excluded_assignments.len())
                     .map_err(|_| ParliamentReducerErrorV1::InvalidBallotCount)?;
-                if registered > ballot.attempt.original_seats.saturating_sub(excluded) {
+                if registered > ballot.attempt.original_seats.saturating_sub(excluded)
+                    || registered > ballot.max_corpus_entries
+                {
                     return Err(ParliamentReducerErrorV1::InvalidBallotCount);
                 }
             }
+            if let Some(survivors) = ballot.survivors
+                && (survivors == 0
+                    || survivors > ballot.registered_voters.unwrap_or(0)
+                    || survivors > ballot.max_corpus_entries)
+            {
+                return Err(ParliamentReducerErrorV1::InvalidBallotCount);
+            }
             if let Some(accepted) = ballot.accepted_ballots {
                 if accepted > ballot.registered_voters.unwrap_or(0)
+                    || accepted > ballot.max_corpus_entries
                     || ballot.survivors != Some(accepted)
                 {
                     return Err(ParliamentReducerErrorV1::InvalidBallotCount);
                 }
+            }
+            let terminal_failure = matches!(
+                ballot.attempt.status,
+                BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded
+            );
+            if terminal_failure {
+                if !ballot_failure_matches_state(ballot) {
+                    return Err(ParliamentReducerErrorV1::BallotFailureKindMismatch);
+                }
+            } else if ballot.failure_root.is_some()
+                || ballot.failure_kind.is_some()
+                || ballot.failure_height.is_some()
+            {
+                return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
             }
             if self.used_tle_sessions.get(&tle_session_id) != Some(id) {
                 return Err(ParliamentReducerErrorV1::TleSessionAlreadyConsumed);
