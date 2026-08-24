@@ -987,6 +987,42 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        sdk_job = workflow.split("  sdk-and-codec-guards:\n", 1)[1].split(
+            "\n  javascript-provenance-platforms:\n", 1
+        )[0]
+        envelope_marker = (
+            "      - name: Prime and bind the audited JavaScript native "
+            "build envelope\n"
+        )
+        self.assertEqual(sdk_job.count(envelope_marker), 1)
+        envelope_step = sdk_job.split(envelope_marker, 1)[1].split(
+            "\n      - uses:", 1
+        )[0]
+        for required in (
+            'workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"',
+            '[[ -f "$cargo_lock" && ! -L "$cargo_lock" ]]',
+            "rustup which --toolchain 1.93.1 cargo",
+            "rustup which --toolchain 1.93.1 rustc",
+            "rustup which --toolchain 1.93.1 rustdoc",
+            "CARGO_NET_OFFLINE=false \\",
+            '"$cargo_path" fetch --locked --manifest-path '
+            '"$workspace/Cargo.toml"',
+            'cargo_target="$RUNNER_TEMP/iroha-kotodama-js-native-cargo"',
+            '[[ "$cargo_target" != "$workspace"/* ]]',
+            'echo "CARGO_BUILD_JOBS=1"',
+            'echo "CARGO_INCREMENTAL=0"',
+            'echo "CARGO_NET_OFFLINE=true"',
+            'echo "CARGO_TARGET_DIR=$cargo_target"',
+            'echo "IROHA_JS_CARGO_LOCKFILE_PATH=$cargo_lock"',
+            'echo "IROHA_JS_CARGO_PATH=$cargo_path"',
+            'echo "RUSTC=$rustc_path"',
+            'echo "RUSTC_BOOTSTRAP=1"',
+            'echo "RUSTDOC=$rustdoc_path"',
+        ):
+            self.assertIn(required, envelope_step)
+        self.assertNotIn("check_kagemusha_reviewed_cargo_lock", sdk_job)
+        self.assertNotIn("--materialize", sdk_job)
+
         representative_job = workflow.split(
             "  representative-regression:\n", 1
         )[1]

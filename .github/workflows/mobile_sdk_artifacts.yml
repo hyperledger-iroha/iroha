@@ -178,7 +178,6 @@ jobs:
     timeout-minutes: 120
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -271,11 +270,11 @@ jobs:
       - name: Build NoritoBridge XCFramework
         run: |
           build_args=()
-          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+          if [[ "$APPLE_PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
             build_args+=(--privacy-production-enabled)
           fi
           scripts/build_norito_xcframework.sh "${build_args[@]}"
-          if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
+          if [[ "$APPLE_PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
             test -f "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
           else
             test ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
@@ -357,7 +356,6 @@ jobs:
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -470,6 +468,8 @@ jobs:
           echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
           echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Compile candidate Android lab main and instrumentation sources only
+        env:
+          KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build host SoraFS reference native bridge
         run: cargo build --locked -p connect_norito_bridge
@@ -500,7 +500,7 @@ jobs:
           -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR"
           -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon"
           :client-android:buildNativeLibs
-          -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"
+          -PprivacyProductionEnabled="$ANDROID_PRIVACY_PRODUCTION_ENABLED"
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
         run: |
@@ -509,7 +509,7 @@ jobs:
             --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR" \
             -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR" \
             -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
-            -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED" \
+            -PprivacyProductionEnabled="$ANDROID_PRIVACY_PRODUCTION_ENABLED" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
             :client-android:testDebugUnitTest \

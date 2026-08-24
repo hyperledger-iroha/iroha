@@ -3808,7 +3808,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
 
 _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "fair_v2_ingress_admit_leader_wire": (
-        "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
+        "75cfbce52068c2a1ee077c2b0b58c072ac1084fe262b132bddbc8fe3f642a2ad"
     ),
     "try_recv_if_at_checked": (
         "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"

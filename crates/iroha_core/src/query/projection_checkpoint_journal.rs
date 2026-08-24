@@ -5,10 +5,13 @@
 //! the most recent checkpoint without scanning external DA manifests ad hoc. Recovery handles temp
 //! and main candidates sequentially and applies fixed byte/allocation/shard limits before retaining
 //! a decoded checkpoint.
-use crate::query::projection_checkpoint::{
-    QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES,
-    QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,
-    QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES, QueryProjectionCheckpoint,
+use crate::{
+    query::projection_checkpoint::{
+        QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES,
+        QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,
+        QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES, QueryProjectionCheckpoint,
+    },
+    secure_file_metadata::{self, SecureMetadata},
 };
 use iroha_logger::warn;
 use norito::{DecodeLimits, decode_from_bytes_with_limits, to_bytes};
@@ -376,7 +379,7 @@ fn read_bounded_journal_file(path: &Path, max_bytes: usize) -> io::Result<Option
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = secure_file_metadata::from_file(&file)?;
     if !journal_file_metadata_unchanged(&path_before, &opened_before) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -395,8 +398,8 @@ fn read_bounded_journal_file(path: &Path, max_bytes: usize) -> io::Result<Option
                 .saturating_add(1),
         )
         .read_to_end(&mut bytes)?;
-    let opened_after = file.metadata()?;
-    let path_after = fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let path_after = secure_file_metadata::from_path(path)?;
     if bytes.len() > max_bytes
         || !journal_file_metadata_unchanged(&opened_before, &opened_after)
         || !journal_file_metadata_unchanged(&opened_before, &path_after)
@@ -409,8 +412,8 @@ fn read_bounded_journal_file(path: &Path, max_bytes: usize) -> io::Result<Option
     }
     Ok(Some(bytes))
 }
-fn direct_journal_file_metadata(path: &Path, max_bytes: usize) -> io::Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path)?;
+fn direct_journal_file_metadata(path: &Path, max_bytes: usize) -> io::Result<SecureMetadata> {
+    let metadata = secure_file_metadata::from_path(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || !journal_file_is_single_link(&metadata)
@@ -423,7 +426,7 @@ fn direct_journal_file_metadata(path: &Path, max_bytes: usize) -> io::Result<fs:
     }
     Ok(metadata)
 }
-fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
+fn journal_file_is_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
@@ -431,7 +434,6 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt as _;
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -441,7 +443,7 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
 }
 #[cfg(unix)]
-fn journal_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn journal_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -454,8 +456,7 @@ fn journal_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn journal_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn journal_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.volume_serial_number().is_some()
         && left.file_index().is_some()
         && left.volume_serial_number() == right.volume_serial_number()
@@ -467,7 +468,7 @@ fn journal_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn journal_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn journal_file_metadata_unchanged(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
     false
 }
 #[cfg(test)]

@@ -205,6 +205,15 @@ EXPECTED_FORBIDDEN_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
     "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
 ]
+EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+EXPECTED_ARM64_SHAKE_X2_SYMBOLS = {
+    "shake128x2",
+    "shake128x2_absorb",
+    "shake128x2_squeezeblocks",
+    "shake256x2",
+    "shake256x2_absorb",
+    "shake256x2_squeezeblocks",
+}
 LIBRARY_NAME = "libNoritoBridge.a"
 MANIFEST_NAME = "NoritoBridge.artifacts.json"
 EXPECTED_HEADER_ENTRIES = {

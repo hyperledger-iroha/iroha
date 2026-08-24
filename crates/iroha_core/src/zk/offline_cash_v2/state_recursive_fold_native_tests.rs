@@ -223,7 +223,7 @@ fn eq_fixture_v2() -> (
     let proving_svk = proving_key.svk();
     let verifier_svk = eq_succinct_verifying_key_v2();
     assert_eq!(proving_svk.domain.k, verifier_svk.domain.k);
-    assert_eq!(proving_svk.domain.gen, verifier_svk.domain.gen);
+    assert_eq!(proving_svk.domain.r#gen, verifier_svk.domain.r#gen);
     assert_eq!(proving_svk.g, verifier_svk.g);
     assert_eq!(proving_svk.h, verifier_svk.h);
     assert_eq!(proving_svk.s, verifier_svk.s);
@@ -277,7 +277,7 @@ fn ep_fixture_v2() -> (
     let proving_svk = proving_key.svk();
     let verifier_svk = ep_succinct_verifying_key_v2();
     assert_eq!(proving_svk.domain.k, verifier_svk.domain.k);
-    assert_eq!(proving_svk.domain.gen, verifier_svk.domain.gen);
+    assert_eq!(proving_svk.domain.r#gen, verifier_svk.domain.r#gen);
     assert_eq!(proving_svk.g, verifier_svk.g);
     assert_eq!(proving_svk.h, verifier_svk.h);
     assert_eq!(proving_svk.s, verifier_svk.s);

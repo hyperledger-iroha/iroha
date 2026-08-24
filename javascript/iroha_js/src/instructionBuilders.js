@@ -1201,11 +1201,17 @@ function normalizeProofAttachment(value, name) {
       name,
     );
   }
-  const payload = { backend, proof: proofBox };
-  payload.vk_ref = normalizePortableProofVerifyingKeyId(
-    source.verifyingKeyRef,
-    `${name}.verifyingKeyRef`,
-  );
+  const payload = {
+    backend,
+    proof: proofBox,
+    vk_ref: normalizePortableProofVerifyingKeyId(
+      source.verifyingKeyRef,
+      `${name}.verifyingKeyRef`,
+    ),
+    vk_commitment: null,
+    envelope_hash: null,
+    lane_privacy: null,
+  };
   if (payload.vk_ref.backend !== backend) {
     fail(
       ValidationErrorCode.INVALID_OBJECT,

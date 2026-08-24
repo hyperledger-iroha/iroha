@@ -8,6 +8,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "ci/check_connect_norito_bridge_header.sh"
+      - "ci/check_authenticated_tool_controller.sh"
       - "ci/check_kagemusha_*.sh"
       - "ci/check_kagemusha_production_readiness_source_contract.py"
       - "ci/check_kagemusha_production_readiness_source_support.py"
@@ -755,12 +756,15 @@ on:
       - "specs/sdk/swift/readiness/*kagemusha*.md"
       - "artifacts/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
+      - "scripts/build_norito_xcframework.sh"
       - "scripts/capture_android_attestation_status.py"
       - "scripts/android_attestation_certificate_profile.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
       - "scripts/tests/check_swift_offline_device_attestation_fixture_test.py"
+      - "scripts/tests/authenticated_tool_controller_test.py"
+      - "scripts/tests/mobile_sdk_python312_contract.sh"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
@@ -810,6 +814,8 @@ jobs:
           --only-binary=:all:
           -r python/iroha_python/requirements-ci.lock
       - name: Build and install the exact native Python SDK
+        env:
+          IROHA_PYTHON_SKIP_RUNTIME_LINK: "1"
         run: |
           python -m pip install --no-deps -e python/norito_py -e python/iroha_torii_client
           wheel_dir="$(mktemp -d)"
@@ -903,7 +909,8 @@ jobs:
       - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
       - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_kagami --bin kagami atomic_activation_
-      - run: cargo test -p iroha_kagami --bin kagami kagemusha::tests:: -- --nocapture
+      - run: >-
+          cargo test -p iroha_kagami --bin kagami kagemusha::tests:: -- --nocapture
       - run: cargo test -p iroha_kagami --bin kagami backing_
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
@@ -921,13 +928,131 @@ jobs:
       - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
       - run: cargo test -p iroha_cli --bin iroha kagemusha_rollout -- --nocapture
       - run: cargo test -p iroha_cli --bin iroha kagemusha_lifecycle -- --nocapture
-      - run: cargo test -p iroha --lib http_default::tests:: -- --nocapture
+      - run: >-
+          cargo test -p iroha --lib http_default::tests:: -- --nocapture
 
   swift:
     name: Swift lifecycle surface
     runs-on: macos-15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Bind a canonical regular rustup executable
+        shell: bash
+        run: |
+          umask 077
+          ambient_rustup="$(command -v rustup)"
+          rustup_source="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          candidate = pathlib.Path(sys.argv[1]).resolve(strict=True)
+          metadata = candidate.lstat()
+          if not stat.S_ISREG(metadata.st_mode) or not os.access(candidate, os.X_OK):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$ambient_rustup")"
+          rustup_dir="$RUNNER_TEMP/iroha-kagemusha-apple-tools"
+          mkdir -p "$rustup_dir"
+          rustup_dir="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          raw = sys.argv[1]
+          candidate = pathlib.Path(raw)
+          workspace = pathlib.Path(sys.argv[2]).resolve(strict=True)
+          metadata = candidate.lstat()
+          resolved = candidate.resolve(strict=True)
+          if (
+              not candidate.is_absolute()
+              or str(candidate) != raw
+              or resolved != candidate
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISDIR(metadata.st_mode)
+              or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+              or candidate == workspace
+              or workspace in candidate.parents
+          ):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$rustup_dir" "$GITHUB_WORKSPACE")"
+          rustup_binary="$rustup_dir/rustup"
+          [[ ! -e "$rustup_binary" && ! -L "$rustup_binary" ]]
+          /bin/cp "$rustup_source" "$rustup_binary"
+          /bin/chmod 0700 "$rustup_binary"
+          canonical_rustup="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c '
+          import os
+          import pathlib
+          import stat
+          import sys
+          raw = sys.argv[1]
+          candidate = pathlib.Path(raw)
+          metadata = candidate.lstat()
+          resolved = candidate.resolve(strict=True)
+          if (
+              not candidate.is_absolute()
+              or str(candidate) != raw
+              or resolved != candidate
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISREG(metadata.st_mode)
+              or not os.access(candidate, os.X_OK)
+          ):
+              raise SystemExit(1)
+          print(candidate)
+          ' "$rustup_binary")"
+          [[ "$canonical_rustup" == "$rustup_binary" ]]
+          /usr/bin/cmp -s "$rustup_source" "$rustup_binary"
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_binary" >> "$GITHUB_ENV"
+      - name: Install Apple Rust targets and prefetch locked dependencies
+        run: |
+          "$MOBILE_SDK_RUSTUP_BINARY" target add --toolchain 1.93.1 aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          cargo_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 cargo)"
+          "$cargo_path" fetch --locked
+      - name: Bind the first-release Apple Cargo envelope
+        run: |
+          cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
+          mkdir -p "$cargo_target"
+          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
+          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          echo "RUSTC=$rustc_path" >> "$GITHUB_ENV"
+          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
+          echo "RUSTDOC=$rustdoc_path" >> "$GITHUB_ENV"
+      - name: Prepare external Apple native artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-kagemusha-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-kagemusha-apple-build"
+          scratch_dir="$RUNNER_TEMP/iroha-kagemusha-swift-tests"
+          mkdir -p "$artifact_dir" "$build_dir" "$scratch_dir"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$scratch_dir" >> "$GITHUB_ENV"
+      - name: Make reviewed Iroha source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
+      - name: Build exact ABI-22 NoritoBridge XCFramework
+        run: scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
 
   kotlin-java:
@@ -946,7 +1071,10 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
-      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - name: Warm dependencies, then compile the Android candidate lab offline
+        env:
+          KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
@@ -974,5 +1102,7 @@ jobs:
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - run: npm ci --ignore-scripts
+        working-directory: javascript/iroha_js
+      - run: npm run build:dist
         working-directory: javascript/iroha_js
       - run: ci/check_kagemusha_recursive_spend_javascript_sdk.sh

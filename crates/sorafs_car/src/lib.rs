@@ -4737,6 +4737,7 @@ fn try_owned_plan_string(value: &str, context: &'static str) -> Result<String, C
     owned.push_str(value);
     Ok(owned)
 }
+#[cfg(unix)]
 fn try_clone_logical_path(path: &[String]) -> Result<Vec<String>, CarPlanError> {
     let mut clone = Vec::new();
     try_reserve_plan(&mut clone, path.len(), "logical file path")?;

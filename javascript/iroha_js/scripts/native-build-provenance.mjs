@@ -133,7 +133,9 @@ function canonicalGitEnvironment(env) {
   return {
     ...canonical,
     GIT_CONFIG_COUNT: "0",
-    GIT_CONFIG_GLOBAL: devNull,
+    // Git for Windows accepts the DOS device name here, while Node's
+    // `\\.\nul` spelling is rejected as a Git configuration path.
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : devNull,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_LITERAL_PATHSPECS: "1",
     GIT_NO_REPLACE_OBJECTS: "1",

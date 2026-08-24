@@ -1033,7 +1033,6 @@ test(
       timeoutMs: 30_000,
     });
     assertSuccessfulStatus(accountStatus, accountId);
-
     const assetDefinitionId = randomAssetDefinitionId(domainId);
     const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
@@ -1042,6 +1041,7 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
+          name: "JS integration mint asset", owningDomain: domainId, balanceScopePolicy: "Global",
           metadata: {
             suite: "js-integration",
             step: "asset-mint",
@@ -1251,13 +1251,13 @@ test(
       timeoutMs: 30_000,
     });
     assertSuccessfulStatus(receiverStatus, receiverAccountId);
-
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
+          name: "JS integration transfer asset", owningDomain: domainId, balanceScopePolicy: "Global",
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",

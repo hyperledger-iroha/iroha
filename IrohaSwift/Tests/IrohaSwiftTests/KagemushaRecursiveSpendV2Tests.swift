@@ -51,15 +51,34 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
         let implementation = String(tail[..<end.lowerBound])
 
+        XCTAssertTrue(implementation.contains("let verifier = productCapability.verifier"))
         XCTAssertTrue(implementation.contains(
             "_ = try await toriiRestClient.getOfflineCapability()"
         ))
-        XCTAssertTrue(implementation.contains("getZkAssetMerklePathSnapshot("))
+        XCTAssertTrue(implementation.contains(
+            "let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot("
+        ))
+        XCTAssertTrue(implementation.contains("canonicalAuth: canonicalAuth"))
         XCTAssertTrue(implementation.contains(
             "snapshot.evaluatedBlockHeight >= productCapability.minimumEvaluatedBlockHeight"
         ))
+        XCTAssertTrue(implementation.contains(
+            "verifier.activationHeight <= snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "verifier.withdrawalHeight.map({ snapshot.evaluatedBlockHeight < $0 }) != false"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHeight: snapshot.evaluatedBlockHeight"
+        ))
+        XCTAssertTrue(implementation.contains(
+            "evaluatedBlockHash: snapshot.evaluatedBlockHash"
+        ))
+        XCTAssertFalse(implementation.contains("getKagemushaReadiness"))
         XCTAssertFalse(implementation.contains("matching: readiness"))
         XCTAssertFalse(implementation.contains("ToriiKagemushaReadiness"))
+        XCTAssertFalse(implementation.contains("for attempt in 0..<3"))
+        XCTAssertFalse(implementation.contains("let currentReadiness"))
     }
 
     func testReleaseQualifiedStepEqVerifierKeyIDBindsExactManifest() throws {

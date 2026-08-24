@@ -172,6 +172,112 @@ final class ZkAssetMerklePathTests: XCTestCase {
         XCTAssertEqual(path.directions, localPath.directions)
     }
 
+    func testToriiProviderUsesConfiguredCanonicalAuthentication() async throws {
+        let commitment = scalar(7)
+        let sibling = scalar(11)
+        let root = try computeRoot([commitment, sibling])
+        let local = try LocalZkAssetMerklePathProvider(
+            rootHistory: [root],
+            commitmentHistory: [commitment, sibling]
+        )
+        let localPath = try await local.getMerklePathForCommitment(
+            asset: "usd#bank",
+            commitment: commitment
+        )
+        let response = merklePathResponse(
+            root: root,
+            entries: [(commitment, localPath, localPath.siblings)]
+        )
+        let expectedAccount = try AccountAddress.parseEncoded(canonicalAuth.accountId).canonicalHex()
+
+        ZkMerklePathStubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                expectedAccount
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs),
+                "4102444801000"
+            )
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce),
+                "zk-merkle-path-test"
+            )
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature)
+            )
+            let http = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (http, response)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
+        let client = ToriiClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: URLSession(configuration: config),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            canonicalRequestAuth: canonicalAuth
+        )
+        let provider: any ZkAssetMerklePathProvider = client
+
+        let path = try await provider.getMerklePathForCommitment(
+            asset: "usd#bank",
+            commitment: commitment
+        )
+        let paths = try await provider.getMerklePaths(
+            asset: "usd#bank",
+            commitments: [commitment]
+        )
+
+        XCTAssertEqual(path, localPath)
+        XCTAssertEqual(paths, [localPath])
+    }
+
+    func testToriiProviderRequiresConfiguredCanonicalAuthentication() async {
+        ZkMerklePathStubURLProtocol.handler = { _ in
+            XCTFail("missing canonical authentication must fail before dispatch")
+            throw URLError(.userAuthenticationRequired)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
+        let client = ToriiClient(
+            baseURL: URL(string: "https://torii.example")!,
+            session: URLSession(configuration: config),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+        )
+        let provider: any ZkAssetMerklePathProvider = client
+        let expectedReason =
+            "zk-asset Merkle path queries require ToriiClient.canonicalRequestAuth."
+
+        do {
+            _ = try await provider.getMerklePathForCommitment(
+                asset: "usd#bank",
+                commitment: scalar(7)
+            )
+            XCTFail("missing canonical authentication should fail")
+        } catch let ToriiClientError.invalidPayload(reason) {
+            XCTAssertEqual(reason, expectedReason)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        do {
+            _ = try await provider.getMerklePaths(
+                asset: "usd#bank",
+                commitments: [scalar(7)]
+            )
+            XCTFail("missing canonical authentication should fail")
+        } catch let ToriiClientError.invalidPayload(reason) {
+            XCTAssertEqual(reason, expectedReason)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testToriiClientFetchesRootsBoundToCommittedSnapshot() async throws {
         let root = scalar(7)
         let blockHash = Data(repeating: 0x0a, count: 32)

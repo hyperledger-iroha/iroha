@@ -6,6 +6,7 @@
 //! can authenticate that WAL. This store persists those canonical inputs before
 //! the corresponding WAL is opened and never overwrites a conflicting height.
 use super::v2::VerifiedHeightContext;
+use crate::secure_file_metadata::{self, SecureMetadata};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -77,9 +78,9 @@ impl PersistedHeightContext {
 #[derive(Clone, Debug)]
 pub(crate) struct V2ContextStore {
     root: PathBuf,
-    root_identity: fs::Metadata,
+    root_identity: SecureMetadata,
     directory: PathBuf,
-    directory_identity: fs::Metadata,
+    directory_identity: SecureMetadata,
     #[cfg(test)]
     lookup_pause: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<ContextIoPause>>>>,
     #[cfg(test)]
@@ -400,47 +401,45 @@ fn compare_existing_frame(
 #[derive(Debug)]
 struct StableDirectory {
     canonical_path: PathBuf,
-    metadata: fs::Metadata,
+    metadata: SecureMetadata,
 }
 #[derive(Debug)]
 struct StableFile {
     canonical_path: PathBuf,
-    metadata: fs::Metadata,
-    directory_metadata: fs::Metadata,
+    metadata: SecureMetadata,
+    directory_metadata: SecureMetadata,
 }
 #[cfg(unix)]
-fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(windows)]
-fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.volume_serial_number() == right.volume_serial_number()
         && left.file_index() == right.file_index()
         && left.volume_serial_number().is_some()
         && left.file_index().is_some()
 }
 #[cfg(all(not(unix), not(windows)))]
-fn metadata_same_object(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     left.file_type() == right.file_type() && left.created().ok() == right.created().ok()
 }
 #[cfg(unix)]
-fn is_single_link(metadata: &fs::Metadata) -> bool {
+fn is_single_link(metadata: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     metadata.nlink() == 1
 }
 #[cfg(windows)]
-fn is_single_link(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn is_single_link(metadata: &SecureMetadata) -> bool {
     metadata.number_of_links() == Some(1)
 }
 #[cfg(all(not(unix), not(windows)))]
-fn is_single_link(_metadata: &fs::Metadata) -> bool {
+fn is_single_link(_metadata: &SecureMetadata) -> bool {
     true
 }
 #[cfg(unix)]
-fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     metadata_same_object(left, right)
         && left.nlink() == 1
@@ -452,8 +451,7 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     metadata_same_object(left, right)
         && left.number_of_links() == Some(1)
         && right.number_of_links() == Some(1)
@@ -462,7 +460,7 @@ fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.creation_time() == right.creation_time()
 }
 #[cfg(all(not(unix), not(windows)))]
-fn file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     metadata_same_object(left, right)
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
@@ -471,7 +469,7 @@ fn stable_directory(
     root: &Path,
     expected: &Path,
 ) -> Result<Option<StableDirectory>, V2ContextStoreError> {
-    let before = match fs::symlink_metadata(expected) {
+    let before = match secure_file_metadata::from_path(expected) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(io_error(expected, source)),
@@ -482,7 +480,8 @@ fn stable_directory(
             "context-store path is not a direct directory",
         ));
     }
-    let root_before = fs::symlink_metadata(root).map_err(|source| io_error(root, source))?;
+    let root_before =
+        secure_file_metadata::from_path(root).map_err(|source| io_error(root, source))?;
     if root_before.file_type().is_symlink() || !root_before.is_dir() {
         return Err(unsafe_path(
             root,
@@ -503,8 +502,10 @@ fn stable_directory(
             "context-store directory contains a symlink or escapes its root",
         ));
     }
-    let root_after = fs::symlink_metadata(root).map_err(|source| io_error(root, source))?;
-    let after = fs::symlink_metadata(expected).map_err(|source| io_error(expected, source))?;
+    let root_after =
+        secure_file_metadata::from_path(root).map_err(|source| io_error(root, source))?;
+    let after =
+        secure_file_metadata::from_path(expected).map_err(|source| io_error(expected, source))?;
     if root_after.file_type().is_symlink()
         || !root_after.is_dir()
         || after.file_type().is_symlink()
@@ -536,7 +537,7 @@ fn stable_file_metadata(
     let Some(directory_before) = stable_directory(root, directory)? else {
         return Ok(None);
     };
-    let before = match fs::symlink_metadata(path) {
+    let before = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(io_error(path, source)),
@@ -554,7 +555,7 @@ fn stable_file_metadata(
             "context file escapes its canonical store directory",
         ));
     }
-    let after = fs::symlink_metadata(path).map_err(|source| io_error(path, source))?;
+    let after = secure_file_metadata::from_path(path).map_err(|source| io_error(path, source))?;
     let Some(directory_after) = stable_directory(root, directory)? else {
         return Err(unsafe_path(
             directory,
@@ -577,9 +578,9 @@ fn stable_file_metadata(
 }
 fn stable_read_file(
     root: &Path,
-    root_identity: &fs::Metadata,
+    root_identity: &SecureMetadata,
     directory: &Path,
-    directory_identity: &fs::Metadata,
+    directory_identity: &SecureMetadata,
     path: &Path,
     byte_limit: usize,
     after_identity_preflight: impl FnOnce(),
@@ -610,7 +611,7 @@ fn stable_read_file(
         .read(true)
         .open(path)
         .map_err(|source| io_error(path, source))?;
-    let opened = file.metadata().map_err(|source| io_error(path, source))?;
+    let opened = secure_file_metadata::from_file(&file).map_err(|source| io_error(path, source))?;
     if !opened.is_file() || !file_metadata_unchanged(&before.metadata, &opened) {
         return Err(unsafe_path(
             path,
@@ -634,7 +635,8 @@ fn stable_read_file(
         .take(u64::try_from(byte_limit.saturating_add(1)).unwrap_or(u64::MAX))
         .read_to_end(&mut bytes)
         .map_err(|source| io_error(path, source))?;
-    let handle_after = file.metadata().map_err(|source| io_error(path, source))?;
+    let handle_after =
+        secure_file_metadata::from_file(&file).map_err(|source| io_error(path, source))?;
     let path_after = stable_file_metadata(root, directory, path)?
         .ok_or_else(|| unsafe_path(path, "context file disappeared while it was being read"))?;
     require_root_identity(root, root_identity)?;
@@ -653,7 +655,10 @@ fn stable_read_file(
     }
     Ok(Some(bytes))
 }
-fn require_root_identity(root: &Path, expected: &fs::Metadata) -> Result<(), V2ContextStoreError> {
+fn require_root_identity(
+    root: &Path,
+    expected: &SecureMetadata,
+) -> Result<(), V2ContextStoreError> {
     let current = stable_directory(root, root)?.ok_or_else(|| {
         unsafe_path(
             root,
@@ -671,7 +676,7 @@ fn require_root_identity(root: &Path, expected: &fs::Metadata) -> Result<(), V2C
 fn require_directory_identity(
     root: &Path,
     directory: &Path,
-    expected: &fs::Metadata,
+    expected: &SecureMetadata,
 ) -> Result<(), V2ContextStoreError> {
     let current = stable_directory(root, directory)?.ok_or_else(|| {
         unsafe_path(
@@ -690,7 +695,7 @@ fn require_directory_identity(
 fn ensure_context_directory(
     root: &Path,
     directory: &Path,
-) -> Result<(fs::Metadata, fs::Metadata), V2ContextStoreError> {
+) -> Result<(SecureMetadata, SecureMetadata), V2ContextStoreError> {
     if directory.parent() != Some(root) {
         return Err(unsafe_path(
             directory,
@@ -800,9 +805,9 @@ fn ensure_store_root(root: &Path) -> Result<(), V2ContextStoreError> {
 }
 fn write_atomic_synced_noclobber(
     root: &Path,
-    root_identity: &fs::Metadata,
+    root_identity: &SecureMetadata,
     directory: &Path,
-    directory_identity: &fs::Metadata,
+    directory_identity: &SecureMetadata,
     path: &Path,
     bytes: &[u8],
     before_publish: impl FnOnce(),
@@ -839,11 +844,9 @@ fn write_atomic_synced_noclobber(
             "atomic context-store directory changed during temporary creation",
         ));
     }
-    let temp_path_metadata = fs::symlink_metadata(temporary.path())
+    let temp_path_metadata = secure_file_metadata::from_path(temporary.path())
         .map_err(|source| io_error(temporary.path(), source))?;
-    let temp_handle_metadata = temporary
-        .as_file()
-        .metadata()
+    let temp_handle_metadata = secure_file_metadata::from_file(temporary.as_file())
         .map_err(|source| io_error(temporary.path(), source))?;
     if temp_path_metadata.file_type().is_symlink()
         || !temp_path_metadata.is_file()
@@ -860,11 +863,9 @@ fn write_atomic_synced_noclobber(
         .and_then(|()| temporary.as_file_mut().flush())
         .and_then(|()| temporary.as_file().sync_all())
         .map_err(|source| io_error(temporary.path(), source))?;
-    let temp_handle_after = temporary
-        .as_file()
-        .metadata()
+    let temp_handle_after = secure_file_metadata::from_file(temporary.as_file())
         .map_err(|source| io_error(temporary.path(), source))?;
-    let temp_path_after = fs::symlink_metadata(temporary.path())
+    let temp_path_after = secure_file_metadata::from_path(temporary.path())
         .map_err(|source| io_error(temporary.path(), source))?;
     if !file_metadata_unchanged(&temp_handle_after, &temp_path_after)
         || temp_handle_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
@@ -912,9 +913,8 @@ fn write_atomic_synced_noclobber(
     persisted
         .sync_all()
         .map_err(|source| io_error(path, source))?;
-    let persisted_handle = persisted
-        .metadata()
-        .map_err(|source| io_error(path, source))?;
+    let persisted_handle =
+        secure_file_metadata::from_file(&persisted).map_err(|source| io_error(path, source))?;
     let persisted_path = stable_file_metadata(root, directory, path)?
         .ok_or_else(|| unsafe_path(path, "atomic context target disappeared after publication"))?;
     require_root_identity(root, root_identity)?;
@@ -932,11 +932,13 @@ fn write_atomic_synced_noclobber(
     require_directory_identity(root, directory, directory_identity)?;
     Ok(true)
 }
-fn sync_directory_stable(path: &Path, expected: &fs::Metadata) -> Result<(), V2ContextStoreError> {
+fn sync_directory_stable(
+    path: &Path,
+    expected: &SecureMetadata,
+) -> Result<(), V2ContextStoreError> {
     let directory = File::open(path).map_err(|source| io_error(path, source))?;
-    let opened = directory
-        .metadata()
-        .map_err(|source| io_error(path, source))?;
+    let opened =
+        secure_file_metadata::from_file(&directory).map_err(|source| io_error(path, source))?;
     if !opened.is_dir() || !metadata_same_object(expected, &opened) {
         return Err(unsafe_path(
             path,
@@ -946,7 +948,7 @@ fn sync_directory_stable(path: &Path, expected: &fs::Metadata) -> Result<(), V2C
     directory
         .sync_all()
         .map_err(|source| io_error(path, source))?;
-    let after = fs::symlink_metadata(path).map_err(|source| io_error(path, source))?;
+    let after = secure_file_metadata::from_path(path).map_err(|source| io_error(path, source))?;
     if after.file_type().is_symlink() || !after.is_dir() || !metadata_same_object(expected, &after)
     {
         return Err(unsafe_path(

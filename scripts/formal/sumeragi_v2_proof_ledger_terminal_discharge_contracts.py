@@ -1143,7 +1143,7 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "c0b5ef19fc5daec8d4d314668d33655e66c1dc7b20327f5ccb92ea2ca0b7603e"
+        "0871b142fd35a1a86ef86e52de7f7c52cf960b02731241de249910539dc8bd7b"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "047871a2fbbc08306274a266a0592cae1f2fc360c66ff66f7e08386f1f4cffd2"
@@ -1164,7 +1164,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "3b217f914c6af3452be842036751330234a219554e25dcb508407ef4f97f407c"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
+        "c5d359c0281809db0fb794f63683bdbf04005f1dc2eac09e250ea513567447e0"
     ),
 }
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (

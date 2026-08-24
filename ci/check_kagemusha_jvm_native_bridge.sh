@@ -11,7 +11,7 @@ ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 22 library"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required"
 LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {
@@ -161,10 +161,12 @@ else
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
-[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]] \
   || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute regular JDK directory"
 NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
 JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must resolve to a canonical regular JDK directory"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"
 for tool in "$NM_BINARY" "$JAVA_BINARY"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] \
@@ -198,21 +200,35 @@ RUSTC_BINARY="$(
   /usr/bin/env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" rustc
 )"
+RUSTDOC_BINARY="$(
+  /usr/bin/env -i "${RUSTUP_ENV[@]}" \
+    "$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" rustdoc
+)"
 CARGO_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_BINARY")"
 RUSTC_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$RUSTC_BINARY")"
-[[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" ]] \
-  || fail "pinned Cargo and rustc executables are unavailable"
+RUSTDOC_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$RUSTDOC_BINARY")"
+[[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" && -x "$RUSTDOC_BINARY" ]] \
+  || fail "pinned Cargo, rustc, and rustdoc executables are unavailable"
 
 cargo_identity="$(/usr/bin/env -i "${RUSTUP_ENV[@]}" "$CARGO_BINARY" --version --verbose)"
 rustc_identity="$(/usr/bin/env -i "${RUSTUP_ENV[@]}" "$RUSTC_BINARY" --version --verbose)"
+rustdoc_identity="$(/usr/bin/env -i "${RUSTUP_ENV[@]}" "$RUSTDOC_BINARY" --version --verbose)"
 cargo_release="$(/usr/bin/sed -n 's/^release: //p' <<<"$cargo_identity")"
 rustc_release="$(/usr/bin/sed -n 's/^release: //p' <<<"$rustc_identity")"
+rustdoc_release="$(/usr/bin/sed -n 's/^release: //p' <<<"$rustdoc_identity")"
 cargo_commit="$(/usr/bin/sed -n 's/^commit-hash: //p' <<<"$cargo_identity")"
 rustc_commit="$(/usr/bin/sed -n 's/^commit-hash: //p' <<<"$rustc_identity")"
-[[ "$cargo_release" == "$PINNED_TOOLCHAIN" && "$rustc_release" == "$PINNED_TOOLCHAIN" ]] \
-  || fail "resolved Cargo/rustc do not match exact Rust $PINNED_TOOLCHAIN"
-[[ "$cargo_commit" =~ ^[0-9a-f]{40}$ && "$rustc_commit" =~ ^[0-9a-f]{40}$ ]] \
-  || fail "resolved Cargo/rustc commits are not canonical"
+rustdoc_commit="$(/usr/bin/sed -n 's/^commit-hash: //p' <<<"$rustdoc_identity")"
+[[ "$cargo_release" == "$PINNED_TOOLCHAIN" \
+    && "$rustc_release" == "$PINNED_TOOLCHAIN" \
+    && "$rustdoc_release" == "$PINNED_TOOLCHAIN" ]] \
+  || fail "resolved Cargo/rustc/rustdoc do not match exact Rust $PINNED_TOOLCHAIN"
+[[ "$cargo_commit" =~ ^[0-9a-f]{40}$ \
+    && "$rustc_commit" =~ ^[0-9a-f]{40}$ \
+    && "$rustdoc_commit" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "resolved Cargo/rustc/rustdoc commits are not canonical"
+[[ "$rustdoc_commit" == "$rustc_commit" ]] \
+  || fail "resolved rustdoc does not belong to the authenticated rustc toolchain"
 java_version="$(
   /usr/bin/env -i HOME="$USER_HOME_DIR" PATH="$JAVA_HOME_DIR/bin:/usr/bin:/bin" \
     TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 JAVA_HOME="$JAVA_HOME_DIR" \
@@ -242,13 +258,14 @@ GIT_SHA256_START="$(tool_sha256 "$GIT_BINARY")"
 RUSTUP_SHA256_START="$(tool_sha256 "$RUSTUP_BINARY")"
 CARGO_SHA256_START="$(tool_sha256 "$CARGO_BINARY")"
 RUSTC_SHA256_START="$(tool_sha256 "$RUSTC_BINARY")"
+RUSTDOC_SHA256_START="$(tool_sha256 "$RUSTDOC_BINARY")"
 NM_SHA256_START="$(tool_sha256 "$NM_BINARY")"
 JAVA_SHA256_START="$(tool_sha256 "$JAVA_BINARY")"
 
 if [[ "${KAGEMUSHA_JVM_NATIVE_TOOL_RESOLUTION_ONLY:-0}" == "1" ]]; then
   printf '%s\n' \
     "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY" "$CARGO_BINARY" \
-    "$RUSTC_BINARY" "$NM_BINARY" "$JAVA_BINARY"
+    "$RUSTC_BINARY" "$RUSTDOC_BINARY" "$NM_BINARY" "$JAVA_BINARY"
   exit 0
 fi
 
@@ -330,6 +347,11 @@ fi
 EMPTY_NATIVE_DIR="$BUILD_SESSION/no-native"
 CARGO_TARGET_DIR="$BUILD_SESSION/cargo-target"
 mkdir -p "$EMPTY_NATIVE_DIR" "$CARGO_TARGET_DIR"
+CARGO_TARGET_DIR="$(
+  "$PYTHON_BINARY" -I -S -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "$CARGO_TARGET_DIR"
+)"
 
 run_adversarial_environment_self_test() {
   local fake_bin="$BUILD_SESSION/hostile-bin"
@@ -339,7 +361,7 @@ run_adversarial_environment_self_test() {
   local cargo_probe_output="$BUILD_SESSION/cargo-environment.txt"
   local gradle_probe_output="$BUILD_SESSION/gradle-environment.txt"
   mkdir -p "$fake_bin" "$fake_home"
-  for tool_name in python3 git rustup cargo rustc nm java; do
+  for tool_name in python3 git rustup cargo rustc rustdoc nm java; do
     printf '#!/bin/sh\nprintf "%%s\\n" "%s0" >>"%s"\nexit 97\n' '$' "$marker" \
       >"$fake_bin/$tool_name"
     chmod 0700 "$fake_bin/$tool_name"
@@ -494,7 +516,7 @@ run_adversarial_environment_self_test
 source_seal() {
   env -i \
     HOME="$USER_HOME_DIR" \
-    PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
+    PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -502,9 +524,11 @@ source_seal() {
     NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
     NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
-    "$PYTHON_BINARY" -I -S "$SOURCE_SEAL" "$@"
+    NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY" \
+    "$PYTHON_BINARY" -I -S -B "$SOURCE_SEAL" "$@"
 }
 
 SOURCE_SNAPSHOT="$BUILD_SESSION/source-seal-v1.json"
@@ -621,13 +645,19 @@ printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
+  *-windows-*) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
+  *) BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
-NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
+[[ -f "$BUILT_NATIVE_LIBRARY" && ! -L "$BUILT_NATIVE_LIBRARY" ]] \
+  || fail "fresh host bridge library is missing: $BUILT_NATIVE_LIBRARY"
+# Cargo may hard-link the top-level debug artifact into its dependency tree.
+# Authenticate and load a private copy so the evidence path has no mutable alias.
+NATIVE_LIBRARY_DIR="$BUILD_SESSION/c-jni-native"
+mkdir "$NATIVE_LIBRARY_DIR"
+NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/${BUILT_NATIVE_LIBRARY##*/}"
+/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"
+chmod 0700 "$NATIVE_LIBRARY"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
@@ -981,6 +1011,7 @@ for tool_and_hash in \
   "$RUSTUP_BINARY:$RUSTUP_SHA256_START" \
   "$CARGO_BINARY:$CARGO_SHA256_START" \
   "$RUSTC_BINARY:$RUSTC_SHA256_START" \
+  "$RUSTDOC_BINARY:$RUSTDOC_SHA256_START" \
   "$NM_BINARY:$NM_SHA256_START" \
   "$JAVA_BINARY:$JAVA_SHA256_START"; do
   tool_path="${tool_and_hash%:*}"

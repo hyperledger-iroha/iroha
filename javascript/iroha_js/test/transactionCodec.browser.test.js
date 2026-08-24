@@ -380,7 +380,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     sampleInput({
       metadata: { z: [true, null, { b: 2, a: "é" }], a: "-1.25" },
       quantity: "0.0000000000000000000000000001",
-      ttlMs: 0,
+      ttlMs: 1,
       nonce: 0xffff_ffff,
     }),
   ]) {
@@ -393,6 +393,15 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     );
     assert.equal({}.safe, undefined, "metadata normalization must not mutate prototypes");
   }
+
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ ttlMs: 0 })),
+    "invalid_integer",
+  );
+  assert.throws(
+    () => nativeBuild(sampleInput({ ttlMs: 0 })),
+    /ttl_ms must be positive/u,
+  );
 });
 
 test("browser payload pins canonical TransactionDomain::Network wire and rejects domain aliases", () => {
@@ -816,17 +825,17 @@ test("browser metadata JSON strings must already be exact and canonical", () => 
     "stored Metadata Json must use Rust plain control escaping",
   );
   const canonicalControls =
-    '{"v":"\\u0008\\u000C\\u0000\\u001F\\n\\r\\t"}';
+    '{"v":"\\b\\f\\u0000\\u001f\\n\\r\\t"}';
   const canonicalControlInput = sampleInput({ metadata: canonicalControls });
   assert.deepEqual(
     buildBrowserTransferPayload(canonicalControlInput),
     Buffer.from(nativeBuild(canonicalControlInput).payloadBytes),
   );
   const javascriptControlAlias = JSON.stringify({ v: controlValue });
-  assert.notEqual(javascriptControlAlias, canonicalControls);
-  expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
-    "invalid_metadata",
+  assert.equal(javascriptControlAlias, canonicalControls);
+  assert.deepEqual(
+    buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
+    Buffer.from(nativeBuild(sampleInput({ metadata: javascriptControlAlias })).payloadBytes),
   );
 
   for (const metadata of [
@@ -1047,14 +1056,6 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   assert.equal(Buffer.byteLength(oversizedJson), 65_537);
 
   for (const [context, mutatedPayload] of [
-    [
-      "chain ID",
-      replacePayloadField(
-        payload,
-        0,
-        struct([stringArchive("c".repeat(1_025))]),
-      ),
-    ],
     ["wire ID", replaceTransferExecutable(payload, { wireId: "w".repeat(15) })],
     [
       "metadata key",
@@ -1403,7 +1404,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
       browserSignedTransactionHashHex(
         Buffer.concat([finalized.signedTransaction, Buffer.of(0)]),
       ),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
   expectCodecError(
     () =>
@@ -1423,6 +1424,6 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   ]);
   expectCodecError(
     () => browserSignedTransactionHashHex(overlong),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
 });

@@ -37,11 +37,10 @@ const connectTransport = {
       walletLaunchUri: "iroha://connect?sid=sid-demo-1&role=wallet",
     };
   },
-  async awaitApproval(session) {
+  async awaitApproval(_session) {
     return {
       accountId,
       signingPublicKey,
-      session,
     };
   },
   async requestSignature(_session, signable) {

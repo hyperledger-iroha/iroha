@@ -32,6 +32,7 @@ paths = {
     "core_cargo": root / "crates/iroha_core/Cargo.toml",
     "header": root / "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "release_workflow": root / ".github/workflows/mobile_sdk_artifacts.yml",
+    "pr_workflow": root / ".github/workflows/pr_kagemusha_payload_bench.yml",
 }
 
 errors = []
@@ -712,17 +713,29 @@ for needle in (
 
 compile_check = text["compile_check"]
 for needle in (
+    "KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE",
+    "warm-gradle-artifacts",
+    "final-gradle-artifacts",
+    "MOBILE_SDK_ANDROID_ARTIFACT_DIR",
+    "-Pkotlin.compiler.execution.strategy=in-process",
+    'rm -rf -- "$EVIDENCE_ROOT/gradle" "$EVIDENCE_ROOT/warm-gradle-project-cache"',
     "-PkagemushaCandidateCompileOnly=true",
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
     "--max-workers=2",
+    "--project-cache-dir",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
     "chmod -R u+w",
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
+for workflow in ("pr_workflow", "release_workflow"):
+    if 'KAGEMUSHA_CANDIDATE_COMPILE_WARM_GRADLE_CACHE: "1"' not in text[workflow]:
+        errors.append(
+            f"{workflow} must explicitly warm the disposable Gradle dependency cache"
+        )
 
 source_seal = text["source_seal"]
 for needle in (

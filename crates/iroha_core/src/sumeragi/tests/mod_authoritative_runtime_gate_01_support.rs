@@ -390,6 +390,52 @@ fn v2_timeout_certificate(view: u64) -> BlockMessage {
         }),
     ))
 }
+fn v2_locked_timeout_certificate(view: u64) -> BlockMessage {
+    let mut message = v2_timeout_certificate(view);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ..
+    }) = &mut message
+    else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    let locked_round = wire::ConsensusRound {
+        context_id: certificate.round.context_id,
+        height: certificate.round.height,
+        view: view.saturating_sub(1),
+    };
+    certificate.groups.push(wire::TimeoutVoteGroup {
+        highest_prepare_qc: Some(wire::QuorumCertificate {
+            round: locked_round,
+            proposal_round: locked_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: wire::BlockSubject {
+                parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"fair-v2-ingress-timeout-upgrade-parent",
+                ))),
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"fair-v2-ingress-timeout-upgrade-block",
+                )),
+                payload_hash: Hash::new(b"fair-v2-ingress-timeout-upgrade-payload"),
+            },
+            execution_commitment: wire::ExecutionCommitment::new_without_merge_carrier(
+                Hash::new(b"fair-v2-ingress-timeout-upgrade-parent-state"),
+                Hash::new(b"fair-v2-ingress-timeout-upgrade-post-state"),
+                Hash::new(b"fair-v2-ingress-timeout-upgrade-writes"),
+                None,
+                0,
+                1,
+                Hash::new(b"fair-v2-ingress-timeout-upgrade-executed-wire"),
+            )
+            .expect("timeout-upgrade commitment is canonical"),
+            signers: vec![1, 2],
+            aggregate_signature: vec![0xC3; 8],
+        }),
+        signers: vec![1, 2],
+        aggregate_signature: vec![0xC3; 8],
+    });
+    message
+}
 fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
     let round = wire::ConsensusRound {
         context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -650,18 +696,31 @@ fn bind_test_leader_wire_gate(
     round: wire::ConsensusRound,
     max_chunk_count: u32,
 ) -> TempDir {
+    bind_test_leader_wire_gate_with_roster(
+        ingress,
+        std::slice::from_ref(validator),
+        round,
+        max_chunk_count,
+    )
+}
+fn bind_test_leader_wire_gate_with_roster(
+    ingress: &Arc<super::FairV2Ingress>,
+    validators: &[PeerId],
+    round: wire::ConsensusRound,
+    max_chunk_count: u32,
+) -> TempDir {
     ingress.close();
     ingress
-        .configure_roster([validator.clone()])
-        .expect("one-validator fair-ingress geometry");
+        .configure_roster(validators.iter().cloned())
+        .expect("exact fair-ingress roster geometry");
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = max_chunk_count;
     let directory = TempDir::new().expect("temporary leader-wire directory");
     let wal_path = directory.path().join("safety.wal");
     let owner = [0xA6; 32];
-    let roster = [validator.clone()].into_iter().collect();
+    let roster = validators.iter().cloned().collect();
     let capacity = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-        1,
+        validators.len(),
         max_chunk_count,
     )
     .expect("finite leader-wire geometry");

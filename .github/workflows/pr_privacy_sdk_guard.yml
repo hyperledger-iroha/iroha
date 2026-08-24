@@ -437,7 +437,6 @@ jobs:
     timeout-minutes: 10
     env:
       IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
@@ -453,6 +452,9 @@ jobs:
         with:
           name: privacy-jvm-native-abi22-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi22
+      - name: Bind authenticated C# privacy bridge path
+        shell: bash
+        run: printf 'LD_LIBRARY_PATH=%s/privacy-jvm-native-abi22\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Authenticate exact ABI22 C# privacy input
         env:
           PRIVACY_CSHARP_PYTHON: ${{ steps.privacy-csharp-python.outputs.python-path }}

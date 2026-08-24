@@ -1820,16 +1820,24 @@ fn fair_v2_ingress_admit_leader_wire(
                 }
             });
         }
+        let same_round_timeout_upgrade = identity.phase
+            == FairV2IngressLeaderWirePhase::TimeoutCertificate
+            && incumbent.token.identity.phase == FairV2IngressLeaderWirePhase::TimeoutCertificate
+            && identity.context_id == incumbent.token.identity.context_id
+            && identity.height == incumbent.token.identity.height
+            && identity.view == incumbent.token.identity.view;
         if incumbent.status.blocks_replacement() {
-            return Err(if identity.view > incumbent.token.identity.view {
-                FairV2IngressLeaderWireAdmissionError::Busy
-            } else {
-                FairV2IngressLeaderWireAdmissionError::Rejected
-            });
+            return Err(
+                if identity.view > incumbent.token.identity.view || same_round_timeout_upgrade {
+                    FairV2IngressLeaderWireAdmissionError::Busy
+                } else {
+                    FairV2IngressLeaderWireAdmissionError::Rejected
+                },
+            );
         }
         if identity.context_id != incumbent.token.identity.context_id
             || identity.height != incumbent.token.identity.height
-            || identity.view <= incumbent.token.identity.view
+            || (identity.view <= incumbent.token.identity.view && !same_round_timeout_upgrade)
         {
             return Err(FairV2IngressLeaderWireAdmissionError::Rejected);
         }
@@ -4825,7 +4833,7 @@ impl FairV2Ingress {
             .iter()
             .filter_map(|(slot, record)| {
                 (record.status == FairV2IngressLeaderWireStatus::Dormant
-                    && next.obsoletes(&record.token))
+                    && next.retires(&record.token))
                 .then(|| slot.clone())
             })
             .collect::<BTreeSet<_>>();

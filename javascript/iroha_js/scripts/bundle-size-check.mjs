@@ -20,19 +20,19 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // The eager code-split closure is 998,331 bytes. Sumeragi's two existing
-    // async typed methods load their reviewed 71,905-byte incremental closure
-    // on demand. The unchanged 983 KiB eager ceiling leaves 8,261 bytes.
+    // The eager code-split closure is 990,506 bytes. Sumeragi's three existing
+    // async typed methods load their reviewed 73,354-byte incremental closure
+    // on demand. The unchanged 983 KiB eager ceiling leaves 16,086 bytes.
     limitKb: 983,
-    reviewedEagerBytes: 998_331,
-    reviewedCombinedBytes: 1_070_236,
+    reviewedEagerBytes: 990_506,
+    reviewedCombinedBytes: 1_063_860,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "src", "sumeragiTyped.js"),
-        edgeCount: 2,
-        reviewedBytes: 71_905,
-        limitKb: 71,
+        edgeCount: 3,
+        reviewedBytes: 73_354,
+        limitKb: 72,
       }),
     ]),
   }),
@@ -44,8 +44,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
     // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
-    // and shared validation/finalization corridors bring current V1 to 300,611
-    // bytes (+3.48%).
+    // and shared validation/finalization corridors bring current V1 to 300,933
+    // bytes (+3.59%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -57,9 +57,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 384,814 bytes (+3.61%). The
-    // 380 KiB ceiling remains below a 5% predecessor regression.
+    // pre-reset tree. Canonical ProofAttachment handling, the shared
+    // asset-definition builder, and controller/session validation bring current
+    // V1 to 388,013 bytes (+4.47%). The 380 KiB ceiling remains below a 5%
+    // predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -104,20 +105,21 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 480,214 bytes
-    // (+4.83%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 42 bytes. The typed Sumeragi parser and deployment
-    // submit continuation are audited below as non-overlapping lazy closures.
-    limitKb: 469,
-    reviewedEagerBytes: 480_214,
-    reviewedCombinedBytes: 561_634,
+    // same pinned runner. Its reviewed eager code-split closure is 480,045 bytes
+    // (+4.80%) after shared validation paths are interned. The 470 KiB eager
+    // ceiling leaves 1,235 bytes while the measured graph remains below the protected
+    // 5% predecessor regression. The typed Sumeragi parser and deployment submit
+    // continuation are audited below as non-overlapping lazy closures.
+    limitKb: 470,
+    reviewedEagerBytes: 480_045,
+    reviewedCombinedBytes: 562_914,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 72_243,
-        limitKb: 71,
+        reviewedBytes: 73_692,
+        limitKb: 72,
       }),
       Object.freeze({
         specifier: "./smartContractDeploymentSubmit.js",

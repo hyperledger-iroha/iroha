@@ -45,6 +45,7 @@ test("native SDK archives expose local compiled profiles without synthesizing re
     "python/iroha_python/iroha_python_rs/src/lib.rs",
   ]) {
     const rust = source(path);
+    const productionPrefix = rust.split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/u, 1)[0];
     assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
     assert.match(rust, /PrivacyProtocolIdV1::ALL/);
     assert.match(rust, /compiled_privacy_profile_catalog_v1/);
@@ -52,7 +53,10 @@ test("native SDK archives expose local compiled profiles without synthesizing re
       rust,
       /validate_local_privacy_compiled_profile_catalog_archive_v1/,
     );
-    assert.doesNotMatch(rust, /PrivacyConsensusPolicyV1::taira_default\(\)/);
+    assert.doesNotMatch(
+      productionPrefix,
+      /PrivacyConsensusPolicyV1::taira_default\(\)/,
+    );
     assert.doesNotMatch(rust, /fn privacy_capabilities\s*\(/);
     assert.doesNotMatch(rust, /pub fn privacy_capabilities_v1\s*\(/);
     assert.doesNotMatch(rust, /name = "privacy_capabilities_v1"/);
@@ -68,7 +72,7 @@ test("only a fresh committed Torii view supplies authoritative privacy readiness
   const state = source("crates/iroha_core/src/state.rs");
   assert.match(
     runtime,
-    /handle_privacy_capabilities[\s\S]*PrivacyCapabilitySnapshotV1[\s\S]*state\s*\.view\(\)\s*\.privacy_capability_snapshot_v1\(\)/,
+    /handle_privacy_capabilities[\s\S]*PrivacyExact12CapabilityManifestV1[\s\S]*state\s*\.view\(\)\s*\.privacy_capability_snapshot_v1\(\)/,
   );
   assert.match(
     state,

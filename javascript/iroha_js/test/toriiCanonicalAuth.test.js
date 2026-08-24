@@ -46,7 +46,13 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   assert.equal(init.headers["X-Iroha-Account"], AUTH_ALIAS);
   const retiredRawHeaderInitKey = ["__iroha", "RawUtf8Headers"].join("");
   assert.equal(Object.hasOwn(init, retiredRawHeaderInitKey), false);
-  assert.deepEqual(Object.keys(init).sort(), ["body", "headers", "method", "signal"]);
+  assert.deepEqual(Object.keys(init).sort(), [
+    "body",
+    "headers",
+    "method",
+    "redirect",
+    "signal",
+  ]);
 
   const parsed = new URL(url);
   const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);

@@ -8,12 +8,14 @@
 //! authenticated local trust boundary and must not be writable by an attacker while the issuer is
 //! running.
 use super::codec::BLIND_ISSUANCE_RESPONSE_BYTES_V1;
+#[cfg(unix)]
+use std::io::Read;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -22,8 +24,10 @@ use thiserror::Error;
 const STORE_RECORD_MAGIC_V1: [u8; 4] = *b"ILS1";
 const STORE_RECORD_VERSION_V1: u8 = 1;
 const STORE_RECORD_EXTENSION_V1: &str = ".bls1";
+#[cfg(any(unix, test))]
 const STORE_TEMP_DIRECTORY_V1: &str = ".tmp";
 const STORE_TEMP_EXTENSION_V1: &str = ".tmp";
+#[cfg(unix)]
 const STORE_WRITER_LOCK_FILE_V1: &str = ".writer.lock";
 const STORE_RECORD_HEADER_BYTES_V1: usize = 4 + 1 + 1 + 32 + 32 + 8 + 8;
 const STORE_FRESH_TAG_V1: u8 = 0;
@@ -1431,6 +1435,7 @@ fn encode_record_v1(
     }
     Ok(bytes)
 }
+#[cfg(any(unix, test))]
 fn decode_record_v1(
     bytes: &[u8],
 ) -> Result<StoredAuthorizationV1, BootleLanternIssuanceStoreErrorV1> {
@@ -1571,6 +1576,7 @@ fn validate_decoded_record_v1(
         }
     }
 }
+#[cfg(any(unix, test))]
 fn take_array_v1<const N: usize>(
     bytes: &[u8],
     offset: &mut usize,
@@ -1596,6 +1602,7 @@ fn record_file_name_v1(authorization_id: [u8; 32]) -> String {
     name.push_str(STORE_RECORD_EXTENSION_V1);
     name
 }
+#[cfg(unix)]
 fn parse_record_file_name_v1(name: &str) -> Result<[u8; 32], BootleLanternIssuanceStoreErrorV1> {
     let hex = name
         .strip_suffix(STORE_RECORD_EXTENSION_V1)
@@ -1615,6 +1622,7 @@ fn parse_record_file_name_v1(name: &str) -> Result<[u8; 32], BootleLanternIssuan
     }
     Ok(id)
 }
+#[cfg(unix)]
 fn hex_nibble_v1(byte: u8) -> Result<u8, BootleLanternIssuanceStoreErrorV1> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -1622,6 +1630,7 @@ fn hex_nibble_v1(byte: u8) -> Result<u8, BootleLanternIssuanceStoreErrorV1> {
         _ => Err(BootleLanternIssuanceStoreErrorV1::Corrupt),
     }
 }
+#[cfg(unix)]
 fn ensure_store_root_v1(root: &Path) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
     match fs::symlink_metadata(root) {
         Ok(metadata) => {
@@ -1646,6 +1655,7 @@ fn ensure_store_root_v1(root: &Path) -> Result<(), BootleLanternIssuanceStoreErr
     }
     Ok(())
 }
+#[cfg(unix)]
 fn ensure_temp_root_v1(
     root: &Path,
     temp_root: &Path,
@@ -1664,6 +1674,7 @@ fn ensure_temp_root_v1(
     }
     Ok(())
 }
+#[cfg(unix)]
 fn clean_stale_temp_files_v1(temp_root: &Path) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
     let mut removed = false;
     for entry in fs::read_dir(temp_root).map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)? {
@@ -1696,6 +1707,7 @@ fn clean_stale_temp_files_v1(temp_root: &Path) -> Result<(), BootleLanternIssuan
     }
     Ok(())
 }
+#[cfg(any(unix, test))]
 fn admit_file_record_allocation_v1(
     loaded_records: usize,
     loaded_bytes: u64,
@@ -1765,6 +1777,7 @@ fn acquire_file_store_writer_lock_v1(
     sync_directory_v1(root).map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
     Ok(file)
 }
+#[cfg(unix)]
 fn load_file_store_v1(
     root: &Path,
     config: BootleLanternIssuanceStoreConfigV1,
@@ -1908,13 +1921,6 @@ fn open_record_file_v1(
     }
     Ok(file)
 }
-#[cfg(not(unix))]
-fn open_record_file_v1(
-    _path: &Path,
-    _path_metadata: &fs::Metadata,
-) -> Result<File, BootleLanternIssuanceStoreErrorV1> {
-    Err(BootleLanternIssuanceStoreErrorV1::UnsupportedPlatform)
-}
 fn reject_untrusted_existing_temp_v1(path: &Path) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
     match fs::symlink_metadata(path) {
         Ok(_) => Err(BootleLanternIssuanceStoreErrorV1::Corrupt),
@@ -1929,6 +1935,7 @@ fn open_file_store_roots_v1() -> &'static Mutex<BTreeSet<PathBuf>> {
     static ROOTS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
     ROOTS.get_or_init(|| Mutex::new(BTreeSet::new()))
 }
+#[cfg(unix)]
 fn acquire_file_store_lease_v1(
     canonical_root: PathBuf,
 ) -> Result<FileStoreDirectoryLeaseV1, BootleLanternIssuanceStoreErrorV1> {
