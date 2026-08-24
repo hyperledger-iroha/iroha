@@ -135,7 +135,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Read as _, Seek as _, Write as _},
+    io::{self, BufRead as _, Read as _, Seek as _, Write as _},
     net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -172,8 +172,10 @@ const INROU_PORTABLE_BUNDLE_DEVICE_SERIAL: &str = "sora_bundle";
 const INROU_PORTABLE_BLOCK_SECTOR_BYTES: usize = 512;
 const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 const INROU_SHARED_VOLUME_GUEST_UID: u32 = 1_000;
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 const INROU_SHARED_VOLUME_GUEST_GID: u32 = 1_000;
 /// Largest variable response body a Soracloud syscall may materialize.
 ///
@@ -4407,7 +4409,9 @@ struct HostedHttpWorker {
     #[cfg(target_os = "linux")]
     loopback_firewall: Option<InrouLoopbackOwnerFirewall>,
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+// TODO: Wire these confinement seams into the Inrou V1 secure launcher before
+// first-release Inrou hosting is enabled.
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 struct InrouTapNetworkAttachment {
     ip_binary: PathBuf,
     iptables_binary: PathBuf,
@@ -4424,6 +4428,7 @@ struct InrouTapNetworkAttachment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InrouTapFirewallPlan {
     Isolated,
+    #[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
     Allowlist(Vec<InrouTapResolvedAllowlistEndpoint>),
 }
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -4433,13 +4438,13 @@ struct InrouTapResolvedAllowlistEndpoint {
     address: Ipv4Addr,
     port: u16,
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InrouTapFirewallRuleSpec {
     args: Vec<String>,
     context: &'static str,
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InrouNfsExport {
     guest_client: String,
@@ -4447,9 +4452,11 @@ struct InrouNfsExport {
 }
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl InrouTapFirewallPlan {
+    #[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
     fn installs_masquerade_rule(&self) -> bool {
         matches!(self, Self::Allowlist(_))
     }
+    #[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
     fn installs_return_rule(&self) -> bool {
         matches!(self, Self::Allowlist(_))
     }
@@ -14240,6 +14247,7 @@ struct PortableVmBundleBinding {
 }
 #[cfg(target_os = "linux")]
 impl InrouTapNetworkAttachment {
+    #[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
     fn cleanup(&mut self) {
         let delete_link = ["link", "del", "dev", self.tap_name.as_str()];
         if let Some(exportfs_binary) = self.exportfs_binary.as_ref() {
@@ -14258,6 +14266,7 @@ impl InrouTapNetworkAttachment {
         }
         let _ = run_host_command(&self.ip_binary, &delete_link);
     }
+    #[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
     fn accounted_egress_bytes(&self) -> io::Result<u64> {
         if !self.firewall_plan.installs_masquerade_rule() {
             return Ok(0);
@@ -14979,10 +14988,7 @@ fn portable_vm_child_identity(
     Ok(identity)
 }
 #[cfg(target_os = "linux")]
-fn resolve_inrou_exportfs_executable() -> Option<PathBuf> {
-    resolve_executable_on_path("exportfs")
-}
-#[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn resolve_inrou_rpc_nfsd_executable() -> Option<PathBuf> {
     resolve_executable_on_path("rpc.nfsd")
 }
@@ -15095,7 +15101,7 @@ fn acquire_inrou_write_lease(file: &fs::File) -> io::Result<InrouWriteLease<'_>>
     const F_SETOWN: i32 = 8;
     const F_SETSIG: i32 = 10;
     inrou_linux_fcntl_with_arg(file, F_SETOWN, rustix::process::getpid().as_raw_pid())?;
-    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::runtime::Signal::URG.as_raw())?;
+    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::process::Signal::URG.as_raw())?;
     set_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock)?;
     if let Err(error) = verify_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock) {
         let _ = set_inrou_linux_file_lease(file, rustix::process::FlockType::Unlocked);
@@ -15589,6 +15595,7 @@ fn ensure_inrou_path_has_no_symlink_components(path: &Path) -> eyre::Result<()> 
     Ok(())
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn prepare_inrou_shared_export_directory(
     path: &Path,
     guest_uid: u32,
@@ -15890,7 +15897,7 @@ fn write_inrou_root_disk_binding(root_disk_path: &Path, binding: Hash) -> eyre::
     write_bytes_atomic(&binding_path, binding.to_string().as_bytes())
         .wrap_err_with(|| format!("write {}", binding_path.display()))
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn ensure_inrou_root_disk(
     base_rootfs_image_path: &Path,
     root_volume: &SoracloudRuntimeLeaseVolumePlan,
@@ -16039,6 +16046,7 @@ fn ensure_inrou_portable_root_disk(
     Ok(root_disk_path)
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn ensure_inrou_nfs_server_running(
     mount_binary: &Path,
     rpc_nfsd_binary: &Path,
@@ -16069,6 +16077,7 @@ fn ensure_inrou_nfs_server_running(
     Ok(())
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn ensure_inrou_shared_filesystem_mounts(
     leasefs_exports: &[InrouLeaseFsExport],
     network_attachment: &mut InrouTapNetworkAttachment,
@@ -16115,6 +16124,7 @@ fn ensure_inrou_shared_filesystem_mounts(
     Ok(mounts)
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn ensure_inrou_leasefs_exports(
     plan: &SoracloudRuntimeServicePlan,
 ) -> eyre::Result<Vec<InrouLeaseFsExport>> {
@@ -17313,6 +17323,7 @@ fn qemu_option_path(path: &Path) -> eyre::Result<String> {
     Ok(path.replace(',', ",,"))
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn build_inrou_bootstrap_seed(
     mke2fs: &Path,
     materialization_dir: &Path,
@@ -17367,6 +17378,7 @@ fn build_inrou_bootstrap_seed_from_documents(
     Ok(seed_image_path)
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn setup_inrou_tap_network(
     cache_key: &HostedHttpWorkerCacheKey,
     _materialization_dir: &Path,
@@ -17452,6 +17464,7 @@ fn inrou_tap_firewall_plan(
     }
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn install_inrou_tap_firewall_rules(
     attachment: &mut InrouTapNetworkAttachment,
     guest_cidr: &str,
@@ -17468,6 +17481,7 @@ fn install_inrou_tap_firewall_rules(
     Ok(())
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn install_inrou_iptables_rule(
     attachment: &mut InrouTapNetworkAttachment,
     args: Vec<String>,
@@ -17482,7 +17496,7 @@ fn run_host_command_strings(program: &Path, args: &[String]) -> eyre::Result<()>
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
     run_host_command(program, &borrowed)
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn inrou_tap_delete_rule_args(args: &[String]) -> Vec<String> {
     let mut delete_args = args.to_vec();
     if let Some(index) = delete_args
@@ -17499,7 +17513,7 @@ fn inrou_tap_delete_rule_args(args: &[String]) -> Vec<String> {
     }
     delete_args
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn planned_inrou_tap_firewall_rules(
     tap_name: &str,
     guest_cidr: &str,
@@ -17647,7 +17661,7 @@ fn planned_inrou_tap_firewall_rules(
     }
     rules
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn inrou_ipv4_endpoint_is_public(address: Ipv4Addr) -> bool {
     let [first, second, third, fourth] = address.octets();
     let is_shared = first == 100 && second & 0b1100_0000 == 0b0100_0000;
@@ -17667,7 +17681,7 @@ fn inrou_ipv4_endpoint_is_public(address: Ipv4Addr) -> bool {
         || address.is_broadcast()
         || address.is_multicast())
 }
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn resolve_inrou_allowlist_endpoints(
     entries: &[iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1],
 ) -> eyre::Result<Vec<InrouTapResolvedAllowlistEndpoint>> {
@@ -17747,6 +17761,7 @@ fn resolve_inrou_allowlist_endpoints(
     Ok(resolved.into_iter().collect())
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn derive_inrou_tap_network_attachment(
     cache_key: &HostedHttpWorkerCacheKey,
     ip_binary: PathBuf,
@@ -17789,6 +17804,7 @@ fn derive_inrou_tap_network_attachment(
     }
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn inrou_ip_forward_enabled() -> io::Result<bool> {
     Ok(fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "1")
 }
@@ -18173,6 +18189,7 @@ fn create_populated_ext4_image(
     )
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn build_inrou_network_config(network_attachment: &InrouTapNetworkAttachment) -> String {
     let nameservers = collect_host_nameservers();
     let nameserver_yaml = nameservers
@@ -18754,6 +18771,7 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 #[cfg(target_os = "linux")]
+#[allow(dead_code, reason = "retained for Inrou V1 secure launcher completion")]
 fn collect_host_nameservers() -> Vec<String> {
     let mut nameservers = fs::read_to_string("/etc/resolv.conf")
         .ok()
@@ -19227,12 +19245,11 @@ fn attest_inrou_qemu_process(
         .wrap_err_with(|| format!("inspect configured QEMU executable {}", qemu.display()))?;
     let process_executable = PathBuf::from(format!("/proc/{}/exe", child.id()));
     let deadline = std::time::Instant::now() + SORACLOUD_INROU_QMP_ATTEST_TIMEOUT;
-    let mut last_mismatch = "setpriv has not exec'd QEMU".to_owned();
     loop {
         if let Some(status) = child.try_wait()? {
             eyre::bail!("Inrou QEMU exited before process attestation with status {status}");
         }
-        match fs::metadata(&process_executable) {
+        let last_mismatch = match fs::metadata(&process_executable) {
             Ok(actual_executable)
                 if actual_executable.dev() == expected_executable.dev()
                     && actual_executable.ino() == expected_executable.ino() =>
@@ -19242,15 +19259,15 @@ fn attest_inrou_qemu_process(
                     .and_then(|status| validate_inrou_qemu_proc_status(&status, identity))
                 {
                     Ok(()) => break,
-                    Err(error) => last_mismatch = error.to_string(),
+                    Err(error) => error.to_string(),
                 }
             }
-            Ok(_) => last_mismatch = "setpriv has not exec'd the pinned QEMU image".to_owned(),
+            Ok(_) => "setpriv has not exec'd the pinned QEMU image".to_owned(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                last_mismatch = "spawned process has not published procfs identity".to_owned();
+                "spawned process has not published procfs identity".to_owned()
             }
             Err(error) => return Err(error).wrap_err("inspect spawned Inrou QEMU executable"),
-        }
+        };
         if std::time::Instant::now() >= deadline {
             eyre::bail!(
                 "spawned Inrou QEMU did not reach the exact sandboxed identity before the fixed deadline: {last_mismatch}"
@@ -21977,7 +21994,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
-    use serial_test::serial;
     use sorafs_car::{
         CarBuildPlan, FileEntry,
         bundle_archive::{BundleArchiveFile, write_gzip_ustar},
@@ -22003,6 +22019,23 @@ mod tests {
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn assert_eyre_error_contains(error: eyre::Report, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(expected),
+            "expected error containing {expected:?}, got {message:?}"
+        );
+    }
+
+    fn assert_eyre_error_contains_any(error: eyre::Report, expected: &[&str]) {
+        let message = format!("{error:#}");
+        assert!(
+            expected.iter().any(|fragment| message.contains(fragment)),
+            "expected error containing one of {expected:?}, got {message:?}"
+        );
+    }
+
     #[test]
     fn storage_path_components_are_deterministic_and_collision_resistant() {
         let slash = storage_path_component("tenant/service");
@@ -31231,12 +31264,18 @@ mod tests {
     }
     #[test]
     fn inrou_tap_firewall_plan_accepts_only_isolated() -> Result<()> {
-        inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)
-            .expect_err("Inrou V1 must reject unrestricted egress");
-        inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
-        ]))
-        .expect_err("Inrou V1 must reject unmetered allowlist egress");
+        assert_eyre_error_contains(
+            inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)
+                .expect_err("Inrou V1 must reject unrestricted egress"),
+            "forbids unrestricted network egress",
+        );
+        assert_eyre_error_contains(
+            inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Allowlist(vec![
+                SoraNetworkAllowlistEntryV1::new("8.8.8.8", [443]),
+            ]))
+            .expect_err("Inrou V1 must reject unmetered allowlist egress"),
+            "kernel-backed byte accounting",
+        );
         assert_eq!(
             inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Isolated)?,
             InrouTapFirewallPlan::Isolated
@@ -31253,8 +31292,11 @@ mod tests {
                 SoraNetworkAllowlistEntryV1::new("8.8.8.8", [8443]),
             ],
         ] {
-            resolve_inrou_allowlist_endpoints(&entries)
-                .expect_err("noncanonical or duplicate allowlist entries must fail closed");
+            assert_eyre_error_contains(
+                resolve_inrou_allowlist_endpoints(&entries)
+                    .expect_err("noncanonical or duplicate allowlist entries must fail closed"),
+                "Inrou allowlist",
+            );
         }
     }
     #[test]
@@ -31283,11 +31325,7 @@ mod tests {
             SoraNetworkAllowlistEntryV1::new("::1", [443]),
         ]))
         .expect_err("allowlist should fail closed when no IPv4 endpoint is enforceable");
-        assert!(
-            error
-                .to_string()
-                .contains("kernel-backed egress accounting")
-        );
+        assert!(error.to_string().contains("kernel-backed byte accounting"));
     }
     #[test]
     fn inrou_allowlist_accepts_only_public_ipv4_endpoints() {
@@ -31316,11 +31354,14 @@ mod tests {
         ] {
             let address = address.parse().expect("valid non-public IPv4");
             assert!(!inrou_ipv4_endpoint_is_public(address));
-            resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
-                address.to_string(),
-                [443],
-            )])
-            .expect_err("non-public allowlist endpoints must fail closed before VMM setup");
+            assert_eyre_error_contains(
+                resolve_inrou_allowlist_endpoints(&[SoraNetworkAllowlistEntryV1::new(
+                    address.to_string(),
+                    [443],
+                )])
+                .expect_err("non-public allowlist endpoints must fail closed before VMM setup"),
+                "public IPv4 endpoint",
+            );
         }
     }
     #[test]
@@ -31510,15 +31551,22 @@ mod tests {
             TcpListener::bind(isolated.expected_backend).is_err(),
             "the supervisor must retain the QEMU port until its owner firewall is active"
         );
-        build_portable_vm_network_plan(
+        let Err(error) = build_portable_vm_network_plan(
             8080,
             &InrouTapFirewallPlan::Allowlist(vec![InrouTapResolvedAllowlistEndpoint {
                 host: "ton.example".to_owned(),
                 address: "8.8.8.8".parse().expect("IPv4"),
                 port: 443,
             }]),
-        )
-        .expect_err("PortableVM V1 must not construct unmetered guestfwd egress");
+        ) else {
+            panic!("PortableVM V1 must not construct unmetered guestfwd egress");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("supports only isolated networking"),
+            "unexpected unmetered guestfwd rejection: {error:#}"
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -31680,15 +31728,24 @@ mod tests {
         let duplicate = format!(
             "{valid}  TCP[HOST_FORWARD]  14  127.0.0.1       41232  10.0.2.15     8080 0     0\n"
         );
-        parse_inrou_qmp_usernet_forward(&duplicate, 8080)
-            .expect_err("multiple forwards must fail closed");
-        parse_inrou_qmp_usernet_forward(
-            "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
-            8080,
-        )
-        .expect_err("a non-loopback forward must fail closed");
-        parse_inrou_qmp_usernet_forward(valid, 8081)
-            .expect_err("a forward to the wrong guest port must fail closed");
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(&duplicate, 8080)
+                .expect_err("multiple forwards must fail closed"),
+            "exactly one process-owned TCP host forward",
+        );
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(
+                "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
+                8080,
+            )
+            .expect_err("a non-loopback forward must fail closed"),
+            "outside its exact binding",
+        );
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(valid, 8081)
+                .expect_err("a forward to the wrong guest port must fail closed"),
+            "outside its exact binding",
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -31738,18 +31795,30 @@ mod tests {
             },
         )?);
         validate_inrou_qemu_proc_status(valid, &identity)?;
-        validate_inrou_qemu_proc_status(
-            &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
-            &identity,
-        )
-        .expect_err("a retained bounding capability must fail closed");
-        validate_inrou_qemu_proc_status(
-            &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
-            &identity,
-        )
-        .expect_err("supplementary group drift must fail closed");
-        validate_inrou_qemu_proc_status(&valid.replace("Seccomp:\t2", "Seccomp:\t0"), &identity)
-            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted");
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
+                &identity,
+            )
+            .expect_err("a retained bounding capability must fail closed"),
+            "retained capabilities in `CapBnd`",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
+                &identity,
+            )
+            .expect_err("supplementary group drift must fail closed"),
+            "exact supplementary groups",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("Seccomp:\t2", "Seccomp:\t0"),
+                &identity,
+            )
+            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted"),
+            "seccomp filter mode",
+        );
         Ok(())
     }
     #[test]
@@ -31905,7 +31974,7 @@ mod tests {
             let _ = qmp_release_rx.recv_timeout(Duration::from_secs(5));
             Ok(())
         });
-        let qmp_control = Arc::new(Mutex::new(PortableVmQmpControl {
+        let qmp_control = Arc::new(parking_lot::Mutex::new(PortableVmQmpControl {
             reader: io::BufReader::new(supervisor_qmp),
         }));
         let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -31934,16 +32003,25 @@ mod tests {
         let base_url = format!("http://{}", listener.local_addr()?);
         probe_hosted_http_health(&base_url, None)?;
         drop(listener);
-        probe_hosted_http_health(&base_url, None)
-            .expect_err("a missing listener must not be reported as healthy");
-        probe_hosted_http_health(&format!("{base_url}/unexpected"), None)
-            .expect_err("listener probes must reject URLs outside the exact origin");
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&base_url, None)
+                .expect_err("a missing listener must not be reported as healthy"),
+            "connect to hosted-HTTP listener",
+        );
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&format!("{base_url}/unexpected"), None)
+                .expect_err("listener probes must reject URLs outside the exact origin"),
+            "must be an explicit IPv4 loopback HTTP origin",
+        );
         Ok(())
     }
     #[test]
     fn hosted_http_health_probe_rejects_redirects_and_non_loopback_origins() -> Result<()> {
-        probe_hosted_http_health("http://192.0.2.1:8080", Some("/health"))
-            .expect_err("health probes must remain on the explicit loopback origin");
+        assert_eyre_error_contains(
+            probe_hosted_http_health("http://192.0.2.1:8080", Some("/health"))
+                .expect_err("health probes must remain on the explicit loopback origin"),
+            "must be an explicit IPv4 loopback HTTP origin",
+        );
 
         let redirect_target = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         redirect_target.set_nonblocking(true)?;
@@ -31974,8 +32052,11 @@ mod tests {
             }
         });
 
-        probe_hosted_http_health(&format!("http://{source_address}"), Some("/health"))
-            .expect_err("a redirect must not satisfy the health probe");
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&format!("http://{source_address}"), Some("/health"))
+                .expect_err("a redirect must not satisfy the health probe"),
+            "returned 302",
+        );
         source.join().expect("redirect source thread");
         assert!(
             !target.join().expect("redirect target thread"),
@@ -32054,12 +32135,18 @@ mod tests {
         };
         validate_portable_vm_kvm_identity(&identity, kvm_device)?;
         identity.supplementary_gids.push(999);
-        validate_portable_vm_kvm_identity(&identity, kvm_device)
-            .expect_err("KVM must reject unrelated supplementary groups");
+        assert_eyre_error_contains(
+            validate_portable_vm_kvm_identity(&identity, kvm_device)
+                .expect_err("KVM must reject unrelated supplementary groups"),
+            "supplementary gids must be exactly",
+        );
         identity.gid = 108;
         identity.supplementary_gids.clear();
-        validate_portable_vm_kvm_identity(&identity, kvm_device)
-            .expect_err("the shared KVM group must not protect tenant disks");
+        assert_eyre_error_contains(
+            validate_portable_vm_kvm_identity(&identity, kvm_device)
+                .expect_err("the shared KVM group must not protect tenant disks"),
+            "must remain distinct",
+        );
         Ok(())
     }
     #[test]
@@ -32081,8 +32168,11 @@ mod tests {
                     ..accepted.clone()
                 },
             ] {
-                validate_portable_vm_child_identity_values(&rejected)
-                    .expect_err("primary ids outside the fixed corridor must fail closed");
+                assert_eyre_error_contains(
+                    validate_portable_vm_child_identity_values(&rejected)
+                        .expect_err("primary ids outside the fixed corridor must fail closed"),
+                    "fixed host-reserved corridor",
+                );
             }
         }
         for gid in [60_001, 65_534, 524_288, 2_147_483_648, u32::MAX] {
@@ -32090,8 +32180,11 @@ mod tests {
                 supplementary_gids: vec![gid],
                 ..accepted.clone()
             };
-            validate_portable_vm_child_identity_values(&rejected)
-                .expect_err("Linux host-reserved supplementary gids must fail closed");
+            assert_eyre_error_contains(
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("Linux host-reserved supplementary gids must fail closed"),
+                "Inrou QEMU supplementary gid",
+            );
         }
         Ok(())
     }
@@ -32112,8 +32205,16 @@ mod tests {
             "passwd: files\npasswd: files\ngroup: files\n",
             "passwd: files\ngroup: files\nSUBID: sss\n",
         ] {
-            validate_inrou_local_nsswitch(invalid)
-                .expect_err("remote, missing, or ambiguous NSS identity sources must fail closed");
+            assert_eyre_error_contains_any(
+                validate_inrou_local_nsswitch(invalid).expect_err(
+                    "remote, missing, or ambiguous NSS identity sources must fail closed",
+                ),
+                &[
+                    "/etc/nsswitch.conf",
+                    "NSS resolution",
+                    "requires deterministic `subid: files` resolution",
+                ],
+            );
         }
 
         let passwd = "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n";
@@ -32129,8 +32230,12 @@ mod tests {
             "root:x:0:0:root:/root:/bin/sh\niroha-inrou:x:70000:70000::/nonexistent:/bin/sh\n",
             "other:x:1234:70000::/nonexistent:/usr/sbin/nologin\niroha-inrou:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
         ] {
-            validate_inrou_reserved_passwd(invalid, &identity)
-                .expect_err("an ambiguous or login-capable service passwd row must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_reserved_passwd(invalid, &identity).expect_err(
+                    "an ambiguous or login-capable service passwd row must fail closed",
+                ),
+                "passwd",
+            );
         }
 
         let group = "root:x:0:\nkvm:x:108:\niroha-inrou:x:70000:\n";
@@ -32141,32 +32246,50 @@ mod tests {
             "root:x:0:\ndocker:x:999:iroha-inrou\niroha-inrou:x:70000:\n",
             "root:x:0:\niroha-inrou:x:70000:iroha-inrou\n",
         ] {
-            validate_inrou_reserved_group(invalid, &identity)
-                .expect_err("ambiguous identity groups or memberships must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_reserved_group(invalid, &identity)
+                    .expect_err("ambiguous identity groups or memberships must fail closed"),
+                "group",
+            );
         }
         validate_inrou_reserved_shadow("iroha-inrou:!:20000:0:99999:7:::\n")?;
-        validate_inrou_reserved_shadow("iroha-inrou:$6$hash:20000:0:99999:7:::\n")
-            .expect_err("an unlocked password must fail closed");
+        assert_eyre_error_contains(
+            validate_inrou_reserved_shadow("iroha-inrou:$6$hash:20000:0:99999:7:::\n")
+                .expect_err("an unlocked password must fail closed"),
+            "locked password",
+        );
         validate_inrou_reserved_gshadow("iroha-inrou:!::\n")?;
         for invalid in [
             "iroha-inrou:!:root:iroha-inrou\n",
             "docker:!:iroha-inrou:\niroha-inrou:!::\n",
         ] {
-            validate_inrou_reserved_gshadow(invalid)
-                .expect_err("gshadow administrators or members must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_reserved_gshadow(invalid)
+                    .expect_err("gshadow administrators or members must fail closed"),
+                "gshadow",
+            );
         }
 
         validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 99_999)?;
         validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", 165_536)?;
         for covered in [100_000, 165_535] {
-            validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", covered)
-                .expect_err("both subordinate-range boundaries must reserve the child id");
+            assert_eyre_error_contains(
+                validate_inrou_subordinate_id_unmapped("alice:100000:65536\n", "subuid", covered)
+                    .expect_err("both subordinate-range boundaries must reserve the child id"),
+                "falls within local subuid range",
+            );
         }
-        validate_inrou_subordinate_id_unmapped("alice:4294967294:1\n", "subuid", u32::MAX - 1)
-            .expect_err("the highest valid subordinate id range must be enforced");
+        assert_eyre_error_contains(
+            validate_inrou_subordinate_id_unmapped("alice:4294967294:1\n", "subuid", u32::MAX - 1)
+                .expect_err("the highest valid subordinate id range must be enforced"),
+            "falls within local subuid range",
+        );
         for forbidden_owner in ["iroha-inrou:200000:1\n", "70000:200000:1\n"] {
-            validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000)
-                .expect_err("service and numeric identity owners must not receive subids");
+            assert_eyre_error_contains(
+                validate_inrou_subordinate_id_unmapped(forbidden_owner, "subuid", 70_000)
+                    .expect_err("service and numeric identity owners must not receive subids"),
+                "must not delegate a range",
+            );
         }
         for malformed in [
             "alice:100000:0\n",
@@ -32174,8 +32297,12 @@ mod tests {
             "alice:not-a-number:1\n",
             "alice:100000\n",
         ] {
-            validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000)
-                .expect_err("malformed, empty, or overflowing subordinate ranges must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_subordinate_id_unmapped(malformed, "subgid", 70_000).expect_err(
+                    "malformed, empty, or overflowing subordinate ranges must fail closed",
+                ),
+                "subgid",
+            );
         }
         Ok(())
     }
@@ -32217,8 +32344,11 @@ mod tests {
                 ..secure
             },
         ] {
-            validate_portable_vm_kvm_identity(&identity, insecure)
-                .expect_err("insecure `/dev/kvm` custody must fail closed");
+            assert_eyre_error_contains(
+                validate_portable_vm_kvm_identity(&identity, insecure)
+                    .expect_err("insecure `/dev/kvm` custody must fail closed"),
+                "`/dev/kvm`",
+            );
         }
     }
     #[cfg(target_os = "linux")]
@@ -32535,8 +32665,11 @@ mod tests {
             fs::set_permissions(&installed, fs::Permissions::from_mode(0o600))?;
         }
 
-        install_staged_inrou_disk(&staged, &installed, Some(4))
-            .expect_err("installing a staged disk must never replace existing lease state");
+        assert_eyre_error_contains(
+            install_staged_inrou_disk(&staged, &installed, Some(4))
+                .expect_err("installing a staged disk must never replace existing lease state"),
+            "without replacing existing state",
+        );
         assert_eq!(fs::read(&installed)?, b"old!");
         assert_eq!(fs::read(&staged)?, b"new!");
         Ok(())
@@ -32822,26 +32955,41 @@ mod tests {
         fs::write(&disk, b"disk")?;
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o600))?;
         validate_reusable_inrou_disk(&disk, Some(4))?;
-        validate_reusable_inrou_disk(&disk, Some(5))
-            .expect_err("a reusable raw disk must retain its configured length");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, Some(5))
+                .expect_err("a reusable raw disk must retain its configured length"),
+            "instead of the required",
+        );
 
         let symbolic = temp_dir.path().join("symbolic.raw");
         std::os::unix::fs::symlink(&disk, &symbolic)?;
-        validate_reusable_inrou_disk(&symbolic, None)
-            .expect_err("a reusable disk must not follow symbolic links");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&symbolic, None)
+                .expect_err("a reusable disk must not follow symbolic links"),
+            "must be a regular file",
+        );
 
         let hard = temp_dir.path().join("hard.raw");
         fs::hard_link(&disk, &hard)?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a multiply linked reusable disk must fail closed");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a multiply linked reusable disk must fail closed"),
+            "must have exactly one hard link",
+        );
         fs::remove_file(hard)?;
 
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o622))?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a disk writable by other users must fail closed");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a disk writable by other users must fail closed"),
+            "owner-writable and inaccessible",
+        );
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o400))?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a reusable disk must remain writable by its owner");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a reusable disk must remain writable by its owner"),
+            "owner-writable and inaccessible",
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -32899,20 +33047,30 @@ mod tests {
         assert_eq!(fs::metadata(&secure)?.permissions().mode() & 0o777, 0o700);
 
         fs::set_permissions(&secure, fs::Permissions::from_mode(0o770))?;
-        ensure_secure_inrou_disk_directory(&secure)
-            .expect_err("a group-writable disk directory must fail closed");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&secure)
+                .expect_err("a group-writable disk directory must fail closed"),
+            "custody permits path replacement",
+        );
 
         let linked = temp_dir.path().join("linked-volume");
         std::os::unix::fs::symlink(temp_dir.path(), &linked)?;
-        ensure_secure_inrou_disk_directory(&linked)
-            .expect_err("a disk-directory symbolic link must fail closed");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&linked)
+                .expect_err("a disk-directory symbolic link must fail closed"),
+            "contains symlink component",
+        );
 
         let real_parent = temp_dir.path().join("real-parent");
         fs::create_dir(&real_parent)?;
         let linked_parent = temp_dir.path().join("linked-parent");
         std::os::unix::fs::symlink(&real_parent, &linked_parent)?;
-        ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume"))
-            .expect_err("a symbolic-link ancestor must fail before disk creation or delegation");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume")).expect_err(
+                "a symbolic-link ancestor must fail before disk creation or delegation",
+            ),
+            "contains symlink component",
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -32937,14 +33095,24 @@ mod tests {
 
         let linked = temp_dir.path().join("linked-shared-volume");
         std::os::unix::fs::symlink(&prepared, &linked)?;
-        prepare_inrou_shared_export_directory(&linked, uid, gid)
-            .expect_err("a shared export must not follow a symbolic link");
+        assert_eyre_error_contains(
+            prepare_inrou_shared_export_directory(&linked, uid, gid)
+                .expect_err("a shared export must not follow a symbolic link"),
+            "must be a real directory",
+        );
 
         let replaceable_parent = temp_dir.path().join("replaceable-parent");
         fs::create_dir(&replaceable_parent)?;
         fs::set_permissions(&replaceable_parent, fs::Permissions::from_mode(0o777))?;
-        prepare_inrou_shared_export_directory(&replaceable_parent.join("shared-volume"), uid, gid)
-            .expect_err("an export below a replaceable parent must fail closed");
+        assert_eyre_error_contains(
+            prepare_inrou_shared_export_directory(
+                &replaceable_parent.join("shared-volume"),
+                uid,
+                gid,
+            )
+            .expect_err("an export below a replaceable parent must fail closed"),
+            "custody permits path replacement",
+        );
         Ok(())
     }
     #[test]
@@ -32960,8 +33128,11 @@ mod tests {
 
         let mut mismatched_plan = plan;
         mismatched_plan.rootfs_image_path = "/inrou/other-rootfs.ext4".to_owned();
-        inrou_rootfs_base_binding(&bundle, &mismatched_plan)
-            .expect_err("an unsigned rootfs plan substitution must fail closed");
+        assert_eyre_error_contains(
+            inrou_rootfs_base_binding(&bundle, &mismatched_plan)
+                .expect_err("an unsigned rootfs plan substitution must fail closed"),
+            "does not match the signed bundle",
+        );
         Ok(())
     }
     #[cfg(not(windows))]
@@ -33106,13 +33277,16 @@ mod tests {
             .expect("root volume");
         let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
         fs::write(&base_rootfs, b"authenticated-base")?;
-        ensure_inrou_portable_root_disk(
-            &qemu_img,
-            &base_rootfs,
-            root_volume,
-            Hash::new(b"authenticated-base"),
-        )
-        .expect_err("qemu-img failure must fail root-disk creation");
+        assert_eyre_error_contains(
+            ensure_inrou_portable_root_disk(
+                &qemu_img,
+                &base_rootfs,
+                root_volume,
+                Hash::new(b"authenticated-base"),
+            )
+            .expect_err("qemu-img failure must fail root-disk creation"),
+            "create PortableVm root overlay",
+        );
         let root_dir = PathBuf::from(&root_volume.local_materialization_dir);
         let root_disk = root_dir.join("rootfs.qcow2");
         assert!(!root_disk.exists());
@@ -33125,8 +33299,13 @@ mod tests {
                 .contains(".inrou-stage-")
         }));
 
-        ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)
-            .expect_err("qemu-img failure must fail lease-disk creation");
+        let Err(error) = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan) else {
+            panic!("qemu-img failure must fail lease-disk creation");
+        };
+        assert!(
+            error.to_string().contains("create PortableVm lease disk"),
+            "unexpected lease-disk creation error: {error:#}"
+        );
         let lease_volume = replica_plan
             .lease_volumes
             .iter()
