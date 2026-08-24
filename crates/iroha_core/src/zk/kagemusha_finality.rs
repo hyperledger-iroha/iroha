@@ -1270,37 +1270,63 @@ mod tests {
                     digest
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::NetworkMismatch
+            KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
         );
-        let mut manifest = fixture.manifest.clone();
-        manifest.asset = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("asset domain"),
-            "other".parse().expect("asset name"),
-        );
-        let digest = canonical_sha256(&manifest).expect("digest");
+        let mut anchor = fixture.anchor.clone();
+        anchor.network_id = manifest.network_id;
+        anchor.current_note.network_id = manifest.network_id;
+        anchor = anchor.finalize_digest().expect("alternate network anchor");
+        let mut proof = fixture.proof.clone();
+        proof.anchor = anchor.compact_ref().unwrap();
         assert_eq!(
             verifier
                 .verify_v4(
-                    &fixture.proof,
+                    &proof,
                     &fixture.roster,
-                    &fixture.anchor,
-                    &manifest,
-                    digest
+                    &anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::NetworkMismatch
+        );
+        let other_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("asset domain"),
+            "other".parse().expect("asset name"),
+        );
+        let mut anchor = fixture.anchor.clone();
+        anchor.asset = AssetId::new(other_asset.clone(), anchor.payer.clone());
+        anchor.current_note.asset = other_asset;
+        anchor = anchor.finalize_digest().expect("alternate asset anchor");
+        let mut proof = fixture.proof.clone();
+        proof.anchor = anchor.compact_ref().unwrap();
+        assert_eq!(
+            verifier
+                .verify_v4(
+                    &proof,
+                    &fixture.roster,
+                    &anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::AssetMismatch
         );
-        let mut manifest = fixture.manifest.clone();
-        manifest.asset_scale += 1;
-        let digest = canonical_sha256(&manifest).expect("digest");
+        let mut anchor = fixture.anchor.clone();
+        anchor.asset_scale += 1;
+        anchor.amount.scale += 1;
+        anchor.current_note.amount.scale += 1;
+        anchor = anchor.finalize_digest().expect("alternate scale anchor");
+        let mut proof = fixture.proof.clone();
+        proof.anchor = anchor.compact_ref().unwrap();
         assert_eq!(
             verifier
                 .verify_v4(
-                    &fixture.proof,
+                    &proof,
                     &fixture.roster,
-                    &fixture.anchor,
-                    &manifest,
-                    digest
+                    &anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ScaleMismatch

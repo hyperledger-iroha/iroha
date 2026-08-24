@@ -8028,7 +8028,7 @@ pub struct Offline {
     pub kagemusha_promotion_reservation_path: Option<PathBuf>,
     /// Absolute root-owned no-replace output path for this validator's seal.
     pub kagemusha_validator_qualification_seal_path: Option<PathBuf>,
-    /// Estimated decoded Kagemusha verifier budget, capped at the 256 MiB default.
+    /// Estimated decoded Kagemusha verifier budget, capped at the 272 MiB default.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES")]
     pub kagemusha_max_decoded_bytes: u64,
 }

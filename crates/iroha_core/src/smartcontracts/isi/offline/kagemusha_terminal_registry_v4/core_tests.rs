@@ -84,7 +84,9 @@ fn candidate_binding_internal_validation_receipt(
     let reviewed_cargo_fuzz_binary_sha256 = [16; 32];
     let reviewed_fuzz_cargo_proxy_binary_sha256 = [17; 32];
     let reviewed_fuzz_rustc_binary_sha256 = [18; 32];
-    let tracked_cargo_lock_sha256 = [6; 32];
+    let tracked_cargo_lock_sha256 = manifest
+        .reviewed_source_closure
+        .tracked_cargo_lock_sha256;
     let standalone_fuzz_cargo_lock_sha256 = [7; 32];
     let tool_roles = [
         KagemushaInternalValidationToolRoleV1::Cargo,
@@ -194,7 +196,7 @@ fn candidate_binding_internal_validation_receipt(
             git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
             git_mode: "100644".to_owned(),
             sha256: tracked_cargo_lock_sha256,
-            size_bytes: 1024,
+            size_bytes: manifest.reviewed_source_closure.tracked_cargo_lock_size_bytes,
         },
         standalone_fuzz_cargo_lock: KagemushaReviewedTrackedCargoLockV2 {
             path: "fuzz/Cargo.lock".to_owned(),
@@ -334,9 +336,6 @@ fn authenticated_candidate_binding_release_for_network(
         KeyPair::from_seed(vec![0x72; 32], Algorithm::Ed25519),
         KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519),
     ];
-    let candidate = manifest
-        .immutable_candidate()
-        .expect("candidate-binding immutable candidate");
     let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
         &candidate,
         manifest.qualification_receipt_sha256,

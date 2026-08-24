@@ -22,7 +22,7 @@ pub struct Offline {
     pub kagemusha_promotion_reservation_path: Option<PathBuf>,
     /// Root-owned no-replace output path for this validator's qualification seal.
     pub kagemusha_validator_qualification_seal_path: Option<PathBuf>,
-    /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
+    /// Estimated decoded Kagemusha verifier budget under the 272 MiB safety ceiling.
     pub kagemusha_max_decoded_bytes: u64,
 }
 impl_default!(Offline => {

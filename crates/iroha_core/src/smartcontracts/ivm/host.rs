@@ -23401,7 +23401,7 @@ seiyaku DurableOwner {
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            Hash::new(crate::zk::IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1).into(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -27375,7 +27375,7 @@ seiyaku DurableOwner {
         let generic_id = VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless-hydration");
         let mut generic_record = active_vk_record(
             generic_commitment,
-            [0x78; 32],
+            Hash::new(crate::zk::IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1).into(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",

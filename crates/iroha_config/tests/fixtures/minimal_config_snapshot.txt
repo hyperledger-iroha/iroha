@@ -2952,7 +2952,7 @@ Root {
             kagemusha_catalog_revalidation_authority_public_key: None,
             kagemusha_promotion_reservation_path: None,
             kagemusha_validator_qualification_seal_path: None,
-            kagemusha_max_decoded_bytes: 268435456,
+            kagemusha_max_decoded_bytes: 285212672,
         },
         router: Router {
             twap_window: 60s,

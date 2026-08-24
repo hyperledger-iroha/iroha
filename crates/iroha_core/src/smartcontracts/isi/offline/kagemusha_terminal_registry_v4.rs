@@ -218,7 +218,11 @@ const MAX_CATALOG_RELEASES_V4: usize = 16;
 ))]
 const MAX_CATALOG_AGGREGATE_BYTES_V4: u64 = 12 * 1024 * 1024 * 1024;
 /// Default decoded-resident ceiling used by non-daemon catalog callers.
-pub const DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4: u64 = 256 * 1024 * 1024;
+///
+/// 272 MiB is the next 16 MiB boundary above the conservative 279,192,800-byte
+/// fixed-K17 two-profile qualification estimate.
+pub const DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4: u64 =
+    iroha_config::parameters::defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
 /// `ParamsIPA` retains two vectors of 64-byte Pasta affine points per domain row.
 #[cfg(any(
     test,
@@ -3531,6 +3535,59 @@ mod tests {
             kagemusha_internal_validation_runner_identity_sha256_v1,
         },
     };
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    struct KagemushaCatalogTestTempDir {
+        // Drop the directory before the later-declared guard releases the lane.
+        directory: tempfile::TempDir,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    impl KagemushaCatalogTestTempDir {
+        fn path(&self) -> &Path {
+            self.directory.path()
+        }
+    }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    fn kagemusha_catalog_test_tempdir() -> std::io::Result<KagemushaCatalogTestTempDir> {
+        static TEMP_DIR_MUTEX: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        let guard = TEMP_DIR_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temporary_root = std::fs::canonicalize(std::env::temp_dir())?;
+        // Darwin's per-user `T` directory is mutated continuously by parallel
+        // tests. Catalog validation deliberately snapshots every absolute-path
+        // ancestor, so use its stable `0` sibling when that standard layout is
+        // available. Other platforms and custom TMPDIR layouts retain the
+        // canonical system temporary root as a portable fallback.
+        #[cfg(target_os = "macos")]
+        let temporary_root = temporary_root
+            .parent()
+            .map(|parent| parent.join("0"))
+            .filter(|candidate| candidate.is_dir())
+            .map_or(Ok(temporary_root), std::fs::canonicalize)?;
+        let base = temporary_root.join(format!(
+            "iroha-kagemusha-catalog-test-tmp-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&base)?;
+        let directory = tempfile::Builder::new()
+            .prefix("catalog-")
+            .tempdir_in(base)?;
+        Ok(KagemushaCatalogTestTempDir {
+            directory,
+            _guard: guard,
+        })
+    }
     #[cfg(target_os = "macos")]
     struct MacosAclGuard {
         path: PathBuf,
@@ -3805,7 +3862,7 @@ mod tests {
     ))]
     #[test]
     fn qualification_seal_missing_or_malformed_file_fails_closed() {
-        let temporary = tempfile::tempdir().expect("ACL-free temporary seal root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("ACL-free temporary seal root");
         let trusted_uid = rustix::process::geteuid().as_raw();
         let policy = temporary.path().join("policy.norito");
         let artifacts = temporary.path().join("artifacts");
@@ -3910,7 +3967,7 @@ mod tests {
     #[test]
     fn qualification_seal_trust_rejects_extended_acl_write_grants() {
         use std::os::unix::fs::MetadataExt as _;
-        let temporary = tempfile::tempdir().expect("ACL fixture root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("ACL fixture root");
         let source_path = temporary.path().join("source.bin");
         std::fs::write(&source_path, b"trusted source").expect("write trusted source fixture");
         let canonical_source =
@@ -3980,6 +4037,13 @@ mod tests {
         assert_eq!(estimate.persistent_bytes, expected_persistent);
         assert_eq!(estimate.peak_load_bytes, expected_peak);
         assert!(estimate.peak_load_bytes <= DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4);
+    }
+    #[test]
+    fn decoded_catalog_default_matches_configured_safety_ceiling() {
+        assert_eq!(
+            DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4,
+            iroha_config::parameters::defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
     }
     #[test]
     fn decoded_catalog_headroom_rounds_up() {
@@ -4054,7 +4118,7 @@ mod tests {
     ))]
     #[test]
     fn decoded_catalog_loader_enforces_budget_before_artifact_reads() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -4079,6 +4143,24 @@ mod tests {
                     .expect("compact framed artifact size");
             }
         }
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.internal_validation_receipt_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("compact candidate digest"),
+                manifest.qualification_receipt_sha256,
+            );
         let manifest_bytes = norito::to_bytes(&manifest).expect("canonical compact manifest");
         let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
         let release = artifacts.join(hex::encode(manifest_sha256));
@@ -4087,6 +4169,7 @@ mod tests {
             .expect("write compact manifest");
         let estimate =
             estimate_catalog_release_memory_v4(&manifest).expect("compact catalog memory estimate");
+        assert_eq!(estimate.peak_load_bytes, 279_192_800);
         assert!(estimate.peak_load_bytes <= DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4);
         let error = KagemushaReleaseCatalogV4::load_with_decoded_budget(
             &policy,
@@ -4111,7 +4194,7 @@ mod tests {
         unix,
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
     ))]
-    fn canonical_temporary_root(temporary: &tempfile::TempDir) -> PathBuf {
+    fn canonical_temporary_root(temporary: &KagemushaCatalogTestTempDir) -> PathBuf {
         std::fs::canonicalize(temporary.path()).expect("canonical temporary catalog root")
     }
     #[cfg(all(
@@ -4119,11 +4202,11 @@ mod tests {
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
     ))]
     fn pinned_source_fixture() -> (
-        tempfile::TempDir,
+        KagemushaCatalogTestTempDir,
         PathBuf,
         KagemushaCatalogPinnedArtifactSourceV4,
     ) {
-        let temporary = tempfile::tempdir().expect("temporary pinned-source root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary pinned-source root");
         let root = canonical_temporary_root(&temporary);
         let release_directory = root.join("release");
         std::fs::create_dir(&release_directory).expect("create pinned-source release directory");
@@ -4280,7 +4363,8 @@ mod tests {
     ))]
     #[test]
     fn sealed_path_revalidation_rejects_path_stat_owner_mode_and_time_tamper() {
-        let temporary = tempfile::tempdir().expect("ACL-free temporary sealed-path root");
+        let temporary =
+            kagemusha_catalog_test_tempdir().expect("ACL-free temporary sealed-path root");
         let file_path = temporary.path().join("sealed.bin");
         std::fs::write(&file_path, b"sealed identity").expect("write sealed-path fixture");
         let canonical_file = std::fs::canonicalize(&file_path).expect("canonical fixture file");
@@ -4329,7 +4413,8 @@ mod tests {
     #[test]
     fn sealed_path_revalidation_rejects_content_replacement_and_writable_mode() {
         use std::os::unix::fs::PermissionsExt as _;
-        let temporary = tempfile::tempdir().expect("ACL-free temporary sealed-path root");
+        let temporary =
+            kagemusha_catalog_test_tempdir().expect("ACL-free temporary sealed-path root");
         let file_path = temporary.path().join("sealed.bin");
         std::fs::write(&file_path, b"original bytes").expect("write sealed-path fixture");
         let canonical_file = std::fs::canonicalize(&file_path).expect("canonical fixture file");
@@ -4481,7 +4566,7 @@ mod tests {
     ))]
     #[test]
     fn staged_genesis_authenticates_only_policy_while_runtime_requires_nonempty_catalog() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let policy_bytes = std::fs::read(&policy).expect("read test release policy");
@@ -4665,23 +4750,25 @@ mod tests {
     #[test]
     fn pinned_source_rejects_in_place_tamper_and_trailing_growth() {
         use std::io::Write as _;
-        let (_temporary, release_directory, source) = pinned_source_fixture();
-        let file_name = source.artifacts[0].descriptor.file_name.clone();
-        std::fs::write(release_directory.join(&file_name), vec![0xa5; 128])
-            .expect("tamper pinned artifact in place");
-        let mut invoked = false;
-        let tamper_error = source
-            .with_selected_file(
-                KagemushaPastaCycleParityV1::StepEq,
-                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
-                |_file| {
-                    invoked = true;
-                    Ok(())
-                },
-            )
-            .expect_err("in-place tamper must invalidate the pinned snapshot");
-        assert!(tamper_error.contains("changed identity, bytes, or read-only"));
-        assert!(!invoked);
+        {
+            let (_temporary, release_directory, source) = pinned_source_fixture();
+            let file_name = source.artifacts[0].descriptor.file_name.clone();
+            std::fs::write(release_directory.join(&file_name), vec![0xa5; 128])
+                .expect("tamper pinned artifact in place");
+            let mut invoked = false;
+            let tamper_error = source
+                .with_selected_file(
+                    KagemushaPastaCycleParityV1::StepEq,
+                    KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                    |_file| {
+                        invoked = true;
+                        Ok(())
+                    },
+                )
+                .expect_err("in-place tamper must invalidate the pinned snapshot");
+            assert!(tamper_error.contains("changed identity, bytes, or read-only"));
+            assert!(!invoked);
+        }
         let (_temporary, release_directory, source) = pinned_source_fixture();
         let file_name = source.artifacts[0].descriptor.file_name.clone();
         std::fs::OpenOptions::new()
@@ -4791,7 +4878,7 @@ mod tests {
     ))]
     #[test]
     fn configured_catalog_rejects_malformed_policy_before_publication() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = root.join("policy.norito");
         let artifacts = root.join("artifacts");
@@ -4808,7 +4895,7 @@ mod tests {
     ))]
     #[test]
     fn configured_catalog_rejects_empty_release_inventory() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -4827,7 +4914,7 @@ mod tests {
     ))]
     #[test]
     fn configured_catalog_rejects_release_count_above_retention_bound() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -4880,7 +4967,7 @@ mod tests {
     ))]
     #[test]
     fn configured_catalog_rejects_manifest_directory_digest_substitution() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -4925,7 +5012,7 @@ mod tests {
     #[test]
     fn configured_catalog_rejects_symlinked_policy_and_artifact_roots() {
         use std::os::unix::fs::symlink;
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -4964,7 +5051,7 @@ mod tests {
     #[test]
     fn configured_catalog_paths_reject_intermediate_symlinks() {
         use std::os::unix::fs::symlink;
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let real_parent = root.join("real-parent");
         let artifacts = real_parent.join("artifacts");
@@ -5014,7 +5101,7 @@ mod tests {
     #[test]
     fn configured_catalog_rejects_symlinked_release_directory_and_manifest_leaf() {
         use std::os::unix::fs::symlink;
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = write_test_policy(&root);
         let artifacts = root.join("artifacts");
@@ -5054,7 +5141,7 @@ mod tests {
     ))]
     #[test]
     fn pinned_directory_reads_original_object_and_rejects_path_replacement() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let temporary_root = canonical_temporary_root(&temporary);
         let artifacts = temporary_root.join("artifacts");
         let displaced = temporary_root.join("artifacts-displaced");
@@ -5086,7 +5173,7 @@ mod tests {
     ))]
     #[test]
     fn retained_policy_handle_rejects_post_read_mutation() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let root = canonical_temporary_root(&temporary);
         let policy = root.join("policy.norito");
         std::fs::write(&policy, b"initial-policy").expect("write initial policy");
@@ -5111,7 +5198,7 @@ mod tests {
     ))]
     #[test]
     fn pinned_release_reads_original_object_and_rejects_entry_replacement() {
-        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let temporary = kagemusha_catalog_test_tempdir().expect("temporary catalog root");
         let temporary_root = canonical_temporary_root(&temporary);
         let root = temporary_root.join("artifacts");
         let release_name = hex::encode([0x72; 32]);
