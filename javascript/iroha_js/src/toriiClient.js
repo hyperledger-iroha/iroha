@@ -21625,6 +21625,10 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
+    fee_payment: normalizeFeePaymentIntentValue(
+      record.fee_payment,
+      `${context}.fee_payment`,
+    ),
     transaction_payload_b64: normalizeOptionalExactBase64Payload(
       record.transaction_payload_b64,
       `${context}.transaction_payload_b64`,

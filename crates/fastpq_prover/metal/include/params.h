@@ -10,6 +10,7 @@ struct FftArgs {
     uint threadgroup_lanes;
     uint column_offset;
     uint _padding;
+    uint _padding2;
 };
 
 struct LdeArgs {

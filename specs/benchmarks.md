@@ -213,16 +213,16 @@ Keep the wrapped JSON and `FASTPQ_METAL_TRACE_CHILD=1` traces checked in under
 `artifacts/fastpq_benchmarks/` so subsequent WP2-D/WP2-E reviews can diff the GA
 capture against earlier refresh runs without rerunning the workload.
 
-Each fresh `fastpq_metal_bench` capture now also writes a richer `bn254_metrics`
-block, which exposes `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` entries for
-the CPU baseline and whichever GPU backend (Metal/CUDA) was active, **and** a
-`bn254_dispatch` block that records the observed threadgroup widths, logical
-thread counts, and pipeline limits for the single-column BN254 FFT/LDE
-dispatches. The benchmark wrapper copies both maps into `benchmarks.bn254_*`, so
-dashboards and Prometheus exporters can scrape labelled latencies and geometry
-without re-parsing the raw operations array. The `FASTPQ_METAL_THREADGROUP`
-override now applies to BN254 kernels as well, making threadgroup sweeps
-reproducible from one knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
+`fastpq_metal_bench` writes `acceleration.bn254_poseidon_ms` under
+`bn254_metrics` when the genuinely BN254 `bn254_poseidon_words` operation is
+captured. Generic FFT/IFFT/LDE and column-Poseidon operations use Goldilocks
+inputs and are not promoted under BN254 metric names. A `bn254_dispatch` block
+is included only when the captured kernel samples actually contain
+single-column BN254 FFT/LDE dispatches. Dedicated Metal BN254 FFT/LDE benchmark
+operations are still outstanding; low-level hardware parity covers those
+kernels in the meantime. The wrapper copies present `bn254_*` maps into the
+wrapped artifact, and `FASTPQ_METAL_THREADGROUP` remains available for
+reproducible low-level BN254 sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1764】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2219】【scripts/fastpq/wrap_benchmark.py:1268】
 
 To keep downstream dashboards simple, run `python3 scripts/benchmarks/export_csv.py`
 after capturing a bundle. The helper flattens `poseidon_microbench_*.json` into

@@ -32149,8 +32149,9 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
     let_row! { rules = ValidationFeePlainElectorateRulesV1 { voting_asset_id: fee_asset.clone(), bond_escrow_account: proposer.clone(), slash_receiver_account: (*BOB_ID).clone(), ballot_amount: Quantity::from(1_u32), ballot_duration_blocks: 1, citizenship_amount: Quantity::from(1_u32), max_members: 1, conviction_step_blocks: 1, max_conviction: 1, min_turnout: 1, approval_threshold_numerator: 1, approval_threshold_denominator: 1, eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate, } };
     let_row! { policy = ValidationFeePolicyV1 { schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION, network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked( Hash::prehashed([0xA5; 32]), )), policy_version: 1, previous_policy_hash: None, ds_asset_id: fee_asset, ds_scale: VALIDATION_FEE_DS_SCALE, fee: Quantity::zero(), treasury_account_id: proposer.clone(), charging_mode: ValidationFeeChargingMode::Disabled, effective_from_height: 1, expires_after_height: None, exemption_classes: Vec::new(), treasury_payout_binding: None, } };
     GovernanceProposalRecord {
-        proposer,
+        proposer: proposer.clone(),
         kind: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: proposer,
             policy,
             payout_lifecycle_proposal_id: None,
             plain_electorate_rules: rules,

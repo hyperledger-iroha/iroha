@@ -206,6 +206,56 @@ mod tests {
         assert!(!cfg.operation.includes_fft_tuning());
     }
     #[test]
+    fn operation_filter_scopes_auxiliary_work_and_reports_canonical_name() {
+        let cases = [
+            ("all", "all", true, true, true),
+            ("fft", "fft", true, false, false),
+            ("ifft", "ifft", true, false, false),
+            ("lde", "lde", true, false, true),
+            (
+                "poseidon_hash_columns",
+                "poseidon_hash_columns",
+                false,
+                true,
+                false,
+            ),
+            (
+                "poseidon_merkle_pairs",
+                "poseidon_merkle_pairs",
+                false,
+                false,
+                false,
+            ),
+            (
+                "bn254_poseidon_words",
+                "bn254_poseidon_words",
+                false,
+                false,
+                false,
+            ),
+        ];
+        for (raw, canonical, fft_tuning, poseidon_microbench, lde_probe) in cases {
+            let cfg = Config::from_iter(["--operation".to_owned(), raw.to_owned()].into_iter())
+                .expect("operation parses");
+            assert_eq!(cfg.operation.as_str(), canonical);
+            assert_eq!(
+                cfg.operation.includes_fft_tuning(),
+                fft_tuning,
+                "unexpected FFT tuning selection for {raw}"
+            );
+            assert_eq!(
+                cfg.operation.includes_poseidon_microbench(),
+                poseidon_microbench,
+                "unexpected Poseidon microbench selection for {raw}"
+            );
+            assert_eq!(
+                cfg.operation.includes_lde_telemetry_probe(),
+                lde_probe,
+                "unexpected LDE telemetry probe selection for {raw}"
+            );
+        }
+    }
+    #[test]
     fn zero_fill_value_includes_bytes_and_ms() {
         let summary = Summary::from_samples(&[1.0, 2.0, 3.0]);
         let stats = ZeroFillSummary {
@@ -940,13 +990,24 @@ mod harness {
         pub(crate) fn includes(&self, op: BenchOperation) -> bool {
             matches!(self, Self::All) || matches!(self, Self::Only(single) if *single == op)
         }
+        pub(crate) fn as_str(&self) -> &'static str {
+            match self {
+                Self::All => "all",
+                Self::Only(operation) => operation.as_str(),
+            }
+        }
         pub(crate) fn includes_fft_tuning(&self) -> bool {
-            !matches!(
+            matches!(
                 self,
-                Self::Only(
-                    BenchOperation::Bn254PoseidonWords | BenchOperation::PoseidonMerklePairs
-                )
+                Self::All
+                    | Self::Only(BenchOperation::Fft | BenchOperation::Ifft | BenchOperation::Lde)
             )
+        }
+        pub(crate) fn includes_poseidon_microbench(&self) -> bool {
+            self.includes(BenchOperation::Poseidon)
+        }
+        pub(crate) fn includes_lde_telemetry_probe(&self) -> bool {
+            self.includes(BenchOperation::Lde)
         }
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1711,11 +1772,10 @@ mod harness {
         Value::Object(map)
     }
     fn bn254_metric_name(operation: &str) -> Option<&'static str> {
+        // TODO: Add dedicated Metal BN254 FFT/LDE benchmark operations before exporting their
+        // acceleration metric names; the generic FFT/LDE operations use Goldilocks columns.
         match operation {
-            "fft" => Some("acceleration.bn254_fft_ms"),
-            "ifft" => Some("acceleration.bn254_ifft_ms"),
-            "lde" => Some("acceleration.bn254_lde_ms"),
-            "poseidon_hash_columns" => Some("acceleration.bn254_poseidon_ms"),
+            "bn254_poseidon_words" => Some("acceleration.bn254_poseidon_ms"),
             _ => None,
         }
     }
@@ -2617,7 +2677,7 @@ mod harness {
                 .as_ref()
                 .map_or(true, |stats| stats.dispatch_count == 0);
         if gpu_available
-            && config.operation.includes_fft_tuning()
+            && config.operation.includes_lde_telemetry_probe()
             && (zero_fill_missing || queue_stats_missing)
         {
             let (probe_zero_fill, probe_queue) =
@@ -2681,7 +2741,7 @@ mod harness {
             .duration_since(UNIX_EPOCH)
             .map_err(|err| format!("system clock error: {err}"))?
             .as_secs();
-        let poseidon_micro = if config.operation.includes_fft_tuning() {
+        let poseidon_micro = if config.operation.includes_poseidon_microbench() {
             capture_poseidon_microbench(gpu_available, backend_label.as_str())
         } else {
             None
@@ -3061,28 +3121,34 @@ mod harness {
         assert!(!self::inject_zero_fill(&mut operations, &zero_fill));
     }
     #[test]
-    fn bn254_metrics_capture_cpu_and_gpu_latency() {
-        let cpu_fft = Summary::from_samples(&[10.0, 14.0]);
-        let gpu_fft = Summary::from_samples(&[5.0, 6.0]);
-        let cpu_lde = Summary::from_samples(&[20.0, 20.0]);
+    fn bn254_metrics_only_capture_actual_bn254_operations() {
+        let cpu_gold_fft = Summary::from_samples(&[10.0, 14.0]);
+        let gpu_gold_fft = Summary::from_samples(&[5.0, 6.0]);
+        let cpu_poseidon = Summary::from_samples(&[20.0, 24.0]);
+        let gpu_poseidon = Summary::from_samples(&[8.0, 10.0]);
         let operations = vec![
-            self::operation_value("fft", 8, 2, &cpu_fft, Some(&gpu_fft), None),
-            self::operation_value("lde", 16, 2, &cpu_lde, None, None),
+            self::operation_value("fft", 8, 2, &cpu_gold_fft, Some(&gpu_gold_fft), None),
+            self::operation_value(
+                "bn254_poseidon_words",
+                16,
+                1,
+                &cpu_poseidon,
+                Some(&gpu_poseidon),
+                None,
+            ),
         ];
         let metrics = bn254_metrics_value(&operations, "metal").expect("metrics present");
         let map = metrics.as_object().expect("metrics serialize to map");
-        let fft = map
-            .get("acceleration.bn254_fft_ms")
+        assert!(
+            !map.contains_key("acceleration.bn254_fft_ms"),
+            "Goldilocks FFT must not be relabelled as BN254"
+        );
+        let poseidon = map
+            .get("acceleration.bn254_poseidon_ms")
             .and_then(Value::as_object)
-            .expect("fft metric present");
-        assert_eq!(fft.get("cpu").and_then(Value::as_f64), Some(12.0));
-        assert_eq!(fft.get("metal").and_then(Value::as_f64), Some(5.5));
-        let lde = map
-            .get("acceleration.bn254_lde_ms")
-            .and_then(Value::as_object)
-            .expect("lde metric present");
-        assert_eq!(lde.get("cpu").and_then(Value::as_f64), Some(20.0));
-        assert!(!lde.contains_key("metal"));
+            .expect("BN254 Poseidon metric present");
+        assert_eq!(poseidon.get("cpu").and_then(Value::as_f64), Some(22.0));
+        assert_eq!(poseidon.get("metal").and_then(Value::as_f64), Some(9.0));
     }
     #[test]
     fn enforce_gpu_requirement_errors_when_requested() {
@@ -3665,6 +3731,10 @@ mod harness {
         report.insert(
             "iterations".to_owned(),
             json::to_value(&inputs.config.iterations).expect("serialize iterations"),
+        );
+        report.insert(
+            "operation_filter".to_owned(),
+            json::to_value(inputs.config.operation.as_str()).expect("serialize operation filter"),
         );
         report.insert(
             "execution_mode".to_owned(),

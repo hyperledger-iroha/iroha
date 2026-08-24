@@ -1107,6 +1107,245 @@ fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
     }
     Ok(())
 }
+
+fn invalid_global_beacon_persistence(message: impl Into<String>) -> json::Error {
+    json::Error::InvalidField {
+        field: "world.global_beacon".to_owned(),
+        message: message.into(),
+    }
+}
+
+fn validate_global_beacon_persistence(world: &World) -> Result<(), json::Error> {
+    let dkg = world.global_beacon_dkg.view();
+    let key_sessions = world.global_beacon_key_sessions.view();
+    let active_sessions = world.global_beacon_active_session.view();
+    let latest_pulses = world.global_beacon_latest_pulse.view();
+    let pulses = world.global_beacon_pulses.view();
+
+    for (session_id, snapshot) in dkg.iter() {
+        snapshot.validate().map_err(|error| {
+            invalid_global_beacon_persistence(format!(
+                "invalid active DKG snapshot {}: {error}",
+                hex::encode(session_id)
+            ))
+        })?;
+        if session_id != &snapshot.session.session_id {
+            return Err(invalid_global_beacon_persistence(
+                "active DKG storage key differs from its embedded session id",
+            ));
+        }
+        if key_sessions.get(session_id).is_some() {
+            return Err(invalid_global_beacon_persistence(
+                "one beacon session is both active DKG and finalized",
+            ));
+        }
+    }
+
+    for (key, _) in active_sessions.iter() {
+        if *key != GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY {
+            return Err(invalid_global_beacon_persistence(
+                "active-session pointer uses a noncanonical singleton key",
+            ));
+        }
+    }
+    for (key, _) in latest_pulses.iter() {
+        if *key != GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY {
+            return Err(invalid_global_beacon_persistence(
+                "latest-pulse link uses a noncanonical singleton key",
+            ));
+        }
+    }
+    let active_session = active_sessions
+        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+        .copied();
+    for (session_id, record) in key_sessions.iter() {
+        record.validate().map_err(|error| {
+            invalid_global_beacon_persistence(format!(
+                "invalid finalized key session {}: {error}",
+                hex::encode(session_id)
+            ))
+        })?;
+        if session_id != &record.session.session_id {
+            return Err(invalid_global_beacon_persistence(
+                "finalized key storage key differs from its embedded session id",
+            ));
+        }
+        let lifecycle_is_live =
+            record.activated_at_height.is_some() && record.retired_at_height.is_none();
+        if lifecycle_is_live != (active_session == Some(*session_id)) {
+            return Err(invalid_global_beacon_persistence(
+                "active-session pointer and key lifecycle metadata disagree",
+            ));
+        }
+    }
+    if active_session.is_some_and(|session_id| key_sessions.get(&session_id).is_none()) {
+        return Err(invalid_global_beacon_persistence(
+            "active-session pointer references a missing finalized key",
+        ));
+    }
+
+    let mut ordered_pulses = Vec::with_capacity(pulses.len());
+    for (pulse_id, pulse) in pulses.iter() {
+        let link = validate_persisted_global_threshold_beacon_pulse_v1(pulse).map_err(|error| {
+            invalid_global_beacon_persistence(format!(
+                "invalid finalized pulse {}: {error}",
+                hex::encode(pulse_id)
+            ))
+        })?;
+        if pulse_id != &pulse.pulse_id || pulse_id != &link.pulse_id {
+            return Err(invalid_global_beacon_persistence(
+                "pulse storage key differs from its canonical pulse id",
+            ));
+        }
+        let key_session = key_sessions.get(&pulse.session_id).ok_or_else(|| {
+            invalid_global_beacon_persistence("pulse references a missing finalized key session")
+        })?;
+        if !key_session.is_active_at(pulse.height)
+            || pulse.network_id != key_session.session.network_id
+            || pulse.roster_hash != key_session.session.roster_hash
+            || pulse.transcript_hash != key_session.session.transcript_hash
+        {
+            return Err(invalid_global_beacon_persistence(
+                "pulse is outside its key lifecycle or immutable session binding",
+            ));
+        }
+        ordered_pulses.push(pulse);
+    }
+    ordered_pulses.sort_by_key(|pulse| (pulse.height, pulse.round, pulse.pulse_id));
+    for pair in ordered_pulses.windows(2) {
+        let previous = pair[0];
+        let current = pair[1];
+        if (current.height, current.round) <= (previous.height, previous.round)
+            || current.previous_pulse_id != previous.pulse_id
+            || current.previous_seed != previous.seed
+        {
+            return Err(invalid_global_beacon_persistence(
+                "finalized pulse history is not one strict predecessor chain",
+            ));
+        }
+    }
+
+    let latest = latest_pulses
+        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+        .copied();
+    match ordered_pulses.last() {
+        Some(last) => {
+            let expected = GlobalThresholdBeaconPulseLinkV1 {
+                pulse_id: last.pulse_id,
+                seed: last.seed,
+                height: last.height,
+                round: last.round,
+            };
+            if latest != Some(expected) {
+                return Err(invalid_global_beacon_persistence(
+                    "latest-pulse link does not name the history tail",
+                ));
+            }
+        }
+        None => {
+            if let Some(origin) = latest {
+                origin.validate_origin().map_err(|error| {
+                    invalid_global_beacon_persistence(format!(
+                        "invalid genesis beacon origin: {error}"
+                    ))
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn invalid_tle_ovn_persistence(field: &'static str, message: impl Into<String>) -> json::Error {
+    json::Error::InvalidField {
+        field: field.to_owned(),
+        message: message.into(),
+    }
+}
+
+fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
+    let mut validated_key_sessions = BTreeMap::new();
+    let parliament_attempts = world.parliament_attempts.view();
+    for (key_session_id, public_state) in world.tle_key_sessions.view().iter() {
+        if key_session_id != &public_state.key_session_id {
+            return Err(invalid_tle_ovn_persistence(
+                "tle_key_sessions",
+                "TLE key-session storage key differs from its embedded canonical id",
+            ));
+        }
+        let validated = public_state.clone().validate().map_err(|error| {
+            invalid_tle_ovn_persistence(
+                "tle_key_sessions",
+                format!("invalid persisted adaptive TLE key session {key_session_id}: {error}"),
+            )
+        })?;
+        validated_key_sessions.insert(*key_session_id, validated);
+    }
+
+    for (ballot_attempt_id, lifecycle) in world.timed_ovn_evidence.view().iter() {
+        if ballot_attempt_id.as_bytes() != &lifecycle.ballot_attempt_id() {
+            return Err(invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                "timed-OVN storage key differs from its embedded ballot-attempt id",
+            ));
+        }
+        let key_session = validated_key_sessions
+            .get(&lifecycle.tle_key_session_id())
+            .ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "timed_ovn_evidence",
+                    "timed-OVN lifecycle references a missing TLE key session",
+                )
+            })?;
+        lifecycle.validate(key_session).map_err(|error| {
+            invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
+            )
+        })?;
+
+        let session = lifecycle.session();
+        if session.parameter_hash != crate::governance::timed_ovn::timed_ovn_parameter_hash_v1() {
+            return Err(invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                "timed-OVN lifecycle does not use the fixed v1 parameter profile",
+            ));
+        }
+        let governance_attempt_id =
+            iroha_data_model::governance::types::GovernanceAttemptId::new(
+                session.governance_attempt_id,
+            );
+        let governance_attempt = parliament_attempts
+            .get(&governance_attempt_id)
+            .ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "timed_ovn_evidence",
+                    "timed-OVN lifecycle references a missing Parliament attempt",
+                )
+            })?;
+        if governance_attempt.proposal_content_id().as_bytes() != &session.proposal_content_id {
+            return Err(invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                "timed-OVN proposal binding differs from its Parliament attempt",
+            ));
+        }
+        let ballot = governance_attempt.ballot(ballot_attempt_id).ok_or_else(|| {
+            invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                "timed-OVN lifecycle references a missing Parliament ballot attempt",
+            )
+        })?;
+        if ballot.attempt().body_instance_id.as_bytes() != &session.body_instance_id
+            || ballot.release_height() != Some(lifecycle.target_finalized_height())
+        {
+            return Err(invalid_tle_ovn_persistence(
+                "timed_ovn_evidence",
+                "timed-OVN body or release-height binding differs from Parliament state",
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
@@ -1598,6 +1837,15 @@ fn parse_world(
     let governance_unlock_stats = take_optional_default(&mut map, "governance_unlock_stats")?;
     let council = take_optional_default(&mut map, "council")?;
     let parliament_bodies = take_optional_default(&mut map, "parliament_bodies")?;
+    let parliament_attempts = take_optional_default(&mut map, "parliament_attempts")?;
+    let tle_key_sessions = take_optional_default(&mut map, "tle_key_sessions")?;
+    let timed_ovn_evidence = take_optional_default(&mut map, "timed_ovn_evidence")?;
+    let global_beacon_dkg = take_optional_default(&mut map, "global_beacon_dkg")?;
+    let global_beacon_key_sessions = take_optional_default(&mut map, "global_beacon_key_sessions")?;
+    let global_beacon_active_session =
+        take_optional_default(&mut map, "global_beacon_active_session")?;
+    let global_beacon_latest_pulse = take_optional_default(&mut map, "global_beacon_latest_pulse")?;
+    let global_beacon_pulses = take_optional_default(&mut map, "global_beacon_pulses")?;
     let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
     let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
     let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
@@ -1857,12 +2105,58 @@ fn parse_world(
         governance_unlock_stats,
         council,
         parliament_bodies,
+        parliament_attempts,
+        tle_key_sessions,
+        timed_ovn_evidence,
+        global_beacon_dkg,
+        global_beacon_key_sessions,
+        global_beacon_active_session,
+        global_beacon_latest_pulse,
+        global_beacon_pulses,
         vrf_epochs,
         merge_hint_roots,
         merge_global_state_root,
         consensus_evidence: Storage::default(),
         external_event_buf,
     };
+    for (attempt_id, attempt) in world.parliament_attempts.view().iter() {
+        if attempt_id != &attempt.attempt().id {
+            return Err(json::Error::InvalidField {
+                field: "parliament_attempts".into(),
+                message: "Parliament attempt storage key differs from its embedded canonical id"
+                    .into(),
+            });
+        }
+        attempt
+            .validate()
+            .map_err(|error| json::Error::InvalidField {
+                field: "parliament_attempts".into(),
+                message: format!("invalid persisted Parliament attempt: {error}"),
+            })?;
+    }
+    validate_tle_ovn_persistence(&world)?;
+    validate_global_beacon_persistence(&world)?;
+    for (proposal_id, proposal) in world.governance_proposals.view().iter() {
+        let proposal_operator = match &proposal.kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+                Some(&payload.proposal_operator)
+            }
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                payload,
+            ) => Some(&payload.proposal_operator),
+            _ => None,
+        };
+        if proposal_operator.is_some_and(|operator| {
+            operator != &proposal.proposer || proposal.kind.fingerprint() != *proposal_id
+        }) {
+            return Err(json::Error::InvalidField {
+                field: "governance_proposals".into(),
+                message:
+                    "validation-fee proposal operator, proposer, or storage fingerprint differs"
+                        .to_owned(),
+            });
+        }
+    }
     MusubiPersistedState {
         namespace_bindings: &world.musubi_namespace_bindings,
         packages: &world.musubi_packages,
@@ -2408,10 +2702,16 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
             iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
         review_panel_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+        coordination_council_size:
+            iroha_config::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
         policy_jury_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+        confirmation_jury_size:
+            iroha_config::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
         oversight_committee_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+        mpc_committee_size:
+            iroha_config::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
         fma_committee_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
         pipeline_study_sla_blocks:

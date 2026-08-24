@@ -1332,16 +1332,18 @@ fn generate_localnet_inner<T: Write>(
             .expect("gas account id required for NPoS bootstrap");
         let stake_amount =
             localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
-        genesis = append_localnet_npos_bootstrap_for_services(
+        genesis = append_localnet_npos_bootstrap(
             genesis,
-            &peers,
-            gas_account_id,
-            &stake_amount,
-            opts.sora_profile,
-            &genesis_account_id,
-            &client_identity.account_id,
-            &onboarding_identity.account_id,
-            taira,
+            &LocalnetNposBootstrapContext {
+                peers: &peers,
+                gas_account_id,
+                stake_amount: &stake_amount,
+                sora_profile: opts.sora_profile,
+                genesis_account_id: &genesis_account_id,
+                client_account_id: &client_identity.account_id,
+                onboarding_account_id: &onboarding_identity.account_id,
+                taira,
+            },
         )?;
         genesis = append_private_dataspace_genesis_bootstrap_for_client(
             genesis,
@@ -2326,7 +2328,10 @@ fn render_peer_config(
         );
         signer.insert(
             "revision".into(),
-            Value::Integer(TAIRA_RUNTIME_SIGNER_REVISION as i64),
+            Value::Integer(
+                i64::try_from(TAIRA_RUNTIME_SIGNER_REVISION)
+                    .expect("Taira runtime signer revision fits a TOML integer"),
+            ),
         );
         signer.insert(
             "policy_digest_hex".into(),
@@ -3782,66 +3787,32 @@ impl BootstrapRegistrations {
         }
     }
 }
-#[cfg(test)]
-#[allow(clippy::too_many_lines)]
-fn append_localnet_npos_bootstrap(
-    genesis: RawGenesisTransaction,
-    peers: &[Peer],
-    gas_account_id: &AccountId,
-    stake_amount: &Quantity,
+struct LocalnetNposBootstrapContext<'a> {
+    peers: &'a [Peer],
+    gas_account_id: &'a AccountId,
+    stake_amount: &'a Quantity,
     sora_profile: Option<SoraProfile>,
-    genesis_account_id: &AccountId,
-) -> Result<RawGenesisTransaction> {
-    append_localnet_npos_bootstrap_for_client(
-        genesis,
-        peers,
-        gas_account_id,
-        stake_amount,
-        sora_profile,
-        genesis_account_id,
-        &localnet_client_account_id(),
-        false,
-    )
-}
-#[cfg(test)]
-fn append_localnet_npos_bootstrap_for_client(
-    genesis: RawGenesisTransaction,
-    peers: &[Peer],
-    gas_account_id: &AccountId,
-    stake_amount: &Quantity,
-    sora_profile: Option<SoraProfile>,
-    genesis_account_id: &AccountId,
-    client_account_id: &AccountId,
+    genesis_account_id: &'a AccountId,
+    client_account_id: &'a AccountId,
+    onboarding_account_id: &'a AccountId,
     taira: bool,
-) -> Result<RawGenesisTransaction> {
-    append_localnet_npos_bootstrap_for_services(
-        genesis,
-        peers,
-        gas_account_id,
-        stake_amount,
-        sora_profile,
-        genesis_account_id,
-        client_account_id,
-        client_account_id,
-        taira,
-    )
 }
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the ordered NPoS bootstrap matrix stays linear so transaction ordering remains auditable"
 )]
-fn append_localnet_npos_bootstrap_for_services(
+fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
-    peers: &[Peer],
-    gas_account_id: &AccountId,
-    stake_amount: &Quantity,
-    sora_profile: Option<SoraProfile>,
-    genesis_account_id: &AccountId,
-    client_account_id: &AccountId,
-    onboarding_account_id: &AccountId,
-    taira: bool,
+    context: &LocalnetNposBootstrapContext<'_>,
 ) -> Result<RawGenesisTransaction> {
+    let peers = context.peers;
+    let gas_account_id = context.gas_account_id;
+    let stake_amount = context.stake_amount;
+    let sora_profile = context.sora_profile;
+    let genesis_account_id = context.genesis_account_id;
+    let client_account_id = context.client_account_id;
+    let onboarding_account_id = context.onboarding_account_id;
+    let taira = context.taira;
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
     let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
@@ -5554,27 +5525,19 @@ mod tests {
                     .expect("generated localnet genesis has one structured parameter block"),
                 requested_stake_amount,
             );
-            genesis = if uses_default_client {
-                append_localnet_npos_bootstrap(
-                    genesis,
-                    &peers,
-                    &gas_account_id,
-                    &stake_amount,
-                    opts.sora_profile,
-                    &genesis_account_id,
-                )
-            } else {
-                append_localnet_npos_bootstrap_for_client(
-                    genesis,
-                    &peers,
-                    &gas_account_id,
-                    &stake_amount,
-                    opts.sora_profile,
-                    &genesis_account_id,
+            genesis = append_localnet_npos_bootstrap(
+                genesis,
+                &LocalnetNposBootstrapContext {
+                    peers: &peers,
+                    gas_account_id: &gas_account_id,
+                    stake_amount: &stake_amount,
+                    sora_profile: opts.sora_profile,
+                    genesis_account_id: &genesis_account_id,
                     client_account_id,
-                    false,
-                )
-            }
+                    onboarding_account_id: client_account_id,
+                    taira: false,
+                },
+            )
             .expect("append localnet NPoS bootstrap");
             genesis = append_private_dataspace_genesis_bootstrap_for_client(
                 genesis,

@@ -286,7 +286,7 @@ kernel void bn254_fft_columns(
     for (uint stage = 0U; stage < log_size; ++stage) {
         ulong len = 1UL << (stage + 1U);
         ulong half_len = len >> 1UL;
-        ulong stage_offset = stage_span * stage;
+        ulong stage_offset = (1UL << stage) - 1UL;
         for (ulong pair_idx = tid; pair_idx < stage_span; pair_idx += threads_per_group) {
             ulong block = pair_idx / half_len;
             ulong pair = pair_idx % half_len;
@@ -357,7 +357,7 @@ kernel void bn254_lde_columns(
     for (uint stage = 0U; stage < log_len; ++stage) {
         ulong len = 1UL << (stage + 1U);
         ulong half_len = len >> 1UL;
-        ulong stage_offset = stage_span * stage;
+        ulong stage_offset = (1UL << stage) - 1UL;
         for (ulong pair_idx = tid; pair_idx < stage_span; pair_idx += threads_per_group) {
             ulong block = pair_idx / half_len;
             ulong pair = pair_idx % half_len;

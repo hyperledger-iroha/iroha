@@ -3757,6 +3757,7 @@ mod tests {
                     "unregister guard policy must be structurally valid"
                 );
                 ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    proposal_operator: fixture_account(0xA8),
                     policy,
                     payout_lifecycle_proposal_id: None,
                     plain_electorate_rules: rules.clone(),
@@ -3764,6 +3765,7 @@ mod tests {
             }
             ValidationFeeProposalFixtureKind::PayoutLifecycle => {
                 ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    proposal_operator: fixture_account(0xA8),
                     payout_binding: validation_fee_guard_payout_binding(rules),
                     plain_electorate_rules: rules.clone(),
                 })

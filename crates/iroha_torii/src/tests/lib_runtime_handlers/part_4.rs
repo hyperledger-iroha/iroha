@@ -1107,7 +1107,10 @@ fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDt
         .as_secs();
     let bucket_start = (now_unix / 60) * 60;
     let operator = privacy_operator(app).0;
-    let collector_id = super::collector_id_for_operator(&operator);
+    let collector_id =
+        iroha_data_model::soranet::privacy_metrics::derive_soranet_privacy_collector_id(
+            &operator.0,
+        );
     let mut share = SoranetPrivacyPrioShareV1::new(collector_id, bucket_start, 60);
     share.mode = SoranetPrivacyModeV1::Entry;
     share.handshake_accept_share = 5;

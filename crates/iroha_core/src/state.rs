@@ -72,7 +72,7 @@ use iroha_data_model::{
     },
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
-    governance::types::{ParliamentBody, ProposalKind},
+    governance::types::{BallotAttemptId, ParliamentBody, ProposalKind, TleKeySessionId},
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
         error::{
@@ -333,6 +333,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
+    governance::parliament::ParliamentAttemptStateV1,
     smartcontracts::isi::offline::LifecycleEntrypointContext,
 };
 mod bounded_authority;
@@ -399,11 +400,19 @@ use crate::telemetry::StateTelemetry;
 use crate::telemetry::record_da_shard_cursor_lag;
 use crate::{
     Peers,
+    beacon::{
+        FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
+        GlobalThresholdBeaconError, GlobalThresholdBeaconPulseLinkV1,
+        ValidatedGlobalThresholdBeaconSessionV1,
+        validate_persisted_global_threshold_beacon_pulse_v1,
+        verify_finalized_global_threshold_beacon_pulse_v1,
+    },
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
     executor::Executor,
-    governance::manifest::{
-        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+    governance::{
+        manifest::{LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding},
+        timed_ovn::{TimedOvnEvidenceError, TimedOvnLifecycleStateV1},
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::{Kura, PendingCertifiedMergeEvidenceScan},
@@ -441,6 +450,7 @@ use crate::{
     state::storage_transactions::{
         TransactionsBlock, TransactionsBlockError, TransactionsStorage, TransactionsView,
     },
+    tle_release::{TleKeySessionPublicStateV1, TleReleaseAdapterError},
 };
 pub(crate) mod storage_transactions;
 // Covers the inclusive 1 MiB canonical Kotodama argument-record boundary,
@@ -448,6 +458,7 @@ pub(crate) mod storage_transactions;
 // while retaining headroom for the entrypoint wrapper and contract body.
 const DEFAULT_GAS_LIMIT_PER_BLOCK: u64 = 4_000_000;
 const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
+const GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY: u64 = 0;
 const fn trigger_batch_gas_budget(remaining_block_budget: u64) -> u64 {
     if remaining_block_budget == u64::MAX {
         DEFAULT_TRIGGER_GAS_LIMIT
@@ -810,6 +821,14 @@ macro_rules! with_world_overlay_fields {
             governance_unlock_stats,
             council,
             parliament_bodies,
+            parliament_attempts,
+            tle_key_sessions,
+            timed_ovn_evidence,
+            global_beacon_dkg,
+            global_beacon_key_sessions,
+            global_beacon_active_session,
+            global_beacon_latest_pulse,
+            global_beacon_pulses,
             vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
@@ -4105,6 +4124,25 @@ pub struct World {
     /// Multi-body parliament rosters by epoch.
     pub(crate) parliament_bodies:
         Storage<u64, iroha_data_model::governance::types::ParliamentBodies>,
+    /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
+    pub(crate) parliament_attempts:
+        Storage<iroha_data_model::governance::types::GovernanceAttemptId, ParliamentAttemptStateV1>,
+    /// Finalized public-only adaptive TLE key sessions.
+    pub(crate) tle_key_sessions: Storage<TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
+    pub(crate) timed_ovn_evidence: Storage<BallotAttemptId, TimedOvnLifecycleStateV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs, keyed by session id.
+    pub(crate) global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
+    /// Finalized beacon public keys with activation and retirement metadata.
+    pub(crate) global_beacon_key_sessions:
+        Storage<[u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    /// Singleton pointer to the active finalized beacon key session.
+    pub(crate) global_beacon_active_session: Storage<u64, [u8; 32]>,
+    /// Singleton predecessor link for the next finalized beacon pulse.
+    pub(crate) global_beacon_latest_pulse: Storage<u64, GlobalThresholdBeaconPulseLinkV1>,
+    /// Append-only finalized beacon pulse history keyed by canonical pulse id.
+    pub(crate) global_beacon_pulses:
+        Storage<[u8; 32], iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: Storage<u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Placeholder buffer of events pending publication to external subscribers.
@@ -4809,6 +4847,35 @@ pub struct WorldBlock<'world> {
     /// Multi-body parliament rosters by epoch.
     pub(crate) parliament_bodies:
         StorageBlock<'world, u64, iroha_data_model::governance::types::ParliamentBodies>,
+    /// Canonical attempt-local Parliament reducer state.
+    pub(crate) parliament_attempts: StorageBlock<
+        'world,
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        ParliamentAttemptStateV1,
+    >,
+    /// Finalized public-only adaptive TLE key sessions.
+    pub(crate) tle_key_sessions:
+        StorageBlock<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
+    pub(crate) timed_ovn_evidence:
+        StorageBlock<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs.
+    pub(crate) global_beacon_dkg:
+        StorageBlock<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
+    /// Finalized beacon public-key lifecycle records.
+    pub(crate) global_beacon_key_sessions:
+        StorageBlock<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    /// Singleton active beacon session pointer.
+    pub(crate) global_beacon_active_session: StorageBlock<'world, u64, [u8; 32]>,
+    /// Singleton latest beacon pulse/origin link.
+    pub(crate) global_beacon_latest_pulse:
+        StorageBlock<'world, u64, GlobalThresholdBeaconPulseLinkV1>,
+    /// Append-only finalized beacon pulse history.
+    pub(crate) global_beacon_pulses: StorageBlock<
+        'world,
+        [u8; 32],
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    >,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: StorageBlock<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
     /// Latest lane merge-hint roots observed via the merge ledger during this block.
@@ -4967,6 +5034,14 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
+        collect_reverts!(self.parliament_attempts, ParliamentAttempt);
+        collect_reverts!(self.tle_key_sessions, TleKeySession);
+        collect_reverts!(self.timed_ovn_evidence, TimedOvnEvidence);
+        collect_reverts!(self.global_beacon_dkg, GlobalBeaconDkg);
+        collect_reverts!(self.global_beacon_key_sessions, GlobalBeaconKeySession);
+        collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
+        collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
+        collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
         collect_reverts!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_reverts!(
             self.direct_lane_block_application_markers,
@@ -5048,6 +5123,14 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
+        collect_payload!(self.parliament_attempts, ParliamentAttempt);
+        collect_payload!(self.tle_key_sessions, TleKeySession);
+        collect_payload!(self.timed_ovn_evidence, TimedOvnEvidence);
+        collect_payload!(self.global_beacon_dkg, GlobalBeaconDkg);
+        collect_payload!(self.global_beacon_key_sessions, GlobalBeaconKeySession);
+        collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
+        collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
+        collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
         collect_payload!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_payload!(
             self.direct_lane_block_application_markers,
@@ -5311,6 +5394,14 @@ impl<'world> WorldBlock<'world> {
             governance_slashes,
             council,
             parliament_bodies,
+            parliament_attempts,
+            tle_key_sessions,
+            timed_ovn_evidence,
+            global_beacon_dkg,
+            global_beacon_key_sessions,
+            global_beacon_active_session,
+            global_beacon_latest_pulse,
+            global_beacon_pulses,
             vrf_epochs,
         );
         out
@@ -6071,6 +6162,43 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         u64,
         iroha_data_model::governance::types::ParliamentBodies,
+    >,
+    pub(crate) parliament_attempts: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        ParliamentAttemptStateV1,
+    >,
+    /// Finalized public-only adaptive TLE key sessions.
+    pub(crate) tle_key_sessions: StorageTransaction<
+        'block,
+        'world,
+        TleKeySessionId,
+        TleKeySessionPublicStateV1,
+    >,
+    /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
+    pub(crate) timed_ovn_evidence: StorageTransaction<
+        'block,
+        'world,
+        BallotAttemptId,
+        TimedOvnLifecycleStateV1,
+    >,
+    pub(crate) global_beacon_dkg:
+        StorageTransaction<'block, 'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
+    pub(crate) global_beacon_key_sessions: StorageTransaction<
+        'block,
+        'world,
+        [u8; 32],
+        FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    >,
+    pub(crate) global_beacon_active_session: StorageTransaction<'block, 'world, u64, [u8; 32]>,
+    pub(crate) global_beacon_latest_pulse:
+        StorageTransaction<'block, 'world, u64, GlobalThresholdBeaconPulseLinkV1>,
+    pub(crate) global_beacon_pulses: StorageTransaction<
+        'block,
+        'world,
+        [u8; 32],
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
     pub(crate) vrf_epochs:
         StorageTransaction<'block, 'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
@@ -8107,6 +8235,34 @@ pub struct WorldView<'world> {
     /// Multi-body parliament rosters by epoch.
     pub(crate) parliament_bodies:
         StorageView<'world, u64, iroha_data_model::governance::types::ParliamentBodies>,
+    /// Canonical attempt-local Parliament reducer state.
+    pub(crate) parliament_attempts: StorageView<
+        'world,
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        ParliamentAttemptStateV1,
+    >,
+    /// Finalized public-only adaptive TLE key sessions.
+    pub(crate) tle_key_sessions:
+        StorageView<'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+    /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
+    pub(crate) timed_ovn_evidence:
+        StorageView<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs.
+    pub(crate) global_beacon_dkg: StorageView<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
+    /// Finalized beacon public-key lifecycle records.
+    pub(crate) global_beacon_key_sessions:
+        StorageView<'world, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    /// Singleton active beacon session pointer.
+    pub(crate) global_beacon_active_session: StorageView<'world, u64, [u8; 32]>,
+    /// Singleton latest beacon pulse/origin link.
+    pub(crate) global_beacon_latest_pulse:
+        StorageView<'world, u64, GlobalThresholdBeaconPulseLinkV1>,
+    /// Append-only finalized beacon pulse history.
+    pub(crate) global_beacon_pulses: StorageView<
+        'world,
+        [u8; 32],
+        iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+    >,
     /// VRF epoch randomness and participation records keyed by epoch index.
     pub(crate) vrf_epochs: StorageView<'world, u64, iroha_data_model::consensus::VrfEpochRecord>,
 }
@@ -17635,6 +17791,7 @@ impl World {
             governance_unlock_stats: Cell::default(),
             council: Storage::default(),
             parliament_bodies: Storage::default(),
+            parliament_attempts: Storage::default(),
             ..Self::new()
         };
         world
@@ -19403,6 +19560,29 @@ macro_rules! world_ro_accessors {
             storage council: u64 => CouncilState;
             /// Parliament multi-body rosters by epoch (read-only).
             storage parliament_bodies: u64 => iroha_data_model::governance::types::ParliamentBodies;
+            /// Canonical attempt-local Parliament reducer state (read-only).
+            storage parliament_attempts:
+                iroha_data_model::governance::types::GovernanceAttemptId =>
+                ParliamentAttemptStateV1;
+            /// Finalized public-only adaptive TLE key sessions.
+            storage tle_key_sessions:
+                TleKeySessionId => TleKeySessionPublicStateV1;
+            /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
+            storage timed_ovn_evidence:
+                BallotAttemptId => TimedOvnLifecycleStateV1;
+            /// Active public-only adaptive beacon DKG snapshots by session id.
+            storage global_beacon_dkg:
+                [u8; 32] => GlobalThresholdBeaconDkgSnapshotV1;
+            /// Finalized beacon key sessions with activation/retirement metadata.
+            storage global_beacon_key_sessions:
+                [u8; 32] => FinalizedGlobalThresholdBeaconKeySessionRecordV1;
+            /// Singleton active beacon key-session pointer.
+            storage global_beacon_active_session: u64 => [u8; 32];
+            /// Singleton latest finalized beacon pulse or genesis-origin link.
+            storage global_beacon_latest_pulse: u64 => GlobalThresholdBeaconPulseLinkV1;
+            /// Append-only finalized beacon pulse history by pulse id.
+            storage global_beacon_pulses:
+                [u8; 32] => iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1;
             /// VRF epoch randomness and participation records (read-only) keyed by epoch index.
             storage vrf_epochs: u64 => iroha_data_model::consensus::VrfEpochRecord;
         );
@@ -20777,6 +20957,14 @@ impl<'world> WorldBlock<'world> {
             governance_unlock_stats,
             council,
             parliament_bodies,
+            parliament_attempts,
+            tle_key_sessions,
+            timed_ovn_evidence,
+            global_beacon_dkg,
+            global_beacon_key_sessions,
+            global_beacon_active_session,
+            global_beacon_latest_pulse,
+            global_beacon_pulses,
             vrf_epochs,
             merge_hint_roots,
             merge_global_state_root,
@@ -20930,6 +21118,14 @@ impl<'world> WorldBlock<'world> {
         governance_unlock_stats.commit();
         council.commit();
         parliament_bodies.commit();
+        parliament_attempts.commit();
+        tle_key_sessions.commit();
+        timed_ovn_evidence.commit();
+        global_beacon_dkg.commit();
+        global_beacon_key_sessions.commit();
+        global_beacon_active_session.commit();
+        global_beacon_latest_pulse.commit();
+        global_beacon_pulses.commit();
         merge_global_state_root.commit();
         merge_hint_roots.commit();
         vrf_epochs.commit();
@@ -21942,6 +22138,246 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     > {
         &mut self.parliament_bodies
     }
+    /// Validate and persist one canonical attempt-local Parliament reducer snapshot.
+    pub(crate) fn put_parliament_attempt(
+        &mut self,
+        attempt: ParliamentAttemptStateV1,
+    ) -> Result<(), crate::governance::parliament::ParliamentReducerErrorV1> {
+        attempt.validate()?;
+        let id = attempt.attempt().id;
+        self.parliament_attempts.insert(id, attempt);
+        Ok(())
+    }
+    /// Validate and persist one immutable public-only adaptive TLE key session.
+    pub(crate) fn put_tle_key_session(
+        &mut self,
+        state: TleKeySessionPublicStateV1,
+    ) -> Result<(), TleReleaseAdapterError> {
+        let key_session_id = state.key_session_id;
+        state.clone().validate()?;
+        if self
+            .tle_key_sessions
+            .get(&key_session_id)
+            .is_some_and(|previous| previous != &state)
+        {
+            return Err(TleReleaseAdapterError::TranscriptMismatch);
+        }
+        self.tle_key_sessions.insert(key_session_id, state);
+        Ok(())
+    }
+    /// Validate and persist one direct monotonic timed-OVN lifecycle transition.
+    pub(crate) fn put_timed_ovn_lifecycle(
+        &mut self,
+        state: TimedOvnLifecycleStateV1,
+    ) -> Result<(), TimedOvnEvidenceError> {
+        let key_session_id = state.tle_key_session_id();
+        let key_session = self
+            .tle_key_sessions
+            .get(&key_session_id)
+            .cloned()
+            .ok_or(TimedOvnEvidenceError::TleKeySessionMismatch)?
+            .validate()?;
+        state.validate(&key_session)?;
+        let ballot_attempt_id = BallotAttemptId::new(state.ballot_attempt_id());
+        match self.timed_ovn_evidence.get(&ballot_attempt_id) {
+            Some(previous) if previous == &state => return Ok(()),
+            Some(previous) if state.is_direct_successor_of(previous) => {}
+            Some(_) => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
+            None if matches!(&state, TimedOvnLifecycleStateV1::Registered(_)) => {}
+            None => return Err(TimedOvnEvidenceError::InvalidLifecycleTransition),
+        }
+        self.timed_ovn_evidence.insert(ballot_attempt_id, state);
+        Ok(())
+    }
+    /// Validate and persist a monotonic public-only snapshot of an active beacon DKG.
+    pub(crate) fn put_global_beacon_dkg_snapshot(
+        &mut self,
+        snapshot: GlobalThresholdBeaconDkgSnapshotV1,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        snapshot.validate()?;
+        let session_id = snapshot.session.session_id;
+        if self.global_beacon_key_sessions.get(&session_id).is_some() {
+            return Err(GlobalThresholdBeaconError::PersistenceConflict);
+        }
+        if let Some(previous) = self.global_beacon_dkg.get(&session_id) {
+            if previous.session != snapshot.session
+                || snapshot.last_updated_height < previous.last_updated_height
+            {
+                return Err(GlobalThresholdBeaconError::NonMonotonicDkgState);
+            }
+            if !previous
+                .dealer_commitments
+                .iter()
+                .all(|event| snapshot.dealer_commitments.contains(event))
+                || !previous
+                    .complaints
+                    .iter()
+                    .all(|event| snapshot.complaints.contains(event))
+                || !previous
+                    .complaint_responses
+                    .iter()
+                    .all(|event| snapshot.complaint_responses.contains(event))
+                || (snapshot.last_updated_height == previous.last_updated_height
+                    && previous != &snapshot)
+            {
+                return Err(GlobalThresholdBeaconError::PersistenceConflict);
+            }
+        }
+        self.global_beacon_dkg.insert(session_id, snapshot);
+        Ok(())
+    }
+    /// Persist one finalized public beacon key and remove its matching active DKG snapshot.
+    pub(crate) fn put_finalized_global_beacon_key_session(
+        &mut self,
+        record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        record.validate()?;
+        if record.activated_at_height.is_some() || record.retired_at_height.is_some() {
+            return Err(GlobalThresholdBeaconError::InvalidKeyLifecycle);
+        }
+        let session_id = record.session.session_id;
+        if let Some(previous) = self.global_beacon_key_sessions.get(&session_id) {
+            return if previous == &record {
+                Ok(())
+            } else {
+                Err(GlobalThresholdBeaconError::PersistenceConflict)
+            };
+        }
+        if let Some(active_dkg) = self.global_beacon_dkg.get(&session_id) {
+            let transcript = &record.session.adaptive_dkg;
+            if active_dkg.session != transcript.session
+                || active_dkg.generator_h != transcript.generator_h
+                || active_dkg.generator_v != transcript.generator_v
+                || active_dkg.dealer_commitments != transcript.dealer_commitments
+                || active_dkg.complaints != transcript.complaints
+                || active_dkg.complaint_responses != transcript.complaint_responses
+                || active_dkg.last_updated_height > transcript.finalized_at_height
+            {
+                return Err(GlobalThresholdBeaconError::PersistenceConflict);
+            }
+            self.global_beacon_dkg.remove(session_id);
+        }
+        self.global_beacon_key_sessions.insert(session_id, record);
+        Ok(())
+    }
+    /// Activate a finalized beacon key, rejecting implicit replacement of another active key.
+    pub(crate) fn activate_global_beacon_key_session(
+        &mut self,
+        session_id: [u8; 32],
+        height: u64,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        if let Some(active) = self
+            .global_beacon_active_session
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            && active != &session_id
+        {
+            return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
+        }
+        let mut record = self
+            .global_beacon_key_sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or(GlobalThresholdBeaconError::ActiveKeyMismatch)?;
+        record.activate(height)?;
+        self.global_beacon_key_sessions.insert(session_id, record);
+        self.global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, session_id);
+        Ok(())
+    }
+    /// Retire the currently active beacon key at a strictly later committed height.
+    pub(crate) fn retire_global_beacon_key_session(
+        &mut self,
+        session_id: [u8; 32],
+        height: u64,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        if self
+            .global_beacon_active_session
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            != Some(&session_id)
+        {
+            return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
+        }
+        let mut record = self
+            .global_beacon_key_sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or(GlobalThresholdBeaconError::ActiveKeyMismatch)?;
+        record.retire(height)?;
+        self.global_beacon_key_sessions.insert(session_id, record);
+        self.global_beacon_active_session
+            .remove(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY);
+        Ok(())
+    }
+    /// Install the non-zero genesis beacon origin before any finalized pulse exists.
+    pub(crate) fn initialize_global_beacon_origin(
+        &mut self,
+        origin: GlobalThresholdBeaconPulseLinkV1,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        origin.validate_origin()?;
+        if self.global_beacon_pulses.iter().next().is_some() {
+            return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        if let Some(existing) = self
+            .global_beacon_latest_pulse
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+        {
+            return if existing == &origin {
+                Ok(())
+            } else {
+                Err(GlobalThresholdBeaconError::PersistenceConflict)
+            };
+        }
+        self.global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, origin);
+        Ok(())
+    }
+    /// Verify and atomically append one finalized pulse to authoritative history.
+    pub(crate) fn verify_and_advance_global_beacon_pulse(
+        &mut self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        pulse: iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
+        expected_anchor: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+    ) -> Result<GlobalThresholdBeaconPulseLinkV1, GlobalThresholdBeaconError> {
+        let session_id = pulse.session_id;
+        if self
+            .global_beacon_active_session
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            != Some(&session_id)
+            || session.record().session_id != session_id
+        {
+            return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
+        }
+        let persisted_session = self
+            .global_beacon_key_sessions
+            .get(&session_id)
+            .ok_or(GlobalThresholdBeaconError::ActiveKeyMismatch)?;
+        if &persisted_session.session != session.record()
+            || !persisted_session.is_active_at(pulse.height)
+        {
+            return Err(GlobalThresholdBeaconError::ActiveKeyMismatch);
+        }
+        if self.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
+            return Err(GlobalThresholdBeaconError::ReusedPulse);
+        }
+        let predecessor = self
+            .global_beacon_latest_pulse
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            .copied()
+            .ok_or(GlobalThresholdBeaconError::InvalidPulseHistory)?;
+        let link = verify_finalized_global_threshold_beacon_pulse_v1(
+            session,
+            &pulse,
+            predecessor,
+            expected_anchor,
+        )?;
+        if validate_persisted_global_threshold_beacon_pulse_v1(&pulse)? != link {
+            return Err(GlobalThresholdBeaconError::InvalidPulseHistory);
+        }
+        self.global_beacon_pulses.insert(link.pulse_id, pulse);
+        self.global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+        Ok(link)
+    }
     /// Test helper: seed governance proposals while retaining the exact typed index.
     pub fn governance_proposals_mut(
         &mut self,
@@ -22296,6 +22732,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             governance_unlock_stats,
             council,
             parliament_bodies,
+            parliament_attempts,
+            tle_key_sessions,
+            timed_ovn_evidence,
+            global_beacon_dkg,
+            global_beacon_key_sessions,
+            global_beacon_active_session,
+            global_beacon_latest_pulse,
+            global_beacon_pulses,
             vrf_epochs,
             consensus_evidence,
             external_event_sink,
@@ -22463,6 +22907,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         governance_unlock_stats.apply();
         council.apply();
         parliament_bodies.apply();
+        parliament_attempts.apply();
+        tle_key_sessions.apply();
+        timed_ovn_evidence.apply();
+        global_beacon_dkg.apply();
+        global_beacon_key_sessions.apply();
+        global_beacon_active_session.apply();
+        global_beacon_latest_pulse.apply();
+        global_beacon_pulses.apply();
         vrf_epochs.apply();
         tx_sequences.apply();
         oracle_disputes.apply();
@@ -25397,10 +25849,16 @@ impl State {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
                 review_panel_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+                coordination_council_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
                 policy_jury_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+                confirmation_jury_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
                 oversight_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+                mpc_committee_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
                 fma_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
                 pipeline_study_sla_blocks: iroha_config::parameters::defaults::governance::PIPELINE_STUDY_SLA_BLOCKS,

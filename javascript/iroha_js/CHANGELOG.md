@@ -47,7 +47,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
   removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
-  the complete first-release PLAIN electorate rules. Both native exports now
+  the canonical proposal operator and complete first-release PLAIN electorate
+  rules. Both native exports now
   validate exact JSON and compute canonical `ProposalKind` fingerprints, and
   the JavaScript/TypeScript package exposes both required-argument helpers
   without a fallback hashing path.

@@ -22,11 +22,17 @@ benchmarks and diagnostics can surface the same facts programmatically.【crates
 
 | Entry point | Operation | Threadgroup cap | Tile stage cap | Notes |
 | ----------- | --------- | --------------- | -------------- | ----- |
-| `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 32 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
+| `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 8 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
-| `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 32 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
-| `poseidon_trace_fused` | Hash columns and compute depth‑1 parents in one pass | 256 threads | — | Runs the same absorption/permutation as `poseidon_hash_columns`, stores the leaf digests directly into the output buffer, and immediately folds each `(left,right)` pair under the `fastpq:v1:trace:node` domain so `(⌈columns / 2⌉)` parents land after the leaf slice. Odd column counts duplicate the final leaf on-device, eliminating the follow-up kernel and the CPU fallback for the first Merkle layer.【crates/fastpq_prover/metal/kernels/poseidon2.metal:384】【crates/fastpq_prover/src/metal.rs:2407】
-| `poseidon_permute` | Dense-MDS Goldilocks `x^7` permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory, copy the MDS rows into per-thread registers, and process states in 4-state chunks so each round constant fetch is reused across multiple states before advancing. The rounds stay fully unrolled and every lane still walks multiple states, guaranteeing ≥4 096 logical threads per dispatch. `FASTPQ_METAL_POSEIDON_LANES` / `FASTPQ_METAL_POSEIDON_BATCH` pin the launch width and per-lane batch without rebuilding the metallib. The source filename remains `poseidon2.metal` for build compatibility; the construction is not Poseidon2.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal_config.rs:78】【crates/fastpq_prover/src/metal.rs:1971】
+| `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 8 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
+| `poseidon_permute` | Dense-MDS Goldilocks `x^7` permutation (STATE_WIDTH = 3) | 256 threads | — | Threadgroups cache the round constants/MDS rows in threadgroup memory. Production Goldilocks dispatches assign one independent state per lane and size the grid from the actual state count; there is no artificial minimum-thread floor. The source filename remains `poseidon2.metal` for build compatibility; the construction is not Poseidon2.【crates/fastpq_prover/metal/kernels/poseidon2.metal:1】【crates/fastpq_prover/src/metal.rs:3115】
+| `poseidon_hash_columns` | Hash flattened column payloads | 256 threads | — | Absorbs each domain-separated padded payload entirely on-device and returns one state per column.【crates/fastpq_prover/metal/kernels/poseidon2.metal:353】
+| `poseidon_hash_rows` | Hash independent trace rows | 256 threads | — | Reads column-major values and writes row digests in row order using one state per lane.【crates/fastpq_prover/metal/kernels/poseidon2.metal:454】
+| `poseidon_trace_fused` | Hash trace columns into a combined leaf/parent buffer | 256 threads | — | Writes the leaf slice into the combined buffer. The host waits for global visibility before launching `poseidon_trace_parents` for the depth-1 layer.【crates/fastpq_prover/metal/kernels/poseidon2.metal:524】
+| `poseidon_trace_parents` | Compute depth-1 trace Merkle parents | 256 threads | — | Hashes adjacent leaves after the leaf pass completes; odd leaf counts duplicate the final leaf exactly like the CPU builder.【crates/fastpq_prover/metal/kernels/poseidon2.metal:596】
+| `bn254_fft_columns` | BN254 FFT over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup uses packed `n - 1` stage twiddles and deterministic Montgomery arithmetic.【crates/fastpq_prover/metal/kernels/bn254.metal:257】
+| `bn254_lde_columns` | BN254 coset LDE over one canonical-limb column | Pipeline limit | — | A cooperative single threadgroup performs coset scaling and the packed-twiddle FFT; the host bounds retained command buffers while dispatching columns.【crates/fastpq_prover/metal/kernels/bn254.metal:313】
+| `bn254_poseidon_hash_words` | BN254 Poseidon word-batch hashing | 128 threads | — | Converts canonical limbs to Montgomery form, hashes the requested word slices, and returns canonical BN254 digest bytes.【crates/fastpq_prover/metal/kernels/bn254.metal:532】
 
 The descriptors are available at runtime via
 `fastpq_prover::metal_kernel_descriptors()` for tooling that wants to display
@@ -58,7 +64,7 @@ non-empty `fastpq.metallib`, exporting every entry point listed above. Bootstrap
 diagnostics identify initial lookup/probe failures, cache-clear or redetection
 failures, and Xcode selection/license remediation. If toolchain bootstrap or
 offline compilation fails, the runtime concatenates the prelude, parameters,
-field helpers, and all kernel translation units into self-contained Metal 3.0
+field helpers, and all kernel translation units into self-contained MSL 2.4
 source and creates the same pipelines through
 `MTLDevice::new_library_with_source`.
 The build script passes the generated Cargo `OUT_DIR` path to the crate at compile
@@ -70,9 +76,9 @@ For parity with CI runs you can regenerate the library manually:
 
 ```bash
 export OUT_DIR=$PWD/target/metal && mkdir -p "$OUT_DIR"
-xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
-xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
-xcrun metal -std=metal3.0 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
+xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/ntt_stage.metal -o "$OUT_DIR/ntt_stage.air"
+xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/poseidon2.metal -o "$OUT_DIR/poseidon2.air"
+xcrun metal -std=macos-metal2.4 -O3 -c -I crates/fastpq_prover/metal/include -I crates/fastpq_prover/metal/kernels crates/fastpq_prover/metal/kernels/bn254.metal -o "$OUT_DIR/bn254.air"
 xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254.air" -o "$OUT_DIR/fastpq.metallib"
 ```
 
@@ -80,10 +86,10 @@ xcrun metallib "$OUT_DIR/ntt_stage.air" "$OUT_DIR/poseidon2.air" "$OUT_DIR/bn254
 
 `metal_config::fft_tuning` threads the device execution width and max threads per
 threadgroup into the planner so runtime dispatches respect the hardware limits.
-The defaults clamp to 32/64/128/256 lanes as the log-size increases, and the
-tile depth now walks from five stages to four at `log_len ≥ 12`, then keeps the
-shared-memory pass active for 12/14/16 stages once the trace crosses
-`log_len ≥ 18/20/22` before handing work to the post-tiling kernel. Operator
+The defaults clamp to 32/64/128/256 lanes as the log-size increases. The
+256-word threadgroup tile can hold butterflies for at most eight radix-2 stages;
+smaller domains retain the five-/four-stage heuristics, and wider stages are
+handed to the post-tiling kernel. Operator
 overrides (`FASTPQ_METAL_FFT_LANES`, `FASTPQ_METAL_FFT_TILE_STAGES`) flow through
 `FftArgs::threadgroup_lanes`/`local_stage_limit` and are applied by the kernels
 above without rebuilding the metallib.【crates/fastpq_prover/src/metal_config.rs:12】【crates/fastpq_prover/src/metal.rs:599】

@@ -211,8 +211,9 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 3 remains the historical introduction point for the append-only mixed
 batch above. Version 4 changes canonical validation-fee governance bytes by
-requiring exact `plain_electorate_rules` in policy and payout-lifecycle
-proposal instructions, retaining those rules in enacted registry entries, and
+requiring the canonical execution-authority `proposal_operator` and exact
+`plain_electorate_rules` in policy and payout-lifecycle proposal preimages,
+retaining both in enacted authorization, and
 binding finalized authorization to the frozen PLAIN electorate. The rules fix
 the voting asset, bond-escrow and slash-receiver accounts, ballot and
 citizenship amounts, inclusive ballot duration, member cap, conviction,
@@ -224,8 +225,8 @@ At `h_start`, after the seven-body Parliament gate, consensus persists a
 `ValidationFeePlainElectorateSnapshotV1`: the proposal id/operator, capture and
 gate heights, exact member count, canonical member records, and
 domain-separated roster root. The corresponding
-`ValidationFeeParliamentAuthorizationV1` retains the snapshot
-root/count/capture/gate anchors. Ballot admission and tallying reject accounts
+`ValidationFeeParliamentAuthorizationV1` retains the proposal operator plus the
+snapshot root/count/capture/gate anchors. Ballot admission and tallying reject accounts
 outside the full frozen roster. Finalization and enactment recheck that
 snapshot, while registry validation and the verified policy projection recheck
 the proposal-bound rules and retained anchors. An enacted policy is admitted

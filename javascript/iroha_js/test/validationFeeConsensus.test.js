@@ -44,6 +44,7 @@ function completeParliamentProposal(kind, proposalOctet, rosterOctet, snapshotOc
   const proposalId = proposalOctet.repeat(32);
   return {
     proposal_kind: kind,
+    proposal_operator: `proposal-operator-${proposalOctet}`,
     proposal_id: proposalId,
     payload_hash: proposalId,
     parliament_roster_root: rosterOctet.repeat(32),
@@ -319,6 +320,10 @@ test("verified current policy enforces and freezes the complete nested projectio
     "bond-escrow-account",
   );
   assert.equal(
+    verified.current_policy.parliament.validationFeePolicy.proposal_operator,
+    "proposal-operator-02",
+  );
+  assert.equal(
     verified.current_policy.parliament.payoutLifecycle
       .plainElectorateSnapshot.rosterRoot,
     "0c".repeat(32),
@@ -351,6 +356,22 @@ test("verified current policy enforces and freezes the complete nested projectio
 
 test("verified current policy rejects missing, extra, and mistyped nested fields", () => {
   const malformedFixtures = [
+    {
+      label: "missing proposal operator",
+      mutate(projection) {
+        delete projection.current_policy.parliament.validationFeePolicy
+          .proposal_operator;
+      },
+      error: /validationFeePolicy must contain exactly/u,
+    },
+    {
+      label: "empty proposal operator",
+      mutate(projection) {
+        projection.current_policy.parliament.validationFeePolicy.proposal_operator =
+          "";
+      },
+      error: /proposal_operator must be canonical bounded text/u,
+    },
     {
       label: "missing proposal-bound escrow",
       mutate(projection) {

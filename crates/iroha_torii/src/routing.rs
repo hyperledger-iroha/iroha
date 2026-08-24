@@ -41637,6 +41637,24 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             proposal_id = Some(id.clone());
             referendum_id = Some(id);
         }
+        GovernanceEvent::ParliamentAttemptCreated(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentLifecycleTransitionApplied(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentAttemptTransitioned(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentAggregateFinalized(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentCertificateIssued(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentBodyTransitioned(_)
+        | GovernanceEvent::ParliamentBallotTransitioned(_)
+        | GovernanceEvent::ParliamentConcentrationWarning(_) => {}
         GovernanceEvent::CouncilPersisted(_) | GovernanceEvent::ParliamentSelected(_) => {
             council_updated = true;
         }
@@ -44255,7 +44273,7 @@ mod validation_fee_torii_ingress_tests {
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -44280,11 +44298,8 @@ mod validation_fee_torii_ingress_tests {
             VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
             VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
-            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
+            ValidationFeeMultisigMarkerV1,
             ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateMemberV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
             ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
             ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
             ValidationFeeTreasuryPayoutRecipientV1,
@@ -44303,11 +44318,8 @@ mod validation_fee_torii_ingress_tests {
     };
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
-    const TEST_REFERENDUM_START_HEIGHT: u64 = 1;
-    const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
-    const TEST_REFERENDUM_END_HEIGHT: u64 =
-        TEST_REFERENDUM_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
-    const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_REFERENDUM_END_HEIGHT + 1;
+    const TEST_PROPOSAL_CREATED_HEIGHT: u64 = 1;
+    const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 3_601;
     const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
         TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
     const TEST_ACTIVE_VALIDATION_HEIGHT: u64 = TEST_POLICY_EFFECTIVE_HEIGHT + 1;
@@ -44684,6 +44696,126 @@ mod validation_fee_torii_ingress_tests {
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
         policy.treasury_account_id.clone()
     }
+    fn validation_fee_test_authorization(
+        authority: &AccountId,
+        proposal_fingerprint: [u8; 32],
+    ) -> ValidationFeeParliamentAuthorizationV1 {
+        use iroha_data_model::governance::types::{
+            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
+            BodyInstanceId, GovernanceAttemptId, GovernanceCertificateId,
+            GovernanceCertificateV1, GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
+            ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
+            ParliamentBallotCertificateBindingV1, ParliamentBody,
+            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1,
+            SortitionRequestV1, TleKeySessionId, TleSessionId,
+        };
+        let enacted_at_height = TEST_POLICY_ENACTMENT_HEIGHT;
+        let base = enacted_at_height.checked_sub(7).expect("certificate lifecycle");
+        let root = |marker: u8| [marker; 32];
+        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
+        let governance_attempt_sequence = 0;
+        let governance_attempt_id =
+            GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
+        let election_attempt_sequence = 0;
+        let election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::PolicyJury,
+            election_attempt_sequence,
+        );
+        let beacon_session_id = BeaconSessionId::new(root(2));
+        let sortition_request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            election_attempt_id,
+            ParliamentBody::PolicyJury,
+            root(1),
+            500,
+            500,
+            base + 1,
+            base + 2,
+            beacon_session_id,
+            None,
+        )
+        .expect("canonical Policy Jury request");
+        let roster_root = root(4);
+        let body_instance_id = BodyInstanceId::derive_v1(election_attempt_id, roster_root);
+        let ballot_attempt_sequence = 0;
+        let ballot_attempt_id =
+            BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
+        let release_beacon_session_id = BeaconSessionId::new(root(7));
+        let tle_key_session_id = TleKeySessionId::new(root(8));
+        let release_height = base + 4;
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_attempt_id,
+            tle_key_session_id,
+            release_beacon_session_id,
+            release_height,
+        );
+        let governance_certificate = GovernanceCertificateV1 {
+            proposal_content_id,
+            governance_attempt_id,
+            governance_attempt_sequence,
+            risk_tier: RiskTierV1::Standard,
+            body_bindings: vec![ParliamentBodyCertificateBindingV1 {
+                body_instance_id,
+                election_attempt_id,
+                election_attempt_sequence,
+                sortition_request_id: sortition_request.id,
+                sortition_request,
+                body: ParliamentBody::PolicyJury,
+                beacon_session_id,
+                beacon_pulse_id: BeaconPulseId::new(root(3)),
+                roster_root,
+                assignment_root: root(5),
+                result_root: root(6),
+                result_height: base + 5,
+                ballot: Some(ParliamentBallotCertificateBindingV1 {
+                    ballot_attempt_id,
+                    ballot_attempt_sequence,
+                    tle_session_id,
+                    tle_key_session_id,
+                    registration_root: root(9),
+                    dropout_root: root(10),
+                    survivor_root: root(11),
+                    corpus_root: root(12),
+                    no_recovery_root: root(13),
+                    timed_commitment_root: root(14),
+                    release_beacon_session_id,
+                    registered_at_height: base + 3,
+                    release_height,
+                    release_pulse_id: BeaconPulseId::new(root(15)),
+                    opening_height: release_height,
+                    opening_root: root(16),
+                    tally: ParliamentAggregateTallyV1 {
+                        original_seats: 500,
+                        accepted_ballots: 334,
+                        aye: 200,
+                        nay: 100,
+                        abstain: 34,
+                    },
+                    outcome: ParliamentAggregateOutcomeV1::Approved,
+                }),
+            }],
+            policy_version: 1,
+            effect_preimage_hash: root(19),
+            expected_head: GovernanceExpectedHeadV1::Present(
+                GovernanceExpectedHeadPresentV1 {
+                    subject_id: root(17),
+                    version: 1,
+                    head_root: root(18),
+                },
+            ),
+            certified_at_height: base + 6,
+            enact_at_height: enacted_at_height,
+        };
+        let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
+        ValidationFeeParliamentAuthorizationV1 {
+            proposal_operator: authority.clone(),
+            proposal_fingerprint,
+            governance_certificate_id,
+            governance_certificate,
+            enacted_at_height,
+        }
+    }
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
@@ -44692,138 +44824,29 @@ mod validation_fee_torii_ingress_tests {
     ) {
         use iroha_data_model::{
             governance::types::{
-                GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
                 ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
             },
-            isi::governance::VotingMode,
         };
-        let member = authority.clone();
-        let rosters = [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ]
-        .into_iter()
-        .map(|body| {
-            (
-                body,
-                ParliamentRoster {
-                    body,
-                    epoch: 1,
-                    members: vec![member.clone()],
-                    alternates: Vec::new(),
-                    candidate_count: 1,
-                    derived_by: Default::default(),
-                },
-            )
-        })
-        .collect();
-        let bodies = ParliamentBodies {
-            selection_epoch: 1,
-            rosters,
-        };
-        let roster_digest = Blake2b512::digest(
-            norito::to_bytes(&bodies).expect("encode validation-fee Parliament bodies"),
-        );
-        let mut roster_root = [0; 32];
-        roster_root.copy_from_slice(&roster_digest[..32]);
-        let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
-            voting_asset_id: policy.ds_asset_id.clone(),
-            bond_escrow_account: state.gov.bond_escrow_account.clone(),
-            slash_receiver_account: state.gov.slash_receiver_account.clone(),
-            ballot_amount: 150_u64.into(),
-            ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
-            citizenship_amount: 10_000_u64.into(),
-            max_members: 256,
-            conviction_step_blocks: 100,
-            max_conviction: 6,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            eligibility_rule:
-                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
-        };
-        assert_eq!(
-            plain_electorate_rules.invariant_error(),
-            None,
-            "Torii validation-fee fixture must retain an enactable PLAIN electorate contract"
-        );
         let payout_binding = policy
             .treasury_payout_binding
             .clone()
             .expect("enabled validation-fee fixture must carry its payout binding");
         let payout_lifecycle_kind =
             ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                proposal_operator: authority.clone(),
                 payout_binding: payout_binding.clone(),
-                plain_electorate_rules: plain_electorate_rules.clone(),
             });
         let payout_lifecycle_id = payout_lifecycle_kind.fingerprint();
         let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: authority.clone(),
             policy: policy.clone(),
             payout_lifecycle_proposal_id: Some(payout_lifecycle_id),
-            plain_electorate_rules: plain_electorate_rules.clone(),
         });
         let policy_proposal_id = policy_kind.fingerprint();
-        let approval_gate_height = TEST_REFERENDUM_START_HEIGHT - 1;
-        let electorate_for = |proposal_id| {
-            let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-                proposal_id,
-                authority.clone(),
-                TEST_REFERENDUM_START_HEIGHT,
-                approval_gate_height,
-                vec![ValidationFeePlainElectorateMemberV1 {
-                    account_id: authority.clone(),
-                    bonded_height: approval_gate_height,
-                    bonded_amount: plain_electorate_rules.citizenship_amount.clone(),
-                }],
-            )
-            .expect("canonical validation-fee Torii PLAIN electorate snapshot");
-            assert_eq!(
-                electorate.context_error(proposal_id, authority, &plain_electorate_rules),
-                None
-            );
-            electorate
-        };
-        let payout_lifecycle_electorate = electorate_for(payout_lifecycle_id);
-        let policy_electorate = electorate_for(policy_proposal_id);
-        let authorization_for =
-            |proposal_id, electorate: &ValidationFeePlainElectorateSnapshotV1| {
-                ValidationFeeParliamentAuthorizationV1 {
-                    proposal_id,
-                    proposal_fingerprint: proposal_id,
-                    proposal_time_roster_root: roster_root,
-                    plain_electorate_snapshot_root: electorate.roster_root,
-                    plain_electorate_snapshot_member_count: electorate.member_count,
-                    plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
-                    plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
-                    referendum_window: ValidationFeeGovernanceWindowV1 {
-                        lower: TEST_REFERENDUM_START_HEIGHT,
-                        upper: TEST_REFERENDUM_END_HEIGHT,
-                    },
-                    finalization: ValidationFeeFinalizationEvidenceV1 {
-                        referendum_id: proposal_id,
-                        finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
-                        mode: ValidationFeeGovernanceVotingModeV1::Plain,
-                        approve: 1,
-                        reject: 0,
-                        abstain: 0,
-                        min_turnout: plain_electorate_rules.min_turnout,
-                        approval_threshold_numerator: plain_electorate_rules
-                            .approval_threshold_numerator,
-                        approval_threshold_denominator: plain_electorate_rules
-                            .approval_threshold_denominator,
-                        approved: true,
-                    },
-                    enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
-                }
-            };
         let payout_lifecycle_authorization =
-            authorization_for(payout_lifecycle_id, &payout_lifecycle_electorate);
-        let policy_authorization = authorization_for(policy_proposal_id, &policy_electorate);
+            validation_fee_test_authorization(authority, payout_lifecycle_id);
+        let policy_authorization =
+            validation_fee_test_authorization(authority, policy_proposal_id);
         assert_eq!(
             payout_lifecycle_authorization.invariant_error(),
             None,
@@ -44836,14 +44859,12 @@ mod validation_fee_torii_ingress_tests {
         );
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
-            plain_electorate_rules.clone(),
-            policy_authorization,
+            policy_authorization.clone(),
             Some(ValidationFeePayoutLifecycleReferenceV1 {
                 lifecycle_seal: payout_binding
                     .lifecycle_seal()
                     .expect("derive payout lifecycle seal"),
-                parliament_authorization: payout_lifecycle_authorization,
-                plain_electorate_rules: plain_electorate_rules.clone(),
+                parliament_authorization: payout_lifecycle_authorization.clone(),
             }),
         )
         .expect("validation-fee registry entry");
@@ -44915,18 +44936,16 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("activate protected pool-contract subject");
-        for (proposal_id, kind, authorization, electorate) in [
+        for (proposal_id, kind, authorization) in [
             (
                 payout_lifecycle_id,
                 payout_lifecycle_kind,
                 payout_lifecycle_authorization,
-                payout_lifecycle_electorate,
             ),
             (
                 policy_proposal_id,
                 policy_kind,
                 policy_authorization,
-                policy_electorate,
             ),
         ] {
             stx.world.governance_proposals_mut().insert(
@@ -44934,64 +44953,14 @@ mod validation_fee_torii_ingress_tests {
                 iroha_core::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
                     kind,
-                    created_height: TEST_REFERENDUM_START_HEIGHT,
+                    created_height: TEST_PROPOSAL_CREATED_HEIGHT,
                     status: iroha_core::state::GovernanceProposalStatus::Enacted,
                     pipeline: iroha_core::state::GovernancePipeline::default(),
-                    parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
-                        selection_epoch: 1,
-                        beacon: [0x55; 32],
-                        roster_root,
-                        bodies: bodies.clone(),
-                    }),
-                    finalization_evidence: Some(GovernanceFinalizationEvidence {
-                        proposal_id,
-                        referendum_id: authorization.finalization.referendum_id,
-                        finalized_at_height: authorization.finalization.finalized_at_height,
-                        mode: VotingMode::Plain,
-                        approve: authorization.finalization.approve,
-                        reject: authorization.finalization.reject,
-                        abstain: authorization.finalization.abstain,
-                        min_turnout: authorization.finalization.min_turnout,
-                        approval_threshold_numerator: authorization
-                            .finalization
-                            .approval_threshold_numerator,
-                        approval_threshold_denominator: authorization
-                            .finalization
-                            .approval_threshold_denominator,
-                        approved: authorization.finalization.approved,
-                    }),
+                    parliament_snapshot: None,
+                    finalization_evidence: None,
                     enacted_at_height: Some(authorization.enacted_at_height),
                 },
             );
-            let referendum_id = hex::encode(proposal_id);
-            stx.world.governance_referenda_mut().insert(
-                referendum_id.clone(),
-                iroha_core::state::GovernanceReferendumRecord {
-                    h_start: authorization.referendum_window.lower,
-                    h_end: authorization.referendum_window.upper,
-                    status: iroha_core::state::GovernanceReferendumStatus::Closed,
-                    mode: iroha_core::state::GovernanceReferendumMode::Plain,
-                },
-            );
-            let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
-            for body in [
-                ParliamentBody::RulesCommittee,
-                ParliamentBody::AgendaCouncil,
-                ParliamentBody::InterestPanel,
-                ParliamentBody::ReviewPanel,
-                ParliamentBody::PolicyJury,
-                ParliamentBody::OversightCommittee,
-                ParliamentBody::FmaCommittee,
-            ] {
-                approvals
-                    .ensure_stage(body, 1, 1, 10_000)
-                    .record(authority.clone());
-            }
-            approvals.approval_gate_height = Some(electorate.approval_gate_height);
-            approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
-            stx.world
-                .governance_stage_approvals_mut()
-                .insert(referendum_id, approvals);
         }
         stx.world
             .parameters_mut_for_testing()

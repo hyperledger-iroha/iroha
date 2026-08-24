@@ -6,47 +6,36 @@ This document records current runtime behavior; aspirational mechanisms in the
 constitution are not active until implemented and separately enacted.
 
 # Current state (v1)
-- Validation-fee governance runs as: bonded citizen proposal → immutable
-  proposal-time seven-body Parliament approvals → PLAIN citizen referendum →
-  approved close → enactment. A citizen ballot cannot open or bypass the
-  Parliament gate.
-- Parliament selection uses deterministic, independently domain-separated
-  draws over bonded citizens; the citizenship bond is an anti-Sybil/collateral
-  floor and does not increase draw odds above the minimum. Each proposal body
-  uses `min(configured target, eligible citizens)` members, rejects only the
-  zero-candidate case, and computes quorum from the actual immutable roster.
-  The same citizen may serve in all seven bodies. The proposal-local roster and
-  quorum basis points are pinned when the proposal enters the pipeline; later
-  module-catalog or governance-configuration changes cannot replace its voters
-  or lower its threshold.
-- The first validation-fee release supports PLAIN finalization only. `h_end` is
-  inclusive; finalization is first permitted at `h_end + 1`, evidence is
-  anchored to `h_end`, and retained ballot locks keep the same tally available
-  if finalization lands in a later block. Other governance paths may retain ZK
-  behavior where explicitly configured. The Taira validation-fee profile
-  retains an exact 3,600-block window, so `h_end = h_start + 3,599`.
-- At the `h_start` boundary, after all seven proposal-local Parliament bodies
-  have reached quorum, consensus freezes the complete PLAIN electorate. The
-  snapshot binds the proposal id and operator, Parliament approval-gate height,
-  capture height, canonical member records, member count, and a
-  domain-separated roster root. It is absent before opening and mandatory once
-  the referendum is open; later citizen-registry changes cannot add, remove, or
-  alter eligible voters. Ballot admission and live/final tallying fail closed
-  on a non-member or a lock that differs from the retained rules.
-- Every validation-fee proposal fingerprints and retains its exact
-  `plain_electorate_rules`. Ballots use the retained asset, bond escrow, slash
-  receiver, amount, duration, conviction, turnout, approval threshold, member
-  cap, and citizen gate even if live governance configuration later changes.
-  A transaction containing only a PLAIN ballot remains a control-plane
-  transaction after a validation-fee policy activates; mixing that ballot with
-  ordinary instructions does not inherit the exemption.
-  Lock, expiry-release, slash, and restitution transfers are atomic and retain
-  the lock on any custody mismatch or transfer failure. Unregistering retained
-  custody accounts, asset definitions, or their domains is rejected even
-  before the first ballot while the proposal is pending or approved. The typed
-  `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` route derives
-  these immutable fields and rejects duplicate effective ballots; clients
-  supply only the owner and closed AYE/NAY/ABSTAIN direction.
+- Validation-fee governance runs as: an operator-bound native proposal →
+  deterministic Parliament body election → timed-private OVN ballot attempts →
+  one canonical Parliament certificate → enactment at the certified due height.
+  No validation-fee policy or payout-lifecycle preimage accepts a PLAIN voting
+  mode, public electorate, referendum window, or public finalization evidence.
+- Every validation-fee proposal fingerprints its canonical execution authority
+  as `proposal_operator`. The operator must equal the governance record's
+  proposer and the operator retained with the protected registry certificate;
+  proposal reuse, restoration, projection, and enactment fail closed on any
+  mismatch. Transaction ordering therefore cannot attach an identical policy
+  payload to a different retained operator.
+- Parliament attempts use consensus-derived, domain-separated identifiers for
+  the proposal content, governance attempt, body election, body instance,
+  ballot attempt, TLE key session, and release session. Registration,
+  survivor, timed-commitment, release, and retry windows are deterministic
+  block-height intervals. Retry and accepted-corpus bounds are consensus-hashed
+  configuration, not environment-variable switches.
+- The timed-private ballot certificate retains the exact sortition request,
+  roster/assignment/result roots, ballot-attempt and TLE bindings,
+  registration/dropout/survivor/corpus/no-recovery/commitment/opening roots,
+  release pulse, aggregate tally, and terminal outcome. The no-recovery root is
+  mandatory: there is no public-ballot or plaintext fallback path when a timed
+  release attempt fails.
+- A validation-fee authorization retains the complete certificate and its
+  canonical `GovernanceCertificateId`. Validation rejects a structurally
+  invalid certificate, a non-canonical certificate id, a certificate whose
+  proposal-content id differs from the exact operator-bound proposal
+  fingerprint, or enactment at a height other than the certificate's due
+  height. Summary APIs may expose the id and heights; proof/detail APIs retain
+  the complete certificate for independent validation.
 - An epoch council roster is immutable after its first successful persistence.
   Replaying the exact same roster is idempotent and cannot consume another
   service slot or extend a cooldown. A citizen cannot release the citizenship
@@ -55,17 +44,18 @@ constitution are not active until implemented and separately enacted.
 - An enacted validation-fee policy is valid only when
   `effective_from_height = enacted_at_height + 120,960`; an earlier or later
   activation, or height overflow, is rejected. The proof-bearing current-policy
-  flow rechecks that relation and projects the exact proposal rules together
-  with the frozen-roster root, member count, capture height, and approval-gate
+  flow rechecks that relation and projects the exact proposal operator,
+  certificate id, complete certificate, certification height, and enactment-due
   height. Clients must complete every bounded proof page and verify the finality
-  chain, registry witness, chain/genesis binding, and policy-chain genesis
-  before enabling fees.
+  chain, registry witness, chain/genesis binding, policy-chain genesis, and both
+  certificates before enabling fees.
 - Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
 - Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
 
 # In-flight / backlog
-- Publish VRF draw artifacts (seed, proof, ordered roster, alternates) and codify replacement rules for no-shows; add golden fixtures for the draw and replacements.
-- Stage-SLA enforcement for the Parliament bodies (rules → agenda → interest → review → policy jury → oversight/FMA → enact) needs explicit timers, escalation paths, and telemetry counters.
-- Policy-jury secret/commit–reveal voting and associated bribery-resistance audits remain a hardening item on top of the signed clear-ballot path.
-- Misconduct slashing for high-risk bodies and cooldowns between service slots require configuration plumbing plus tests.
-- Governance lane sealing and referenda window/turnout gates are tracked in `gov.md`/`status.md`; keep the roadmap entries updated as the remaining acceptance tests land.
+- Complete end-to-end retention of issued certificates through every governance
+  execution and recovery path, then add multi-peer timed-release/retry fixtures.
+- Add operational telemetry for attempt transitions and deterministic deadline
+  misses without exposing private ballot contents.
+- Misconduct slashing for high-risk bodies and cooldowns between service slots
+  require configuration plumbing plus tests.

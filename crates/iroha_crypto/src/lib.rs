@@ -26,6 +26,9 @@ mod merkle;
 mod mldsa_seed;
 #[cfg(not(feature = "ffi_import"))]
 mod multihash;
+#[cfg(feature = "bls")]
+/// Reference Ristretto255 Open Vote Network primitives and known-answer tests.
+pub mod ovn;
 #[cfg(not(feature = "ffi_import"))]
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
@@ -34,6 +37,15 @@ mod protocol_key;
 /// RAM-LFE commitment and evaluation interfaces.
 pub mod ram_lfe;
 pub(crate) mod rng;
+#[cfg(feature = "bls")]
+/// Fixed-suite threshold-BLS public transcript and signature validation.
+pub mod threshold_bls;
+#[cfg(feature = "bls")]
+/// Folded timed Open Vote Network ballots with intrinsic threshold release.
+pub mod timed_ovn;
+#[cfg(feature = "bls")]
+/// Generic timelock-encryption KEM/DEM helpers outside the folded ballot path.
+pub mod tle;
 /// Deterministic dual-`rand_core` RNG used by protocols that must replay an
 /// exact prover-randomness schedule from secret seed material.
 pub use rng::rng_from_seed_slice;

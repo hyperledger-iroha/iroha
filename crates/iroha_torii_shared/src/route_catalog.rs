@@ -2786,9 +2786,6 @@ pub mod runtime_governance {
         "/v1/validation-fee/proposals/{proposal_id}";
     /// Strict native validation-fee proposal draft path.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT_PATH: &str = "/v1/validation-fee/proposals/draft";
-    /// Typed proposal-bound validation-fee PLAIN ballot draft path.
-    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH: &str =
-        "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
     /// Fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_compute_post(
         "validation_fee.policy.current_proof",
@@ -2808,11 +2805,6 @@ pub mod runtime_governance {
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: RouteDescriptor = app_signed_post(
         "validation_fee.proposal.draft",
         VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
-    );
-    /// Draft one exact proposal-bound validation-fee PLAIN ballot.
-    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT: RouteDescriptor = app_signed_post(
-        "validation_fee.proposal.plain_ballot.draft",
-        VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH,
     );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
@@ -2940,7 +2932,6 @@ pub mod runtime_governance {
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
         VALIDATION_FEE_PROPOSAL_DRAFT,
-        VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
         GOV_PROPOSAL_GET,
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,

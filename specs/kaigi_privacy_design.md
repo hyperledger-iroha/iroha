@@ -198,11 +198,11 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
   `EndKaigi` always requires the stored host account's transaction signature.
   If host privacy artifacts were supplied at creation, their nullifier is
   recorded immediately and cannot be reused by a later host action.
-- Kaigi verifier-key carriers use strict ZK1 `IPAK`/`CID1`/`H2VK` metadata and
-  outer envelopes use the exact owner-crate schema tag plus a nonzero hash of
-  the complete registered key carrier. The public JS roster builder rejects
-  while roster join admission is unavailable; its internal candidate fixture
-  remains test-only.
+- Kaigi verifier-key carriers use strict ZK1 `IPAK`/`CID1`/`H2VK` metadata in
+  that exact order, and outer envelopes use the exact owner-crate schema tag
+  plus a nonzero hash of the complete registered key carrier. The public JS
+  roster builder rejects while roster join admission is unavailable; its
+  internal candidate fixture remains test-only.
 - Determinism: we fix Poseidon parameters, circuit versions, and indexes in the
   registry. Any change bumps `KaigiPrivacyMode` to `ZkRosterV2` with matching
   tests/golden files.

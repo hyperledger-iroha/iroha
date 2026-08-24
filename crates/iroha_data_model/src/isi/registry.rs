@@ -289,11 +289,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 349;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 354;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 349;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 354;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 330;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 333;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -346,9 +346,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "6e45bdd0660c988a60e472f1f070e566728933ace51c1823165500616f8da87a";
+            "c433ff1cbfd7cb79dff4e551c3786368dae000841ba47cae3d3543559d7dd728";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "69cae26fe4929e265f915592e1ce61ec7f97002b9f539dedfa35027c0d866c5f";
+            "70727bc24c7c1ae9b21cce072cc09136bcb042086f400ea96efa4b986facc219";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -375,7 +375,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                19,
+                21,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(

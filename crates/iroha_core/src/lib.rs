@@ -162,6 +162,8 @@ pub mod sumeragi;
 pub mod telemetry;
 /// Network Time Service (scaffolding)
 pub mod time;
+/// Adaptive threshold-BLS timelock-release session and share verification.
+pub mod tle_release;
 /// Shared Torii helpers (query surfaces, filters).
 pub mod torii;
 /// Peer-to-peer Torii ingress proxy envelopes.

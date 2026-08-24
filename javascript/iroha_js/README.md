@@ -3042,9 +3042,10 @@ policy requires the typed enacted lifecycle and immutable payout binding, and
 charges exactly 10 minor units at scale 2 (`0.10`).
 
 Validation-fee proposal IDs are available only through the native canonical
-`ProposalKind` encoder. Both proposal kinds require the complete first-release
-PLAIN electorate contract, so a caller cannot fingerprint the same policy or
-payout binding against different ballot rules:
+`ProposalKind` encoder. Both proposal kinds require the canonical proposal
+operator and complete first-release PLAIN electorate contract, so a caller
+cannot fingerprint the same policy or payout binding under a different
+retained proposer or ballot rules:
 
 ```js
 import {
@@ -3073,19 +3074,21 @@ const plainElectorateRules = {
 
 const lifecycleId =
   computeValidationFeePayoutLifecycleProposalFingerprintV1(
+    PROPOSAL_OPERATOR_ACCOUNT_ID,
     payoutBinding,
     plainElectorateRules,
   );
 const policyId = computeValidationFeePolicyProposalFingerprintV1(
+  PROPOSAL_OPERATOR_ACCOUNT_ID,
   policy,
   lifecycleId,
   plainElectorateRules,
 );
 ```
 
-The native bridge rejects missing, extra, legacy, and non-canonical JSON fields
-before fingerprinting; these helpers do not provide a JavaScript hashing
-fallback.
+The native bridge rejects a missing or non-canonical operator plus missing,
+extra, legacy, and non-canonical JSON fields before fingerprinting; these
+helpers do not provide a JavaScript hashing fallback.
 
 `submitIvmProvedContractCall` quotes the exact unsigned `IvmProved` payload,
 rebuilds its signature-bound fee intent from the quote, reattaches the proof,

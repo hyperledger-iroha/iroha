@@ -189,7 +189,14 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
         "false",
-        "live cleanup, complete Apply census, and neutral worker publication",
+        "live reconciliation, complete Apply census, and neutral worker publication",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+        ".map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;",
+        ".map_err(ProductionCompletionDispatchErrorV1::Service)?;",
+        "neutral Apply reservation must join executor evidence before one-shot queue publication",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",

@@ -5,6 +5,7 @@
 //! endpoint-local aliases are not part of the instruction format.
 #[cfg(feature = "governance")]
 use crate::governance::types::ParliamentBody;
+pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
 use std::{string::String, vec::Vec};
 #[cfg(not(feature = "governance"))]
 type ParliamentBody = ();
@@ -19,13 +20,15 @@ use crate::{
     prelude::*,
     runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
-    validation_fee::{
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1,
-    },
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use iroha_primitives::numeric::Quantity;
 use norito::codec::{Decode, Encode};
+
+/// Attempt-based SORA Parliament instruction surface.
+pub mod parliament;
+pub use parliament::*;
+
 #[cfg(not(feature = "governance"))]
 mod at_window_placeholder {
     use super::*;
@@ -42,107 +45,6 @@ mod at_window_placeholder {
         pub lower: u64,
         /// Upper bound (inclusive) of the enactment window.
         pub upper: u64,
-    }
-}
-/// Voting mode for a referendum
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-)]
-pub enum VotingMode {
-    /// Zero-knowledge voting flow (default ballot type).
-    Zk,
-    /// Plain-text quadratic voting flow.
-    Plain,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for VotingMode {
-    fn json_serialize(&self, out: &mut String) {
-        norito::json::write_json_string(
-            match self {
-                Self::Zk => "Zk",
-                Self::Plain => "Plain",
-            },
-            out,
-        );
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::write_json_string_to(
-            match self {
-                Self::Zk => "Zk",
-                Self::Plain => "Plain",
-            },
-            out,
-        )
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for VotingMode {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Zk" => Ok(Self::Zk),
-            "Plain" => Ok(Self::Plain),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
-/// Council derivation method.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-)]
-pub enum CouncilDerivationKind {
-    /// Derived automatically from deterministic bonded-citizen sortition.
-    Sortition,
-    /// Supplied explicitly by an authorized parliament administrator.
-    #[default]
-    Manual,
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for CouncilDerivationKind {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string(label, out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        let label = match self {
-            CouncilDerivationKind::Sortition => "Sortition",
-            CouncilDerivationKind::Manual => "Manual",
-        };
-        norito::json::write_json_string_to(label, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for CouncilDerivationKind {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Sortition" => Ok(CouncilDerivationKind::Sortition),
-            "Manual" => Ok(CouncilDerivationKind::Manual),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
     }
 }
 /// Propose deployment of an IVM bytecode (`.to`) by hash
@@ -203,16 +105,10 @@ impl crate::seal::Instruction for ProposeSorafsProviderGovernance {}
 /// Propose one validation-fee policy through SORA Parliament.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeValidationFeePolicy {
-    /// Complete policy to append if Parliament and the referendum approve it.
+    /// Complete policy to append if Parliament certifies it.
     pub policy: ValidationFeePolicyV1,
     /// Exact enacted payout lifecycle required when the policy carries a payout binding.
     pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
-    /// Optional inclusive referendum voting window override.
-    pub referendum_window: Option<AtWindow>,
-    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
-    pub mode: Option<VotingMode>,
-    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
-    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
 /// Propose one exact validation-fee payout lifecycle through SORA Parliament.
@@ -223,12 +119,6 @@ pub struct ProposeValidationFeePayoutLifecycle {
     /// Consensus derives the non-zero lifecycle seal from this complete
     /// binding before accepting the proposal.
     pub payout_binding: ValidationFeeTreasuryPayoutBindingV1,
-    /// Optional inclusive referendum voting window override.
-    pub referendum_window: Option<AtWindow>,
-    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
-    pub mode: Option<VotingMode>,
-    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
-    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 /// Cast a ZK ballot (default voting mode)
@@ -594,15 +484,9 @@ impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
 impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
-    referendum_window: Option<AtWindow>,
-    mode: Option<VotingMode>,
-    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
-    referendum_window: Option<AtWindow>,
-    mode: Option<VotingMode>,
-    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 impl_governance_decode_from_slice!(CastZkBallot {
     election_id: String,

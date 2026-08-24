@@ -512,7 +512,6 @@ named_route_policy_test!(
                 runtime_governance::VALIDATION_FEE_PROPOSALS,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
                 runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,
-                runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
                 runtime_governance::GOV_PROPOSAL_GET,
                 runtime_governance::GOV_LOCKS_GET,
                 runtime_governance::GOV_REFERENDUM_GET,

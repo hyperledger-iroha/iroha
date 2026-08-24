@@ -205,9 +205,9 @@ implementation and testing.
 - **Build guards:** the `fastpq.metallib` ships the tiled kernels, so CI still fails fast if the shader drifts. Any future optimisations stay behind telemetry/feature gates rather than compile-time switches.
 - **Parity fixtures:** ✅ `bn254_parity` tests continue to compare GPU FFT/LDE outputs against CPU fixtures and now run live on Metal hardware; keep tampered-manifest tests in mind if new kernel code paths appear.
 - **Telemetry & benchmarks:** `fastpq_metal_bench` now emits:
-  - a `bn254_dispatch` block summarising per-dispatch threadgroup widths, logical thread counts, and pipeline limits for FFT/LDE single-column batches; and
-  - a `bn254_metrics` block that records `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` for the CPU baseline plus whichever GPU backend ran.
-  The benchmark wrapper copies both maps into every wrapped artefact so WP2-D dashboards ingest labelled latencies/geometry without reverse-engineering the raw operations array. `FASTPQ_METAL_THREADGROUP` now applies to BN254 FFT/LDE dispatches as well, making the knob usable for perf sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
+  - a `bn254_dispatch` block only when captured kernel samples actually contain FFT/LDE single-column BN254 dispatches; and
+  - a `bn254_metrics` block for the genuinely BN254 `bn254_poseidon_words` operation, exported as `acceleration.bn254_poseidon_ms` for the CPU baseline plus Metal.
+  Generic FFT/IFFT/LDE and column-Poseidon timings use Goldilocks inputs and are no longer mislabeled as BN254 metrics. Dedicated Metal BN254 FFT/LDE benchmark operations remain outstanding; low-level hardware parity already covers those kernels. The benchmark wrapper copies present maps into wrapped artefacts, and `FASTPQ_METAL_THREADGROUP` applies to BN254 FFT/LDE dispatches for reproducible low-level sweeps.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1764】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2219】【scripts/fastpq/wrap_benchmark.py:1268】
 
 ## Open Questions (Resolved May 2027)
 

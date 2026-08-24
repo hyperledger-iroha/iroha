@@ -1009,7 +1009,8 @@ public final class HttpClientTransport implements IrohaClient {
       final MultisigProposeRequest requestBody) {
     final byte[] body = encodeJsonBody(buildMultisigProposePayload(requestBody));
     final TransportRequest request = buildJsonPostRequest("/v1/multisig/propose", body);
-    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose");
+    return fetchJson(request, ContractJsonParser::parseMultisigResponse, "multisig propose")
+        .thenApply(response -> validateMultisigResponse(response, requestBody));
   }
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
@@ -2855,6 +2856,21 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("instructions", instructions);
     return payload;
+  }
+
+  /** Rejects a multisig response that changes a signature-bound request field. */
+  static MultisigResponse validateMultisigResponse(
+      final MultisigResponse response, final MultisigProposeRequest request) {
+    if (!request.feePayment().hasSamePayerAndGasBound(response.feePayment())) {
+      throw new IllegalStateException(
+          "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound");
+    }
+    if (request.creationTimeMs() != null
+        && !request.creationTimeMs().equals(response.creationTimeMs())) {
+      throw new IllegalStateException(
+          "multisig response creation_time_ms is not bound to the request");
+    }
+    return response;
   }
 
   static void putValidationFeePolicyMetadata(

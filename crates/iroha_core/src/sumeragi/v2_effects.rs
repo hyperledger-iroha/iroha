@@ -2577,6 +2577,7 @@ type DurableDecision = (
     wire::BlockSubject,
     wire::ExecutionCommitment,
 );
+/// Exact local owner which installed one durable Decision before runner cleanup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingRunnerDecisionCleanup {
     decision: DurableDecision,
@@ -2855,7 +2856,7 @@ pub(crate) trait EffectRuntime {
         ownership: &RuntimeEffectOwnership,
     ) -> Result<(), String>;
     /// Consume and validate the exact scheduler owner created by the preceding
-    /// successful live or recovery step.
+    /// successful live step.
     fn take_scheduler_ownership(&mut self) -> Result<(), String>;
     /// Observe the scheduler branch before its move-only carrier is consumed.
     #[cfg(test)]
@@ -3467,6 +3468,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
     durable_validate_retry_seals:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+    /// Inert exact markers for Validate rows published directly by the lifecycle body pipeline.
     published_lifecycle_validate_retry_markers: BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         PublishedLifecycleValidateRetryMarkerV1,
@@ -3509,6 +3511,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    /// Newly installed live Decision whose exact Apply suffix cannot enter the
+    /// worker until the runner retires process-local proposal and lane owners.
     pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     live_lifecycle_decision_apply: Option<LiveLifecycleDecisionApplyOwnerV1>,
     live_lifecycle_validate_successor: Option<LiveLifecycleValidateSuccessorOwnerV1>,
@@ -6060,6 +6064,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.publish_status(services)
     }
     /// Consume startup or reducer effects in their exact emitted order.
+    #[cfg(test)]
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -7748,6 +7753,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::Sign { .. } | AdapterEffect::EnterView { .. } => false,
         }
     }
+    #[cfg(test)]
     fn consume_pacemaker_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -8095,10 +8101,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             "one bounded pending-Kura attempt settles exactly once"
         );
         self.pending_tip_recovery_last_result = Some(result);
-        self.pending_tip_recovery_attempts
-    }
-    /// Number of serialized interrupted-tip recovery attempts made so far.
-    pub(crate) const fn pending_tip_recovery_attempts(&self) -> u64 {
         self.pending_tip_recovery_attempts
     }
     /// Begin the asynchronous durable-store → deterministic-validation chain
@@ -10254,56 +10256,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         result?;
         Ok(())
-    }
-    fn ensure_pending_tip_recovery_effect_is_local(
-        &self,
-        effect: &AdapterEffect,
-    ) -> Result<(), EffectExecutorError> {
-        let local_only_error = || {
-            EffectExecutorError::Contract(
-                "interrupted-tip recovery attempted a non-local consensus effect before finality"
-                    .to_owned(),
-            )
-        };
-        match effect {
-            AdapterEffect::FetchBody { round, subject, .. } => self
-                .recovered_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::StoreBody { round, subject, .. } => self
-                .durable_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::ValidateBody { round, subject, .. } => self
-                .validated_bodies
-                .contains_key(&(*round, *subject))
-                .then_some(())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Apply {
-                subject,
-                certificate,
-                ..
-            } => self
-                .pending_tip_recovery
-                .as_ref()
-                .filter(|evidence| {
-                    evidence.commit_qc() == certificate
-                        && evidence.commit_subject() == *subject
-                        && self
-                            .validated_bodies
-                            .get(&(evidence.durable_round(), evidence.durable_subject()))
-                            == Some(evidence.validated_receipt())
-                })
-                .map(|_| ())
-                .ok_or_else(local_only_error),
-            AdapterEffect::Sign { .. }
-            | AdapterEffect::Broadcast(_)
-            | AdapterEffect::EnterView { .. }
-            | AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => Err(local_only_error()),
-        }
     }
     #[cfg(test)]
     fn bind_body_pipeline_owner(

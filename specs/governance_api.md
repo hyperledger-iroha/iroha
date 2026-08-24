@@ -42,7 +42,8 @@ Overview
   referendum, tally, protected-namespace, unlock, governed-contract, enactment,
   and council reads/drafts; and all typed validation-fee proof/proposal routes.
   The Ministry agenda `authority`, citizenship-draft `owner`, and validation-fee
-  PLAIN-ballot-draft `owner` must equal the verified account before state access.
+  proposal-draft `proposal_operator` must equal the verified account before
+  state access.
   Operator and protocol-handshake routes retain their stronger dedicated
   boundaries. Only the fixed ABI-v1 hash calculator and the state-independent
   referendum-finalize instruction calculator remain public in this audited
@@ -58,12 +59,10 @@ Overview
   empty skeleton when Torii responds with `204 No Content`), which keeps
   automation from branching on `null` before queueing transactions or
   triggers.
-- Rust (`iroha::client::Client`):
-  `post_validation_fee_plain_ballot_draft` accepts the typed
-  `ValidationFeePlainBallotDraftRequestV1`, calls the proposal-bound route, and
-  rejects a response unless its canonical framed `CastPlainBallot` exactly
-  matches the requested proposal id, owner, and direction together with the
-  returned immutable amount and duration.
+- Rust consumers use the shared validation-fee proposal and proof DTOs. A
+  summary response carries only certificate identity/heights; an
+  independent-validation response retains the complete canonical Parliament
+  certificate.
 
 ## SoraFS Governance DAG read authority
 
@@ -121,55 +120,41 @@ Endpoints
     request the next page; an incomplete, skipped, reordered, rollback, or
     equivocal chain is not deployable evidence.
   - Clients verify locally with the immutable chain id, genesis hash,
-    policy-chain genesis hash, checkpoint height, and checkpoint context id.
+  policy-chain genesis hash, checkpoint height, and checkpoint context id.
     The resulting verified projection includes, for both the policy and payout
-    lifecycle proposals, `plainElectorateRules` and
-    `plainElectorateSnapshot.{rosterRoot,memberCount,capturedAtHeight,approvalGateHeight}`.
-    Verification also requires PLAIN finalization, matching rules and snapshot
-    anchors, and the exact
+    lifecycle proposals, the canonical `proposal_operator`, exact proposal
+    fingerprint, canonical `governance_certificate_id`, complete
+    `governance_certificate`, certification height, and certified enactment-due
+    height. Verification requires the certificate content id to equal the exact
+    operator-bound proposal fingerprint, the certificate id to equal the
+    canonical hash of the retained certificate, enactment to occur at the
+    certificate's due height, and the exact
     `effective_from_height = enacted_at_height + 120,960` relation.
 - GET `/v1/validation-fee/proposals`
   - Lists only typed native validation-fee policy and payout-lifecycle
-    proposals. Each record carries `plain_electorate_snapshot`: it is `null`
-    before referendum opening and the complete frozen citizen roster
-    thereafter.
-- GET `/v1/validation-fee/proposals/{proposal_id}?account_id=<i105-account-id>`
-  - Returns the exact proposal/referendum, proposal-time Parliament snapshot,
-    frozen PLAIN electorate snapshot, current height, per-body members,
-    alternates, quorum and decision counts for all seven bodies, optional
-    current-account decisions, the live or finalized citizen tally, the
-    ordered proposal pipeline, and current retained voter locks. The electorate
-    snapshot contains the proposal/operator binding, capture and approval-gate
-    heights, exact member count, canonical member records, and roster root. All
-    integer fields in this projection are canonical unsigned decimal strings.
+    proposals. Records retain the exact typed operator-bound payload and ordered
+    pipeline. Certified records expose the canonical certificate id,
+    certification height, enactment-due height, and enacted height as a bounded
+    summary; they do not duplicate the full certificate.
+- GET `/v1/validation-fee/proposals/{proposal_id}`
+  - Returns the exact proposal summary, current committed height, and the full
+    canonical Parliament certificate when the proposal has been certified and
+    retained in the protected registry. This is the independent-validation
+    endpoint: clients must validate the certificate before trusting its id or
+    outcome. All projected height fields are canonical unsigned decimal strings.
 - POST `/v1/validation-fee/proposals/draft`
-  - Builds exactly one native PLAIN validation-fee proposal instruction for
-    local signing. The strict request requires `plain_electorate_rules`; those
-    exact rules are included in the native proposal fingerprint and retained
-    for the voting asset, bond escrow, slash receiver, ballot eligibility,
-    amount, duration, conviction, turnout, and approval checks. Legacy
-    signed-policy, governance-keyset, detached-signature, and ZK compatibility
-    shapes are not accepted.
-  - The supplied rules and inclusive referendum span must exactly match active
-    governance configuration. Taira fixes the span at 3,600 blocks
-    (`h_end = h_start + 3,599`); the draft route rejects any other span or
-    rule set.
-- POST `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft`
-  - Strict request:
-    `{ "version": 1, "owner": "<i105-account-id>", "direction": "AYE" | "NAY" | "ABSTAIN" }`.
-  - Returns exactly one canonical framed `CastPlainBallot` instruction for
-    local signing. The response repeats the exact proposal id, owner,
-    direction, proposal-bound amount, and proposal-bound duration.
-  - The route fails closed unless the referendum is PLAIN and open at the next
-    possible inclusion height, all seven retained Parliament bodies still
-    satisfy the proposal snapshot, the owner belongs to the electorate frozen
-    at `h_start`, and the account has not already cast an effective ballot.
-    Membership is never recomputed from the live citizen registry. Callers
-    cannot override amount or duration.
-  - Accepted locks retain the proposal-bound voting asset, bond escrow, and
-    slash receiver. Later governance configuration changes cannot redirect
-    locking, release, slashing, or restitution; missing or mismatched custody
-    evidence fails closed without deleting the lock.
+  - Builds exactly one native validation-fee proposal instruction for
+    local signing. The authenticated strict request requires
+    `proposal_operator` to equal its canonical request signer. That account is
+    embedded in the exact native policy or payout-lifecycle proposal preimage,
+    so changing the signer changes the proposal fingerprint. The request does
+    not accept a public referendum mode, window, electorate, or finalization
+    shape; those are not validation-fee authorization inputs.
+  - `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` is retired
+    and is not registered. Requests to that path fail at routing. Validation-fee
+    authorization is produced only by the canonical timed-private Parliament
+    lifecycle and its complete certificate; Torii does not translate a public
+    ballot into that protocol.
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):

@@ -929,7 +929,11 @@ class HttpClientTransport(
 
     override fun proposeMultisig(request: MultisigProposeRequest): CompletableFuture<MultisigResponse> {
         val body = encodeJsonBody(buildMultisigProposePayload(request))
-        return fetchJson(buildJsonPostRequest("/v1/multisig/propose", body), ContractJsonParser::parseMultisigResponse, "multisig propose")
+        return fetchJson(
+            buildJsonPostRequest("/v1/multisig/propose", body),
+            ContractJsonParser::parseMultisigResponse,
+            "multisig propose",
+        ).thenApply { response -> validateMultisigResponse(response, request) }
     }
 
     fun getGovernanceContract(contractAddress: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<GovernanceContractResponse> {
@@ -1876,6 +1880,22 @@ class HttpClientTransport(
                 Base64.getEncoder().encodeToString(instruction)
             }
             return payload
+        }
+
+        /** Reject a multisig response that changes a signature-bound request field. */
+        @JvmStatic internal fun validateMultisigResponse(
+            response: MultisigResponse,
+            request: MultisigProposeRequest,
+        ): MultisigResponse {
+            check(request.feePayment.hasSamePayerAndGasBound(response.feePayment)) {
+                "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
+            }
+            request.creationTimeMs?.let { expected ->
+                check(response.creationTimeMs == expected) {
+                    "multisig response creation_time_ms is not bound to the request"
+                }
+            }
+            return response
         }
 
         @JvmStatic internal fun putValidationFeePolicyMetadata(

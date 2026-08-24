@@ -63,6 +63,7 @@ const PARLIAMENT_PROPOSAL_KEYS = Object.freeze([
   "plainElectorateSnapshot",
   "proposal_id",
   "proposal_kind",
+  "proposal_operator",
 ]);
 const PLAIN_ELECTORATE_RULE_KEYS = Object.freeze([
   "approval_threshold_denominator",
@@ -437,6 +438,10 @@ function validateParliamentProposal(value, expectedKind, label) {
   if (proposal.proposal_kind !== expectedKind) {
     throw new TypeError(`${label}.proposal_kind must be ${expectedKind}`);
   }
+  const proposalOperator = canonicalText(
+    proposal.proposal_operator,
+    `${label}.proposal_operator`,
+  );
   const proposalId = lowerHex32(proposal.proposal_id, `${label}.proposal_id`);
   const payloadHash = lowerHex32(proposal.payload_hash, `${label}.payload_hash`);
   requireEqual(payloadHash, proposalId, `${label}.payload_hash`);
@@ -470,7 +475,7 @@ function validateParliamentProposal(value, expectedKind, label) {
   ) {
     throw new TypeError(`${label} violates its frozen electorate or enactment anchors`);
   }
-  return { proposalId, rules, window };
+  return { proposalId, proposalOperator, rules, window };
 }
 
 function equalPlainElectorateRules(left, right) {

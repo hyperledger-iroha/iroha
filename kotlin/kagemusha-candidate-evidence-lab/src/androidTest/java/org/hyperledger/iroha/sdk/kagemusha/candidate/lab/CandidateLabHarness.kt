@@ -1582,7 +1582,7 @@ internal object CandidateLabHarness {
             "native accepted candidate must report a clean source tree"
         }
         val bridgeAbi = requireAscii(fields[8], "bridge ABI").toInt()
-        check(bridgeAbi == 21)
+        check(bridgeAbi == 22)
         check(candidateSha == BuildConfig.CANDIDATE_RECORD_SHA256)
         check(manifestSha == BuildConfig.CANDIDATE_MANIFEST_SHA256)
         check(generation == BuildConfig.GENERATION)

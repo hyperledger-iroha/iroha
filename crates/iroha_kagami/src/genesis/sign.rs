@@ -1843,16 +1843,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn checked_in_profile_commitments_match_production_signing() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for (genesis_path, config_path) in [(
+        assert_checked_in_profile_commitment_matches_production_signing(
+            &root,
             "defaults/kagami/iroha3-dev/genesis.json",
             "defaults/kagami/iroha3-dev/config.toml",
-        )] {
-            assert_checked_in_profile_commitment_matches_production_signing(
-                &root,
-                genesis_path,
-                config_path,
-            );
-        }
+        );
     }
     #[test]
     #[expect(

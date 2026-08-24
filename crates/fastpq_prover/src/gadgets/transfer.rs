@@ -1068,6 +1068,10 @@ mod tests {
         transcript.deltas[0].amount = Quantity::from(201u32);
         transcript.deltas[0].from_balance_after = Quantity::from(0u32);
         transcript.deltas[0].to_balance_after = Quantity::from(202u32);
+        transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
+            &transcript.deltas[0],
+            &transcript.batch_hash,
+        ));
         let transitions = sample_transitions(&transcript);
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("underflow fails");
         assert!(
@@ -1091,6 +1095,10 @@ mod tests {
         transcript.deltas[0].from_balance_after = Quantity::from(199u32);
         transcript.deltas[0].to_balance_before = Quantity::from(u64::MAX);
         transcript.deltas[0].to_balance_after = Quantity::from(u64::MAX);
+        transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
+            &transcript.deltas[0],
+            &transcript.batch_hash,
+        ));
         let transitions = sample_transitions(&transcript);
         let err = verify_transcripts(&transitions, &[transcript]).expect_err("overflow fails");
         assert!(

@@ -148,14 +148,18 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 3 remains the historical introduction point for the append-only mixed
 batch above. Version 4 changes canonical validation-fee governance bytes by
-requiring exact `plain_electorate_rules` in policy and payout-lifecycle
-proposal instructions, retaining those rules in enacted registry entries, and
+requiring the canonical execution-authority `proposal_operator` and exact
+`plain_electorate_rules` in policy and payout-lifecycle proposal preimages,
+retaining both in enacted authorization, and
 binding finalized authorization to a frozen PLAIN electorate. SDKs must reject
 a node advertising any other data-model version before submission.
 
 ### Validation-fee PLAIN governance
 
-- `ValidationFeePlainElectorateRulesV1` is part of each native proposal
+- `ValidationFeePolicyProposal` and `ValidationFeePayoutLifecycleProposal`
+  bind the canonical transaction authority as `proposal_operator`; Core derives
+  it from execution and different operators produce different fingerprints.
+  `ValidationFeePlainElectorateRulesV1` is also part of each native proposal
   fingerprint. It fixes the voting asset, bond-escrow account, slash-receiver
   account, ballot amount and duration, citizenship amount, member cap,
   conviction parameters, turnout and approval threshold, and the closed
@@ -170,7 +174,7 @@ a node advertising any other data-model version before submission.
   domain-separated `roster_root`. The proposal operator must have bonded at or
   before the gate; every other member must have bonded strictly after the gate
   and before capture.
-- `ValidationFeeParliamentAuthorizationV1` retains the snapshot root, count,
+- `ValidationFeeParliamentAuthorizationV1` retains the proposal operator and snapshot root, count,
   capture height, and approval-gate height alongside the proposal fingerprint,
   Parliament roster root, referendum window, PLAIN finalization, and enactment
   height. Registry validation requires these anchors and thresholds to match

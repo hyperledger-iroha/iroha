@@ -46,6 +46,15 @@ function exactJsonObject(value, name) {
   return encoded;
 }
 
+function exactProposalOperator(value) {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new TypeError(
+      "proposalOperator must be one canonical domainless AccountId",
+    );
+  }
+  return value;
+}
+
 function exactFingerprint(value, proposalName) {
   const fingerprint = Buffer.from(value);
   if (fingerprint.length !== 32) {
@@ -63,12 +72,14 @@ function exactFingerprint(value, proposalName) {
  * contract. The electorate rules must use the exact first-release PLAIN
  * contract. Native validation rejects missing, unknown, and legacy fields.
  *
+ * @param {string} proposalOperator canonical domainless transaction authority
  * @param {Record<string, unknown>} policy
  * @param {string | null} payoutLifecycleProposalId
  * @param {Record<string, unknown>} plainElectorateRules
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
+  proposalOperator,
   policy,
   payoutLifecycleProposalId,
   plainElectorateRules,
@@ -77,6 +88,7 @@ export function computeValidationFeePolicyProposalFingerprintV1(
     "validationFeePolicyProposalFingerprintV1",
     "validation_fee_policy_proposal_fingerprint_v1",
   )(
+    exactProposalOperator(proposalOperator),
     exactJsonObject(policy, "policy"),
     exactLifecycleProposalId(payoutLifecycleProposalId),
     exactJsonObject(plainElectorateRules, "plainElectorateRules"),
@@ -87,14 +99,16 @@ export function computeValidationFeePolicyProposalFingerprintV1(
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
  *
- * Both arguments must use their exact native snake-case JSON contracts.
+ * Both object arguments must use their exact native snake-case JSON contracts.
  * Native validation rejects missing, unknown, legacy, and non-canonical fields.
  *
+ * @param {string} proposalOperator canonical domainless transaction authority
  * @param {Record<string, unknown>} payoutBinding
  * @param {Record<string, unknown>} plainElectorateRules
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  proposalOperator,
   payoutBinding,
   plainElectorateRules,
 ) {
@@ -102,6 +116,7 @@ export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
     "validationFeePayoutLifecycleProposalFingerprintV1",
     "validation_fee_payout_lifecycle_proposal_fingerprint_v1",
   )(
+    exactProposalOperator(proposalOperator),
     exactJsonObject(payoutBinding, "payoutBinding"),
     exactJsonObject(plainElectorateRules, "plainElectorateRules"),
   );

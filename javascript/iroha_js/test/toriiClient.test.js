@@ -20526,6 +20526,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(),
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     tx_hash_hex: null,
@@ -20813,6 +20814,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(),
   };
 
   await assert.rejects(
@@ -20922,6 +20924,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     ...verifyingKeyDraftForPayload(Buffer.from([1])),
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    fee_payment: authorityFeePayment(5),
     proposal_id: "a".repeat(64),
     instructions_hash: "a".repeat(64),
     creation_time_ms: 123456,
@@ -20982,6 +20985,7 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     ok: true,
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
     submitted: true,
+    fee_payment: authorityFeePayment(),
     proposal_id: "b".repeat(64),
     instructions_hash: "b".repeat(64),
     tx_hash_hex: "c".repeat(64),

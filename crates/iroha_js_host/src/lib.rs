@@ -179,7 +179,7 @@ use iroha_data_model::{
 use std::{
     collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, fs, mem,
+    fmt, fs,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -1031,7 +1031,8 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     if columns.iter().any(|column| column.len() != rows) {
         return;
     }
-    let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
+    let mut payload =
+        Vec::with_capacity(8 + rows * columns.len() * core::mem::size_of::<Halo2Scalar>());
     payload
         .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
     payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
@@ -1943,10 +1944,12 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_policy_proposal_fingerprint_v1(
+    proposal_operator: String,
     policy_json: String,
     payout_lifecycle_proposal_id: Option<Uint8Array>,
     plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
     let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
@@ -1956,6 +1959,7 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
         validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator,
         policy,
         payout_lifecycle_proposal_id,
         plain_electorate_rules,
@@ -1967,9 +1971,11 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+    proposal_operator: String,
     payout_binding_json: String,
     plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let payout_binding_value: json::Value =
         json::from_json(&payout_binding_json).map_err(norito_to_napi)?;
     let payout_binding =
@@ -1979,6 +1985,7 @@ pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
         validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     let fingerprint =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            proposal_operator,
             payout_binding,
             plain_electorate_rules,
         })
@@ -7455,6 +7462,29 @@ fn validate_validation_fee_payout_binding(
         ));
     }
     Ok(())
+}
+fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
+    if value.is_empty() || value.trim() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proposal operator must be one canonical domainless AccountId",
+        ));
+    }
+    let account = AccountId::parse_encoded(value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid proposal operator: {error}"),
+            )
+        })?;
+    if account.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proposal operator must use canonical AccountId form",
+        ));
+    }
+    Ok(account)
 }
 fn validation_fee_plain_electorate_rules_from_json(
     payload: &str,

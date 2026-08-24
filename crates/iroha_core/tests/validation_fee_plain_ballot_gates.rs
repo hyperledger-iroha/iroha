@@ -187,6 +187,7 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     };
     assert_eq!(policy.policy_invariant_error(), None);
     let proposal_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: proposer.clone(),
         policy,
         payout_lifecycle_proposal_id: None,
         plain_electorate_rules: retained_rules.clone(),

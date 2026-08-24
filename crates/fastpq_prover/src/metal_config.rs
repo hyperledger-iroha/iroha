@@ -14,7 +14,8 @@ const MIN_THREADGROUP_LANES: u32 = 8;
 const MAX_THREADGROUP_LANES: u32 = 256;
 const DEFAULT_TILE_STAGE_LIMIT: u32 = 5;
 const MIN_TILE_STAGE_LIMIT: u32 = 1;
-const MAX_TILE_STAGE_LIMIT: u32 = 16;
+/// Maximum radix-2 stage count that fits in the 256-word Metal threadgroup tile.
+pub const FFT_TILE_STAGE_LIMIT_MAX: u32 = 8;
 const POSEIDON_LANES_ENV: &str = "FASTPQ_METAL_POSEIDON_LANES";
 const POSEIDON_BATCH_ENV: &str = "FASTPQ_METAL_POSEIDON_BATCH";
 const DEFAULT_POSEIDON_LANES: u32 = 256;
@@ -27,7 +28,7 @@ const GIB_BYTES: u64 = 1024 * 1024 * 1024;
 const GIB_F64: f64 = 1024.0 * 1024.0 * 1024.0;
 #[allow(clippy::doc_markdown)]
 /// Maximum LDE tile depth allowed for Metal kernels.
-pub const LDE_TILE_STAGE_LIMIT_MAX: u32 = 32;
+pub const LDE_TILE_STAGE_LIMIT_MAX: u32 = FFT_TILE_STAGE_LIMIT_MAX;
 #[allow(clippy::doc_markdown)]
 /// Minimum LDE tile depth allowed for Metal kernels.
 pub const LDE_TILE_STAGE_LIMIT_MIN: u32 = 1;
@@ -123,7 +124,7 @@ pub fn fft_tuning(log_len: u32, exec_width: u32, max_threads: u32) -> FftTuning 
     } else {
         fft_tile_override()
             .unwrap_or_else(|| default_tile_stage_target(log_len))
-            .clamp(MIN_TILE_STAGE_LIMIT, MAX_TILE_STAGE_LIMIT)
+            .clamp(MIN_TILE_STAGE_LIMIT, FFT_TILE_STAGE_LIMIT_MAX)
             .min(log_len)
     };
     FftTuning {
@@ -290,8 +291,8 @@ fn parse_fft_lane_override(raw: &str) -> Result<u32, &'static str> {
 }
 fn parse_fft_tile_override(raw: &str) -> Result<u32, &'static str> {
     let value: u32 = raw.parse().map_err(|_| "not an integer")?;
-    if !(MIN_TILE_STAGE_LIMIT..=MAX_TILE_STAGE_LIMIT).contains(&value) {
-        return Err("tile depth out of supported range (1–16)");
+    if !(MIN_TILE_STAGE_LIMIT..=FFT_TILE_STAGE_LIMIT_MAX).contains(&value) {
+        return Err("tile depth out of supported range (1–8)");
     }
     Ok(value)
 }
@@ -376,7 +377,7 @@ pub fn lde_tile_stage_target(eval_log: u32, hints: DeviceHints) -> u32 {
     } else if working_set >= 16.0 && eval_log >= 18 {
         target = target.saturating_add(1).min(eval_log);
     }
-    target
+    target.min(LDE_TILE_STAGE_LIMIT_MAX)
 }
 fn working_set_gib(hints: DeviceHints) -> f64 {
     if hints.recommended_max_working_set == 0 {
@@ -481,7 +482,7 @@ mod tests {
         let tuning = fft_tuning(20, 32, 64);
         assert!(tuning.threadgroup_lanes <= 64);
         assert!(tuning.threadgroup_lanes >= 32);
-        assert!(tuning.tile_stage_limit <= MAX_TILE_STAGE_LIMIT);
+        assert!(tuning.tile_stage_limit <= FFT_TILE_STAGE_LIMIT_MAX);
     }
     #[test]
     fn fft_tuning_scales_with_trace_size() {
@@ -490,10 +491,10 @@ mod tests {
         assert_eq!(small.tile_stage_limit, 5);
         let large = fft_tuning(18, 32, 512);
         assert_eq!(large.threadgroup_lanes, 256);
-        assert_eq!(large.tile_stage_limit, 12);
+        assert_eq!(large.tile_stage_limit, FFT_TILE_STAGE_LIMIT_MAX);
         let huge = fft_tuning(22, 32, 512);
         assert_eq!(huge.threadgroup_lanes, 256);
-        assert_eq!(huge.tile_stage_limit, 16);
+        assert_eq!(huge.tile_stage_limit, FFT_TILE_STAGE_LIMIT_MAX);
     }
     #[test]
     fn poseidon_tuning_respects_limits() {
@@ -548,9 +549,9 @@ mod tests {
     fn lde_tile_stage_target_tracks_memory_tier() {
         let _hint_guard = device_hints_test_guard();
         let default_target = lde_tile_stage_target(18, device_hint_snapshot());
-        assert_eq!(default_target, 12);
+        assert_eq!(default_target, LDE_TILE_STAGE_LIMIT_MAX);
         set_device_hints_for_tests(Some(DeviceHints::new(false, true, true, 24 * GIB_BYTES)));
         let boosted = lde_tile_stage_target(18, device_hint_snapshot());
-        assert_eq!(boosted, 14);
+        assert_eq!(boosted, LDE_TILE_STAGE_LIMIT_MAX);
     }
 }

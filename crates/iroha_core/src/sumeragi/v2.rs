@@ -2165,6 +2165,10 @@ impl ProductionLifecycleOwnerStartupErrorV1 {
     fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
         Self { kind }
     }
+    /// Classify a pending-Kura join that did not open the recovered Apply branch.
+    pub(in crate::sumeragi) fn pending_kura_recovered_apply(reason: &'static str) -> Self {
+        Self::new(ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(reason))
+    }
 }
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
 ///

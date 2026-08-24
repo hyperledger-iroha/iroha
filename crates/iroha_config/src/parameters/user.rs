@@ -2251,6 +2251,57 @@ impl Default for RuntimeUpgradeProvenance {
         }
     }
 }
+/// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct ParliamentTimedOvn {
+    /// Consensus block-height span allotted to proof-validated registration submissions.
+    #[config(default = "defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS")]
+    pub registration_phase_blocks: u64,
+    /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
+    #[config(default = "defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS")]
+    pub survivor_freeze_phase_blocks: u64,
+    /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
+    #[config(default = "defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS")]
+    pub commitment_phase_blocks: u64,
+    /// Consensus block-height span between commitment close and the earliest timed release.
+    #[config(default = "defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS")]
+    pub release_delay_blocks: u64,
+    /// Retry attempts permitted after the initial private ballot attempt, capped at 16.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES")]
+    pub max_ballot_retries: u32,
+    /// Maximum entries retained in any registration, survivor, or ballot corpus, capped at 1,000.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES")]
+    pub max_corpus_entries: u32,
+}
+impl ParliamentTimedOvn {
+    fn parse(self) -> actual::ParliamentTimedOvn {
+        let policy = actual::ParliamentTimedOvn {
+            registration_phase_blocks: self.registration_phase_blocks,
+            survivor_freeze_phase_blocks: self.survivor_freeze_phase_blocks,
+            commitment_phase_blocks: self.commitment_phase_blocks,
+            release_delay_blocks: self.release_delay_blocks,
+            max_ballot_retries: self.max_ballot_retries,
+            max_corpus_entries: self.max_corpus_entries,
+        };
+        policy.assert_valid();
+        policy
+    }
+}
+impl Default for ParliamentTimedOvn {
+    fn default() -> Self {
+        Self {
+            registration_phase_blocks:
+                defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS,
+            survivor_freeze_phase_blocks:
+                defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS,
+            commitment_phase_blocks:
+                defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS,
+            release_delay_blocks: defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS,
+            max_ballot_retries: defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES,
+            max_corpus_entries: defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES,
+        }
+    }
+}
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -2489,6 +2540,12 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
     )]
     pub parliament_quorum_bps: u16,
+    /// Consensus block-height span for immutable primary and alternate invitation responses.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS")]
+    pub parliament_invitation_phase_blocks: u64,
+    /// Consensus-critical timed-OVN phase and resource policy.
+    #[config(nested)]
+    pub parliament_timed_ovn: ParliamentTimedOvn,
     /// Rules Committee size.
     #[config(
         env = "GOV_RULES_COMMITTEE_SIZE",
@@ -2513,19 +2570,32 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE"
     )]
     pub review_panel_size: usize,
+    /// Coordination Council size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
+    )]
+    pub coordination_council_size: usize,
     /// Policy Jury size.
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
+    /// Maximum Confirmation Jury size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
+    )]
+    pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     #[config(
         env = "GOV_OVERSIGHT_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE"
     )]
     pub oversight_committee_size: usize,
-    /// MPC/FMA board size.
+    /// MPC Committee size.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE")]
+    pub mpc_committee_size: usize,
+    /// FMA Committee size.
     #[config(
         env = "GOV_FMA_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE"
@@ -2607,12 +2677,18 @@ impl Default for Governance {
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_timed_ovn: ParliamentTimedOvn::default(),
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
             review_panel_size: defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+            coordination_council_size: defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
             policy_jury_size: defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+            confirmation_jury_size: defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
             oversight_committee_size: defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+            mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
             pipeline_study_sla_blocks: None,
             pipeline_review_sla_blocks: None,
@@ -2632,6 +2708,27 @@ impl Governance {
             (1..=10_000).contains(&self.parliament_quorum_bps),
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
         );
+        assert!(
+            self.parliament_invitation_phase_blocks > 0,
+            "parliament_invitation_phase_blocks must be non-zero"
+        );
+        for (name, size) in [
+            ("rules_committee_size", self.rules_committee_size),
+            ("agenda_council_size", self.agenda_council_size),
+            ("interest_panel_size", self.interest_panel_size),
+            ("review_panel_size", self.review_panel_size),
+            ("coordination_council_size", self.coordination_council_size),
+            ("policy_jury_size", self.policy_jury_size),
+            ("confirmation_jury_size", self.confirmation_jury_size),
+            ("oversight_committee_size", self.oversight_committee_size),
+            ("mpc_committee_size", self.mpc_committee_size),
+            ("fma_committee_size", self.fma_committee_size),
+        ] {
+            assert!(
+                (1..=1_000).contains(&size),
+                "{name} must be within 1..=1_000"
+            );
+        }
         let viral_incentives = actual::ViralIncentives {
             incentive_pool_account: parse_account_id_literal(
                 &self.viral_incentive_pool_account,
@@ -2761,12 +2858,17 @@ impl Governance {
                 .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
             parliament_quorum_bps: self.parliament_quorum_bps,
+            parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
+            parliament_timed_ovn: self.parliament_timed_ovn.parse(),
             rules_committee_size: self.rules_committee_size,
             agenda_council_size: self.agenda_council_size,
             interest_panel_size: self.interest_panel_size,
             review_panel_size: self.review_panel_size,
+            coordination_council_size: self.coordination_council_size,
             policy_jury_size: self.policy_jury_size,
+            confirmation_jury_size: self.confirmation_jury_size,
             oversight_committee_size: self.oversight_committee_size,
+            mpc_committee_size: self.mpc_committee_size,
             fma_committee_size: self.fma_committee_size,
             pipeline_study_sla_blocks: self
                 .pipeline_study_sla_blocks
@@ -2788,6 +2890,148 @@ impl Governance {
 #[cfg(test)]
 mod governance_tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn parliament_invitation_window_is_file_configured_and_nonzero() {
+        let table: toml::Table = toml::from_str("parliament_invitation_phase_blocks = 17")
+            .expect("parse Parliament invitation policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with invitation policy")
+            .parse();
+
+        assert_eq!(parsed.parliament_invitation_phase_blocks, 17);
+    }
+
+    #[test]
+    fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
+        let table: toml::Table = toml::from_str(
+            r#"
+[parliament_timed_ovn]
+registration_phase_blocks = 11
+survivor_freeze_phase_blocks = 12
+commitment_phase_blocks = 13
+release_delay_blocks = 14
+max_ballot_retries = 15
+max_corpus_entries = 16
+"#,
+        )
+        .expect("parse timed-OVN policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with timed-OVN policy")
+            .parse()
+            .parliament_timed_ovn;
+
+        assert_eq!(
+            parsed,
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 11,
+                survivor_freeze_phase_blocks: 12,
+                commitment_phase_blocks: 13,
+                release_delay_blocks: 14,
+                max_ballot_retries: 15,
+                max_corpus_entries: 16,
+            }
+        );
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(50));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(800));
+    }
+
+    #[test]
+    fn parliament_timed_ovn_defaults_are_bounded_and_valid() {
+        let parsed = ParliamentTimedOvn::default().parse();
+
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(8_100));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(32_400));
+        assert!(
+            parsed.max_ballot_retries
+                <= defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            16
+        );
+        assert_eq!(
+            parsed.max_corpus_entries,
+            u32::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1)
+                .expect("timed-OVN participant limit fits u32")
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT,
+            1_000
+        );
+
+        let no_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries: 0,
+            ..parsed
+        };
+        no_retries.assert_valid();
+        let maximum_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries:
+                defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            ..parsed
+        };
+        maximum_retries.assert_valid();
+    }
+
+    #[test]
+    fn parliament_timed_ovn_rejects_zero_overflow_and_resource_overruns() {
+        let valid = actual::ParliamentTimedOvn::default();
+        let invalid = [
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                survivor_freeze_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                commitment_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                release_delay_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX / 2,
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT + 1,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries:
+                    defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT + 1,
+                ..valid
+            },
+        ];
+
+        for policy in invalid {
+            assert!(
+                std::panic::catch_unwind(|| policy.assert_valid()).is_err(),
+                "invalid timed-OVN policy must fail closed: {policy:?}"
+            );
+        }
+    }
+
     #[test]
     fn debug_trace_pipeline_defaults_false() {
         let cfg = Governance::default();

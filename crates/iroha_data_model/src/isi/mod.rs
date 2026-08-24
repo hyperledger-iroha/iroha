@@ -554,6 +554,10 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePolicy)
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePayoutLifecycle);
 #[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::CreateParliamentGovernanceAttemptV1);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::SubmitParliamentLifecycleTransitionV1);
+#[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::CastZkBallot);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::CastPlainBallot);
@@ -2909,6 +2913,8 @@ pub mod error {
 }
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
+    #[cfg(feature = "governance")]
+    pub use super::governance::parliament::*;
     pub use super::{
         AggregateOracleFeed, Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox,
         Instruction, InstructionBox, Log, Mint, MintBox, OpenOracleDispute, ProposeOracleChange,

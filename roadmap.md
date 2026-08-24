@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -9,11 +9,6 @@ Completed history lives in [`status.md`](./status.md).
 
 - Type the two large Halo2 tail-publication ledger equations explicitly so the
   normal lint policy accepts their values without wrapping or lint overrides.
-- Complete the partially landed Sumeragi refactor represented by the 59
-  diagnostics in `MERGE_HEAD`-exact files. Reconcile the missing authorities,
-  carriers, executor fields, and result types as one canonical first-release
-  design; do not restore removed aliases or parallel compatibility surfaces just
-  to satisfy stale call sites.
 
 ## SORA Parliament hardening
 
@@ -21,9 +16,6 @@ Completed history lives in [`status.md`](./status.md).
   authenticated beacon that is not knowable when the proposal id is committed.
   The current public-seed plus caller-influenced proposal-id construction lets
   a proposer grind candidate payloads offline for favorable body rosters.
-- Bind the intended validation-fee proposal operator into the typed proposal
-  preimage and fingerprint. Do not let transaction ordering choose the retained
-  operator for an otherwise identical policy payload.
 - Complete the public contract cleanup: expose the Parliament ballot through
   the governance MCP surface, remove the retired ZK-ballot path from the served
   OpenAPI asset, align alias acceptance across Torii/OpenAPI/SDKs, and publish
@@ -2867,9 +2859,9 @@ shape is not a fallback.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
-`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
-receive an operator-supplied canonical Base58 XOR id through
-`--xor-asset-definition-id`.
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw` with `NumericSpec::fractional(9)`, and Nexus
+deployable genesis generation must receive an operator-supplied canonical
+Base58 XOR id through `--xor-asset-definition-id`.
 
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now

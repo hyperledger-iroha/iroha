@@ -3428,7 +3428,7 @@ mod tests {
 
         let wrong_discriminant = norito::json!({
             "network_id": (network_id.to_string()),
-            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT + 1,
+            "chain_discriminant": (DEFAULT_CHAIN_DISCRIMINANT + 1),
         });
         let discriminant_error = validate_taira_puzzle_identity(&wrong_discriminant, &network_id)
             .expect_err("a foreign chain discriminant must fail before publication");
@@ -3547,13 +3547,23 @@ mod tests {
         ensure_canonical_taira_client_identity(&config).expect("canonical Taira identity");
 
         config.chain = "iroha3-taira".into();
-        ensure_canonical_taira_client_identity(&config)
+        let chain_error = ensure_canonical_taira_client_identity(&config)
             .expect_err("retired chain alias must fail before publication");
+        assert!(
+            chain_error.to_string().contains("requires canonical chain"),
+            "unexpected chain identity error: {chain_error:#}"
+        );
 
         config.chain = DEFAULT_CHAIN_ID.into();
         config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT + 1;
-        ensure_canonical_taira_client_identity(&config)
+        let discriminant_error = ensure_canonical_taira_client_identity(&config)
             .expect_err("wrong Taira discriminant must fail before publication");
+        assert!(
+            discriminant_error
+                .to_string()
+                .contains("requires chain discriminant"),
+            "unexpected chain discriminant error: {discriminant_error:#}"
+        );
     }
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {

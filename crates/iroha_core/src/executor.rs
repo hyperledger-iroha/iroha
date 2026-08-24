@@ -9390,6 +9390,8 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::EnactSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
+        iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         iroha_data_model::isi::governance::ApproveGovernanceProposal,
         iroha_data_model::isi::governance::CastParliamentBallot,
         iroha_data_model::isi::governance::CastZkBallot,

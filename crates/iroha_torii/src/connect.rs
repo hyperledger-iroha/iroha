@@ -1314,10 +1314,6 @@ impl Bus {
             .await;
             return;
         }
-        let target = match frame.dir {
-            proto::Dir::AppToWallet => proto::Role::Wallet,
-            proto::Dir::WalletToApp => proto::Role::App,
-        };
         let Some(enc_len) = encoded_len(&frame) else {
             warn!(
                 sid = ?hex::encode(frame.sid),

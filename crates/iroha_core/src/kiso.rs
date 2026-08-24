@@ -1710,10 +1710,16 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
                 review_panel_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+                coordination_council_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
                 policy_jury_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+                confirmation_jury_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
                 oversight_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+                mpc_committee_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
                 fma_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
                 pipeline_study_sla_blocks:

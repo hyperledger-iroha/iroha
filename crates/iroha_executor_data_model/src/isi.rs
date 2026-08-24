@@ -771,6 +771,20 @@ pub mod multisig {
             InstructionBox::from(register)
         }
         #[test]
+        fn multisig_instruction_batch_hash_matches_sdk_golden() {
+            let instruction = InstructionBox::from(CustomInstruction::new(Json::new(())));
+            let hash = HashOf::new(&vec![instruction]);
+            assert_eq!(
+                hash.as_ref(),
+                &[
+                    0x5f, 0x95, 0x7f, 0x67, 0xa4, 0x23, 0x6e, 0xb1, 0x6f, 0x9d, 0xf0,
+                    0xd8, 0x11, 0x70, 0xf3, 0xa7, 0x06, 0x56, 0x94, 0x2b, 0x4e, 0x17,
+                    0x1a, 0x20, 0x8c, 0x26, 0xde, 0x02, 0xe8, 0xe9, 0x9a, 0xcf,
+                ],
+                "HashOf<Vec<InstructionBox>> must match the Java/JS compact-v5 golden",
+            );
+        }
+        #[test]
         fn fixture_account_uses_checked_seed_derivation() {
             let account = fixture_account(42);
             let expected = AccountId::of(fixture_key_pair(42).public_key().clone());

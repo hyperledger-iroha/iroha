@@ -4,6 +4,9 @@ fn validation_fee_account(seed: u8) -> AccountId {
         .expect("validation-fee fixture keypair");
     AccountId::new(keypair.public_key().clone())
 }
+fn validation_fee_proposal_operator_fixture() -> AccountId {
+    validation_fee_account(7)
+}
 fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
@@ -222,7 +225,9 @@ fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
         ),
     ] {
         let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
+        let proposal_operator = validation_fee_proposal_operator_fixture();
         let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: proposal_operator.clone(),
             policy: policy.clone(),
             payout_lifecycle_proposal_id,
             plain_electorate_rules: plain_electorate_rules.clone(),
@@ -232,6 +237,7 @@ fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
         let rules_json =
             json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON");
         let actual = validation_fee_policy_proposal_fingerprint_v1(
+            proposal_operator.to_string(),
             policy_json,
             payout_lifecycle_proposal_id.map(|id| Uint8Array::from(id.to_vec())),
             rules_json,
@@ -241,16 +247,41 @@ fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
     }
 }
 #[test]
+fn validation_fee_policy_proposal_fingerprint_binds_the_exact_operator() {
+    let policy_json =
+        json::to_json(&validation_fee_policy_fixture(None)).expect("validation-fee policy JSON");
+    let rules_json = json::to_json(&validation_fee_plain_electorate_rules_fixture())
+        .expect("plain electorate rules JSON");
+    let first = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_account(7).to_string(),
+        policy_json.clone(),
+        None,
+        rules_json.clone(),
+    )
+    .expect("first operator fingerprint");
+    let second = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_account(8).to_string(),
+        policy_json,
+        None,
+        rules_json,
+    )
+    .expect("second operator fingerprint");
+    assert_ne!(first.as_ref(), second.as_ref());
+}
+#[test]
 fn validation_fee_payout_lifecycle_proposal_fingerprint_matches_native_kind() {
     let payout_binding = validation_fee_payout_binding_fixture();
     let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
+    let proposal_operator = validation_fee_proposal_operator_fixture();
     let expected =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            proposal_operator: proposal_operator.clone(),
             payout_binding: payout_binding.clone(),
             plain_electorate_rules: plain_electorate_rules.clone(),
         })
         .fingerprint();
     let actual = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        proposal_operator.to_string(),
         json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
         json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
     )
@@ -262,6 +293,7 @@ fn validation_fee_proposal_fingerprints_match_wallet_release_vectors() {
     let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
     let policy = validation_fee_policy_fixture(None);
     let policy_fingerprint = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&policy).expect("validation-fee policy JSON"),
         None,
         json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
@@ -273,6 +305,7 @@ fn validation_fee_proposal_fingerprints_match_wallet_release_vectors() {
     );
     let payout_binding = validation_fee_payout_binding_fixture();
     let payout_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
         json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
     )
@@ -294,6 +327,7 @@ fn validation_fee_policy_proposal_fingerprint_rejects_unknown_policy_fields() {
             json::Value::String("legacy".to_owned()),
         );
     let result = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&value).expect("legacy validation-fee policy JSON"),
         None,
         json::to_json(&validation_fee_plain_electorate_rules_fixture())
@@ -313,6 +347,7 @@ fn validation_fee_payout_lifecycle_rejects_retired_sbd_field_names() {
     let ds_asset_id = fields.remove("ds_asset_id").expect("DS asset field");
     fields.insert("sbd_asset_id".to_owned(), ds_asset_id);
     let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&value).expect("retired payout binding JSON"),
         json::to_json(&validation_fee_plain_electorate_rules_fixture())
             .expect("plain electorate rules JSON"),
@@ -328,6 +363,7 @@ fn validation_fee_policy_proposal_fingerprint_rejects_wrong_contract_subject() {
     let mut policy = validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture()));
     policy.treasury_account_id = validation_fee_account(9);
     let result = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&policy).expect("mismatched validation-fee policy JSON"),
         Some(Uint8Array::from(vec![0x56; 32])),
         json::to_json(&validation_fee_plain_electorate_rules_fixture())
@@ -351,6 +387,7 @@ fn validation_fee_proposal_fingerprints_reject_non_exact_plain_rules() {
             json::Value::String("Plain".to_owned()),
         );
     let result = validation_fee_policy_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&validation_fee_policy_fixture(None)).expect("validation-fee policy JSON"),
         None,
         json::to_json(&value).expect("legacy plain electorate rules JSON"),
@@ -366,6 +403,7 @@ fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
     let mut payout_binding = validation_fee_payout_binding_fixture();
     payout_binding.code_hash = [0; 32];
     let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        validation_fee_proposal_operator_fixture().to_string(),
         json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
         json::to_json(&validation_fee_plain_electorate_rules_fixture())
             .expect("plain electorate rules JSON"),

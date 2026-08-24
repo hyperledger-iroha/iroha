@@ -71,6 +71,15 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .project_recovered_durable_validate_retry_census(coordinator, decision)
     }
+    /// Return the sole recovered Decision Apply Ready ordinal when the full
+    /// logical and concrete startup census agrees.
+    pub(super) fn exact_recovered_decision_apply_ready_ordinal(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<u128> {
+        self.registry
+            .exact_recovered_decision_apply_ready_ordinal(coordinator)
+    }
     /// Join one runtime output to its exact next lifecycle row.
     fn join_lifecycle_output(
         &self,
@@ -1383,6 +1392,14 @@ impl ProductionLifecycleOwnerV1 {
                     pending: execution.into_pending(),
                 };
             }
+            Err(_) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        LifecycleOutputRegistryFailureV1::ReadyRejoin,
+                    ),
+                    pending: execution.into_pending(),
+                };
+            }
         };
         match execution.execute_with(execute) {
             Ok(LifecycleOutputServiceDispositionV1::Accepted) => {}
@@ -1447,7 +1464,7 @@ impl ProductionLifecycleOwnerV1 {
         ) {
             return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                 failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
-                    RegistryError::CorruptWork,
+                    LifecycleOutputRegistryFailureV1::TerminalProjection,
                 ),
                 pending: execution.into_pending(),
             };

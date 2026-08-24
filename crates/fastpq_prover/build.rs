@@ -20,6 +20,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
     println!("cargo:rerun-if-env-changed=SDKROOT");
+    println!("cargo:rerun-if-env-changed=TOOLCHAINS");
+    println!("cargo:rerun-if-env-changed=PATH");
     println!("cargo:rerun-if-changed=cuda/fastpq_cuda.cu");
     println!("cargo:rerun-if-changed=metal/include/params.h");
     println!("cargo:rerun-if-changed=metal/kernels/field.metal");
@@ -112,23 +114,29 @@ fn ensure_metal_toolchain() -> Result<(), String> {
     println!(
         "cargo:warning=FASTPQ Metal compiler/linker is unavailable ({initial_error}); running `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}`"
     );
-    let status = Command::new("xcodebuild")
+    let download = Command::new("xcodebuild")
         .args(["-downloadComponent", "MetalToolchain"])
-        .status()
+        .output()
         .map_err(|error| {
             metal_toolchain_bootstrap_error(&format!(
                 "failed to launch `{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` after the initial health check failed ({initial_error}): {error}"
             ))
         })?;
-    if !status.success() {
+    if !download.status.success() {
         return Err(metal_toolchain_bootstrap_error(&format!(
-            "`{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` exited with {status} after the initial health check failed ({initial_error})"
+            "`{METAL_TOOLCHAIN_DOWNLOAD_COMMAND}` exited with {} after the initial health check failed ({initial_error}): {}",
+            download.status,
+            command_diagnostic(&download)
         )));
     }
     // Clear xcrun's negative lookup cache before resolving the newly installed tools.
-    let cache_error = match Command::new("xcrun").arg("--kill-cache").status() {
-        Ok(status) if status.success() => None,
-        Ok(status) => Some(format!("`xcrun --kill-cache` exited with {status}")),
+    let cache_error = match Command::new("xcrun").arg("--kill-cache").output() {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => Some(format!(
+            "`xcrun --kill-cache` exited with {}: {}",
+            output.status,
+            command_diagnostic(&output)
+        )),
         Err(error) => Some(format!("failed to launch `xcrun --kill-cache`: {error}")),
     };
     match metal_toolchain_status() {
@@ -198,7 +206,7 @@ fn compile_metal_shaders() -> Result<(), String> {
         let air_path = out_dir.join(format!("{name}.air"));
         remove_stale_output("Metal AIR object", &air_path)?;
         let status = Command::new(&metal_exe)
-            .arg("-std=metal3.0")
+            .arg("-std=macos-metal2.4")
             .arg("-O3")
             .arg("-c")
             .arg(format!("-fmodules-cache-path={}", modules_cache.display()))

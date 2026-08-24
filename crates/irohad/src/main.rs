@@ -13546,7 +13546,7 @@ fn validate_config_for_check_mode(
             let outcome =
                 kagemusha_validator_qualification::try_build_kagemusha_validator_qualification_v1(
                     sources,
-                    Some(promotion),
+                    Some(&promotion),
                     Some(&capture),
                     Some(genesis),
                     Some(&runtime_effective_config),

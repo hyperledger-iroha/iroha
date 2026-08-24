@@ -8,6 +8,7 @@ use fastpq_prover::{
 };
 #[cfg(test)]
 use iroha_config::parameters::actual::FastpqExecutionMode;
+#[cfg(any(test, feature = "fastpq-gpu"))]
 use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -86,6 +87,7 @@ impl FastpqPublicInputsTemplate {
         }
     }
 }
+#[cfg(any(test, feature = "fastpq-gpu"))]
 pub(crate) fn poseidon_digest_acceleration_configured(cfg: &Fastpq) -> bool {
     match cfg.poseidon_mode {
         FastpqPoseidonMode::Cpu => false,

@@ -24,7 +24,11 @@ pub mod isi {
     };
     use eyre::Result;
     use iroha_crypto::{
-        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
+        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature,
+        blake2::{
+            Blake2b512, Blake2bVar,
+            digest::{Update as BlakeUpdate, VariableOutput as BlakeVariableOutput},
+        },
     };
     use iroha_executor_data_model::permission::{
         account::{
@@ -80,7 +84,8 @@ pub mod isi {
         events::data::{
             governance::{
                 GovernanceEvent, GovernanceParliamentApprovalRecorded,
-                GovernanceParliamentBallotRecorded, GovernanceReferendumClosed,
+                GovernanceParliamentAttemptCreated, GovernanceParliamentBallotRecorded,
+                GovernanceParliamentLifecycleTransitionApplied, GovernanceReferendumClosed,
                 GovernanceSlashReason,
             },
             prelude::{AccountEvent, AccountPermissionChanged, TriggerEvent},
@@ -91,7 +96,10 @@ pub mod isi {
         },
         governance::types::{
             AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-            GovernanceFinalizationEvidence, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
+            GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1,
+            GovernanceExpectedHeadV1, GovernanceFinalizationEvidence, ParliamentBody,
+            ParliamentAggregateTallyV1, ParliamentDecisionModeV1, ProposalKind,
+            RequiredParliamentBodyV1, RiskTierV1, RuntimeUpgradeProposal,
             SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
@@ -237,7 +245,13 @@ pub mod isi {
     }
     use super::*;
     use crate::{
-        governance::draw::{self, derive_parliament_bodies},
+        governance::{
+            draw::{self, derive_parliament_bodies},
+            timed_ovn::{
+                TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
+                timed_ovn_parameter_hash_v1,
+            },
+        },
         smartcontracts::{
             code::fetch_bound_contract_record,
             isi::triggers::{
@@ -2081,28 +2095,21 @@ pub mod isi {
             GovernanceApprovalMode::LegacyCouncilEpoch
         }
     }
-    fn latest_governance_entropy_seed(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
+    fn latest_governance_entropy_seed(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], Error> {
         if let Some((_epoch, record)) = state_transaction.world.vrf_epochs.iter().last() {
-            return record.seed;
+            return Ok(record.seed);
         }
-        let mut input = Vec::with_capacity(
-            b"iroha:gov:jit:entropy:fallback:v1|".len()
-                + state_transaction.network_id.as_bytes().len()
-                + core::mem::size_of::<u64>(),
-        );
-        input.extend_from_slice(b"iroha:gov:jit:entropy:fallback:v1|");
-        input.extend_from_slice(state_transaction.network_id.as_bytes());
-        input.extend_from_slice(&state_transaction._curr_block.height().get().to_le_bytes());
-        let digest = Blake2b512::digest(input);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest[..32]);
-        out
+        Err(InstructionExecutionError::InvariantViolation(
+            "governance sortition requires finalized beacon entropy".into(),
+        ))
     }
     fn derive_epoch_parliament_beacon(
         epoch: u64,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> [u8; 32] {
-        let entropy = latest_governance_entropy_seed(state_transaction);
+    ) -> Result<[u8; 32], Error> {
+        let entropy = latest_governance_entropy_seed(state_transaction)?;
         let mut input = Vec::with_capacity(
             b"iroha:gov:epoch-beacon:v1|".len()
                 + state_transaction.network_id.as_bytes().len()
@@ -2116,14 +2123,14 @@ pub mod isi {
         let digest = Blake2b512::digest(input);
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest[..32]);
-        out
+        Ok(out)
     }
     fn derive_proposal_parliament_beacon(
         proposal_id: [u8; 32],
         created_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> [u8; 32] {
-        let entropy = latest_governance_entropy_seed(state_transaction);
+    ) -> Result<[u8; 32], Error> {
+        let entropy = latest_governance_entropy_seed(state_transaction)?;
         let mut input = Vec::with_capacity(
             b"iroha:gov:proposal-beacon:v1|".len()
                 + state_transaction.network_id.as_bytes().len()
@@ -2139,7 +2146,7 @@ pub mod isi {
         let digest = Blake2b512::digest(input);
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest[..32]);
-        out
+        Ok(out)
     }
     fn compute_parliament_roster_root(
         bodies: &iroha_data_model::governance::types::ParliamentBodies,
@@ -2161,7 +2168,7 @@ pub mod isi {
     ) -> Result<crate::state::GovernanceParliamentSnapshot, Error> {
         let selection_epoch = created_height;
         let beacon =
-            derive_proposal_parliament_beacon(proposal_id, created_height, state_transaction);
+            derive_proposal_parliament_beacon(proposal_id, created_height, state_transaction)?;
         let current_height = state_transaction._curr_block.height().get();
         let required_bond =
             required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
@@ -3814,6 +3821,17 @@ pub mod isi {
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
+    fn validation_fee_proposal_operator(kind: &ProposalKind) -> Option<&AccountId> {
+        match kind {
+            ProposalKind::ValidationFeePolicy(payload) => Some(&payload.proposal_operator),
+            ProposalKind::ValidationFeePayoutLifecycle(payload) => Some(&payload.proposal_operator),
+            ProposalKind::DeployContract(_)
+            | ProposalKind::RuntimeUpgrade(_)
+            | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_) => None,
+        }
+    }
     fn validate_validation_fee_plain_electorate_rules(
         rules: &ValidationFeePlainElectorateRulesV1,
         state_transaction: &StateTransaction<'_, '_>,
@@ -3903,6 +3921,7 @@ pub mod isi {
                 }
             }
             let payload = ValidationFeePolicyProposal {
+                proposal_operator: authority.clone(),
                 policy: self.policy.clone(),
                 payout_lifecycle_proposal_id: self.payout_lifecycle_proposal_id,
                 plain_electorate_rules: self.plain_electorate_rules.clone(),
@@ -3982,9 +4001,12 @@ pub mod isi {
                 ));
             }
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.as_validation_fee_policy() != Some(&payload) {
+                if existing.as_validation_fee_policy() != Some(&payload)
+                    || existing.proposer != *authority
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
+                        "existing validation-fee policy does not exactly match its operator-bound preimage"
+                            .into(),
                     ));
                 }
                 let referendum = state_transaction
@@ -4148,6 +4170,7 @@ pub mod isi {
                     .map_err(Error::from)?;
             }
             let payload = ValidationFeePayoutLifecycleProposal {
+                proposal_operator: authority.clone(),
                 payout_binding: self.payout_binding.clone(),
                 plain_electorate_rules: self.plain_electorate_rules.clone(),
             };
@@ -4203,9 +4226,12 @@ pub mod isi {
                 ));
             }
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
-                if existing.as_validation_fee_payout_lifecycle() != Some(&payload) {
+                if existing.as_validation_fee_payout_lifecycle() != Some(&payload)
+                    || existing.proposer != *authority
+                {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "governance proposal id collision".into(),
+                        "existing validation-fee payout lifecycle does not exactly match its operator-bound preimage"
+                            .into(),
                     ));
                 }
                 let referendum = state_transaction
@@ -4494,6 +4520,12 @@ pub mod isi {
                     "election already finalized".into(),
                 ));
             }
+            let ballot_corpus_cap = state_transaction.zk.ballot_history_cap.clamp(1, 1_000);
+            if st.ciphertexts.len() >= ballot_corpus_cap {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance ballot corpus is full".into(),
+                ));
+            }
             let domain_tag = if st.domain_tag.is_empty() {
                 DEFAULT_NULLIFIER_DOMAIN_TAG.to_string()
             } else {
@@ -4547,17 +4579,17 @@ pub mod isi {
                         "referendum not active".into(),
                     ));
                 }
-                if matches!(rr.status, crate::state::GovernanceReferendumStatus::Closed) {
+                if !matches!(rr.status, crate::state::GovernanceReferendumStatus::Open) {
                     state_transaction.world.emit_events(Some(
                         iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                             iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                 referendum_id: rid,
-                                reason: "referendum already closed".into(),
+                                reason: "referendum has not passed the Parliament gate".into(),
                             },
                         ),
                     ));
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "referendum closed".into(),
+                        "referendum has not passed the Parliament gate".into(),
                     ));
                 }
             }
@@ -4882,10 +4914,10 @@ pub mod isi {
                     ));
                 }
             }
-            // 4) Ensure a referendum record exists and open it if needed; enforce Zk mode
+            // 4) Re-check that the Parliament gate remains open after proof verification.
             {
                 let rid = self.election_id.clone();
-                let Some(mut rr) = state_transaction
+                let Some(rr) = state_transaction
                     .world
                     .governance_referenda
                     .get(&rid)
@@ -4896,19 +4928,8 @@ pub mod isi {
                     ));
                 };
                 if !matches!(rr.status, crate::state::GovernanceReferendumStatus::Open) {
-                    rr.status = crate::state::GovernanceReferendumStatus::Open;
-                    state_transaction
-                        .world
-                        .governance_referenda
-                        .insert(rid.clone(), rr);
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
-                            iroha_data_model::events::data::governance::GovernanceReferendumOpened {
-                                id: rid.clone(),
-                                h_start: rr.h_start,
-                                h_end: rr.h_end,
-                            },
-                        ),
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum has not passed the Parliament gate".into(),
                     ));
                 }
             }
@@ -5095,13 +5116,9 @@ pub mod isi {
                     }
                 }
             }
-            // Record commitment bytes and enforce cap
+            // Preserve the complete accepted corpus. Capacity was checked before any ballot
+            // nullifier, lock, or referendum state could be mutated.
             st.ciphertexts.push(commit_bytes.to_vec());
-            let cap = state_transaction.zk.ballot_history_cap.max(1);
-            if st.ciphertexts.len() > cap {
-                let surplus = st.ciphertexts.len() - cap;
-                st.ciphertexts.drain(0..surplus);
-            }
             state_transaction.world.elections.remove(id.clone());
             state_transaction.world.elections.insert(id, st);
             // Emit a governance ballot accepted event (mode = Zk, weight not revealed)
@@ -5149,6 +5166,13 @@ pub mod isi {
         if proposal.kind.fingerprint() != proposal_id {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal storage key differs from its exact typed fingerprint"
+                    .into(),
+            )
+            .into());
+        }
+        if validation_fee_proposal_operator(&proposal.kind) != Some(&proposal.proposer) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal operator differs from its retained governance proposer"
                     .into(),
             )
             .into());
@@ -5984,6 +6008,18 @@ pub mod isi {
                 "validation-fee proposal id differs from its exact typed fingerprint".into(),
             ));
         }
+        let proposal_operator =
+            validation_fee_proposal_operator(&proposal.kind).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee authorization received a non-validation-fee proposal".into(),
+                )
+            })?;
+        if proposal_operator != &proposal.proposer {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal operator differs from the retained governance proposer"
+                    .into(),
+            ));
+        }
         let evidence = proposal.finalization_evidence.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal has no finalization evidence".into(),
@@ -6068,6 +6104,7 @@ pub mod isi {
             rules,
         )?;
         let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_operator: proposal_operator.clone(),
             proposal_id,
             proposal_fingerprint,
             proposal_time_roster_root: snapshot.roster_root,
@@ -8650,339 +8687,1004 @@ pub mod isi {
     impl Execute for gov::ApproveGovernanceProposal {
         fn execute(
             self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            record_parliament_stage_decision(
-                self.body,
-                self.proposal_id,
-                gov::ParliamentDecision::Approve,
-                authority,
-                state_transaction,
-            )
+            Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "direct Parliament approvals were removed; submit a private OVN ballot attempt"
+                        .into(),
+                ),
+            ))
         }
     }
     impl Execute for gov::CastParliamentBallot {
         fn execute(
             self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            record_parliament_stage_decision(
-                self.body,
-                self.proposal_id,
-                self.decision,
-                authority,
-                state_transaction,
-            )
-        }
-    }
-    struct ApprovalContext {
-        proposal_id: [u8; 32],
-        rid: String,
-        referendum: crate::state::GovernanceReferendumRecord,
-        proposal_kind: ProposalKind,
-        bodies: iroha_data_model::governance::types::ParliamentBodies,
-        roster: iroha_data_model::governance::types::ParliamentRoster,
-        epoch: u64,
-        persist_epoch_bodies: bool,
-        now_h: u64,
-        quorum_bps: u16,
-    }
-    fn record_parliament_stage_decision(
-        body: ParliamentBody,
-        proposal_id: [u8; 32],
-        decision: gov::ParliamentDecision,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let ctx = load_approval_context(body, proposal_id, state_transaction)?;
-        ensure_parliament_member(authority, &ctx.roster)?;
-        if ctx.persist_epoch_bodies {
-            persist_parliament_bodies_if_missing(&ctx, state_transaction);
-        }
-        let Some(record) =
-            record_parliament_decision(body, decision, authority, &ctx, state_transaction)
-        else {
-            return Ok(());
-        };
-        state_transaction
-            .world
-            .emit_events(Some(GovernanceEvent::ParliamentBallotRecorded(
-                GovernanceParliamentBallotRecorded {
-                    proposal_id,
-                    epoch: ctx.epoch,
-                    body,
-                    decision,
-                    approvals: record.approvals,
-                    rejections: record.rejections,
-                    abstentions: record.abstentions,
-                    required: record.required,
-                },
-            )));
-        if matches!(decision, gov::ParliamentDecision::Approve) {
-            state_transaction
-                .world
-                .emit_events(Some(GovernanceEvent::ParliamentApprovalRecorded(
-                    GovernanceParliamentApprovalRecorded {
-                        proposal_id,
-                        epoch: ctx.epoch,
-                        body,
-                        approvals: record.approvals,
-                        required: record.required,
-                    },
-                )));
-        }
-        maybe_apply_parliament_decision(body, &ctx, &record.approvals_snapshot, state_transaction);
-        Ok(())
-    }
-    fn load_approval_context(
-        body: ParliamentBody,
-        proposal_id: [u8; 32],
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<ApprovalContext, Error> {
-        let proposal = state_transaction
-            .world
-            .governance_proposals
-            .get(&proposal_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "governance proposal not found".into(),
-                )
-            })?;
-        if matches!(
-            proposal.status,
-            crate::state::GovernanceProposalStatus::Approved
-                | crate::state::GovernanceProposalStatus::Rejected
-                | crate::state::GovernanceProposalStatus::Enacted
-                | crate::state::GovernanceProposalStatus::Superseded
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "governance proposal is no longer open for parliament ballots".into(),
-            ));
-        }
-        let rid = hex::encode(proposal_id);
-        let referendum = state_transaction
-            .world
-            .governance_referenda
-            .get(&rid)
-            .copied()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "referendum not found for governance proposal".into(),
-                )
-            })?;
-        if referendum.status == crate::state::GovernanceReferendumStatus::Closed {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "referendum already closed".into(),
-            ));
-        }
-        if referendum.status != crate::state::GovernanceReferendumStatus::Proposed {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "referendum already left parliament stage".into(),
-            ));
-        }
-        let now_h = state_transaction._curr_block.height().get();
-        if now_h > referendum.h_end {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "referendum window elapsed for parliament ballots".into(),
-            ));
-        }
-        if !required_parliament_bodies(&proposal.kind).contains(&body) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament body is not required for this proposal".into(),
-            ));
-        }
-        let quorum_bps = proposal.pipeline.parliament_quorum_bps;
-        if !(1..=10_000).contains(&quorum_bps) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "proposal parliament quorum snapshot is outside 1..=10,000 basis points".into(),
-            ));
-        }
-        // A proposal-local snapshot is authoritative even if the live governance module changes
-        // later. The module catalog selects the policy at proposal creation; it must not swap the
-        // electorate while ballots are in flight.
-        let (bodies, epoch, persist_epoch_bodies) =
-            if let Some(snapshot) = proposal.parliament_snapshot.as_ref() {
-                if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "proposal parliament snapshot epoch mismatch".into(),
-                    ));
-                }
-                let roster_root = compute_parliament_roster_root(&snapshot.bodies)?;
-                if roster_root != snapshot.roster_root {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "proposal parliament snapshot commitment mismatch".into(),
-                    ));
-                }
-                (snapshot.bodies.clone(), snapshot.selection_epoch, false)
-            } else {
-                if validation_fee_plain_electorate_rules(&proposal.kind).is_some() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "validation-fee proposal parliament snapshot is missing".into(),
-                    ));
-                }
-                let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
-                let epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-                let council = state_transaction
-                    .world
-                    .council
-                    .get(&epoch)
-                    .cloned()
-                    .ok_or_else(|| {
-                        let message = if resolve_governance_approval_mode(state_transaction)
-                            == GovernanceApprovalMode::ParliamentSortitionJit
-                        {
-                            "proposal parliament snapshot missing and council roster unavailable"
-                        } else {
-                            "council roster missing for current epoch"
-                        };
-                        InstructionExecutionError::InvariantViolation(message.into())
-                    })?;
-                let beacon = derive_epoch_parliament_beacon(epoch, state_transaction);
-                let bodies = state_transaction
-                    .world
-                    .parliament_bodies
-                    .get(&epoch)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        derive_parliament_bodies(
-                            &state_transaction.gov,
-                            &state_transaction.network_id,
-                            epoch,
-                            &beacon,
-                            &council,
-                        )
-                    });
-                (bodies, epoch, true)
-            };
-        if bodies.selection_epoch != epoch {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament roster epoch mismatch".into(),
-            ));
-        }
-        let Some(roster) = bodies.rosters.get(&body).cloned() else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament roster missing for requested body".into(),
-            ));
-        };
-        if roster.body != body {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament roster body mismatch".into(),
-            ));
-        }
-        if roster.epoch != epoch {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament body roster epoch mismatch".into(),
-            ));
-        }
-        if roster.members.is_empty() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament roster empty for requested body".into(),
-            ));
-        }
-        Ok(ApprovalContext {
-            proposal_id,
-            rid,
-            referendum,
-            proposal_kind: proposal.kind,
-            bodies,
-            roster,
-            epoch,
-            persist_epoch_bodies,
-            now_h,
-            quorum_bps,
-        })
-    }
-    fn ensure_parliament_member(
-        authority: &AccountId,
-        roster: &iroha_data_model::governance::types::ParliamentRoster,
-    ) -> Result<(), Error> {
-        let eligible = roster.members.iter().any(|member| member == authority);
-        if eligible {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "only seated parliament members may vote for this body".into(),
+            Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "plaintext Parliament ballots were removed; submit a private OVN ballot attempt"
+                        .into(),
+                ),
             ))
         }
     }
-    fn persist_parliament_bodies_if_missing(
-        ctx: &ApprovalContext,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        if state_transaction
-            .world
-            .parliament_bodies
-            .get(&ctx.epoch)
-            .is_none()
-        {
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(ctx.epoch, ctx.bodies.clone());
+
+    const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
+    const PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1: &[u8] =
+        b"iroha.governance.parliament.expected_head.root.v1";
+
+    fn parliament_governance_head_root_v1(value: &impl norito::codec::Encode) -> [u8; 32] {
+        let encoded = norito::codec::Encode::encode(value);
+        let domain_len = u64::try_from(PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1.len())
+            .expect("the protocol-defined Parliament head-root domain fits in u64")
+            .to_le_bytes();
+        let mut hasher = <Blake2bVar as BlakeVariableOutput>::new(32)
+            .expect("the Parliament head-root digest length is valid");
+        BlakeUpdate::update(&mut hasher, &domain_len);
+        BlakeUpdate::update(&mut hasher, PARLIAMENT_GOVERNANCE_HEAD_ROOT_V1);
+        BlakeUpdate::update(&mut hasher, &encoded);
+        let mut root = [0_u8; 32];
+        BlakeVariableOutput::finalize_variable(hasher, &mut root)
+            .expect("the Parliament head-root output has the configured length");
+        root
+    }
+
+    fn parliament_present_head_v1(
+        subject_id: [u8; 32],
+        version: u64,
+        value: &impl norito::codec::Encode,
+    ) -> Result<GovernanceExpectedHeadV1, Error> {
+        if version == 0 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "the governed Parliament subject has an invalid zero version".into(),
+            ));
         }
+        Ok(GovernanceExpectedHeadV1::Present(
+            GovernanceExpectedHeadPresentV1 {
+                subject_id,
+                version,
+                head_root: parliament_governance_head_root_v1(value),
+            },
+        ))
     }
-    struct ParliamentDecisionRecord {
-        approvals: u32,
-        rejections: u32,
-        abstentions: u32,
-        required: u32,
-        approvals_snapshot: crate::state::GovernanceStageApprovals,
+
+    fn parliament_absent_head_v1(subject_id: [u8; 32]) -> GovernanceExpectedHeadV1 {
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 { subject_id })
     }
-    fn record_parliament_decision(
-        body: ParliamentBody,
-        decision: gov::ParliamentDecision,
-        authority: &AccountId,
-        ctx: &ApprovalContext,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Option<ParliamentDecisionRecord> {
-        let committee_size = ctx.roster.members.len();
-        let required = crate::state::council_quorum_threshold(committee_size, ctx.quorum_bps);
-        let mut approvals = state_transaction
-            .world
-            .governance_stage_approvals
-            .get(&ctx.rid)
-            .cloned()
-            .unwrap_or_default();
-        let (inserted, approvals_count, rejections_count, abstentions_count, required) = {
-            let stage_record = approvals.ensure_stage(body, ctx.epoch, required, ctx.quorum_bps);
-            let inserted = stage_record.record_decision(authority.clone(), decision);
-            let approvals_count = u32::try_from(stage_record.approvers.len()).unwrap_or(u32::MAX);
-            let rejections_count = u32::try_from(stage_record.rejections.len()).unwrap_or(u32::MAX);
-            let abstentions_count =
-                u32::try_from(stage_record.abstentions.len()).unwrap_or(u32::MAX);
-            let required = stage_record.required;
-            (
-                inserted,
-                approvals_count,
-                rejections_count,
-                abstentions_count,
-                required,
+
+    fn parliament_expected_head_v1(
+        proposal: &ProposalKind,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<GovernanceExpectedHeadV1, Error> {
+        let subject_id = proposal.governed_subject_id_v1().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to derive the governed Parliament subject: {error}").into(),
             )
+        })?;
+        match proposal {
+            ProposalKind::DeployContract(payload) => state_transaction
+                .world
+                .contract_instances
+                .get(&payload.contract_address)
+                .map_or_else(
+                    || Ok(parliament_absent_head_v1(subject_id)),
+                    |code_hash| parliament_present_head_v1(subject_id, 1, code_hash),
+                ),
+            ProposalKind::RuntimeUpgrade(payload) => {
+                let runtime_upgrade_id = payload.manifest.id();
+                state_transaction
+                    .world
+                    .runtime_upgrades
+                    .get(&runtime_upgrade_id)
+                    .map_or_else(
+                        || Ok(parliament_absent_head_v1(subject_id)),
+                        |record| parliament_present_head_v1(subject_id, 1, record),
+                    )
+            }
+            ProposalKind::SccpRouteGovernance(_) => {
+                let registry = state_transaction.sccp_registry.to_wire();
+                parliament_present_head_v1(subject_id, u64::from(registry.version), &registry)
+            }
+            ProposalKind::SorafsProviderGovernance(payload) => {
+                let provider_id = payload.action.provider_id();
+                state_transaction
+                    .world
+                    .provider_owners
+                    .get(&provider_id)
+                    .map_or_else(
+                        || Ok(parliament_absent_head_v1(subject_id)),
+                        |owner| parliament_present_head_v1(subject_id, 1, owner),
+                    )
+            }
+            ProposalKind::MusubiRegistryGovernance(action) => {
+                use iroha_data_model::musubi::MusubiParliamentActionV1;
+
+                match action {
+                    MusubiParliamentActionV1::RecoverPackageOwners(recovery) => state_transaction
+                        .world
+                        .musubi_packages
+                        .get(&recovery.package)
+                        .map_or_else(
+                            || Ok(parliament_absent_head_v1(subject_id)),
+                            |package| {
+                                parliament_present_head_v1(
+                                    subject_id,
+                                    package.revisions.governance,
+                                    package,
+                                )
+                            },
+                        ),
+                    MusubiParliamentActionV1::RetargetAlias(retarget) => state_transaction
+                        .world
+                        .musubi_aliases
+                        .get(&retarget.alias)
+                        .map_or_else(
+                            || Ok(parliament_absent_head_v1(subject_id)),
+                            |alias| {
+                                parliament_present_head_v1(
+                                    subject_id,
+                                    alias.history_revision,
+                                    alias,
+                                )
+                            },
+                        ),
+                    MusubiParliamentActionV1::TakedownArtifact(takedown) => state_transaction
+                        .world
+                        .musubi_releases
+                        .get(&takedown.release)
+                        .map_or_else(
+                            || Ok(parliament_absent_head_v1(subject_id)),
+                            |release| {
+                                parliament_present_head_v1(
+                                    subject_id,
+                                    release.revisions.artifact_governance,
+                                    release,
+                                )
+                            },
+                        ),
+                    MusubiParliamentActionV1::SetRegistryPolicy(_) => {
+                        let policy = state_transaction.world.musubi_registry_policy.get();
+                        parliament_present_head_v1(subject_id, policy.revision, policy)
+                    }
+                }
+            }
+            ProposalKind::ValidationFeePolicy(_) => {
+                let registry = validation_fee_policy_registry(state_transaction)?;
+                registry.as_ref().and_then(|registry| registry.head()).map_or_else(
+                    || Ok(parliament_absent_head_v1(subject_id)),
+                    |head| {
+                        parliament_present_head_v1(
+                            subject_id,
+                            head.policy.policy_version,
+                            head,
+                        )
+                    },
+                )
+            }
+            ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                // The governed subject is the exact lifecycle seal. The enactment effect is a
+                // first-install CAS over its three derived runtime permissions, so `Absent` is
+                // valid only after the same pre-effect validator proves that no holder exists.
+                validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+                    &payload.payout_binding,
+                    state_transaction,
+                )?;
+                Ok(parliament_absent_head_v1(subject_id))
+            }
+        }
+    }
+
+    fn parliament_required_bodies_v1(
+        proposal: &ProposalKind,
+    ) -> (RiskTierV1, Vec<RequiredParliamentBodyV1>) {
+        let bodies: &[ParliamentBody] = match proposal {
+            ProposalKind::DeployContract(_) => &[
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::OversightCommittee,
+                ParliamentBody::PolicyJury,
+            ],
+            ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::ValidationFeePolicy(_)
+            | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::CoordinationCouncil,
+                ParliamentBody::FmaCommittee,
+                ParliamentBody::OversightCommittee,
+                ParliamentBody::PolicyJury,
+            ],
+            ProposalKind::RuntimeUpgrade(_)
+            | ProposalKind::MusubiRegistryGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_) => &[
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::CoordinationCouncil,
+                ParliamentBody::OversightCommittee,
+                ParliamentBody::PolicyJury,
+            ],
         };
-        if !inserted {
-            return None;
+        let risk_tier = if matches!(proposal, ProposalKind::DeployContract(_)) {
+            RiskTierV1::Standard
+        } else {
+            RiskTierV1::Constitutional
+        };
+        let requirements = bodies
+            .iter()
+            .copied()
+            .map(|body| RequiredParliamentBodyV1 {
+                body,
+                decision_mode: if body == ParliamentBody::PolicyJury {
+                    ParliamentDecisionModeV1::HiddenBindingBallot
+                } else {
+                    ParliamentDecisionModeV1::PublicFinding
+                },
+            })
+            .collect();
+        (risk_tier, requirements)
+    }
+
+    fn parliament_reducer_error(error: crate::governance::parliament::ParliamentReducerErrorV1) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            format!("Parliament lifecycle transition rejected: {error}"),
+        ))
+        .into()
+    }
+
+    fn require_parliament_manager(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required: Permission = CanManageParliament.into();
+        if !has_exact_permission(&state_transaction.world, authority, &required) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanManageParliament".into(),
+            ));
         }
-        if approvals.approval_gate_height.is_none()
-            && parliament_approval_gate_met(&ctx.proposal_kind, &approvals, ctx.epoch)
+        Ok(())
+    }
+
+    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            require_parliament_manager(authority, state_transaction)?;
+
+            let proposal_id = self.proposal.fingerprint();
+            let proposal_record = state_transaction
+                .world
+                .governance_proposals
+                .get(&proposal_id)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "Parliament attempt requires an admitted exact typed governance proposal"
+                            .into(),
+                    )
+                })?;
+            if proposal_record.kind != self.proposal {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament proposal storage key collides with different typed content".into(),
+                ));
+            }
+
+            let proposal_content_id = self.proposal_content_id();
+            let previous = state_transaction
+                .world
+                .parliament_attempts
+                .iter()
+                .filter(|(_, state)| state.proposal_content_id() == proposal_content_id)
+                .map(|(_, state)| state)
+                .max_by_key(|state| state.attempt().sequence);
+            let expected_sequence = previous.map_or(0, |state| state.attempt().sequence.saturating_add(1));
+            if self.attempt_sequence != expected_sequence {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "Parliament attempt sequence must be the exact next sequence {expected_sequence}"
+                    )
+                    .into(),
+                ));
+            }
+            if previous.is_some_and(|state| {
+                !matches!(
+                    state.attempt().status,
+                    iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
+                        | iroha_data_model::governance::types::GovernanceAttemptStatusV1::Superseded
+                        | iroha_data_model::governance::types::GovernanceAttemptStatusV1::ExecutionFailed
+                )
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "a new Parliament retry requires a terminal non-enacted predecessor".into(),
+                ));
+            }
+
+            let governance_attempt_id = self.governance_attempt_id();
+            if state_transaction
+                .world
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament governance attempt already exists".into(),
+                ));
+            }
+            let (risk_tier, required_bodies) = parliament_required_bodies_v1(&self.proposal);
+            let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
+            let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)?;
+            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
+                self.canonical_attempt(risk_tier),
+                PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                effect_preimage_hash,
+                expected_head,
+                required_bodies,
+            )
+            .map_err(parliament_reducer_error)?;
+            state_transaction
+                .put_parliament_attempt(attempt)
+                .map_err(parliament_reducer_error)?;
+            let at_height = state_transaction.block_height();
+            state_transaction.world.emit_events(Some(
+                GovernanceEvent::ParliamentAttemptCreated(GovernanceParliamentAttemptCreated {
+                    proposal_content_id,
+                    governance_attempt_id,
+                    attempt_sequence: self.attempt_sequence,
+                    risk_tier,
+                    policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                    effect_preimage_hash,
+                    expected_head,
+                    at_height,
+                }),
+            ));
+            Ok(())
+        }
+    }
+
+    fn parliament_transition_requires_consensus_v1(
+        kind: gov::ParliamentLifecycleTransitionKindV1,
+    ) -> bool {
+        matches!(
+            kind,
+            gov::ParliamentLifecycleTransitionKindV1::ConsumeSortitionPulseBatch
+                | gov::ParliamentLifecycleTransitionKindV1::FailBodyElectionNoRoster
+                | gov::ParliamentLifecycleTransitionKindV1::SealBodyRoster
+                | gov::ParliamentLifecycleTransitionKindV1::BeginBallotOpeningBatch
+                | gov::ParliamentLifecycleTransitionKindV1::FailBallotNoResult
+                | gov::ParliamentLifecycleTransitionKindV1::ConstructCertificate
+                | gov::ParliamentLifecycleTransitionKindV1::MarkEnacted
+                | gov::ParliamentLifecycleTransitionKindV1::MarkSuperseded
+                | gov::ParliamentLifecycleTransitionKindV1::MarkExecutionFailed
+        )
+    }
+
+    fn canonical_parliament_candidate_snapshot_v1(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Vec<AccountId> {
+        let current_height = state_transaction.block_height();
+        let required_bond =
+            required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
+                required_citizenship_bond_for_role(&state_transaction.gov, "council"),
+            );
+        let mut candidates = state_transaction
+            .world
+            .citizens
+            .iter()
+            .filter_map(|(account_id, record)| {
+                (record.amount >= required_bond && record.cooldown_until <= current_height)
+                    .then(|| account_id.clone())
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates
+    }
+
+    fn ensure_parliament_beacon_session_v1(
+        session_id: iroha_data_model::governance::types::BeaconSessionId,
+        height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let session = state_transaction
+            .world
+            .global_beacon_key_sessions
+            .get(session_id.as_bytes())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "Parliament transition references an unknown finalized beacon key session"
+                        .into(),
+                )
+            })?;
+        if !session.is_active_at(height) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament transition references a beacon key session inactive at its committed height"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn parliament_finalized_pulse_seed_v1(
+        session_id: iroha_data_model::governance::types::BeaconSessionId,
+        height: u64,
+        pulse_id: iroha_data_model::governance::types::BeaconPulseId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], Error> {
+        ensure_parliament_beacon_session_v1(session_id, height, state_transaction)?;
+        let pulse = state_transaction
+            .world
+            .global_beacon_pulses
+            .get(pulse_id.as_bytes())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "Parliament transition references an unknown finalized beacon pulse".into(),
+                )
+            })?;
+        if pulse.network_id != state_transaction.network_id
+            || pulse.session_id != *session_id.as_bytes()
+            || pulse.height != height
+            || pulse.pulse_id != *pulse_id.as_bytes()
         {
-            approvals.approval_gate_height = Some(ctx.now_h);
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament transition does not match the persisted finalized beacon pulse"
+                    .into(),
+            ));
         }
-        let approvals_snapshot = approvals.clone();
+        Ok(pulse.seed)
+    }
+
+    fn parliament_timed_ovn_error_v1(error: impl core::fmt::Display) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            format!("Parliament timed-OVN evidence rejected: {error}"),
+        ))
+        .into()
+    }
+
+    fn validated_parliament_tle_key_session_v1(
+        key_session_id: iroha_data_model::governance::types::TleKeySessionId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<crate::tle_release::ValidatedTleKeySessionV1, Error> {
         state_transaction
             .world
-            .governance_stage_approvals
-            .insert(ctx.rid.clone(), approvals_snapshot);
-        Some(ParliamentDecisionRecord {
-            approvals: approvals_count,
-            rejections: rejections_count,
-            abstentions: abstentions_count,
-            required,
-            approvals_snapshot: approvals,
-        })
+            .tle_key_sessions
+            .get(&key_session_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "Parliament timed ballot references an unknown finalized TLE key session"
+                        .into(),
+                )
+            })?
+            .validate()
+            .map_err(parliament_timed_ovn_error_v1)
     }
+
+    fn parliament_timed_ovn_lifecycle_v1(
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<TimedOvnLifecycleStateV1, Error> {
+        state_transaction
+            .world
+            .timed_ovn_evidence
+            .get(&ballot_attempt_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "Parliament timed ballot has no authoritative evidence lifecycle".into(),
+                )
+                .into()
+            })
+    }
+
+    fn parliament_timed_ovn_corpus_count_v1(count: usize) -> Result<u32, Error> {
+        let count = u32::try_from(count).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "Parliament timed-OVN corpus count exceeds u32".into(),
+            )
+        })?;
+        if count == 0
+            || count
+                > u32::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1)
+                    .expect("the protocol timed-OVN participant cap fits u32")
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament timed-OVN corpus is empty or exceeds the V1 protocol cap".into(),
+            ));
+        }
+        Ok(count)
+    }
+
+    impl Execute for gov::SubmitParliamentLifecycleTransitionV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let transition_kind = self.transition.kind();
+            let transition_digest = self.transition.digest_v1();
+            if parliament_transition_requires_consensus_v1(transition_kind) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "consensus-owned Parliament transitions cannot be submitted by an ordinary signed transaction"
+                        .into(),
+                ));
+            }
+            if !matches!(
+                transition_kind,
+                gov::ParliamentLifecycleTransitionKindV1::RecordInvitationResponse
+            ) {
+                require_parliament_manager(authority, state_transaction)?;
+            }
+
+            let governance_attempt_id = self.governance_attempt_id;
+            let mut attempt = state_transaction
+                .world
+                .parliament_attempts
+                .get(&governance_attempt_id)
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "unknown Parliament governance attempt".into(),
+                    )
+                })?;
+            let proposal_content_id = attempt.proposal_content_id();
+            let current_height = state_transaction.block_height();
+            let mut certificate_id = None;
+            let mut timed_ovn_lifecycle = None;
+
+            match self.transition {
+                gov::ParliamentLifecycleTransitionV1::EscalateRisk(payload) => attempt
+                    .escalate_risk(governance_attempt_id, payload.target)
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::CompleteQualification => attempt
+                    .complete_qualification(governance_attempt_id)
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {
+                    if payload.request.request_height != current_height {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament sortition request height must equal the containing block height"
+                                .into(),
+                        ));
+                    }
+                    ensure_parliament_beacon_session_v1(
+                        payload.request.beacon_session_id,
+                        payload.request.pulse_height,
+                        state_transaction,
+                    )?;
+                    let expected_candidates =
+                        canonical_parliament_candidate_snapshot_v1(state_transaction);
+                    if expected_candidates.is_empty()
+                        || payload.candidate_snapshot != expected_candidates
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament sortition candidate snapshot differs from the complete eligible citizen set"
+                                .into(),
+                        ));
+                    }
+                    attempt
+                        .register_sortition_request(
+                            governance_attempt_id,
+                            payload.sequence,
+                            payload.request,
+                            payload.candidate_snapshot,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {
+                    let pulse_output = parliament_finalized_pulse_seed_v1(
+                        payload.beacon_session_id,
+                        payload.pulse_height,
+                        payload.pulse_id,
+                        state_transaction,
+                    )?;
+                    attempt
+                        .consume_sortition_pulse_batch(
+                            governance_attempt_id,
+                            payload.request_ids,
+                            payload.beacon_session_id,
+                            payload.pulse_height,
+                            payload.pulse_id,
+                            pulse_output,
+                            &state_transaction.network_id,
+                            &state_transaction.gov,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::BeginInvitationAcceptance(payload) => {
+                    attempt
+                        .begin_invitation_acceptance(
+                            governance_attempt_id,
+                            payload.election_attempt_id,
+                            current_height,
+                            state_transaction.gov.parliament_invitation_phase_blocks,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::FailBodyElectionNoRoster(payload) => {
+                    attempt
+                        .fail_body_election_no_roster(
+                            governance_attempt_id,
+                            payload.election_attempt_id,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::SealBodyRoster(payload) => {
+                    attempt
+                        .seal_body_roster(
+                            governance_attempt_id,
+                            payload.election_attempt_id,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::AdvanceBodyPhase(payload) => attempt
+                    .advance_body_phase(
+                        governance_attempt_id,
+                        payload.body_instance_id,
+                        payload.target,
+                    )
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::RecordAttemptAbsence(payload) => attempt
+                    .record_attempt_absence(
+                        governance_attempt_id,
+                        payload.body_instance_id,
+                        payload.assignment_id,
+                    )
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::FinalizePublicFinding(payload) => attempt
+                    .finalize_public_finding(
+                        governance_attempt_id,
+                        payload.body_instance_id,
+                        payload.result_root,
+                        current_height,
+                    )
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::RegisterBallotAttempt(payload) => {
+                    ensure_parliament_beacon_session_v1(
+                        payload.release_beacon_session_id,
+                        payload.release_height,
+                        state_transaction,
+                    )?;
+                    let tle_key_session = validated_parliament_tle_key_session_v1(
+                        payload.tle_key_session_id,
+                        state_transaction,
+                    )?;
+                    if tle_key_session.public_state().network_id
+                        != *state_transaction.network_id.as_bytes()
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament TLE key session belongs to a different exact NetworkId"
+                                .into(),
+                        ));
+                    }
+                    let tle_master_public_key = tle_key_session.master_public_key();
+                    let session = TimedOvnSessionPublicV1 {
+                        network_id: *state_transaction.network_id.as_bytes(),
+                        proposal_content_id: *proposal_content_id.as_bytes(),
+                        governance_attempt_id: *governance_attempt_id.as_bytes(),
+                        body_instance_id: *payload.body_instance_id.as_bytes(),
+                        ballot_attempt_id: *payload.ballot_attempt_id.as_bytes(),
+                        parameter_hash: timed_ovn_parameter_hash_v1(),
+                        tle_key_session_id: payload.tle_key_session_id,
+                        tle_key_transcript_hash: tle_key_session.public_state().transcript_hash,
+                        tle_master_public_key: *tle_master_public_key.as_bytes(),
+                    };
+                    let lifecycle = TimedOvnLifecycleStateV1::open_registration(
+                        session,
+                        current_height,
+                        payload.release_height,
+                        &tle_key_session,
+                    )
+                    .map_err(parliament_timed_ovn_error_v1)?;
+                    attempt
+                        .register_ballot_attempt(
+                            governance_attempt_id,
+                            payload.body_instance_id,
+                            payload.ballot_attempt_id,
+                            payload.sequence,
+                            payload.tle_session_id,
+                            payload.tle_key_session_id,
+                            payload.release_beacon_session_id,
+                            current_height,
+                            state_transaction.gov.parliament_timed_ovn,
+                            payload.release_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    timed_ovn_lifecycle = Some(lifecycle);
+                }
+                gov::ParliamentLifecycleTransitionV1::CloseBallotRegistration(payload) => {
+                    let registered_voters =
+                        parliament_timed_ovn_corpus_count_v1(payload.registration_records.len())?;
+                    let lifecycle = parliament_timed_ovn_lifecycle_v1(
+                        payload.ballot_attempt_id,
+                        state_transaction,
+                    )?;
+                    let tle_key_session = validated_parliament_tle_key_session_v1(
+                        lifecycle.tle_key_session_id(),
+                        state_transaction,
+                    )?;
+                    let lifecycle = lifecycle
+                        .close_registration(payload.registration_records, &tle_key_session)
+                        .map_err(parliament_timed_ovn_error_v1)?;
+                    let TimedOvnLifecycleStateV1::RegistrationClosed(closed) = &lifecycle else {
+                        unreachable!("close_registration returns RegistrationClosed")
+                    };
+                    let (_, roster) = closed
+                        .validate(&tle_key_session)
+                        .map_err(parliament_timed_ovn_error_v1)?;
+                    attempt
+                        .close_ballot_registration(
+                            governance_attempt_id,
+                            payload.ballot_attempt_id,
+                            *roster.roster_root(),
+                            registered_voters,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    timed_ovn_lifecycle = Some(lifecycle);
+                }
+                gov::ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(payload) => {
+                    let survivors = parliament_timed_ovn_corpus_count_v1(
+                        payload.survivor_participant_hashes.len(),
+                    )?;
+                    let lifecycle = parliament_timed_ovn_lifecycle_v1(
+                        payload.ballot_attempt_id,
+                        state_transaction,
+                    )?;
+                    let tle_key_session = validated_parliament_tle_key_session_v1(
+                        lifecycle.tle_key_session_id(),
+                        state_transaction,
+                    )?;
+                    let lifecycle = lifecycle
+                        .freeze_survivors(
+                            payload.survivor_participant_hashes,
+                            &tle_key_session,
+                        )
+                        .map_err(parliament_timed_ovn_error_v1)?;
+                    let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
+                        unreachable!("freeze_survivors returns SurvivorsFrozen")
+                    };
+                    let release_identity = frozen.release_identity();
+                    attempt
+                        .freeze_ballot_survivors(
+                            governance_attempt_id,
+                            payload.ballot_attempt_id,
+                            *frozen.dropout_root(),
+                            release_identity.survivor_corpus_root,
+                            survivors,
+                            release_identity.no_recovery_root,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    timed_ovn_lifecycle = Some(lifecycle);
+                }
+                gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
+                    let ballot_count =
+                        parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
+                    let lifecycle = parliament_timed_ovn_lifecycle_v1(
+                        payload.ballot_attempt_id,
+                        state_transaction,
+                    )?;
+                    let tle_key_session = validated_parliament_tle_key_session_v1(
+                        lifecycle.tle_key_session_id(),
+                        state_transaction,
+                    )?;
+                    let lifecycle = lifecycle
+                        .seal_ballots(payload.ballot_records, &tle_key_session)
+                        .map_err(parliament_timed_ovn_error_v1)?;
+                    let TimedOvnLifecycleStateV1::Sealed(sealed) = &lifecycle else {
+                        unreachable!("seal_ballots returns Sealed")
+                    };
+                    let accepted_ballots = u32::from(sealed.aggregate.accepted_ballots);
+                    if accepted_ballots != ballot_count {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament timed-OVN replay accepted a different ballot count".into(),
+                        ));
+                    }
+                    attempt
+                        .freeze_timed_ovn_corpus(
+                            governance_attempt_id,
+                            payload.ballot_attempt_id,
+                            sealed.aggregate.ballot_corpus_hash,
+                            sealed.aggregate.survivor_corpus_root,
+                            accepted_ballots,
+                            sealed.aggregate.transcript_hash,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    timed_ovn_lifecycle = Some(lifecycle);
+                }
+                gov::ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(payload) => {
+                    let lifecycle = parliament_timed_ovn_lifecycle_v1(
+                        payload.ballot_attempt_id,
+                        state_transaction,
+                    )?;
+                    let tle_key_session = validated_parliament_tle_key_session_v1(
+                        lifecycle.tle_key_session_id(),
+                        state_transaction,
+                    )?;
+                    let final_release = crate::tle_release::TleFinalReleaseSignatureV1 {
+                        key_session_id: payload.final_release.key_session_id,
+                        identity_digest: payload.final_release.identity_digest,
+                        signature: payload.final_release.signature,
+                    };
+                    let lifecycle = lifecycle
+                        .finalize_release(&tle_key_session, current_height, final_release)
+                        .map_err(parliament_timed_ovn_error_v1)?;
+                    let TimedOvnLifecycleStateV1::Released(released) = &lifecycle else {
+                        unreachable!("finalize_release returns Released")
+                    };
+                    let ballot = attempt.ballot(&payload.ballot_attempt_id).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "unknown Parliament ballot attempt at aggregate opening".into(),
+                        )
+                    })?;
+                    let tle_session_id = ballot.tle_session_id().ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "Parliament ballot is missing its dedicated TLE session".into(),
+                        )
+                    })?;
+                    let opened_survivors = u32::from(released.sealed.aggregate.accepted_ballots);
+                    let tally = ParliamentAggregateTallyV1 {
+                        original_seats: ballot.attempt().original_seats,
+                        accepted_ballots: opened_survivors,
+                        aye: u32::from(released.tally.aye),
+                        nay: u32::from(released.tally.nay),
+                        abstain: u32::from(released.tally.abstain),
+                    };
+                    attempt
+                        .finalize_opened_ballot(
+                            governance_attempt_id,
+                            payload.ballot_attempt_id,
+                            released.sealed.aggregate.ballot_corpus_hash,
+                            released.sealed.release_identity.no_recovery_root,
+                            tle_session_id,
+                            *released.opening_root(),
+                            opened_survivors,
+                            tally,
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    timed_ovn_lifecycle = Some(lifecycle);
+                }
+                gov::ParliamentLifecycleTransitionV1::BeginBallotOpeningBatch(payload) => {
+                    let _pulse_seed = parliament_finalized_pulse_seed_v1(
+                        payload.release_beacon_session_id,
+                        payload.release_height,
+                        payload.pulse_id,
+                        state_transaction,
+                    )?;
+                    attempt
+                        .begin_ballot_opening_batch(
+                            governance_attempt_id,
+                            payload.ballot_attempt_ids,
+                            payload.release_beacon_session_id,
+                            payload.release_height,
+                            current_height,
+                            payload.pulse_id,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::FailBallotNoResult(payload) => attempt
+                    .fail_ballot_no_result(
+                        governance_attempt_id,
+                        payload.ballot_attempt_id,
+                        payload.failure_root,
+                    )
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::ConstructCertificate(payload) => {
+                    let certificate = attempt
+                        .construct_certificate(
+                            governance_attempt_id,
+                            current_height,
+                            payload.enact_at_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                    certificate_id = Some(
+                        iroha_data_model::governance::types::GovernanceCertificateId::derive_v1(
+                            &certificate,
+                        ),
+                    );
+                }
+                gov::ParliamentLifecycleTransitionV1::MarkEnacted => attempt
+                    .mark_enacted(governance_attempt_id, current_height)
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::MarkSuperseded(payload) => {
+                    let proposal = state_transaction
+                        .world
+                        .governance_proposals
+                        .get(proposal_content_id.as_bytes())
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "Parliament attempt proposal is missing at supersession".into(),
+                            )
+                        })?;
+                    let observed_head =
+                        parliament_expected_head_v1(&proposal.kind, state_transaction)?;
+                    if payload.observed_head != observed_head {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament supersession head differs from committed world state"
+                                .into(),
+                        ));
+                    }
+                    attempt
+                        .mark_superseded(
+                            governance_attempt_id,
+                            current_height,
+                            observed_head,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+                gov::ParliamentLifecycleTransitionV1::MarkExecutionFailed(payload) => attempt
+                    .mark_execution_failed(
+                        governance_attempt_id,
+                        current_height,
+                        payload.effect_preimage_hash,
+                        payload.failure_root,
+                    )
+                    .map_err(parliament_reducer_error)?,
+                gov::ParliamentLifecycleTransitionV1::RecordInvitationResponse(payload) => {
+                    let election = attempt.election(&payload.election_attempt_id).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "unknown Parliament invitation election".into(),
+                        )
+                    })?;
+                    if election.attempt().request.body != payload.body {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Parliament invitation response names the wrong body".into(),
+                        ));
+                    }
+                    attempt
+                        .record_invitation_response(
+                            governance_attempt_id,
+                            payload.election_attempt_id,
+                            authority,
+                            matches!(
+                                payload.decision,
+                                gov::ParliamentInvitationDecisionV1::Accept
+                            ),
+                            current_height,
+                        )
+                        .map_err(parliament_reducer_error)?;
+                }
+            }
+
+            state_transaction
+                .put_parliament_attempt(attempt)
+                .map_err(parliament_reducer_error)?;
+            if let Some(lifecycle) = timed_ovn_lifecycle {
+                state_transaction
+                    .put_timed_ovn_lifecycle(lifecycle)
+                    .map_err(parliament_timed_ovn_error_v1)?;
+            }
+            state_transaction.world.emit_events(Some(
+                GovernanceEvent::ParliamentLifecycleTransitionApplied(
+                    GovernanceParliamentLifecycleTransitionApplied {
+                        proposal_content_id,
+                        governance_attempt_id,
+                        transition_kind,
+                        transition_digest,
+                        certificate_id,
+                        at_height: current_height,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    // TODO: Retire these legacy approval-snapshot readers once every proposal kind is migrated
+    // to the persisted attempt reducer and GovernanceCertificateV1 enactment path. They remain
+    // read-only during the cutover so already-recorded state cannot bypass its former gates.
     fn required_parliament_bodies(proposal_kind: &ProposalKind) -> &'static [ParliamentBody] {
         match proposal_kind {
             ProposalKind::DeployContract(_) => &[
@@ -9018,95 +9720,6 @@ pub mod isi {
             .iter()
             .copied()
             .all(|body| approvals.quorum_met(body, epoch))
-    }
-    fn reject_proposal_by_parliament(
-        ctx: &ApprovalContext,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        if let Some(mut proposal) = state_transaction
-            .world
-            .governance_proposals
-            .get(&ctx.proposal_id)
-            .cloned()
-        {
-            if !matches!(
-                proposal.status,
-                crate::state::GovernanceProposalStatus::Rejected
-                    | crate::state::GovernanceProposalStatus::Enacted
-                    | crate::state::GovernanceProposalStatus::Superseded
-            ) {
-                proposal.status = crate::state::GovernanceProposalStatus::Rejected;
-                state_transaction
-                    .world
-                    .put_governance_proposal(ctx.proposal_id, proposal);
-                state_transaction
-                    .world
-                    .emit_events(Some(GovernanceEvent::ProposalRejected(
-                        iroha_data_model::events::data::governance::GovernanceProposalRejected {
-                            id: ctx.proposal_id,
-                        },
-                    )));
-            }
-        }
-        if let Some(mut rec) = state_transaction
-            .world
-            .governance_referenda
-            .get(&ctx.rid)
-            .copied()
-        {
-            if rec.status != crate::state::GovernanceReferendumStatus::Closed {
-                rec.status = crate::state::GovernanceReferendumStatus::Closed;
-                state_transaction
-                    .world
-                    .governance_referenda
-                    .insert(ctx.rid.clone(), rec);
-                state_transaction
-                    .world
-                    .emit_events(Some(GovernanceEvent::ReferendumClosed(
-                        GovernanceReferendumClosed {
-                            id: ctx.rid.clone(),
-                            at_height: ctx.now_h,
-                        },
-                    )));
-            }
-        }
-    }
-    fn approve_proposal_by_parliament(
-        ctx: &ApprovalContext,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        if ctx.referendum.status == crate::state::GovernanceReferendumStatus::Proposed
-            && ctx.now_h >= ctx.referendum.h_start
-            && ctx.now_h <= ctx.referendum.h_end
-        {
-            let mut rec = ctx.referendum;
-            rec.status = crate::state::GovernanceReferendumStatus::Open;
-            state_transaction
-                .world
-                .governance_referenda
-                .insert(ctx.rid.clone(), rec);
-            state_transaction
-                .world
-                .emit_events(Some(GovernanceEvent::ReferendumOpened(
-                    iroha_data_model::events::data::governance::GovernanceReferendumOpened {
-                        id: ctx.rid.clone(),
-                        h_start: rec.h_start,
-                        h_end: rec.h_end,
-                    },
-                )));
-        }
-    }
-    fn maybe_apply_parliament_decision(
-        body: ParliamentBody,
-        ctx: &ApprovalContext,
-        approvals: &crate::state::GovernanceStageApprovals,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        if approvals.rejection_quorum_met(body, ctx.epoch) {
-            reject_proposal_by_parliament(ctx, state_transaction);
-        } else if parliament_approval_gate_met(&ctx.proposal_kind, approvals, ctx.epoch) {
-            approve_proposal_by_parliament(ctx, state_transaction);
-        }
     }
     // Persist council membership for an epoch.
     impl Execute for gov::PersistCouncilForEpoch {
@@ -9204,7 +9817,7 @@ pub mod isi {
                     },
                 ),
             ));
-            let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction);
+            let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction)?;
             let bodies = derive_parliament_bodies(
                 &state_transaction.gov,
                 &state_transaction.network_id,
@@ -14932,6 +15545,12 @@ pub mod isi {
                     "election already finalized".into(),
                 ));
             }
+            let ballot_corpus_cap = state_transaction.zk.ballot_history_cap.clamp(1, 1_000);
+            if st.ciphertexts.len() >= ballot_corpus_cap {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance ballot corpus is full".into(),
+                ));
+            }
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
             if now_ms < st.start_ts || now_ms > st.end_ts {
@@ -15003,12 +15622,6 @@ pub mod isi {
                 ));
             }
             st.ciphertexts.push(self.ciphertext().clone());
-            // Enforce ballot history cap from config
-            let cap = state_transaction.zk.ballot_history_cap.max(1);
-            if st.ciphertexts.len() > cap {
-                let surplus = st.ciphertexts.len() - cap;
-                st.ciphertexts.drain(0..surplus);
-            }
             state_transaction.world.elections.remove(id.clone());
             state_transaction.world.elections.insert(id, st);
             Ok(())
@@ -20774,6 +21387,131 @@ pub mod isi {
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a ballot grant for another election must not authorize this ballot");
             assert_err!(format!("{error:?}"), "exact CanSubmitGovernanceBallot target", "unexpected ballot target-scope rejection: {error:?}");
         });
+        world_test!(direct_zk_ballot_cannot_open_a_proposed_referendum {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ..Default::default()
+                },
+            );
+            state_transaction.world.governance_referenda.insert(
+                referendum_id.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 0,
+                    h_end: u64::MAX,
+                    status: crate::state::GovernanceReferendumStatus::Proposed,
+                    mode: crate::state::GovernanceReferendumMode::Zk,
+                },
+            );
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a ballot must not bypass the Parliament gate",
+            );
+
+            assert_err!(
+                format!("{error:?}"),
+                "has not passed the Parliament gate",
+                "unexpected gate rejection: {error:?}"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&referendum_id)
+                    .expect("referendum remains present")
+                    .status,
+                crate::state::GovernanceReferendumStatus::Proposed
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .elections
+                    .get(&referendum_id)
+                    .expect("election remains present")
+                    .ciphertexts
+                    .is_empty(),
+                "rejected ballots must not mutate the accepted corpus"
+            );
+        });
+        world_test!(direct_zk_ballot_rejects_a_full_corpus_without_pruning {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.zk.ballot_history_cap = 1;
+            let referendum_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: referendum_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                referendum_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    ciphertexts: vec![vec![0xAA]],
+                    ..Default::default()
+                },
+            );
+            state_transaction.world.governance_referenda.insert(
+                referendum_id.clone(),
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 0,
+                    h_end: u64::MAX,
+                    status: crate::state::GovernanceReferendumStatus::Open,
+                    mode: crate::state::GovernanceReferendumMode::Zk,
+                },
+            );
+
+            let error = gov::CastZkBallot {
+                election_id: referendum_id.clone(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a full corpus must reject before proof dispatch",
+            );
+
+            assert_err!(format!("{error:?}"), "ballot corpus is full");
+            assert_eq!(
+                state_transaction
+                    .world
+                    .elections
+                    .get(&referendum_id)
+                    .expect("election remains present")
+                    .ciphertexts,
+                vec![vec![0xAA]],
+                "the complete accepted corpus must never be pruned"
+            );
+        });
+        world_test!(governance_sortition_has_no_synthetic_entropy_fallback {
+            blank_state_transaction!(state, block, state_block, state_transaction);
+            let error = latest_governance_entropy_seed(&state_transaction)
+                .expect_err("missing finalized beacon entropy must fail closed");
+            assert_err!(
+                format!("{error:?}"),
+                "requires finalized beacon entropy",
+                "unexpected missing-beacon rejection: {error:?}"
+            );
+        });
         world_test!(direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission {
             second_height_transaction!(state, block, state_transaction);
             let wrong_target_permission: Permission = CanSubmitGovernanceBallot {
@@ -23940,13 +24678,13 @@ seiyaku GovernanceLifecycle {
             rec.max_proof_bytes = 0;
             assert!(enforce_vk_max_proof_bytes("ballot", &rec, 64).is_ok());
         });
-        world_test!(extract_vote_public_inputs_handles_halo2_envelope {
-            use iroha_zkp_halo2::Halo2ProofEnvelope;
-            let inputs = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]];
-            let halo_env = Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
-                .expect("halo2 envelope");
-            let proof_bytes = halo_env.to_bytes();
-            let columns: Vec<Vec<[u8; 32]>> = inputs.iter().copied().map(|v| vec![v]).collect();
+        world_test!(extract_vote_public_inputs_handles_strict_halo2_envelope {
+            let scalar_columns =
+                crate::zk::zk1_test_helpers::pasta_fp_single_row_columns(&[1, 2, 3, 4, 5]);
+            let proof_bytes = crate::zk::zk1_test_helpers::proof_with_pasta_fp_columns(
+                &[0xaa], &scalar_columns,
+            );
+            let columns = crate::zk::zk1_test_helpers::pasta_fp_columns_as_bytes(&scalar_columns);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:vote-circuit",

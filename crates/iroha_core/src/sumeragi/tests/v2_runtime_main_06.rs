@@ -1598,55 +1598,6 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
-fn interrupted_tip_recovery_drains_ingress_without_arming_live_timers() {
-    let start = Instant::now();
-    let initial = tag(0);
-    let (mut runtime, _) = SerializedV2Runtime::with_driver(
-        FakeDriver::new(initial),
-        start,
-        Duration::from_secs(10),
-        RuntimeQueueConfig::new(8, 2, 2),
-        Vec::new(),
-    )
-    .expect("open unarmed recovery runtime");
-    enqueue_fake(
-        &mut runtime,
-        initial,
-        CommandClass::Completion,
-        FakeCommand::record(7),
-    )
-    .expect("queue local recovery completion");
-    assert!(matches!(
-        runtime.step_recovery_and_take_scheduler_ownership_for_test(
-            start + Duration::from_secs(1_000)
-        ),
-        Ok(RuntimeStep::Advanced(_))
-    ));
-    assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
-    assert!(runtime.driver.timeouts.is_empty());
-    assert!(runtime.driver.retransmits.is_empty());
-    assert!(matches!(
-        runtime.step_recovery_and_take_scheduler_ownership_for_test(
-            start + Duration::from_secs(2_000)
-        ),
-        Ok(RuntimeStep::Idle)
-    ));
-}
-#[test]
-fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
-    let start = Instant::now();
-    let initial = tag(0);
-    let mut runtime = runtime(
-        FakeDriver::new(initial),
-        start,
-        RuntimeQueueConfig::new(8, 2, 2),
-    );
-    assert!(matches!(
-        runtime.step_recovery(start),
-        Err(RuntimeError::RecoveryAfterClocksArmed)
-    ));
-}
-#[test]
 fn adapter_failure_closes_runtime_permanently() {
     let start = Instant::now();
     let initial = tag(0);

@@ -2696,7 +2696,7 @@ fn canonical_validation_fee_draft_instruction(
     }
     let proposal_kind = request
         .proposal
-        .proposal_kind(&request.plain_electorate_rules);
+        .proposal_kind(&request.proposal_operator, &request.plain_electorate_rules);
     let instruction = match &request.proposal {
         ValidationFeeProposalDraftPayloadV1::Policy {
             policy,
@@ -2724,6 +2724,7 @@ fn canonical_validation_fee_draft_instruction(
             }
             let kind = ProposalKind::ValidationFeePolicy(
                 iroha_data_model::governance::types::ValidationFeePolicyProposal {
+                    proposal_operator: request.proposal_operator.clone(),
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
                     plain_electorate_rules: request.plain_electorate_rules.clone(),
@@ -2775,7 +2776,8 @@ fn validate_validation_fee_draft_response(
     }
     let (expected_kind, expected_instruction) =
         canonical_validation_fee_draft_instruction(request)?;
-    if response.proposal_kind != expected_kind
+    if response.proposal_operator != request.proposal_operator
+        || response.proposal_kind != expected_kind
         || response.proposal_id != hex::encode(expected_kind.fingerprint())
     {
         return Err(eyre!(
@@ -2910,12 +2912,18 @@ fn parse_canonical_validation_fee_u128(value: &str, field: &str) -> Result<u128>
 fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<u64> {
     use iroha_data_model::{governance::types::ProposalKind, isi::governance::VotingMode};
     let expected_id = hex::encode(record.proposal_kind.fingerprint());
+    let proposal_operator = match &record.proposal_kind {
+        ProposalKind::ValidationFeePolicy(payload) => &payload.proposal_operator,
+        ProposalKind::ValidationFeePayoutLifecycle(payload) => &payload.proposal_operator,
+        _ => {
+            return Err(eyre!(
+                "validation-fee proposal read response contains a different proposal kind"
+            ));
+        }
+    };
     if record.proposal_id != expected_id
+        || proposal_operator != &record.proposer
         || record.referendum.mode != VotingMode::Plain
-        || !matches!(
-            record.proposal_kind,
-            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
-        )
     {
         return Err(eyre!(
             "validation-fee proposal read response is not bound to its exact native proposal"
@@ -3986,25 +3994,22 @@ pub struct MultisigResponse {
     /// Active concrete multisig account id used after selector resolution.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Whether a transaction was submitted.
-    #[norito(default)]
-    pub submitted: Option<bool>,
+    pub submitted: bool,
     /// Stable proposal id when available.
-    #[norito(default)]
     pub proposal_id: Option<String>,
     /// Deterministic instructions hash when available.
-    #[norito(default)]
     pub instructions_hash: Option<String>,
     /// Submitted participation transaction hash when available.
-    #[norito(default)]
     pub tx_hash_hex: Option<String>,
     /// Executed transaction hash once quorum has executed.
-    #[norito(default)]
     pub executed_tx_hash_hex: Option<String>,
     /// Creation timestamp for detached signing workflows.
-    #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Exact quote-bound payer, sponsor revision, fee limits, and gas bound.
+    pub fee_payment: FeePaymentIntent,
+    /// Canonical unsigned `TransactionPayload` bytes when preparing locally.
+    pub transaction_payload_b64: Option<String>,
     /// Optional detached signing message bytes.
-    #[norito(default)]
     pub signing_message_b64: Option<String>,
 }
 const DEFAULT_MAX_QUEUED_DURATION: Duration = Duration::from_secs(60);
@@ -6187,14 +6192,64 @@ fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
             canonicalize_hex32_literal(value, field)?;
         }
     }
-    if let Some(value) = &response.signing_message_b64 {
-        let literal = value.trim();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(literal)
-            .map_err(|err| eyre!("multisig response.signing_message_b64 must be base64: {err}"))?;
-        if decoded.is_empty() {
+    match (
+        response.submitted,
+        response.transaction_payload_b64.as_deref(),
+        response.signing_message_b64.as_deref(),
+    ) {
+        (true, None, None) => {
+            if response.tx_hash_hex.is_none() {
+                return Err(eyre!(
+                    "submitted multisig response must contain tx_hash_hex"
+                ));
+            }
+        }
+        (false, Some(transaction_payload_b64), Some(signing_message_b64)) => {
+            const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+            validate_canonical_standard_base64(
+                transaction_payload_b64,
+                MAX_TRANSACTION_PAYLOAD_BYTES,
+                "multisig response.transaction_payload_b64",
+            )?;
+            validate_canonical_standard_base64(
+                signing_message_b64,
+                64,
+                "multisig response.signing_message_b64",
+            )?;
+            let transaction_payload = base64::engine::general_purpose::STANDARD
+                .decode(transaction_payload_b64)
+                .wrap_err("decode multisig response transaction payload")?;
+            let builder = TransactionBuilder::decode_payload(&transaction_payload)
+                .wrap_err("decode canonical multisig response transaction payload")?;
+            let signing_message = base64::engine::general_purpose::STANDARD
+                .decode(signing_message_b64)
+                .wrap_err("decode multisig response signing message")?;
+            if signing_message.as_slice() != builder.payload_hash_bytes().as_slice() {
+                return Err(eyre!(
+                    "multisig response signing message does not match the transaction payload"
+                ));
+            }
+            if builder.payload().fee_payment != response.fee_payment {
+                return Err(eyre!(
+                    "multisig response fee_payment does not match the transaction payload"
+                ));
+            }
+            if response.creation_time_ms
+                != u64::try_from(builder.payload().creation_time().as_millis()).ok()
+            {
+                return Err(eyre!(
+                    "multisig response creation_time_ms does not match the transaction payload"
+                ));
+            }
+            if response.tx_hash_hex.is_some() || response.executed_tx_hash_hex.is_some() {
+                return Err(eyre!(
+                    "unsubmitted multisig response must not contain transaction hashes"
+                ));
+            }
+        }
+        _ => {
             return Err(eyre!(
-                "multisig response.signing_message_b64 must not decode to empty bytes"
+                "multisig response must contain either a submitted transaction hash or an exact transaction-payload/signing-message pair"
             ));
         }
     }
@@ -8659,16 +8714,10 @@ mod evidence_http_tests {
         let instruction: dm::InstructionBox =
             dm::Log::new(dm::Level::INFO, "hello multisig".to_owned()).into();
         let proposal_id = "a".repeat(64);
-        let response = json_response(
-            StatusCode::OK,
-            &format!(
-                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"submitted\":false,\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",\"tx_hash_hex\":null,\"executed_tx_hash_hex\":null,\"creation_time_ms\":123,\"signing_message_b64\":\"AQ==\"}}"
-            ),
-        );
         let request = MultisigProposeRequest {
             multisig_account_id: Some(multisig_account_id.clone()),
             multisig_account_alias: None,
-            signer_account_id,
+            signer_account_id: signer_account_id.clone(),
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(123),
@@ -8676,14 +8725,22 @@ mod evidence_http_tests {
             memo: Some("invoice 42".to_owned()),
             instructions: vec![instruction.clone()],
         };
+        let response_payload =
+            prepared_multisig_response(&client, multisig_account_id.clone(), &request, proposal_id);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_payload).expect("encode multisig response"),
+        );
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
                 .post_multisig_propose(&request)
                 .expect("post multisig propose");
             assert!(resp.ok);
             assert_eq!(resp.resolved_multisig_account_id, multisig_account_id);
-            assert_eq!(resp.submitted, Some(false));
-            assert_eq!(resp.signing_message_b64.as_deref(), Some("AQ=="));
+            assert!(!resp.submitted);
+            assert_eq!(resp.fee_payment, request.fee_payment);
+            assert!(resp.transaction_payload_b64.is_some());
+            assert!(resp.signing_message_b64.is_some());
         });
         let store = snapshots.lock().expect("lock snapshot store");
         assert_eq!(store.len(), 1);
@@ -8739,6 +8796,40 @@ mod evidence_http_tests {
         };
         (multisig_account_id, request)
     }
+    fn prepared_multisig_response(
+        client: &Client,
+        multisig_account_id: AccountId,
+        request: &MultisigProposeRequest,
+        proposal_id: String,
+    ) -> MultisigResponse {
+        let creation_time_ms = request
+            .creation_time_ms
+            .expect("multisig response fixture creation time");
+        let mut builder = TransactionBuilder::new(
+            client.network_id,
+            request.signer_account_id.clone(),
+            request.fee_payment.clone(),
+        );
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
+        let builder = builder.with_instructions(Vec::<InstructionBox>::new());
+        MultisigResponse {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: false,
+            proposal_id: Some(proposal_id.clone()),
+            instructions_hash: Some(proposal_id),
+            tx_hash_hex: None,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            fee_payment: builder.payload().fee_payment.clone(),
+            transaction_payload_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()),
+            ),
+            signing_message_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes()),
+            ),
+        }
+    }
     #[test]
     fn post_multisig_propose_propagates_server_rejection() {
         let client = client_with_base_url(base_url());
@@ -8773,11 +8864,12 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let (multisig_account_id, request) = multisig_propose_request("bad metadata");
+        let mut response_payload =
+            prepared_multisig_response(&client, multisig_account_id, &request, "a".repeat(64));
+        response_payload.instructions_hash = Some("aa".to_owned());
         let bad_hash_response = json_response(
             StatusCode::OK,
-            &format!(
-                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"instructions_hash\":\"aa\"}}"
-            ),
+            &norito::json::to_json(&response_payload).expect("encode bad hash response"),
         );
         let err = with_mock_http(respond_with(&snapshots, bad_hash_response), || {
             client
@@ -8789,11 +8881,11 @@ mod evidence_http_tests {
                 .contains("failed to validate multisig propose response"),
             "unexpected error: {err}"
         );
+        response_payload.instructions_hash = Some("a".repeat(64));
+        response_payload.signing_message_b64 = Some("not base64".to_owned());
         let bad_signing_response = json_response(
             StatusCode::OK,
-            &format!(
-                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"signing_message_b64\":\"not base64\"}}"
-            ),
+            &norito::json::to_json(&response_payload).expect("encode bad signing response"),
         );
         let err = with_mock_http(respond_with(&snapshots, bad_signing_response), || {
             client
@@ -8805,11 +8897,10 @@ mod evidence_http_tests {
                 .contains("failed to validate multisig propose response"),
             "unexpected error: {err}"
         );
+        response_payload.signing_message_b64 = Some(String::new());
         let empty_signing_response = json_response(
             StatusCode::OK,
-            &format!(
-                "{{\"ok\":true,\"resolved_multisig_account_id\":\"{multisig_account_id}\",\"signing_message_b64\":\"\"}}"
-            ),
+            &norito::json::to_json(&response_payload).expect("encode empty signing response"),
         );
         let err = with_mock_http(respond_with(&snapshots, empty_signing_response), || {
             client
@@ -8821,9 +8912,10 @@ mod evidence_http_tests {
                 .contains("failed to validate multisig propose response"),
             "unexpected error: {err}"
         );
+        response_payload.ok = false;
         let false_ok_response = json_response(
             StatusCode::OK,
-            &format!("{{\"ok\":false,\"resolved_multisig_account_id\":\"{multisig_account_id}\"}}"),
+            &norito::json::to_json(&response_payload).expect("encode false ok response"),
         );
         let err = with_mock_http(respond_with(&snapshots, false_ok_response), || {
             client
@@ -16730,6 +16822,11 @@ impl Client {
         &self,
         request: &ValidationFeeProposalDraftRequestV1,
     ) -> Result<ValidationFeeProposalDraftResponseV1> {
+        if request.proposal_operator != self.account {
+            return Err(eyre!(
+                "validation-fee proposal operator must equal the client transaction authority"
+            ));
+        }
         let _ = canonical_validation_fee_draft_instruction(request)?;
         let url = join_torii_url(&self.torii_url, torii_uri::VALIDATION_FEE_PROPOSAL_DRAFT);
         let body = norito::json::to_vec(request)

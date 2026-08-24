@@ -7932,6 +7932,9 @@
               }
             ]
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "ok": {
             "type": "boolean"
           },
@@ -7990,6 +7993,7 @@
           "tx_hash_hex",
           "executed_tx_hash_hex",
           "creation_time_ms",
+          "fee_payment",
           "transaction_payload_b64",
           "signing_message_b64"
         ],
@@ -8090,6 +8094,9 @@
           "executed_tx_hash_hex": {
             "type": "string"
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "instructions_hash": {
             "type": "string"
           },
@@ -8118,7 +8125,8 @@
         "required": [
           "ok",
           "resolved_multisig_account_id",
-          "submitted"
+          "submitted",
+          "fee_payment"
         ],
         "type": "object"
       },
@@ -8554,6 +8562,9 @@
               }
             ]
           },
+          "fee_payment": {
+            "$ref": "#/components/schemas/FeePaymentIntent"
+          },
           "ok": {
             "type": "boolean"
           },
@@ -8613,6 +8624,7 @@
           "tx_hash_hex",
           "executed_tx_hash_hex",
           "creation_time_ms",
+          "fee_payment",
           "transaction_payload_b64",
           "signing_message_b64"
         ],
@@ -30846,6 +30858,11 @@
           "plain_electorate_rules": {
             "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
           },
+          "proposal_operator": {
+            "description": "Canonical domainless transaction authority bound into the exact typed proposal fingerprint.",
+            "minLength": 1,
+            "type": "string"
+          },
           "proposal": {
             "$ref": "#/components/schemas/JsonValue",
             "description": "Closed POLICY or PAYOUT_LIFECYCLE typed payload."
@@ -30883,6 +30900,7 @@
         },
         "required": [
           "version",
+          "proposal_operator",
           "proposal",
           "referendum_window",
           "mode",
@@ -30893,6 +30911,11 @@
       "ValidationFeeProposalDraftResponseV1": {
         "additionalProperties": false,
         "properties": {
+          "proposal_operator": {
+            "description": "Canonical domainless transaction authority bound into proposal_kind and proposal_id.",
+            "minLength": 1,
+            "type": "string"
+          },
           "proposal_id": {
             "maxLength": 64,
             "minLength": 64,
@@ -30918,6 +30941,7 @@
         },
         "required": [
           "version",
+          "proposal_operator",
           "proposal_id",
           "proposal_kind",
           "tx_instructions"
@@ -70504,7 +70528,7 @@
     },
     "/v1/validation-fee/proposals/draft": {
       "post": {
-        "description": "Accept exactly one typed validation-fee policy or payout-lifecycle payload and return its native proposal kind, deterministic fingerprint, and one canonical instruction for local signing. Plain voting is canonical; ZK mode is rejected.",
+        "description": "Accept exactly one canonical-request-signer-bound validation-fee policy or payout-lifecycle payload and return its native proposal kind, deterministic operator-bound fingerprint, and one canonical instruction for local signing. Plain voting is canonical; ZK mode is rejected.",
         "operationId": "validationFeeProposalDraft",
         "parameters": [
           {

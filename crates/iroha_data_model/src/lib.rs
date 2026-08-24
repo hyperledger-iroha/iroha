@@ -91,6 +91,8 @@ pub mod executor;
 pub mod fastpq;
 /// Fraud detection and risk scoring data types.
 pub mod fraud;
+// Certificate-bearing Parliament data must remain available to the always-on
+// validation-fee registry without enabling governance instructions or events.
 /// Governance-related data types (feature-gated)
 #[cfg(feature = "governance")]
 pub mod governance;
@@ -134,6 +136,9 @@ pub mod offline;
 pub mod oracle;
 /// Runtime parameter definitions and schema.
 pub mod parameter;
+#[path = "governance/types.rs"]
+#[doc(hidden)]
+pub mod parliament_types;
 /// Peer and network-topology types.
 pub mod peer;
 /// Permission token and grant model.

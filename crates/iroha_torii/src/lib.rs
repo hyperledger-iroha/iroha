@@ -44762,9 +44762,6 @@ macro_rules! catalog_route_policy {
     (operator_post($handler:path, $state:ident)) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_delete($handler:path)) => {
-        catalog_delete($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
-    };
     (protocol_handshake_get($handler:path)) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
@@ -46604,7 +46601,6 @@ impl Torii {
                 VALIDATION_FEE_PROPOSALS => canonical_account_get(validation_fee_api::handler_proposals, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);
-                VALIDATION_FEE_PLAIN_BALLOT_DRAFT => canonical_account_post(validation_fee_api::handler_plain_ballot_draft, app_state, runtime_governance_body_limit);
                 GOV_PROPOSAL_GET => canonical_account_get(handler_gov_proposal_get, app_state, 0);
                 GOV_LOCKS_GET => canonical_account_get(handler_gov_locks_get, app_state, 0);
                 GOV_REFERENDUM_GET => canonical_account_get(handler_gov_referendum_get, app_state, 0);

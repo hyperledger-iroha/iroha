@@ -155,7 +155,6 @@ struct PendingTransform {
     int device;
     cudaEvent_t event;
     AsyncDispatchBuffers* buffers;
-    void* host_output;
     void* staging_output;
     size_t output_byte_len;
 
@@ -163,14 +162,12 @@ struct PendingTransform {
         int device_in,
         cudaEvent_t event_in,
         AsyncDispatchBuffers* buffers_in,
-        void* host_output_in,
         void* staging_output_in,
         size_t output_byte_len_in
     )
         : device(device_in),
           event(event_in),
           buffers(buffers_in),
-          host_output(host_output_in),
           staging_output(staging_output_in),
           output_byte_len(output_byte_len_in) {}
 };
@@ -613,10 +610,12 @@ static bool checked_bn254_twiddle_limb_len(
     uint64_t domain_len,
     size_t* limb_len
 ) {
-    size_t stage_span = (size_t)(domain_len >> 1u);
     size_t twiddle_count = 0;
-    return checked_size_mul((size_t)log_size, stage_span, &twiddle_count)
-        && checked_size_mul(twiddle_count, (size_t)BN254_LIMBS, limb_len);
+    if (log_size == 0u || domain_len == 0u || domain_len - 1u > (uint64_t)SIZE_MAX) {
+        return false;
+    }
+    twiddle_count = (size_t)(domain_len - 1u);
+    return checked_size_mul(twiddle_count, (size_t)BN254_LIMBS, limb_len);
 }
 
 static bool validate_poseidon_column_slices(
@@ -722,7 +721,6 @@ static cudaError_t destroy_pending_transform(PendingTransform* pending) {
 static cudaError_t create_pending_transform(
     int device,
     AsyncDispatchBuffers* buffers,
-    void* host_output,
     void* staging_output,
     size_t output_byte_len,
     PendingTransform** pending_out
@@ -741,7 +739,6 @@ static cudaError_t create_pending_transform(
             device,
             event,
             buffers,
-            host_output,
             staging_output,
             output_byte_len
         );
@@ -1334,7 +1331,7 @@ __global__ void fastpq_bn254_fft_kernel(
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         uint64_t len = 1ull << (stage + 1u);
         uint64_t half_len = len >> 1;
-        uint64_t stage_offset = (uint64_t)stage * stage_span;
+        uint64_t stage_offset = (1ull << stage) - 1ull;
         for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
             uint64_t block = pair_idx / half_len;
             uint64_t pair = pair_idx % half_len;
@@ -1416,7 +1413,7 @@ __global__ void fastpq_bn254_lde_kernel(
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         const uint64_t len = 1ull << (stage + 1u);
         const uint64_t half_len = len >> 1;
-        const uint64_t stage_offset = (uint64_t)stage * stage_span;
+        const uint64_t stage_offset = (1ull << stage) - 1ull;
         for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
             const uint64_t block = pair_idx / half_len;
             const uint64_t pair = pair_idx % half_len;
@@ -1681,7 +1678,11 @@ extern "C" cudaError_t fastpq_test_wait_timeout_cuda(uint32_t timeout_ms) {
     );
 }
 
-extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
+extern "C" cudaError_t fastpq_pending_wait_cuda(
+    void* handle,
+    uint64_t* output,
+    size_t output_len
+) {
     PendingTransform* pending = reinterpret_cast<PendingTransform*>(handle);
     if (pending == nullptr) {
         return cudaErrorInvalidValue;
@@ -1694,12 +1695,19 @@ extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
     }
 
     status = wait_for_event(pending->event);
-    if (status == cudaSuccess) {
-        if (pending->staging_output == nullptr || pending->host_output == nullptr) {
+    if (status == cudaSuccess && output != nullptr) {
+        size_t output_byte_len = 0;
+        if (
+            pending->staging_output == nullptr
+            || !checked_size_mul(output_len, sizeof(uint64_t), &output_byte_len)
+            || output_byte_len != pending->output_byte_len
+        ) {
             status = cudaErrorInvalidValue;
-        } else if (pending->staging_output != pending->host_output) {
-            memcpy(pending->host_output, pending->staging_output, pending->output_byte_len);
+        } else {
+            memcpy(output, pending->staging_output, pending->output_byte_len);
         }
+    } else if (status == cudaSuccess && output_len != 0) {
+        status = cudaErrorInvalidValue;
     }
     cudaError_t destroy_status = destroy_pending_transform(pending);
     if (status == cudaSuccess) {
@@ -1769,7 +1777,6 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        elements,
         staging_output,
         byte_len,
         &pending
@@ -1892,7 +1899,6 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        elements,
         staging_output,
         byte_len,
         &pending
@@ -2052,7 +2058,6 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        out,
         staging_output,
         eval_byte_len,
         &pending

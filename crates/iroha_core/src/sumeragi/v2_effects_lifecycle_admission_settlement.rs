@@ -1714,13 +1714,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            self.install_pending_durable_validate_admission(
+            return self.install_pending_durable_validate_admission(
                 key,
                 &effect,
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
-            )?;
-            return Ok(());
+            );
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -1817,8 +1816,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
-        )?;
-        Ok(())
+        )
     }
 }
 

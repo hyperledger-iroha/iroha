@@ -1,34 +1,15 @@
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
-const INROU_SHARED_VOLUME_SERVER_PY: &str = include_str!("fixtures/inrou_shared_volume_server.py");
 
-#[test]
-#[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]
-fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result<()> {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1")
-        || std::env::var("IROHA_INROU_PORTABLE").ok().as_deref() != Some("1")
-    {
-        println!(
-            "Skipping: set IROHA_RUN_IGNORED=1 IROHA_INROU_PORTABLE=1 to run the external bundle PortableVm smoke test."
-        );
-        return Ok(());
-    }
-    require_portable_smoke_prerequisites()?;
-    let external_bundle =
-        portable_smoke_required_env_path("IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE")?;
-    let external_entrypoint = std::env::var("IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT")
-        .unwrap_or_else(|_| "/app/launch.sh".to_owned());
-    let external_healthcheck = std::env::var("IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK")
-        .unwrap_or_else(|_| "/health".to_owned());
-    let temp_dir = tempfile::tempdir()?;
-    let selected_guest_isa = current_host_inrou_guest_isa();
-    let local_peer_id = "12D3KooWPortableVmExternalBundlePeer";
-    let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
-        .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
-    config.inrou.start_grace = Duration::from_secs(240);
+fn load_external_inrou_smoke_bundle(
+    config: &SoracloudRuntimeManagerConfig,
+    external_bundle: &Path,
+    external_entrypoint: String,
+    external_healthcheck: String,
+) -> Result<(SoraDeploymentBundleV1, Vec<u8>)> {
     let archive_limits =
         inrou_bundle_archive_limits(&config.inrou, config.cache_budgets.bundle_bytes.get());
     let (external_bundle_file, external_bundle_fingerprint) =
-        open_soracloud_artifact_for_validation(&external_bundle).map_err(|error| {
+        open_soracloud_artifact_for_validation(external_bundle).map_err(|error| {
             eyre::eyre!(
                 "open external Inrou smoke bundle {} securely: {}",
                 external_bundle.display(),
@@ -37,7 +18,7 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         })?;
     let bundle_bytes = read_opened_soracloud_artifact_bounded(
         external_bundle_file,
-        &external_bundle,
+        external_bundle,
         &external_bundle_fingerprint,
         archive_limits.max_compressed_bytes,
     )
@@ -62,6 +43,7 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             external_bundle.display()
         )
     })?;
+
     let mut bundle = sample_inrou_test_bundle()?;
     bundle.container.entrypoint = external_entrypoint;
     bundle.container.args.clear();
@@ -108,48 +90,88 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
             max_total_bytes: std::num::NonZeroU64::new(512 * 1024 * 1024).expect("bytes"),
         },
     ];
-    let mut state = test_state()?;
-    let deployment_state = sample_deployment_state(&bundle);
-    {
-        let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-        world.soracloud_service_revisions_mut_for_testing().insert(
+    Ok((bundle, bundle_bytes))
+}
+
+fn install_external_inrou_smoke_state(
+    state: &mut Arc<State>,
+    bundle: &SoraDeploymentBundleV1,
+    selected_guest_isa: SoraInrouGuestIsaV1,
+    local_peer_id: &str,
+) {
+    let deployment_state = sample_deployment_state(bundle);
+    let world = &mut Arc::get_mut(state).expect("unique test state").world;
+    world.soracloud_service_revisions_mut_for_testing().insert(
+        (
+            bundle.service.service_name.to_string(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    world
+        .soracloud_service_deployments_mut_for_testing()
+        .insert(bundle.service.service_name.clone(), deployment_state);
+    world
+        .soracloud_inrou_service_placements_mut_for_testing()
+        .insert(
             (
                 bundle.service.service_name.to_string(),
                 bundle.service.service_version.clone(),
             ),
-            bundle.clone(),
+            iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+                service_name: bundle.service.service_name.clone(),
+                service_version: bundle.service.service_version.clone(),
+                desired_replica_count: bundle.service.replicas.get(),
+                eligible_validator_count: 1,
+                placements: vec![SoraInrouReplicaPlacementV1 {
+                    replica_slot: 1,
+                    validator_account_id: ALICE_ID.clone(),
+                    peer_id: local_peer_id.to_owned(),
+                    selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+                    selected_guest_isa,
+                    selected_geography_tag: None,
+                    selection_latency_ms: None,
+                }],
+                reconciled_at_ms: 1,
+                last_error: None,
+            },
         );
-        world
-            .soracloud_service_deployments_mut_for_testing()
-            .insert(bundle.service.service_name.clone(), deployment_state);
-        world
-            .soracloud_inrou_service_placements_mut_for_testing()
-            .insert(
-                (
-                    bundle.service.service_name.to_string(),
-                    bundle.service.service_version.clone(),
-                ),
-                iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    service_version: bundle.service.service_version.clone(),
-                    desired_replica_count: bundle.service.replicas.get(),
-                    eligible_validator_count: 1,
-                    placements: vec![SoraInrouReplicaPlacementV1 {
-                        replica_slot: 1,
-                        validator_account_id: ALICE_ID.clone(),
-                        peer_id: local_peer_id.to_owned(),
-                        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
-                        selected_guest_isa,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
-                    }],
-                    reconciled_at_ms: 1,
-                    last_error: None,
-                },
-            );
+}
+
+#[test]
+#[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]
+fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result<()> {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1")
+        || std::env::var("IROHA_INROU_PORTABLE").ok().as_deref() != Some("1")
+    {
+        println!(
+            "Skipping: set IROHA_RUN_IGNORED=1 IROHA_INROU_PORTABLE=1 to run the external bundle PortableVm smoke test."
+        );
+        return Ok(());
     }
+    require_portable_smoke_prerequisites()?;
+    let external_bundle =
+        portable_smoke_required_env_path("IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE")?;
+    let external_entrypoint = std::env::var("IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT")
+        .unwrap_or_else(|_| "/app/launch.sh".to_owned());
+    let external_healthcheck = std::env::var("IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK")
+        .unwrap_or_else(|_| "/health".to_owned());
+    let temp_dir = tempfile::tempdir()?;
+    let selected_guest_isa = current_host_inrou_guest_isa();
+    let local_peer_id = "12D3KooWPortableVmExternalBundlePeer";
+    let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+        .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+    config.inrou.start_grace = Duration::from_secs(240);
+    let (bundle, bundle_bytes) = load_external_inrou_smoke_bundle(
+        &config,
+        &external_bundle,
+        external_entrypoint,
+        external_healthcheck,
+    )?;
+    let mut state = test_state();
+    install_external_inrou_smoke_state(&mut state, &bundle, selected_guest_isa, local_peer_id);
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
     fs::write(
@@ -270,7 +292,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         },
         BTreeMap::new(),
     );
-    let response = host.egress_fetch(SoracloudEgressFetchRequestV1 {
+    let response = host.egress_fetch(&SoracloudEgressFetchRequestV1 {
         url: url.clone(),
         expected_hash: Some(expected_hash),
         max_bytes: 32,
@@ -280,7 +302,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
     assert_eq!(response.body, body);
     assert_eq!(response.body_hash, expected_hash);
     let rate_limited = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(expected_hash),
             max_bytes: 32,
@@ -288,7 +310,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         .expect_err("second request must exceed the per-minute rate limit");
     assert_eq!(rate_limited, VMError::PermissionDenied);
     let disallowed = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url: "http://example.com/blocked".to_owned(),
             expected_hash: Some(Hash::new(b"blocked")),
             max_bytes: 32,
@@ -320,7 +342,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         BTreeMap::new(),
     );
     let byte_limited = byte_limited_host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(Hash::new(b"too-large")),
             max_bytes: 16,
@@ -364,7 +386,7 @@ fn ivm_host_egress_fetch_rejects_oversized_content_type() -> Result<()> {
         BTreeMap::new(),
     );
     let error = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(expected_hash),
             max_bytes: 32,
@@ -399,7 +421,7 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
         BTreeMap::new(),
     );
     let error = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url: "http://127.0.0.1:9/disallowed-port".to_owned(),
             expected_hash: Some(Hash::new(b"blocked")),
             max_bytes: 32,
@@ -410,7 +432,7 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
 }
 #[test]
 fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
-    let state = test_state()?;
+    let state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
     bundle.container.bundle_hash = Hash::new(&artifact_bytes);
@@ -440,7 +462,7 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
 }
 #[test]
 fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
-    let state = test_state()?;
+    let state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
     bundle.container.bundle_hash = Hash::new(&artifact_bytes);
@@ -477,19 +499,19 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
             .health_status,
         SoraServiceHealthStatusV1::Degraded
     );
-    let stats = handle.ivm_runtime_cache_stats();
-    assert_eq!(stats.artifact_reads, 2);
-    assert_eq!(stats.artifact_hashes, 2);
-    assert_eq!(stats.contract_preparations, 1);
-    assert_eq!(stats.runtime_allocations, 1);
-    assert_eq!(stats.invalidations, 1);
-    assert_eq!(stats.prepared_entries, 0);
-    assert_eq!(stats.idle_runtimes, 0);
+    let invalidation_snapshot = handle.ivm_runtime_cache_stats();
+    assert_eq!(invalidation_snapshot.artifact_reads, 2);
+    assert_eq!(invalidation_snapshot.artifact_hashes, 2);
+    assert_eq!(invalidation_snapshot.contract_preparations, 1);
+    assert_eq!(invalidation_snapshot.runtime_allocations, 1);
+    assert_eq!(invalidation_snapshot.invalidations, 1);
+    assert_eq!(invalidation_snapshot.prepared_entries, 0);
+    assert_eq!(invalidation_snapshot.idle_runtimes, 0);
     Ok(())
 }
 #[test]
 fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<()> {
-    let mut state = test_state()?;
+    let mut state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let bundle_bytes = b"ivm bundle bytes".to_vec();
     bundle.container.bundle_hash = Hash::new(&bundle_bytes);

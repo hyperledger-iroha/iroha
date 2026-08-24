@@ -496,6 +496,7 @@ fn test_parliament_authorization(
         &rules,
     );
     ValidationFeeParliamentAuthorizationV1 {
+        proposal_operator,
         proposal_id,
         proposal_fingerprint: proposal_id,
         proposal_time_roster_root: test_roster_root(),
@@ -524,6 +525,7 @@ fn policy_treasury_account(policy: &ValidationFeePolicyV1) -> AccountId {
 }
 fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+        proposal_operator: account(1).0,
         payout_binding: policy
             .treasury_payout_binding
             .clone()
@@ -536,6 +538,7 @@ fn payout_lifecycle_proposal_id(policy: &ValidationFeePolicyV1) -> [u8; 32] {
 }
 fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator: account(1).0,
         policy: policy.clone(),
         payout_lifecycle_proposal_id: Some(payout_lifecycle_proposal_id(policy)),
         plain_electorate_rules: plain_electorate_rules(),

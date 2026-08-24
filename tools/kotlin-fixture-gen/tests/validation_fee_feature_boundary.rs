@@ -97,6 +97,7 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
         None
     );
     let authorization = ValidationFeeParliamentAuthorizationV1 {
+        proposal_operator,
         proposal_id,
         proposal_fingerprint: proposal_id,
         proposal_time_roster_root: [0x13; 32],

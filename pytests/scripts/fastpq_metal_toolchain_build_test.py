@@ -113,6 +113,7 @@ printf 'xcodebuild' >> "$FASTPQ_TEST_TOOL_LOG"
 for argument in "$@"; do printf '|%s' "$argument" >> "$FASTPQ_TEST_TOOL_LOG"; done
 printf '\n' >> "$FASTPQ_TEST_TOOL_LOG"
 if [ -n "${FASTPQ_TEST_XCODEBUILD_STATUS:-}" ]; then
+    printf 'component service unavailable\n' >&2
     exit "$FASTPQ_TEST_XCODEBUILD_STATUS"
 fi
 : > "$FASTPQ_TEST_TOOLCHAIN_READY"
@@ -286,6 +287,7 @@ def test_download_failure_reports_status_and_remediation(
     assert completed.returncode == 0, completed.stderr
     assert log.count("xcodebuild|-downloadComponent|MetalToolchain") == 1
     assert "exited with exit status: 9" in completed.stdout
+    assert "stderr: component service unavailable" in completed.stdout
     assert "xcode-select -p" in completed.stdout
     assert "FASTPQ_SKIP_GPU_BUILD=1" in completed.stdout
 

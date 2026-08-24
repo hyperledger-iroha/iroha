@@ -19,6 +19,9 @@ const bondEscrowAccount = AccountAddress.fromAccount({
 const slashReceiverAccount = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x22))),
 }).toI105();
+const proposalOperator = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x23))),
+}).toI105();
 const plainElectorateRules = Object.freeze({
   voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
   bond_escrow_account: bondEscrowAccount,
@@ -64,10 +67,12 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
   const fingerprint = withNativeBinding(
     {
       validationFeePolicyProposalFingerprintV1(
+        nativeProposalOperator,
         policyJson,
         lifecycleBytes,
         plainElectorateRulesJson,
       ) {
+        assert.equal(nativeProposalOperator, proposalOperator);
         assert.deepEqual(JSON.parse(policyJson), policy);
         assert.deepEqual(lifecycleBytes, Buffer.from(lifecycleId, "hex"));
         assert.deepEqual(
@@ -79,6 +84,7 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
     },
     () =>
       computeValidationFeePolicyProposalFingerprintV1(
+        proposalOperator,
         policy,
         lifecycleId,
         plainElectorateRules,
@@ -91,10 +97,12 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
   const fingerprint = withNativeBinding(
     {
       validationFeePolicyProposalFingerprintV1(
+        nativeProposalOperator,
         _policyJson,
         lifecycleBytes,
         plainElectorateRulesJson,
       ) {
+        assert.equal(nativeProposalOperator, proposalOperator);
         assert.equal(lifecycleBytes, null);
         assert.deepEqual(
           JSON.parse(plainElectorateRulesJson),
@@ -105,6 +113,7 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
     },
     () =>
       computeValidationFeePolicyProposalFingerprintV1(
+        proposalOperator,
         { schema_version: 1 },
         null,
         plainElectorateRules,
@@ -120,9 +129,11 @@ test("validation-fee payout lifecycle fingerprint delegates exact native objects
   const fingerprint = withNativeBinding(
     {
       validationFeePayoutLifecycleProposalFingerprintV1(
+        nativeProposalOperator,
         payoutBindingJson,
         plainElectorateRulesJson,
       ) {
+        assert.equal(nativeProposalOperator, proposalOperator);
         assert.deepEqual(JSON.parse(payoutBindingJson), payoutBinding);
         assert.deepEqual(
           JSON.parse(plainElectorateRulesJson),
@@ -133,6 +144,7 @@ test("validation-fee payout lifecycle fingerprint delegates exact native objects
     },
     () =>
       computeValidationFeePayoutLifecycleProposalFingerprintV1(
+        proposalOperator,
         payoutBinding,
         plainElectorateRules,
       ),
@@ -150,6 +162,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
     assert.throws(
       () =>
         computeValidationFeePolicyProposalFingerprintV1(
+          proposalOperator,
           { schema_version: 1 },
           `0x${"56".repeat(32)}`,
           plainElectorateRules,
@@ -159,6 +172,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
     assert.throws(
       () =>
         computeValidationFeePolicyProposalFingerprintV1(
+          proposalOperator,
           { schema_version: 1 },
           "00".repeat(32),
           plainElectorateRules,
@@ -181,6 +195,7 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
     assert.throws(
       () =>
         computeValidationFeePolicyProposalFingerprintV1(
+          proposalOperator,
           { schema_version: 1 },
           null,
           undefined,
@@ -190,11 +205,34 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
     assert.throws(
       () =>
         computeValidationFeePayoutLifecycleProposalFingerprintV1(
+          proposalOperator,
           [],
           plainElectorateRules,
         ),
       /payoutBinding must be an exact native object/u,
     );
+  });
+});
+
+test("validation-fee proposal fingerprints require an explicit canonical operator", () => {
+  const unexpectedNative = {
+    validationFeePolicyProposalFingerprintV1() {
+      assert.fail("invalid proposal operator must not reach native code");
+    },
+  };
+  withNativeBinding(unexpectedNative, () => {
+    for (const invalid of [null, "", ` ${proposalOperator}`]) {
+      assert.throws(
+        () =>
+          computeValidationFeePolicyProposalFingerprintV1(
+            invalid,
+            { schema_version: 1 },
+            null,
+            plainElectorateRules,
+          ),
+        /proposalOperator must be one canonical domainless AccountId/u,
+      );
+    }
   });
 });
 
@@ -212,6 +250,7 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
       assert.throws(
         () =>
           computeValidationFeePolicyProposalFingerprintV1(
+            proposalOperator,
             { schema_version: 1 },
             null,
             plainElectorateRules,
@@ -221,6 +260,7 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
       assert.throws(
         () =>
           computeValidationFeePayoutLifecycleProposalFingerprintV1(
+            proposalOperator,
             { entrypoint: "autonomous_validation_fee_tick" },
             plainElectorateRules,
           ),
@@ -254,6 +294,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   };
   const proposalId =
     computeValidationFeePolicyProposalFingerprintV1(
+      authority,
       policy,
       null,
       plainElectorateRules,
@@ -261,6 +302,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   assert.match(proposalId, /^[0-9a-f]{64}$/u);
   assert.equal(
     computeValidationFeePolicyProposalFingerprintV1(
+      authority,
       policy,
       null,
       plainElectorateRules,

@@ -13,7 +13,10 @@ use crate::{
         SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
     },
 };
-use iroha_config::parameters::actual::{NexusStorageWeights, Root as Config, SoracloudRuntime};
+use iroha_config::{
+    base::util::Bytes,
+    parameters::actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
+};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -23,6 +26,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use std::{
+    ffi::OsStr,
     fmt,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
@@ -32,6 +36,13 @@ use std::{
     },
     sync::Arc,
 };
+
+fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
+    matches!(
+        argument.to_str(),
+        Some("--check-config" | "--help" | "-h" | "--version" | "-V")
+    )
+}
 
 /// Fixed inherited descriptor containing the Taira runtime signer key.
 pub const TAIRA_RUNTIME_SIGNER_FD_V1: RawFd = 198;
@@ -51,13 +62,13 @@ pub const TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1: u64 = 68_719_476_736;
 pub const TAIRA_NEXUS_KURA_BLOCKS_BPS_V1: u16 = 5_500;
 /// Exact WSV snapshot share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1: u16 = 2_000;
-/// Exact SoraFS share of the first-release Taira Nexus disk budget.
+/// Exact `SoraFS` share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORAFS_BPS_V1: u16 = 2_000;
-/// Exact SoraNet spool share of the first-release Taira Nexus disk budget.
+/// Exact `SoraNet` spool share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORANET_SPOOL_BPS_V1: u16 = 250;
-/// Exact SoraVPN spool share of the first-release Taira Nexus disk budget.
+/// Exact `SoraVPN` spool share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
-/// Exact effective SoraFS component cap derived for first-release Taira.
+/// Exact effective `SoraFS` component cap derived for first-release Taira.
 pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
 
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
@@ -131,8 +142,7 @@ fn validate_taira_storage_profile_v1(
         || effective_budget_bytes != Some(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1)
     {
         return Err(format!(
-            "Taira launcher requires the exact {}-byte Nexus storage budget",
-            TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1
+            "Taira launcher requires the exact {TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1}-byte Nexus storage budget"
         ));
     }
     if weights.kura_blocks_bps != TAIRA_NEXUS_KURA_BLOCKS_BPS_V1
@@ -145,8 +155,7 @@ fn validate_taira_storage_profile_v1(
     }
     if configured_sorafs_capacity_bytes != Some(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1) {
         return Err(format!(
-            "Taira launcher requires an explicit {}-byte SoraFS storage cap before Nexus clamping",
-            TAIRA_SORAFS_STORAGE_CAP_BYTES_V1
+            "Taira launcher requires an explicit {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte SoraFS storage cap before Nexus clamping"
         ));
     }
     if sorafs_provider_enabled {
@@ -156,8 +165,7 @@ fn validate_taira_storage_profile_v1(
     }
     if sorafs_capacity_bytes != TAIRA_SORAFS_STORAGE_CAP_BYTES_V1 {
         return Err(format!(
-            "Taira launcher requires the exact {}-byte effective SoraFS storage cap",
-            TAIRA_SORAFS_STORAGE_CAP_BYTES_V1
+            "Taira launcher requires the exact {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte effective SoraFS storage cap"
         ));
     }
     Ok(())
@@ -173,22 +181,18 @@ fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
         &config.soracloud_runtime,
     )?;
     validate_taira_storage_profile_v1(
-        config
-            .nexus
-            .storage
-            .local_budget_bytes
-            .map(|bytes| bytes.get()),
+        config.nexus.storage.local_budget_bytes.map(Bytes::get),
         config
             .nexus
             .storage
             .effective_local_budget_bytes
-            .map(|bytes| bytes.get()),
+            .map(Bytes::get),
         config.nexus.storage.disk_budget_weights,
         config
             .nexus
             .storage
             .configured_sorafs_max_capacity_bytes()
-            .map(|bytes| bytes.get()),
+            .map(Bytes::get),
         config.torii.sorafs_storage.enabled,
         config.torii.sorafs_storage.max_capacity_bytes.get(),
     )
@@ -247,7 +251,7 @@ impl DescriptorIdentityV1 {
         }
     }
 
-    fn same_security_identity_after_consumption(self, metadata: &std::fs::Metadata) -> bool {
+    fn same_security_identity_after_consumption(&self, metadata: &std::fs::Metadata) -> bool {
         metadata.is_file()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
@@ -260,11 +264,12 @@ impl DescriptorIdentityV1 {
 
 fn consume_trusted_key_file(
     file: &mut File,
-    identity: DescriptorIdentityV1,
+    identity: &DescriptorIdentityV1,
+    zeroed_key_record: &[u8],
 ) -> Result<(), TairaRuntimeSignerErrorV1> {
     file.seek(std::io::SeekFrom::Start(0))
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
-    file.write_all(&[0; TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1 as usize])
+    file.write_all(zeroed_key_record)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
     file.sync_data()
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
@@ -333,7 +338,7 @@ fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSigner
         KeyPair::from_private_key(exposed.0).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)
     })();
     bytes.fill(0);
-    consume_trusted_key_file(&mut file, before)?;
+    consume_trusted_key_file(&mut file, &before, &bytes)?;
     parsed
 }
 
@@ -484,11 +489,11 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 
 /// Run the Taira daemon with the exact signer inherited at descriptor 198.
 ///
-/// `--check-config` remains offline and therefore does not read the descriptor.
-/// Every node-starting invocation resolves the one configured signer through
-/// [`crate::run_with_runtime_provider_registry`].
+/// Config validation, help, and version introspection remain offline and do not
+/// read the descriptor. Every node-starting invocation resolves the one
+/// configured signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry() {
-    if std::env::args_os().any(|argument| argument == "--check-config") {
+    if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
         if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
             eprintln!("{report:?}");
             std::process::exit(1);
@@ -522,14 +527,25 @@ mod tests {
     };
     use std::{
         fs,
-        num::{NonZeroU32, NonZeroU64},
+        num::NonZeroU32,
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
 
     fn canonical_runtime_profile() -> SoracloudRuntime {
-        let mut runtime = SoracloudRuntime::default();
-        runtime.production_mode = true;
-        runtime
+        SoracloudRuntime {
+            production_mode: true,
+            ..SoracloudRuntime::default()
+        }
+    }
+
+    #[test]
+    fn offline_introspection_never_requires_the_runtime_signer() {
+        for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
+            assert!(invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
+        for argument in ["--config", "--sora", "--genesis-manifest-json"] {
+            assert!(!invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
     }
 
     #[test]
@@ -713,11 +729,11 @@ mod tests {
             .expect("canonical private key");
         assert_eq!(
             literal.len() + 1,
-            TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1 as usize
+            usize::try_from(TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1)
+                .expect("fixed Taira key length fits usize")
         );
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
-        use std::io::Write as _;
         writeln!(options.open(&path).expect("create signer key"), "{literal}")
             .expect("write signer key");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("protect signer key");
@@ -840,11 +856,13 @@ mod tests {
         )
         .into_payload()
         .expect("transaction payload");
-        let signed = signer
+        let signed_transaction = signer
             .sign_transaction(payload.clone())
             .expect("sign exact transaction");
-        assert_eq!(signed.payload(), &payload);
-        signed.verify_signature().expect("valid signature");
+        assert_eq!(signed_transaction.payload(), &payload);
+        signed_transaction
+            .verify_signature()
+            .expect("valid signature");
     }
 
     #[test]

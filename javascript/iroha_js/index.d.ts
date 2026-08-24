@@ -602,6 +602,7 @@ export interface MultisigContractCallResponse {
   tx_hash_hex: string | null;
   executed_tx_hash_hex: string | null;
   creation_time_ms: number | null;
+  fee_payment: NoritoFeePaymentIntent;
   transaction_payload_b64: string | null;
   signing_message_b64: string | null;
 }
@@ -10145,6 +10146,7 @@ export interface ValidationFeeVerifiedParliamentProposalV1 {
   readonly proposal_kind:
     | "ValidationFeePolicyV1"
     | "ValidationFeePayoutLifecycleV1";
+  readonly proposal_operator: string;
   readonly proposal_id: string;
   readonly payload_hash: string;
   readonly parliament_roster_root: string;
@@ -11893,10 +11895,12 @@ export interface ValidationFeePlainElectorateRulesV1 {
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
- * contract. The electorate rules must use the exact first-release PLAIN
+ * contract. `proposalOperator` is the canonical domainless execution authority.
+ * The electorate rules must use the exact first-release PLAIN
  * contract. Missing, unknown, and legacy fields are rejected natively.
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
+  proposalOperator: string,
   policy: Readonly<Record<string, JsonValue>>,
   payoutLifecycleProposalId: string | null,
   plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
@@ -11905,10 +11909,12 @@ export function computeValidationFeePolicyProposalFingerprintV1(
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
  *
- * Both arguments must use their exact native snake-case JSON contracts.
- * Missing, unknown, legacy, and non-canonical fields are rejected natively.
+ * Both object arguments must use their exact native snake-case JSON contracts.
+ * `proposalOperator` is the canonical domainless execution authority. Missing,
+ * unknown, legacy, and non-canonical fields are rejected natively.
  */
 export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  proposalOperator: string,
   payoutBinding: Readonly<Record<string, JsonValue>>,
   plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
 ): string;

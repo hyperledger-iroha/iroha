@@ -8626,7 +8626,7 @@ mod tests {
             )
         );
         let state = state_without_zk_ace_activation();
-        let block = state.block(test_header());
+        let mut block = state.block(test_header());
         let transaction = block.transaction();
         assert!(
             transaction

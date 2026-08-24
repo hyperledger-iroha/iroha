@@ -37,6 +37,9 @@ macro_rules! impl_nested_json_key_codec {
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
+    crate::governance::types::GovernanceAttemptId,
+    crate::governance::types::BallotAttemptId,
+    crate::governance::types::TleKeySessionId,
     crate::nft::NftId,
     crate::role::RoleId,
     crate::trigger::TriggerId,
@@ -670,6 +673,7 @@ mod tests {
         SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
     };
     use crate::{
+        governance::types::{BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
         musubi::{
             ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
             MusubiPackageScopeV1, MusubiProviderBundleAttestationKeyV1,
@@ -682,6 +686,24 @@ mod tests {
     use norito::json::Parser;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked JSON key codec fixture keypair")
+    }
+    #[test]
+    fn governance_hash_ids_are_canonical_json_storage_keys() {
+        fn check<T>(key: T)
+        where
+            T: JsonKeyCodec + core::fmt::Debug + PartialEq,
+        {
+            let mut encoded = String::new();
+            key.encode_json_key(&mut encoded);
+            let mut parser = Parser::new(&encoded);
+            let raw = parser.parse_string().expect("parse governance storage key");
+            assert_eq!(T::decode_json_key(&raw).expect("decode storage key"), key);
+            assert!(T::decode_json_key(&raw.to_uppercase()).is_err());
+        }
+
+        check(GovernanceAttemptId::new([0xab; 32]));
+        check(BallotAttemptId::new([0xbc; 32]));
+        check(TleKeySessionId::new([0xcd; 32]));
     }
     #[test]
     fn account_id_json_key_codec_roundtrip() {

@@ -842,7 +842,7 @@ fn collect_shared_finality_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
+    use std::io::Write as _;
 
     fn fetch_status_fixture(content_type: &str, extra_headers: &str, body: &str) -> Result<u64> {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
@@ -943,7 +943,9 @@ mod tests {
             attestation
                 .headers()
                 .get(FINALITY_CHALLENGE_HEADER)
-                .unwrap(),
+                .unwrap()
+                .to_str()
+                .expect("finality challenge header is ASCII"),
             hex::encode([0x42; 32])
         );
         assert!(

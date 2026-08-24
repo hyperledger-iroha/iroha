@@ -42,23 +42,40 @@ enum ColumnDispatchInner<'a> {
 struct PendingCudaColumns<'a> {
     columns: &'a mut [Vec<u64>],
     extent: usize,
-    buffer: Vec<u64>,
-    pending: fastpq_cuda::PendingCudaDispatch,
+    buffer: Option<Vec<u64>>,
+    pending: Option<fastpq_cuda::PendingCudaDispatch>,
 }
 impl PendingCudaColumns<'_> {
-    fn wait(self) -> Result<(), GpuError> {
-        let PendingCudaColumns {
-            columns,
-            extent,
-            buffer,
-            pending,
-        } = self;
-        pending.wait().map_err(|err| GpuError::Execution {
-            backend: GpuBackend::Cuda,
-            message: err.to_string(),
-        })?;
-        restore(columns, &buffer, extent);
+    fn finish(&mut self) -> Result<(), GpuError> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+        let buffer = self
+            .buffer
+            .as_mut()
+            .expect("pending CUDA column output should live until completion");
+        if let Err(err) = pending.wait(buffer) {
+            self.buffer.take();
+            return Err(GpuError::Execution {
+                backend: GpuBackend::Cuda,
+                message: err.to_string(),
+            });
+        }
+        let buffer = self
+            .buffer
+            .take()
+            .expect("completed CUDA column output should remain available");
+        restore(self.columns, &buffer, self.extent);
         Ok(())
+    }
+
+    fn wait(mut self) -> Result<(), GpuError> {
+        self.finish()
+    }
+}
+impl Drop for PendingCudaColumns<'_> {
+    fn drop(&mut self) {
+        let _ = self.finish();
     }
 }
 impl<'a> ColumnDispatch<'a> {
@@ -101,25 +118,54 @@ enum LdeDispatchInner {
 }
 struct PendingCudaLde {
     eval_len: usize,
-    eval_buffer: Vec<u64>,
-    pending: fastpq_cuda::PendingCudaDispatch,
+    eval_buffer: Option<Vec<u64>>,
+    pending: Option<fastpq_cuda::PendingCudaDispatch>,
 }
 impl PendingCudaLde {
-    fn wait(self) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
-        let PendingCudaLde {
-            eval_len,
-            eval_buffer,
-            pending,
-        } = self;
-        pending.wait().map_err(|err| GpuError::Execution {
-            backend: GpuBackend::Cuda,
-            message: err.to_string(),
+    fn complete_output(&mut self) -> Result<(), GpuError> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+        let eval_buffer = self
+            .eval_buffer
+            .as_mut()
+            .expect("pending CUDA LDE output should live until completion");
+        if let Err(err) = pending.wait(eval_buffer) {
+            self.eval_buffer.take();
+            return Err(GpuError::Execution {
+                backend: GpuBackend::Cuda,
+                message: err.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn wait(mut self) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
+        self.complete_output()?;
+        let eval_buffer = self
+            .eval_buffer
+            .take()
+            .expect("completed CUDA LDE output should remain available");
+        let column_count = eval_buffer.len() / self.eval_len;
+        let mut result = Vec::new();
+        result.try_reserve_exact(column_count).map_err(|_| {
+            GpuError::InvalidInput("CUDA LDE result list exceeds available host memory")
         })?;
-        let mut result = Vec::with_capacity(eval_buffer.len() / eval_len);
-        for chunk in eval_buffer.chunks_exact(eval_len) {
-            result.push(chunk.to_vec());
+        for chunk in eval_buffer.chunks_exact(self.eval_len) {
+            let mut column = Vec::new();
+            column.try_reserve_exact(chunk.len()).map_err(|_| {
+                GpuError::InvalidInput("CUDA LDE result column exceeds available host memory")
+            })?;
+            column.extend_from_slice(chunk);
+            result.push(column);
         }
         Ok(Some(result))
+    }
+}
+impl Drop for PendingCudaLde {
+    fn drop(&mut self) {
+        let _ = self.complete_output();
+        self.eval_buffer.take();
     }
 }
 impl LdeDispatch {
@@ -347,7 +393,7 @@ fn fft_cuda_async<'a>(
     shape: DenseColumnShape,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
     let column_count = columns.len();
-    let mut buffer = flatten(columns, shape.total_len);
+    let mut buffer = flatten(columns, shape.total_len)?;
     let pending = fastpq_cuda::fastpq_fft_submit(&mut buffer, column_count, log_size, root)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
@@ -356,8 +402,8 @@ fn fft_cuda_async<'a>(
     Ok(ColumnDispatch::cuda(PendingCudaColumns {
         columns,
         extent: shape.extent,
-        buffer,
-        pending,
+        buffer: Some(buffer),
+        pending: Some(pending),
     }))
 }
 fn ifft_cuda_async<'a>(
@@ -367,7 +413,7 @@ fn ifft_cuda_async<'a>(
     shape: DenseColumnShape,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
     let column_count = columns.len();
-    let mut buffer = flatten(columns, shape.total_len);
+    let mut buffer = flatten(columns, shape.total_len)?;
     let pending = fastpq_cuda::fastpq_ifft_submit(&mut buffer, column_count, log_size, root)
         .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
@@ -376,8 +422,8 @@ fn ifft_cuda_async<'a>(
     Ok(ColumnDispatch::cuda(PendingCudaColumns {
         columns,
         extent: shape.extent,
-        buffer,
-        pending,
+        buffer: Some(buffer),
+        pending: Some(pending),
     }))
 }
 fn lde_cuda_async(
@@ -388,8 +434,12 @@ fn lde_cuda_async(
     coset: u64,
     shape: LdeColumnShape,
 ) -> Result<LdeDispatch, GpuError> {
-    let coeff_buffer = flatten(coeffs, shape.coefficients.total_len);
-    let mut eval_buffer = vec![0u64; shape.eval_total_len];
+    let coeff_buffer = flatten(coeffs, shape.coefficients.total_len)?;
+    let mut eval_buffer = Vec::new();
+    eval_buffer
+        .try_reserve_exact(shape.eval_total_len)
+        .map_err(|_| GpuError::InvalidInput("CUDA LDE output exceeds available host memory"))?;
+    eval_buffer.resize(shape.eval_total_len, 0);
     let pending = fastpq_cuda::fastpq_lde_submit(
         &coeff_buffer,
         coeffs.len(),
@@ -405,17 +455,20 @@ fn lde_cuda_async(
     })?;
     Ok(LdeDispatch::cuda(PendingCudaLde {
         eval_len: shape.eval_len,
-        eval_buffer,
-        pending,
+        eval_buffer: Some(eval_buffer),
+        pending: Some(pending),
     }))
 }
-fn flatten(columns: &[Vec<u64>], total_len: usize) -> Vec<u64> {
-    let mut buffer = Vec::with_capacity(total_len);
+fn flatten(columns: &[Vec<u64>], total_len: usize) -> Result<Vec<u64>, GpuError> {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(total_len)
+        .map_err(|_| GpuError::InvalidInput("CUDA staging buffer exceeds available host memory"))?;
     for column in columns {
         buffer.extend_from_slice(column);
     }
     debug_assert_eq!(buffer.len(), total_len);
-    buffer
+    Ok(buffer)
 }
 fn restore(columns: &mut [Vec<u64>], buffer: &[u64], extent: usize) {
     for (column, chunk) in columns.iter_mut().zip(buffer.chunks_exact(extent)) {
@@ -536,8 +589,13 @@ fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnDispatch, GpuBackend, GpuError, LdeDispatch, checked_cardinality, fft_columns_async,
-        ifft_columns_async, lde_columns_async,
+        ColumnDispatch, GpuBackend, GpuError, LdeDispatch, PendingCudaColumns, PendingCudaLde,
+        checked_cardinality, fft_columns_async, ifft_columns_async, lde_columns_async,
+    };
+    use crate::fastpq_cuda::PendingCudaDispatch;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     };
     #[test]
     fn column_dispatch_ready_waits() {
@@ -548,6 +606,43 @@ mod tests {
         let ready = LdeDispatch::ready(Some(vec![vec![1, 2, 3]]));
         let result = ready.wait().expect("wait succeeds");
         assert_eq!(result.unwrap()[0], vec![1, 2, 3]);
+    }
+    #[test]
+    fn dropping_cuda_column_dispatch_waits_before_releasing_output() {
+        let waited = Arc::new(AtomicBool::new(false));
+        let waited_by_hook = Arc::clone(&waited);
+        let mut columns = vec![vec![1, 2]];
+        {
+            let pending = PendingCudaDispatch::from_wait_hook(2, move |output| {
+                output.copy_from_slice(&[9, 10]);
+                waited_by_hook.store(true, Ordering::Release);
+            });
+            let dispatch = ColumnDispatch::cuda(PendingCudaColumns {
+                columns: &mut columns,
+                extent: 2,
+                buffer: Some(vec![0; 2]),
+                pending: Some(pending),
+            });
+            drop(dispatch);
+        }
+        assert!(waited.load(Ordering::Acquire));
+        assert_eq!(columns, vec![vec![9, 10]]);
+    }
+    #[test]
+    fn dropping_cuda_lde_dispatch_waits_without_materializing_results() {
+        let waited = Arc::new(AtomicBool::new(false));
+        let waited_by_hook = Arc::clone(&waited);
+        let pending = PendingCudaDispatch::from_wait_hook(4, move |output| {
+            output.copy_from_slice(&[1, 2, 3, 4]);
+            waited_by_hook.store(true, Ordering::Release);
+        });
+        let dispatch = LdeDispatch::cuda(PendingCudaLde {
+            eval_len: 4,
+            eval_buffer: Some(vec![0; 4]),
+            pending: Some(pending),
+        });
+        drop(dispatch);
+        assert!(waited.load(Ordering::Acquire));
     }
     #[test]
     fn lde_dispatch_from_error_returns_payload_error() {
