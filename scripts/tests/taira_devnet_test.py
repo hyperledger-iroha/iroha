@@ -26,6 +26,7 @@ try:
     SPEC.loader.exec_module(module)
 finally:
     sys.path.remove(str(MODULE_PATH.parent))
+network_id_from_genesis_hash = sys.modules["taira_constants"].network_id_from_genesis_hash
 
 
 def executable(path: Path, body: bytes = b"current binary\n") -> Path:
@@ -85,13 +86,13 @@ class FakeRuntime:
             for name in ("start.sh", "stop.sh"):
                 executable(target / name, b"#!/usr/bin/env bash\n")
             genesis_hash = "a" * 63 + "b"
-            network_id = module.network_id_from_genesis_hash(genesis_hash)
+            network_id = network_id_from_genesis_hash(genesis_hash)
             for index in range(module.PEER_COUNT):
                 sorafs_dir = target / "state" / f"peer{index}" / "sorafs"
                 (target / f"peer{index}.toml").write_text(
                     f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                     f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n"
-                    f'[genesis]\nexpected_hash = "{network_id}"\n'
+                    '[genesis]\nexpected_hash_file = "genesis.expected_hash"\n'
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
                     "[nexus.storage]\n"
                     f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
@@ -107,11 +108,11 @@ class FakeRuntime:
                 signer.write_bytes(b"x" * module.RUNTIME_SIGNER_FILE_BYTES)
                 signer.chmod(0o600)
             (target / "genesis.expected_hash").write_text(
-                genesis_hash + "\n", encoding="utf-8"
+                network_id + "\n", encoding="utf-8"
             )
             (target / "client.toml").write_text(
                 f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
-                f'network_id = "{network_id}"\n'
+                'network_id_file = "genesis.expected_hash"\n'
                 f'torii_url = "http://127.0.0.1:{api_port}/"\n'
                 f"[account]\nchain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n",
                 encoding="utf-8",
@@ -223,6 +224,23 @@ class TairaDevnetTests(unittest.TestCase):
             "fc56984b-2be7-431d-840e-21514d1883f0",
         )
         self.assertEqual(module.DEFAULT_CHAIN_DISCRIMINANT, 369)
+
+    def test_canonical_network_id_rejects_pre_release_and_malformed_text(self) -> None:
+        genesis_hash = "a" * 63 + "b"
+        canonical = network_id_from_genesis_hash(genesis_hash)
+        self.assertEqual(module.canonical_network_id(canonical), canonical)
+        malformed = (
+            genesis_hash,
+            canonical.lower(),
+            canonical[:-1] + ("0" if canonical[-1] != "0" else "1"),
+            "hash:" + "0" * 63 + "2#F56D",
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    module.canonical_network_id(value)
+        with self.assertRaises(ValueError):
+            network_id_from_genesis_hash("0" * 63 + "2")
 
     def up_args(self, *extra: str):
         """Parse a no-build ``up`` command for this test directory."""
@@ -732,6 +750,28 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "not for canonical Taira"):
             module.check(args, run=runtime.run, request=runtime.request)
 
+    def test_bundle_identity_rejects_raw_crc_and_record_framing_drift(self) -> None:
+        _, target = self.generated_network("identity-record-cases")
+        identity_path = target / "genesis.expected_hash"
+        canonical = identity_path.read_text(encoding="utf-8").removesuffix("\n")
+        cases = (
+            ("raw", "a" * 63 + "b" + "\n", "is invalid"),
+            (
+                "bad checksum",
+                canonical[:-1] + ("0" if canonical[-1] != "0" else "1") + "\n",
+                "is invalid",
+            ),
+            ("missing newline", canonical, "lacks a final newline"),
+            ("multiple records", f"{canonical}\n{canonical}\n", "exactly one record"),
+        )
+        for label, record, message in cases:
+            with self.subTest(label=label):
+                identity_path.write_text(record, encoding="utf-8")
+                with self.assertRaisesRegex(module.DevnetError, message):
+                    module.require_bundle_identity(
+                        target, module.torii_roots(module.DEFAULT_API_PORT)
+                    )
+
     def test_check_rejects_client_chain_discriminant_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
@@ -772,34 +812,79 @@ class TairaDevnetTests(unittest.TestCase):
         ):
             module.check(args, run=runtime.run, request=runtime.request)
 
-    def test_check_rejects_client_network_id_checksum_drift(self) -> None:
+    def test_check_rejects_client_network_identity_file_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         client = self.root / "state" / "network" / "client.toml"
         contents = client.read_text(encoding="utf-8")
-        network_id = module.quoted_assignment(client, "network_id")
-        replacement = network_id[:-1] + ("0" if network_id[-1] != "0" else "1")
-        client.write_text(contents.replace(network_id, replacement), encoding="utf-8")
+        client.write_text(
+            contents.replace("genesis.expected_hash", "foreign.expected_hash"),
+            encoding="utf-8",
+        )
         args = module.parser().parse_args(
             ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "does not match its genesis hash"):
+        with self.assertRaisesRegex(module.DevnetError, "network identity file does not match"):
             module.check(args, run=runtime.run, request=runtime.request)
 
-    def test_check_rejects_peer_genesis_identity_drift(self) -> None:
+    def test_check_rejects_duplicate_inline_client_network_identity(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        client = self.root / "state" / "network" / "client.toml"
+        network_id = (self.root / "state" / "network" / "genesis.expected_hash").read_text(
+            encoding="utf-8"
+        ).removesuffix("\n")
+        contents = client.read_text(encoding="utf-8")
+        client.write_text(
+            contents.replace(
+                "[account]\n", f'network_id = "{network_id}"\n[account]\n', 1
+            ),
+            encoding="utf-8",
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "must not contain `network_id`"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_peer_genesis_identity_file_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         config = self.root / "state" / "network" / "peer2.toml"
         contents = config.read_text(encoding="utf-8")
-        network_id = module.quoted_assignment(config, "expected_hash")
-        foreign = module.network_id_from_genesis_hash("1" * 63 + "3")
-        config.write_text(contents.replace(network_id, foreign), encoding="utf-8")
+        config.write_text(
+            contents.replace("genesis.expected_hash", "foreign.expected_hash"),
+            encoding="utf-8",
+        )
         args = module.parser().parse_args(
             ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
         )
 
-        with self.assertRaisesRegex(module.DevnetError, "genesis hash does not match"):
+        with self.assertRaisesRegex(module.DevnetError, "genesis identity file does not match"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_duplicate_inline_peer_genesis_identity(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        target = self.root / "state" / "network"
+        config = target / "peer2.toml"
+        network_id = (target / "genesis.expected_hash").read_text(
+            encoding="utf-8"
+        ).removesuffix("\n")
+        contents = config.read_text(encoding="utf-8")
+        config.write_text(
+            contents.replace(
+                "[genesis]\n", f'[genesis]\nexpected_hash = "{network_id}"\n', 1
+            ),
+            encoding="utf-8",
+        )
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "must not contain `expected_hash`"):
             module.check(args, run=runtime.run, request=runtime.request)
 
     def test_full_public_doctor_is_opt_in(self) -> None:

@@ -269,6 +269,7 @@ impl SoraArtifactDistributionTargetV1 {
 /// Reusable policy for publishing artifacts to Soracloud host storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraArtifactDistributionPolicyV1 {
     /// Operator target: global or a set of geography tags.
     pub target: SoraArtifactDistributionTargetV1,
@@ -298,12 +299,14 @@ impl SoraArtifactDistributionPolicyV1 {
 /// Immutable `SoraFS` artifact reference used to hydrate Inrou guest images.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraPublishedInrouGuestImageArtifactV1 {
     /// `SoraFS` manifest digest hex for the uploaded guest-image artifact bundle.
     pub manifest_digest_hex: String,
     /// CID rendered for the uploaded guest-image artifact bundle.
     pub content_cid: String,
     /// Optional storage manifest identifier returned by the storage pin endpoint.
+    #[norito(required)]
     pub manifest_id_hex: Option<String>,
     /// Exact copy of the parent guest image's authoritative distribution policy.
     pub distribution: SoraArtifactDistributionPolicyV1,

@@ -432,7 +432,9 @@ only that exact data-only `Uint8Array` proof shape, projects `accountId` into th
 Nexus approval state, and derives the Ed25519 controller key from the canonical
 I105 account. An injected `connectTransport.awaitApproval` instead returns the
 custom `{accountId, signingPublicKey?}` approval shape and must not forward the
-browser proof's `walletPublicKey` or `signature`. For
+browser proof's `walletPublicKey`, `signature`, or a replacement `session`.
+The facade enriches a copy of the exact caller session after binding the
+approval key to the account's Ed25519 controller. For
 `finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
 rejected before finalization, and the signal is checked again after
 finalization and capability capture but before Torii submission. Wait-enabled
@@ -680,6 +682,7 @@ the native Rust bridge. `expectedEntryHash` is the application-selected
 ```js
 import {
   AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  NetworkId,
   ToriiClient,
   verifyAuthenticatedBlockProofsV1,
 } from "@iroha/iroha-js";
@@ -688,7 +691,7 @@ const torii = new ToriiClient("https://taira.sora.org");
 const executedBlockWire = await torii.getLedgerExecutedBlockWire(blockHeight);
 const verdict = await verifyAuthenticatedBlockProofsV1({
   version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
-  chainId: pinnedChainId,
+  networkId: NetworkId.parse(pinnedNetworkIdLiteral),
   trustedContextId: pinnedHeightContextId,
   expectedEntryHash: requestedTransactionEntrypointHash,
   // Include the last accepted proof only when advancing one exact height.
@@ -3810,7 +3813,7 @@ file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 - `IROHA_TORII_INTEGRATION_AUTH_TOKEN` — optional bearer token for auth-protected deployments.
 - `IROHA_TORII_INTEGRATION_CONFIG` — optional path to an `iroha_config` JSON file; when present the test asserts that `extractToriiFeatureConfig()` normalises ISO bridge and Connect settings.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the exact registration payload for `createConnectSession()`: `sid`, canonical `network_id`, base64url `app_pk`, base64url `nonce`, and optional `node`.
-- `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"network_id":"hash:<genesis>#<checksum>","node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}`). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
+- `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"network_id":"hash:<64 uppercase hex>#<CRC16>","node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}`). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
 - `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) drafted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority` and exact `NetworkId`, so the env var only needs vote-specific fields.

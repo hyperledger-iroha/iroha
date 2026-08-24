@@ -645,7 +645,7 @@ fn write_wizard_readme(
             "This output is staged, not a locally signed replacement for the selected network's genesis.\n\n",
             "## Prerequisites\n\n",
             "1. Obtain the network-authoritative `genesis.signed.nrt` from the operator.\n",
-            "2. Obtain its exact signed genesis hash as `genesis.expected_hash`.\n",
+            "2. Obtain its canonical checked NetworkId, derived from the exact signed genesis hash, as `genesis.expected_hash`.\n",
             "3. Verify both artifacts through the network's authenticated distribution channel.\n\n",
             "{profile_prerequisites}\n",
             "`genesis.json` is a reference manifest and must never be used as `genesis.file`.\n\n",

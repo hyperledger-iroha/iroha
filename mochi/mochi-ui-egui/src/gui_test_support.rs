@@ -124,7 +124,7 @@ if [ "$1" = "genesis" ] && [ "$2" = "sign" ]; then
   test -s "$private_key_file"
   test -s "$config_file"
   printf 'stub-signed-genesis' > "$out_file"
-  printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
+  printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
   if [ "$bound_manifest_out" != "$manifest_path" ]; then
     cp "$manifest_path" "$bound_manifest_out"
   fi

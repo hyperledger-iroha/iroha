@@ -7,6 +7,7 @@ services:
       - ./config.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
       - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./genesis.expected_hash:/config/genesis.expected_hash:ro
     ports:
       - "8080:8080"
       - "1337:1337"
@@ -20,6 +21,7 @@ services:
       - ./config-peer-1.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
       - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./genesis.expected_hash:/config/genesis.expected_hash:ro
     ports:
       - "8081:8081"
       - "1338:1338"
@@ -33,6 +35,7 @@ services:
       - ./config-peer-2.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
       - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./genesis.expected_hash:/config/genesis.expected_hash:ro
     ports:
       - "8082:8082"
       - "1339:1339"
@@ -46,6 +49,7 @@ services:
       - ./config-peer-3.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
       - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./genesis.expected_hash:/config/genesis.expected_hash:ro
     ports:
       - "8083:8083"
       - "1340:1340"

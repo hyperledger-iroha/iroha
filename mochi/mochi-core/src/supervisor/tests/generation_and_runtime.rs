@@ -1197,10 +1197,68 @@ fn generated_peer_config_preserves_all_mochi_managed_paths() {
         &[],
     )
     .expect("write generated peer config");
+    let rendered = fs::read_to_string(&spec.config_path).expect("read generated peer config");
+    let rendered: toml::Table = toml::from_str(&rendered).expect("parse generated peer config");
+    let rendered_genesis = rendered
+        .get("genesis")
+        .and_then(toml::Value::as_table)
+        .expect("generated genesis table");
+    assert_eq!(
+        rendered_genesis
+            .get("expected_hash_file")
+            .and_then(toml::Value::as_str),
+        Some(genesis.expected_hash_path.to_string_lossy().as_ref())
+    );
+    assert!(!rendered_genesis.contains_key("expected_hash"));
     let config =
         ManagedNodeConfig::from_path(&spec.config_path).expect("parse generated peer config");
     validate_managed_peer_paths(&config, &spec, 1)
         .expect("generated config keeps every Mochi-managed path");
+}
+#[test]
+fn generated_peer_config_rejects_a_duplicate_inline_genesis_identity() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths = NetworkPaths::from_root(temp.path(), &NetworkProfile::default());
+    paths.ensure().expect("paths");
+    let spec = test_peer_spec(&paths, "peer0".into(), 8080, 1337).expect("peer spec");
+    let genesis = test_genesis_material(&paths);
+    spec.write_config(
+        "managed-identity-chain",
+        &genesis,
+        std::slice::from_ref(&spec),
+        &PeerConfigOverrides::default(),
+        &[],
+    )
+    .expect("write baseline generated peer config");
+    let rendered = fs::read_to_string(&spec.config_path).expect("read baseline peer config");
+    let rendered: toml::Table = toml::from_str(&rendered).expect("parse baseline peer config");
+    let mut genesis_overlay = rendered
+        .get("genesis")
+        .and_then(toml::Value::as_table)
+        .expect("baseline genesis table")
+        .clone();
+    genesis_overlay.insert(
+        "expected_hash".into(),
+        toml::Value::String(
+            NetworkId::from_genesis_hash(genesis.expected_hash.expect("fixture hash")).to_string(),
+        ),
+    );
+    let mut overlay = toml::Table::new();
+    overlay.insert("genesis".into(), toml::Value::Table(genesis_overlay));
+    let error = spec
+        .write_config(
+            "managed-identity-chain",
+            &genesis,
+            std::slice::from_ref(&spec),
+            &PeerConfigOverrides::default(),
+            &[overlay],
+        )
+        .expect_err("published configs must reject duplicate inline genesis identity");
+    assert!(
+        error
+            .to_string()
+            .contains("must select only Mochi's generated genesis identity file")
+    );
 }
 #[test]
 fn generated_sumeragi_capacity_contract_matches_config_defaults() {

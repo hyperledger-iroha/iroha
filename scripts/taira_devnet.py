@@ -37,14 +37,14 @@ try:
         CHAIN_ID as DEFAULT_CHAIN_ID,
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
         PEER_COUNT,
-        network_id_from_genesis_hash,
+        canonical_network_id,
     )
 except ModuleNotFoundError:
     from scripts.taira_constants import (
         CHAIN_ID as DEFAULT_CHAIN_ID,
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
         PEER_COUNT,
-        network_id_from_genesis_hash,
+        canonical_network_id,
     )
 
 
@@ -397,6 +397,15 @@ def quoted_assignment(path: Path, key: str) -> str:
     return values[0]
 
 
+def require_absent_assignment(path: Path, key: str) -> None:
+    """Reject a retired or conflicting assignment in a generated TOML file."""
+
+    text = read_bounded_text(path, limit=MAX_BUNDLE_TEXT_BYTES, label="generated config")
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    if any(pattern.match(line) is not None for line in text.splitlines()):
+        fail(f"generated config must not contain `{key}`: {path}")
+
+
 def integer_assignment(path: Path, key: str) -> int:
     """Read one unique canonical non-negative integer assignment from TOML."""
 
@@ -425,17 +434,35 @@ def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
         fail(f"generated client config has the wrong Taira chain discriminant: {client}")
     if quoted_assignment(client, "torii_url") != roots[0]:
         fail(f"generated client Torii URL does not match requested ports: {client}")
-    expected_hash = read_bounded_text(
-        target / "genesis.expected_hash",
+    expected_network_id_file = target / "genesis.expected_hash"
+    expected_network_id_record = read_bounded_text(
+        expected_network_id_file,
         limit=256,
-        label="generated genesis hash",
-    ).strip()
+        label="generated genesis network identity",
+    )
+    if not expected_network_id_record.endswith("\n"):
+        fail(f"generated genesis network identity lacks a final newline: {expected_network_id_file}")
+    expected_network_id_record = expected_network_id_record.removesuffix("\n")
+    if not expected_network_id_record or any(
+        character in expected_network_id_record for character in "\r\n"
+    ):
+        fail(
+            "generated genesis network identity must contain exactly one record: "
+            f"{expected_network_id_file}"
+        )
     try:
-        expected_network_id = network_id_from_genesis_hash(expected_hash)
+        canonical_network_id(expected_network_id_record)
     except ValueError as error:
-        fail(f"generated genesis hash is invalid: {target / 'genesis.expected_hash'}: {error}")
-    if quoted_assignment(client, "network_id") != expected_network_id:
-        fail(f"generated client network id does not match its genesis hash: {client}")
+        fail(
+            "generated genesis network identity is invalid: "
+            f"{expected_network_id_file}: {error}"
+        )
+    if quoted_assignment(client, "network_id_file") != expected_network_id_file.name:
+        fail(
+            "generated client network identity file does not match the generated bundle: "
+            f"{client}"
+        )
+    require_absent_assignment(client, "network_id")
 
     for index, root in enumerate(roots):
         config = target / f"peer{index}.toml"
@@ -446,8 +473,12 @@ def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
             != DEFAULT_CHAIN_DISCRIMINANT
         ):
             fail(f"peer{index} config has the wrong Taira chain discriminant: {config}")
-        if quoted_assignment(config, "expected_hash") != expected_network_id:
-            fail(f"peer{index} config genesis hash does not match the generated bundle: {config}")
+        if quoted_assignment(config, "expected_hash_file") != expected_network_id_file.name:
+            fail(
+                f"peer{index} config genesis identity file does not match the generated bundle: "
+                f"{config}"
+            )
+        require_absent_assignment(config, "expected_hash")
         port = root.removeprefix("http://127.0.0.1:").removesuffix("/")
         address = re.compile(
             rf'^address = "addr:127\.0\.0\.1:{re.escape(port)}#[0-9A-Fa-f]{{4}}"$'

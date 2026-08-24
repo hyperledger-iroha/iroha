@@ -1,6 +1,74 @@
 struct EnvVarGuard {
     key: &'static str,
 }
+
+#[test]
+fn generated_genesis_record_reader_requires_exact_lf_framing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let record = temp.path().join("record");
+    fs::write(&record, b"value\n").expect("write exact record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record").expect("read exact record"),
+        "value\n"
+    );
+
+    fs::write(&record, b"value\r\n").expect("write CRLF record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record")
+            .expect_err("CRLF must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    fs::write(&record, b"value").expect("write unterminated record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record")
+            .expect_err("unterminated record must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+}
+
+#[test]
+fn generated_genesis_record_reader_rejects_oversized_and_non_regular_inputs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let oversized = temp.path().join("oversized");
+    fs::write(
+        &oversized,
+        vec![b'a'; GENERATED_GENESIS_RECORD_MAX_BYTES_V1 + 1],
+    )
+    .expect("write oversized record");
+    assert_eq!(
+        read_generated_genesis_record(&oversized, "test record")
+            .expect_err("oversized record must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    let directory = temp.path().join("directory");
+    fs::create_dir(&directory).expect("create directory");
+    assert_eq!(
+        read_generated_genesis_record(&directory, "test record")
+            .expect_err("directory must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    #[cfg(unix)]
+    {
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        fs::write(&target, b"value\n").expect("write symlink target");
+        symlink(&target, &link).expect("create record symlink");
+        assert_eq!(
+            read_generated_genesis_record(&link, "test record")
+                .expect_err("symlink must fail closed")
+                .kind(),
+            ErrorKind::InvalidData
+        );
+    }
+}
+
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
         // SAFETY: tests serialize environment mutation within a single thread.
@@ -351,7 +419,7 @@ JSON
         test "$config_mode" = "600"
         grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
-        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
+        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -469,7 +537,7 @@ JSON
         test -s "$config_file"
         grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
-        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
+        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -560,8 +628,11 @@ fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
     fs::create_dir_all(&genesis_dir).expect("genesis fixture dir");
     fs::write(&manifest_path, b"{}").expect("write manifest");
     fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
-    fs::write(&expected_hash_path, format!("{expected_hash}\n"))
-        .expect("write genesis expected hash");
+    fs::write(
+        &expected_hash_path,
+        format!("{}\n", NetworkId::from_genesis_hash(expected_hash)),
+    )
+    .expect("write genesis expected hash");
     fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))
         .expect("write genesis public key");
     GenesisMaterial {
@@ -832,14 +903,23 @@ fn builder_creates_peer_configs() {
                 .as_str()
         )
     );
+    let genesis = value
+        .get("genesis")
+        .and_then(toml::Value::as_table)
+        .expect("generated genesis config");
     assert_eq!(
-        value
-            .get("genesis")
-            .and_then(toml::Value::as_table)
-            .and_then(|table| table.get("expected_hash"))
+        genesis
+            .get("expected_hash_file")
             .and_then(toml::Value::as_str),
-        Some("hash:0000000000000000000000000000000000000000000000000000000000000001#C50E")
+        Some(
+            supervisor
+                .genesis
+                .expected_hash_path
+                .to_string_lossy()
+                .as_ref()
+        )
     );
+    assert!(!genesis.contains_key("expected_hash"));
     assert!(!contents.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
     assert!(
         value

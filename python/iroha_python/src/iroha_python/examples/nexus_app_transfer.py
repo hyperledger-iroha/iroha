@@ -93,6 +93,7 @@ def main() -> None:
     client = NexusAppClient(
         NexusAppConfig(
             network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+            account_chain_discriminant=753,
         ),
         connect_transport=DemoConnectTransport(),
         transaction_codec=DemoTransactionCodec(),
@@ -100,9 +101,9 @@ def main() -> None:
     )
 
     session = client.start_connect()
-    _account, approved_session = client.await_approval(session)
+    approval = client.await_approval(session)
     receipt = client.transfer_with_wallet(
-        approved_session,
+        approval.session,
         NexusTransferInput(
             source_asset_id=SOURCE_ASSET_ID,
             quantity="12.34",

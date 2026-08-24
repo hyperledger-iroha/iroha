@@ -422,6 +422,28 @@ inputs = [
 check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
 
 [[generated]]
+name = "cbsi-offline-interop-fixture"
+kind = "file"
+outputs = [
+  "fixtures/offline/cbsi_interop_contract.json",
+]
+generator = "cargo run --locked --offline --jobs 1 -p iroha_data_model --features dev-tools,test-fixtures,transparent_api --bin cbsi_offline_vectors -- --output \"${IROHA_CBSI_OFFLINE_FIXTURE_STAGE:?set the exact absolute external staging output path}\""
+generator_sources = [
+  "crates/iroha_data_model/src/bin/cbsi_offline_vectors.rs",
+]
+inputs = [
+  "Cargo.lock",
+  "Cargo.toml",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/Cargo.toml",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "rust-toolchain.toml",
+]
+check = "cargo run --locked --offline --jobs 1 -p iroha_data_model --features dev-tools,test-fixtures,transparent_api --bin cbsi_offline_vectors -- --check --output \"$PWD/fixtures/offline/cbsi_interop_contract.json\""
+
+[[generated]]
 name = "nexus-connect-transfer-v1-fixture"
 kind = "file"
 outputs = [

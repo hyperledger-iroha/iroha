@@ -2026,7 +2026,7 @@ starts a four-validator committee by default.
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
 | `IROHA_GENESIS_SIGNED_FILE` | Host-prepared signed genesis body required by the default Compose stack. |
-| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved exact genesis hash required by the default Compose stack. |
+| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved canonical checked NetworkId encoding the exact genesis hash, required by the default Compose stack. |
 
 When running against an external environment, set `--no-start`,
 `--torii-url` (or `IROHA_TORII_URL`), and optional auth tokens

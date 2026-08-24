@@ -301,9 +301,9 @@ Sign the genesis block
 
 * `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
-* `--expected-hash-out <PATH>` — Write the exact signed consensus-header hash as one lowercase line.
+* `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
-   Provision this value as `genesis.expected_hash` independently of the signed block body before starting any validator.
+   The record is `hash:<64 uppercase hex digits>#<CRC16>`. Provision this value as `genesis.expected_hash` independently of the signed block body before starting any validator.
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.

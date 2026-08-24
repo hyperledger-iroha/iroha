@@ -18547,7 +18547,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 quantity: "5",
                 destinationAccountID: destination,
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
-            )
+            ),
+            accountChainDiscriminant: 753
         )
         let nativeMagic = Data([0x4e, 0x52, 0x54, 0x30])
         try requireNativeTestCapability(

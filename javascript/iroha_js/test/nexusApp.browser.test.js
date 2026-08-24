@@ -16,6 +16,7 @@ const fixture = JSON.parse(
   ),
 );
 const fixtureNetworkId = NetworkId.parse(fixture.transfer_input.network_id);
+const fixtureChainDiscriminant = fixture.transfer_input.account_chain_discriminant;
 
 function hexBytes(value) {
   return Uint8Array.from(
@@ -92,6 +93,7 @@ test("browser Nexus runtime does not depend on a global Buffer shim", async () =
     );
     digest = browserModule.nexusPayloadHashHex(Uint8Array.from([1]));
     const client = new browserModule.NexusAppClient({
+      chainDiscriminant: fixtureChainDiscriminant,
       toriiBaseUrl: "https://torii.example",
       async fetchImpl(_url, init) {
         submittedBody = Uint8Array.from(init.body);
@@ -109,6 +111,7 @@ test("browser Nexus runtime does not depend on a global Buffer shim", async () =
 test("browser Nexus default Torii transport submits exact signed bytes", async () => {
   const calls = [];
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example/gateway/v1/",
     async fetchImpl(url, init) {
       calls.push({ url, init, body: Buffer.from(init.body) });
@@ -142,6 +145,7 @@ test("browser Nexus default Torii transport submits exact signed bytes", async (
 test("browser Nexus defaults build, finalize, and submit the shared canonical transfer", async () => {
   let submittedBody;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: hexBytes(
@@ -183,6 +187,7 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
     ["Queued", "status_wait_timeout"],
   ]) {
     const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
       networkId: fixtureNetworkId,
       authority: fixture.transfer_input.authority,
       signingPublicKey: hexBytes(
@@ -248,7 +253,8 @@ test("browser Nexus Torii base URL rejects ambient authority and URL smuggling",
     "not a URL",
   ]) {
     assert.throws(
-      () => new NexusAppClient({ toriiBaseUrl: baseUrl, fetchImpl() {} }),
+      () => new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant, toriiBaseUrl: baseUrl, fetchImpl() {} }),
       /toriiBaseUrl/u,
       baseUrl,
     );
@@ -258,7 +264,10 @@ test("browser Nexus Torii base URL rejects ambient authority and URL smuggling",
 test("browser Nexus snapshots config descriptors without invoking getters", () => {
   let proxyGets = 0;
   const proxied = new Proxy(
-    { networkId: fixtureNetworkId },
+    {
+      chainDiscriminant: fixtureChainDiscriminant,
+      networkId: fixtureNetworkId,
+    },
     {
       get(target, key, receiver) {
         proxyGets += 1;
@@ -268,6 +277,7 @@ test("browser Nexus snapshots config descriptors without invoking getters", () =
   );
   const client = new NexusAppClient(proxied);
   assert.equal(client.config.networkId, fixtureNetworkId);
+  assert.equal(client.config.chainDiscriminant, fixtureChainDiscriminant);
   assert.equal(proxyGets, 0);
 
   let accessorGets = 0;
@@ -294,9 +304,10 @@ test("browser Nexus snapshots config descriptors without invoking getters", () =
 
 test("browser Nexus snapshots transfers and rejects retired chain aliases", () => {
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     networkId: fixtureNetworkId,
-    authority: "snapshot-authority",
-    signingPublicKey: new Uint8Array(32),
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: hexBytes(fixture.connect.approval_frame.signing_public_key_hex),
     transactionCodec: {
       buildTransferPayload() {
         return Uint8Array.from([1]);
@@ -304,9 +315,9 @@ test("browser Nexus snapshots transfers and rejects retired chain aliases", () =
     },
   });
   const valid = {
-    sourceAssetHoldingId: "asset#snapshot-authority",
+    sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
     quantity: "1",
-    destinationAccountId: "destination",
+    destinationAccountId: fixture.transfer_input.destination_account_id,
     feePayment: fixtureFeePayment(),
   };
   let proxyGets = 0;
@@ -350,6 +361,7 @@ test("browser Nexus snapshots Connect options, sessions, and approvals", async (
     fixture.connect.approval_frame.signing_public_key_hex,
   );
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     signingPublicKey: approvedSigningPublicKey,
     connectTransport: {
       startConnect(options) {
@@ -412,6 +424,7 @@ test("browser Nexus snapshots Connect options, sessions, and approvals", async (
     },
   });
   const unsafeApprovalClient = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     signingPublicKey: new Uint8Array(32),
     connectTransport: {
       awaitApproval() {
@@ -436,6 +449,7 @@ test("browser Nexus snapshots Connect options, sessions, and approvals", async (
 test("browser Nexus Torii responses are bounded and canonical JSON objects", async () => {
   let oversizedCancelled = 0;
   const oversized = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return {
@@ -455,6 +469,7 @@ test("browser Nexus Torii responses are bounded and canonical JSON objects", asy
   assert.equal(oversizedCancelled, 1);
 
   const scalar = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return mockResponse(202, JSON.stringify("not-an-object"));
@@ -470,6 +485,7 @@ test("browser Nexus cancels rejected Torii response streams", async () => {
   let submissionCancelled = 0;
   let statusCancelled = 0;
   const submissionClient = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return {
@@ -489,6 +505,7 @@ test("browser Nexus cancels rejected Torii response streams", async () => {
   assert.equal(submissionCancelled, 1);
 
   const statusClient = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return {
@@ -511,6 +528,7 @@ test("browser Nexus cancels rejected Torii response streams", async () => {
 test("browser Nexus raw status reads allow only explicit diagnostic scopes", async () => {
   const urls = [];
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl(url) {
       urls.push(url);
@@ -558,6 +576,7 @@ test("browser Nexus Torii polling retries cached Applied until state finality", 
   ];
   const urls = [];
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl(url) {
       urls.push(url);
@@ -601,6 +620,7 @@ test("browser Nexus Torii polling retries cached failures until state resolution
   ];
   const observed = [];
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return mockResponse(200, JSON.stringify(responses.shift()));
@@ -655,6 +675,7 @@ test("browser Nexus Torii polling fails closed on malformed finality envelopes",
     ],
   ]) {
     const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
       toriiBaseUrl: "https://torii.example",
       async fetchImpl() {
         return mockResponse(200, JSON.stringify(payload));
@@ -672,6 +693,7 @@ test("browser Nexus Torii polling fails closed on malformed finality envelopes",
 
 test("browser Nexus Torii polling fails closed on rejection and success override", async () => {
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return mockResponse(
@@ -706,6 +728,7 @@ test("browser Nexus Torii polling fails closed on rejection and success override
 test("browser Nexus counts duplicate raw statuses before any fetch", async () => {
   let fetchCalls = 0;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetchCalls += 1;
@@ -741,6 +764,7 @@ test("browser Nexus closes an infinite duplicate status iterator", async () => {
     }
   }
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetchCalls += 1;
@@ -775,6 +799,7 @@ test("browser Nexus acquires a custom status iterator exactly once", async () =>
     },
   });
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return mockResponse(200, JSON.stringify(authoritativeAppliedStatus()));
@@ -800,6 +825,7 @@ test("browser Nexus polling uses intrinsic AbortSignal state and listeners", asy
   let fetches = 0;
   let callbacks = 0;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
@@ -841,6 +867,7 @@ test("browser Nexus rejects AbortSignal impostors without invoking public access
     });
   }
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
@@ -892,6 +919,7 @@ test("browser Nexus aborts an uncooperative Fetch implementation via intrinsics"
     fetchStarted = resolve;
   });
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     fetchImpl() {
       fetches += 1;
@@ -922,6 +950,7 @@ test("browser Nexus hard-bounds stalled bodies, cancellation, and callbacks", as
   for (const scenario of ["body", "cancel"]) {
     let stalledOperations = 0;
     const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
       toriiBaseUrl: "https://torii.example",
       fetchImpl() {
         if (scenario === "body") {
@@ -976,6 +1005,7 @@ test("browser Nexus hard-bounds stalled bodies, cancellation, and callbacks", as
   const abortReason = new Error("abort stalled status callback");
   let callbacks = 0;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     fetchImpl() {
       return mockResponse(
@@ -1006,6 +1036,7 @@ test("browser Nexus does not invoke Fetch for an already-aborted direct status r
   controller.abort(reason);
   let fetches = 0;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
@@ -1039,6 +1070,7 @@ test("browser Nexus aborts an in-flight fetch despite hostile listener shadows",
     markStarted = resolve;
   });
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     fetchImpl(_url, init) {
       markStarted();
@@ -1067,6 +1099,7 @@ test("browser Nexus aborts an in-flight fetch despite hostile listener shadows",
 test("browser Nexus preserves a null abort reason during polling", async () => {
   const controller = new AbortController();
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       return mockResponse(200, JSON.stringify(pipelineStatus("Queued")));
@@ -1092,6 +1125,7 @@ test("browser Nexus Torii status polling propagates an already-aborted signal", 
   controller.abort(new Error("cancelled-by-wallet"));
   let requests = 0;
   const client = new NexusAppClient({
+    chainDiscriminant: fixtureChainDiscriminant,
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       requests += 1;

@@ -294,13 +294,19 @@ impl QueryCursor {
     }
 }
 /// Different errors as a result of query response handling
-#[derive(Debug, thiserror::Error, displaydoc::Display)]
+#[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     /// Query validation error
+    #[error("query validation error: {0}")]
     Validation(#[from] ValidationFail),
     /// Iterable query response has an invalid batch shape: {0}
+    #[error("iterable query response has an invalid batch shape: {0}")]
     ResponseShape(#[from] iroha_data_model::query::builder::TypedBatchDowncastError),
-    /// Other error
+    /// Lower-level transport or decoding error, preserving its original diagnostic.
+    ///
+    /// This is an explicit source because transparent forwarding would skip an
+    /// [`eyre::Report`]'s root error when exposing the source chain.
+    #[error("{0}")]
     Other(#[from] eyre::Error),
 }
 impl From<ResponseReport> for QueryError {
@@ -717,6 +723,30 @@ mod query_errors_handling {
                 iroha_data_model::query::builder::TypedBatchDowncastError::WrongType { column: 2 }
             )
         ));
+    }
+    #[test]
+    fn other_query_error_preserves_the_underlying_diagnostic() {
+        let error = QueryError::from(eyre!(
+            "transaction-details response is not one canonical Norito payload"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "transaction-details response is not one canonical Norito payload"
+        );
+    }
+    #[test]
+    fn other_query_error_preserves_the_report_root_in_its_source_chain() {
+        let error = QueryError::from(eyre::Report::from(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "torii down",
+        )));
+        let report = eyre::Report::new(error);
+
+        assert!(report.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+        }));
     }
     #[test]
     fn signed_query_transport_never_retries_ambiguous_decode_failure() {

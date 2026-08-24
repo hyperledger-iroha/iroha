@@ -13,21 +13,22 @@ import {
   browserTransactionCodec,
 } from "@iroha/iroha-js/transaction-codec";
 
-const accountId = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
-const destinationAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
-const sourceAssetId = `7EAD8EFYUx1aVKZPUU1fyKvr8dF1#${accountId}`;
+const accountChainDiscriminant = 369;
+const accountId = "testuﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U";
+const destinationAccountId = "testuﾛ1Nﾛ5ﾃPefCWUﾆﾔaxCRﾈﾅｶubGPﾘｼX9hﾀ8vHGVﾗsﾒJｼF7HF5W";
+const sourceAssetId = `53SSUt68Qn5PdKMMrViDK57X6DG2#${accountId}`;
 const networkId = NetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 const signingPublicKey = Buffer.from(
-  "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+  "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a",
   "hex",
 );
 const walletSignature = Buffer.from(
-  "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07",
+  "4bc83a65550abe7b583c68eada5de720a9487fd23ba00611669cb87c8e86bb437b87c871e39a178d286103e9f9328a17c5995ea7eaf048576aac62e0b6dcb503",
   "hex",
 );
-const signedTransactionHashHex = "b410d55b960d396c1034221dea22464d08de1237363b02cb1f7c35d4c6eaf0a1";
+const signedTransactionHashHex = "d338123041fd61a734f21577b92cbe4b2c177541983ddc96e9e63f9fd878bde9";
 
 const connectTransport = {
   async startConnect() {
@@ -70,6 +71,7 @@ const toriiClient = {
 
 const client = new NexusAppClient({
   networkId,
+  chainDiscriminant: accountChainDiscriminant,
   connectTransport,
   transactionCodec: browserTransactionCodec,
   toriiClient,

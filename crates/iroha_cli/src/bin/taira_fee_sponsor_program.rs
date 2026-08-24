@@ -464,7 +464,7 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
             (
                 "canonical-account".to_owned(),
                 "private-key-literal".to_owned(),
-                RAW_GENESIS_HASH.parse().expect("network id")
+                CANONICAL_NETWORK_ID_LITERAL.parse().expect("network id")
             )
         );
     }
@@ -473,7 +473,7 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
         assert_eq!(
             network_id_from_inline_expected_hash(CANONICAL_NETWORK_ID_LITERAL)
                 .expect("canonical inline expected hash"),
-            RAW_GENESIS_HASH.parse().expect("network id")
+            CANONICAL_NETWORK_ID_LITERAL.parse().expect("network id")
         );
     }
     #[test]

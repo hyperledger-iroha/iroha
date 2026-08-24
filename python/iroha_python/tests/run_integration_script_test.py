@@ -42,7 +42,7 @@ def test_default_compose_artifact_preflight_fails_closed_and_accepts_exact_recor
     hash_path = tmp_path / "genesis.expected_hash"
     public_path.write_text("public-without-newline", encoding="utf-8")
     signed_path.write_bytes(b"signed-genesis")
-    hash_path.write_text(f"{'0' * 63}1\n", encoding="utf-8")
+    hash_path.write_text(f"hash:{'0' * 63}1#C50E\n", encoding="utf-8")
     monkeypatch.setenv("IROHA_GENESIS_PUBLIC_KEY_FILE", str(public_path))
     monkeypatch.setenv("IROHA_GENESIS_SIGNED_FILE", str(signed_path))
     monkeypatch.setenv("IROHA_GENESIS_EXPECTED_HASH_FILE", str(hash_path))
@@ -52,13 +52,25 @@ def test_default_compose_artifact_preflight_fails_closed_and_accepts_exact_recor
         )
 
     public_path.write_text("public\n", encoding="utf-8")
-    hash_path.write_text(f"{'0' * 63}2\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="canonical lowercase Iroha hash"):
+    hash_path.write_text(f"{'0' * 63}1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="canonical checked NetworkId"):
         RUN_INTEGRATION._validate_default_compose_genesis_artifacts(
             RUN_INTEGRATION.DEFAULT_COMPOSE_FILE
         )
 
-    hash_path.write_text(f"{'0' * 63}1\n", encoding="utf-8")
+    hash_path.write_text(f"hash:{'0' * 63}1#c50e\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="canonical checked NetworkId"):
+        RUN_INTEGRATION._validate_default_compose_genesis_artifacts(
+            RUN_INTEGRATION.DEFAULT_COMPOSE_FILE
+        )
+
+    hash_path.write_text(f"hash:{'0' * 63}1#C50F\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="canonical checked NetworkId"):
+        RUN_INTEGRATION._validate_default_compose_genesis_artifacts(
+            RUN_INTEGRATION.DEFAULT_COMPOSE_FILE
+        )
+
+    hash_path.write_text(f"hash:{'0' * 63}1#C50E\n", encoding="utf-8")
     RUN_INTEGRATION._validate_default_compose_genesis_artifacts(
         RUN_INTEGRATION.DEFAULT_COMPOSE_FILE
     )

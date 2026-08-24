@@ -39,9 +39,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # public_key =
 # A fresh node also needs this operator-provisioned signed artifact.
 # file =
-# Pin the exact signed consensus-header hash independently of the artifact. This field is required
-# on fresh starts and restarts; Kagami prints the value after signing.
-expected_hash = "<exact signed genesis block hash>"
+# Pin the exact signed consensus-header hash independently of the artifact. This file is required
+# on fresh starts and restarts and contains Kagami's canonical checked NetworkId plus one LF.
+expected_hash_file = "genesis.expected_hash"
 
 [network]
 # address =

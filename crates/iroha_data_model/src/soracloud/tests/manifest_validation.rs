@@ -927,6 +927,21 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_distribution_field_is_required(&canonical, field);
     }
+    let mut unknown_distribution = canonical.clone();
+    unknown_distribution
+        .get_mut("guest_images")
+        .and_then(Value::as_object_mut)
+        .and_then(|images| images.get_mut("x86_64"))
+        .and_then(|guest| guest.get_mut("distribution"))
+        .and_then(Value::as_object_mut)
+        .expect("x86_64 distribution object")
+        .insert("future_distribution".to_owned(), Value::Bool(true));
+    let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_distribution)
+        .expect_err("unknown first-release distribution fields must be rejected");
+    assert!(matches!(
+        error,
+        json::Error::UnknownField { ref field } if field == "future_distribution"
+    ));
 
     let mut published_manifest = sample_inrou_manifest();
     published_manifest
@@ -944,6 +959,21 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_published_artifact_field_is_required(&published, field);
     }
+    let mut unknown_published = published;
+    unknown_published
+        .get_mut("guest_images")
+        .and_then(Value::as_object_mut)
+        .and_then(|images| images.get_mut("x86_64"))
+        .and_then(|guest| guest.get_mut("published_artifact"))
+        .and_then(Value::as_object_mut)
+        .expect("published guest-image artifact object")
+        .insert("future_artifact".to_owned(), Value::Bool(true));
+    let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_published)
+        .expect_err("unknown first-release published-artifact fields must be rejected");
+    assert!(matches!(
+        error,
+        json::Error::UnknownField { ref field } if field == "future_artifact"
+    ));
 }
 #[cfg(feature = "json")]
 #[test]

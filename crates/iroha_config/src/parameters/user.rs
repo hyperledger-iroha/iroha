@@ -150,7 +150,7 @@ use iroha_crypto::{
     streaming::{KeyMaterialError, STREAMING_DEFAULT_KEM_SUITE, StreamingKeyMaterial},
 };
 use iroha_data_model::{
-    ChainId, Level,
+    ChainId, Level, NetworkId,
     account::{AccountId, curve::CurveId},
     asset::{AssetDefinitionAlias, prelude::AssetDefinitionId},
     block::BlockHeader,
@@ -293,18 +293,14 @@ fn read_private_key_file(
             )
         })
 }
-fn resolve_public_identity_source<T>(
-    inline: Option<WithOrigin<T>>,
+fn resolve_genesis_identity_source(
+    inline: Option<WithOrigin<NetworkId>>,
     file: Option<WithOrigin<PathBuf>>,
     inline_field: &'static str,
     file_field: &'static str,
     error: ParseError,
     emitter: &mut Emitter<ParseError>,
-) -> Option<T>
-where
-    T: FromStr + ToString,
-    T::Err: std::fmt::Display,
-{
+) -> Option<HashOf<BlockHeader>> {
     let file = match (inline, file) {
         (Some(_), Some(_)) => {
             emitter.emit(Report::new(error).attach(format!(
@@ -312,7 +308,7 @@ where
             )));
             return None;
         }
-        (Some(inline), None) => return Some(inline.into_value()),
+        (Some(inline), None) => return Some(inline.into_value().into_genesis_hash()),
         (None, Some(file)) => file,
         (None, None) => {
             emitter.emit(Report::new(error).attach(format!(
@@ -321,22 +317,18 @@ where
             return None;
         }
     };
-    match read_public_identity_file::<T>(file, file_field) {
-        Ok((identity, _)) => Some(identity),
+    match read_network_identity_file(file, file_field) {
+        Ok((identity, _)) => Some(identity.into_genesis_hash()),
         Err(message) => {
             emitter.emit(Report::new(error).attach(message));
             None
         }
     }
 }
-fn read_public_identity_file<T>(
+fn read_network_identity_file(
     file: WithOrigin<PathBuf>,
     file_field: &'static str,
-) -> core::result::Result<(T, ParameterOrigin), String>
-where
-    T: FromStr + ToString,
-    T::Err: std::fmt::Display,
-{
+) -> core::result::Result<(NetworkId, ParameterOrigin), String> {
     let path = file.resolve_relative_path();
     let (_, origin) = file.into_tuple();
     if path.as_os_str().is_empty() {
@@ -369,23 +361,29 @@ where
             path.display()
         ));
     }
-    let encoded = encoded
-        .strip_suffix("\r\n")
-        .or_else(|| encoded.strip_suffix('\n'))
-        .unwrap_or(&encoded);
-    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+    let Some(identity_text) = encoded.strip_suffix('\n') else {
         return Err(format!(
-            "{file_field} `{}` must contain exactly one canonical public identity",
+            "{file_field} `{}` must contain exactly one LF-terminated canonical public identity",
+            path.display()
+        ));
+    };
+    if identity_text.is_empty()
+        || identity_text
+            .bytes()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        return Err(format!(
+            "{file_field} `{}` must contain exactly one LF-terminated canonical public identity",
             path.display()
         ));
     }
-    let identity = T::from_str(encoded).map_err(|err| {
+    let identity = NetworkId::from_str(identity_text).map_err(|err| {
         format!(
             "{file_field} `{}` does not contain a valid public identity: {err}",
             path.display()
         )
     })?;
-    if identity.to_string() != encoded {
+    if encoded != format!("{identity}\n") {
         return Err(format!(
             "{file_field} `{}` does not contain the canonical public identity spelling",
             path.display()
@@ -5720,20 +5718,25 @@ pub struct Genesis {
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis consensus-header hash used as the startup trust anchor.
+    /// Canonical checked network identity derived from the exact genesis consensus-header hash.
     ///
     /// This is mandatory even when a local signed genesis file is configured. Requiring an
     /// independently provisioned value prevents the artifact being authenticated from selecting
     /// its own trust root.
     #[config(env = "GENESIS_EXPECTED_HASH")]
-    pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
-    /// Public file containing the canonical expected consensus-header hash.
+    pub expected_hash: Option<WithOrigin<NetworkId>>,
+    /// Public file containing the canonical checked network identity derived from the expected
+    /// consensus-header hash.
+    ///
+    /// The sole accepted file content is one LF-terminated
+    /// `hash:<64 uppercase hex digits>#<CRC16>` record, byte-identical to client
+    /// `network_id_file`.
     #[config(env = "GENESIS_EXPECTED_HASH_FILE")]
     pub expected_hash_file: Option<WithOrigin<PathBuf>>,
 }
 impl Genesis {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Genesis> {
-        let expected_hash = resolve_public_identity_source(
+        let expected_hash = resolve_genesis_identity_source(
             self.expected_hash,
             self.expected_hash_file,
             "genesis.expected_hash",
@@ -13576,6 +13579,7 @@ impl_default!(SoracloudRuntimeInrou {
 });
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
+        let mut archive_limits_valid = true;
         if self.enabled {
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(
@@ -13586,6 +13590,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_compressed_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_compressed_bytes must not exceed {}",
@@ -13596,6 +13601,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_decoded_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_decoded_bytes must not exceed {}",
@@ -13606,6 +13612,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_file_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed {}",
@@ -13616,6 +13623,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_total_file_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed {}",
@@ -13624,6 +13632,7 @@ impl SoracloudRuntimeInrou {
             );
         }
         if self.bundle_archive_max_file_bytes > self.bundle_archive_max_total_file_bytes {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(
                     "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed bundle_archive_max_total_file_bytes",
@@ -13631,6 +13640,7 @@ impl SoracloudRuntimeInrou {
             );
         }
         if self.bundle_archive_max_total_file_bytes > self.bundle_archive_max_decoded_bytes {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(
                     "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes",
@@ -13640,6 +13650,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_entries.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_entries must not exceed {}",
@@ -13693,6 +13704,29 @@ impl SoracloudRuntimeInrou {
                 );
             }
         }
+        // Root parsing accumulates diagnostics before returning. Keep the discarded
+        // projection internally valid so its invariant assertion cannot turn bad
+        // user input into a panic before the emitter returns the configuration error.
+        let archive_limits = archive_limits_valid.then_some((
+            self.bundle_archive_max_compressed_bytes,
+            self.bundle_archive_max_decoded_bytes,
+            self.bundle_archive_max_entries,
+            self.bundle_archive_max_file_bytes,
+            self.bundle_archive_max_total_file_bytes,
+        ));
+        let (
+            bundle_archive_max_compressed_bytes,
+            bundle_archive_max_decoded_bytes,
+            bundle_archive_max_entries,
+            bundle_archive_max_file_bytes,
+            bundle_archive_max_total_file_bytes,
+        ) = archive_limits.unwrap_or((
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+        ));
         actual::SoracloudRuntimeInrou {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: false,
@@ -13708,11 +13742,11 @@ impl SoracloudRuntimeInrou {
             max_storage_bytes: self
                 .max_storage_bytes
                 .unwrap_or(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES),
-            bundle_archive_max_compressed_bytes: self.bundle_archive_max_compressed_bytes,
-            bundle_archive_max_decoded_bytes: self.bundle_archive_max_decoded_bytes,
-            bundle_archive_max_entries: self.bundle_archive_max_entries,
-            bundle_archive_max_file_bytes: self.bundle_archive_max_file_bytes,
-            bundle_archive_max_total_file_bytes: self.bundle_archive_max_total_file_bytes,
+            bundle_archive_max_compressed_bytes,
+            bundle_archive_max_decoded_bytes,
+            bundle_archive_max_entries,
+            bundle_archive_max_file_bytes,
+            bundle_archive_max_total_file_bytes,
             start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
             stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
         }
@@ -32008,6 +32042,7 @@ mod duration_clamp_tests {
     use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        NetworkId,
         account::AccountId,
         block::BlockHeader,
         name::Name,
@@ -34946,13 +34981,35 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn genesis_expected_hash_rejects_raw_genesis_hash() {
+        let mut table = base_table();
+        table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table")
+            .insert(
+                "expected_hash".into(),
+                Value::String(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"obsolete inline raw genesis hash identity",
+                    ))
+                    .to_string(),
+                ),
+            );
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the first-release inline trust root must reject raw hash compatibility"
+        );
+    }
+    #[test]
     fn genesis_expected_hash_file_supplies_the_exact_trust_root() {
         let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"configuration file backed genesis identity",
         ));
+        let network_id = NetworkId::from_genesis_hash(expected_hash);
         let identity_dir = TestDir::create("genesis-identity");
         let identity_path = identity_dir.path().join("expected_hash");
-        fs::write(&identity_path, format!("{expected_hash}\n")).expect("write identity");
+        fs::write(&identity_path, format!("{network_id}\n")).expect("write identity");
         let mut table = base_table();
         let genesis = table
             .get_mut("genesis")
@@ -34966,6 +35023,62 @@ publish_delay_seconds = 17
         let root = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect("canonical identity file must be accepted");
         assert_eq!(root.genesis.expected_hash, expected_hash);
+    }
+    #[test]
+    fn genesis_expected_hash_file_rejects_noncanonical_record_bytes() {
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"validator canonical network identity file bytes",
+        ));
+        let canonical = NetworkId::from_genesis_hash(expected_hash).to_string();
+        for (label, contents) in [
+            ("missing final LF", canonical.clone()),
+            ("CRLF terminator", format!("{canonical}\r\n")),
+            ("leading space", format!(" {canonical}\n")),
+            ("trailing space", format!("{canonical} \n")),
+            ("extra empty record", format!("{canonical}\n\n")),
+            ("multiple records", format!("{canonical}\n{canonical}\n")),
+        ] {
+            let identity_dir = TestDir::create(label);
+            let identity_path = identity_dir.path().join("expected_hash");
+            fs::write(&identity_path, contents).expect("write malformed identity");
+            let mut table = base_table();
+            let genesis = table
+                .get_mut("genesis")
+                .and_then(Value::as_table_mut)
+                .expect("genesis table");
+            genesis.remove("expected_hash");
+            genesis.insert(
+                "expected_hash_file".into(),
+                Value::String(identity_path.display().to_string()),
+            );
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "{label} must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn genesis_expected_hash_file_rejects_raw_genesis_hash() {
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"obsolete raw genesis hash identity",
+        ));
+        let identity_dir = TestDir::create("raw-genesis-identity");
+        let identity_path = identity_dir.path().join("expected_hash");
+        fs::write(&identity_path, format!("{expected_hash}\n")).expect("write raw hash identity");
+        let mut table = base_table();
+        let genesis = table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table");
+        genesis.remove("expected_hash");
+        genesis.insert(
+            "expected_hash_file".into(),
+            Value::String(identity_path.display().to_string()),
+        );
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the first-release shared identity file must reject raw hash compatibility"
+        );
     }
     #[test]
     fn genesis_rejects_ambiguous_inline_and_file_trust_roots() {

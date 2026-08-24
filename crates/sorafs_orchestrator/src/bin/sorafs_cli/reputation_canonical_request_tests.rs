@@ -113,7 +113,7 @@ fn reputation_auth_requires_an_exact_network_identity() {
     )
     .err()
     .expect("network identity is mandatory");
-    assert!(error.contains("--network-id=GENESIS_HASH"));
+    assert!(error.contains("--network-id=NETWORK_ID"));
 }
 
 #[test]

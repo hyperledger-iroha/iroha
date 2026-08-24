@@ -5745,7 +5745,12 @@ mod tests {
             network_id.inner
         );
         assert!(PyNetworkId::parse(&literal.to_ascii_lowercase()).is_err());
-        assert!(PyNetworkId::parse(&network_id.inner.to_string()).is_err());
+        assert_eq!(
+            PyNetworkId::parse(&network_id.inner.to_string())
+                .expect("NetworkId Display is the canonical Python input")
+                .inner,
+            network_id.inner
+        );
     }
     #[test]
     fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
@@ -8893,28 +8898,20 @@ impl PyNetworkId {
         })
     }
 }
-fn canonical_network_id_literal(network_id: &NetworkId) -> PyResult<String> {
-    let value = norito::json::to_value(network_id)
-        .map_err(|err| PyRuntimeError::new_err(format!("failed to serialize NetworkId: {err}")))?;
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| PyRuntimeError::new_err("NetworkId JSON must be a string literal"))
+fn canonical_network_id_literal(network_id: &NetworkId) -> String {
+    network_id.to_string()
 }
 #[pymethods]
 impl PyNetworkId {
     /// Parse one exact canonical checksummed genesis-header hash literal.
     #[staticmethod]
     fn parse(value: &str) -> PyResult<Self> {
-        let inner = norito::json::from_value::<NetworkId>(norito::json::Value::String(
-            value.to_owned(),
-        ))
-        .map_err(|_| {
+        let inner = value.parse::<NetworkId>().map_err(|_| {
             PyValueError::new_err(
                 "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
             )
         })?;
-        if canonical_network_id_literal(&inner)? != value {
+        if canonical_network_id_literal(&inner) != value {
             return Err(PyValueError::new_err(
                 "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
             ));
@@ -8929,7 +8926,7 @@ impl PyNetworkId {
     /// Return the canonical checksummed hash literal.
     #[getter]
     fn literal(&self) -> PyResult<String> {
-        canonical_network_id_literal(&self.inner)
+        Ok(canonical_network_id_literal(&self.inner))
     }
     /// Return a defensive copy of the exact genesis-header hash bytes.
     #[expect(clippy::wrong_self_convention, reason = "PyO3 borrowed receiver")]
@@ -8940,7 +8937,10 @@ impl PyNetworkId {
         self.literal()
     }
     fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("NetworkId('{}')", self.literal()?))
+        Ok(format!(
+            "NetworkId('{}')",
+            canonical_network_id_literal(&self.inner)
+        ))
     }
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner

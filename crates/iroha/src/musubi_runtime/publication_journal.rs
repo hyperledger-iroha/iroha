@@ -1794,6 +1794,7 @@ mod tests {
         musubi::{ArchiveId, MusubiContentDigestV1},
         sorafs::capacity::ProviderId,
     };
+    const TEST_RETAINED_RESPONSE_BUDGET_BYTES: usize = 64;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             [seed; 32],
@@ -1825,12 +1826,14 @@ mod tests {
         MusubiPublicationServiceJournalBindingV1::from_configuration(configuration)
     }
     fn limits() -> DurableMusubiPublicationServiceJournalLimitsV1 {
+        let response_budget = MAX_CONTROL_RESPONSE_BYTES
+            .checked_add(TEST_RETAINED_RESPONSE_BUDGET_BYTES)
+            .expect("test response budget fits usize");
         DurableMusubiPublicationServiceJournalLimitsV1::new(
             8,
             32,
-            u64::try_from(MAX_CONTROL_RESPONSE_BYTES).expect("response bound fits u64"),
-            u64::try_from(MAX_CONTROL_RESPONSE_BYTES + 1024 * 1024)
-                .expect("snapshot bound fits u64"),
+            u64::try_from(response_budget).expect("response budget fits u64"),
+            u64::try_from(response_budget + 1024 * 1024).expect("snapshot bound fits u64"),
         )
         .expect("valid journal limits")
     }
@@ -2195,6 +2198,39 @@ mod tests {
             journal.begin(&second, 10_001).expect("capacity released"),
             MusubiPublicationJournalBeginV1::Execute
         );
+    }
+    #[test]
+    fn retained_response_cannot_erode_full_in_flight_reservation() {
+        let root = private_tempdir();
+        let configuration = configuration();
+        let minimum_limits = DurableMusubiPublicationServiceJournalLimitsV1::new(
+            2,
+            4,
+            u64::try_from(MAX_CONTROL_RESPONSE_BYTES).expect("response bound fits u64"),
+            u64::try_from(MAX_CONTROL_RESPONSE_BYTES + 1024 * 1024)
+                .expect("snapshot bound fits u64"),
+        )
+        .expect("minimum valid limits");
+        let mut journal = DurableMusubiPublicationServiceJournalV1::initialize(
+            root.path(),
+            journal_binding(&configuration),
+            minimum_limits,
+        )
+        .expect("initialize minimum-capacity journal");
+        let first = attempt(&configuration, 0x65, 0x66);
+        journal
+            .begin(&first, 10_000)
+            .expect("reserve first attempt");
+        journal
+            .commit(first.key, first.request_digest, b"retained")
+            .expect("commit retained response");
+        let revision = journal.revision();
+        let second = attempt(&configuration, 0x67, 0x68);
+        assert_eq!(
+            journal.begin(&second, 10_001),
+            Err(MusubiPublicationServiceJournalErrorV1::Capacity)
+        );
+        assert_eq!(journal.revision(), revision);
     }
     #[test]
     fn invalid_attempts_cannot_persist_a_snapshot_that_reopen_rejects() {

@@ -6,12 +6,12 @@ use crate::{
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::address::ChainDiscriminantGuard,
     block::{
-        BlockHeader, SignedBlock,
+        SignedBlock,
         consensus_v2::{
             ConsensusMode as WireConsensusMode, MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
         },
@@ -166,6 +166,7 @@ struct PreparedRuntimePeer {
     api_port: u16,
     public_key: PublicKey,
 }
+const GENESIS_EXPECTED_HASH_RUNTIME_TARGET: &str = "/run/secrets/iroha_genesis_expected_hash";
 fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
     const MAX_EXACT_RECORD_BYTES: u64 = 64 * 1024;
     let record = read_runtime_file_bounded(path, label, MAX_EXACT_RECORD_BYTES)?;
@@ -201,13 +202,10 @@ fn validate_prepared_genesis(
         "prepared genesis public-key record is not canonical"
     );
     let expected_record = read_exact_record(expected_hash_path, "genesis expected-hash")?;
-    let expected_hash = expected_record
-        .parse::<HashOf<BlockHeader>>()
-        .wrap_err("parse prepared exact genesis hash")?;
-    ensure!(
-        expected_hash.to_string() == expected_record,
-        "prepared genesis expected-hash record is not canonical lowercase marked hex"
-    );
+    let network_id = expected_record
+        .parse::<NetworkId>()
+        .wrap_err("parse prepared checked genesis network identity")?;
+    let expected_hash = network_id.into_genesis_hash();
     let signed = read_runtime_file_bounded(
         signed_block,
         "signed genesis body",
@@ -1681,6 +1679,7 @@ type PreparedRuntimeProjection = (
 fn project_prepared_runtime_config(
     config_dir: &Path,
     projection_root: &Path,
+    expected_hash_validation_path: &Path,
     index: usize,
     mut table: toml::Table,
     source: &actual::Root,
@@ -1731,6 +1730,13 @@ fn project_prepared_runtime_config(
         &["genesis"],
         "file",
         "/genesis/genesis.signed.nrt",
+    )?;
+    remove_toml_key(&mut table, &["genesis"], "expected_hash")?;
+    set_toml_string(
+        &mut table,
+        &["genesis"],
+        "expected_hash_file",
+        GENESIS_EXPECTED_HASH_RUNTIME_TARGET,
     )?;
     remove_toml_key(&mut table, &["genesis"], "manifest_json")?;
     set_toml_string(&mut table, &["kura"], "store_dir", "/storage/kura")?;
@@ -2424,6 +2430,12 @@ fn project_prepared_runtime_config(
         )?;
     }
     let mut validation_table = table.clone();
+    set_toml_string(
+        &mut validation_table,
+        &["genesis"],
+        "expected_hash_file",
+        expected_hash_validation_path.to_string_lossy(),
+    )?;
     for captured in &captured_validation_paths {
         set_toml_string(
             &mut validation_table,
@@ -2563,6 +2575,16 @@ fn load_prepared_bundle(
         &public_key_path,
         &expected_hash_path,
         manifest,
+    )?;
+    let expected_hash_record = format!(
+        "{}\n",
+        NetworkId::from_genesis_hash(validated.expected_hash())
+    );
+    let runtime_expected_hash = materialize_container_readable_file(
+        projection_root,
+        "genesis-hash",
+        crate::localnet::GENESIS_EXPECTED_HASH_FILE,
+        expected_hash_record.as_bytes(),
     )?;
     let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
@@ -2768,6 +2790,7 @@ fn load_prepared_bundle(
         ) = project_prepared_runtime_config(
             config_dir,
             projection_root,
+            &runtime_expected_hash,
             index,
             admitted.table,
             &admitted.config,
@@ -2880,13 +2903,6 @@ fn load_prepared_bundle(
         "genesis-key",
         crate::localnet::GENESIS_PUBLIC_KEY_FILE,
         public_key_record.as_bytes(),
-    )?;
-    let expected_hash_record = format!("{}\n", validated.expected_hash());
-    let runtime_expected_hash = materialize_container_readable_file(
-        projection_root,
-        "genesis-hash",
-        crate::localnet::GENESIS_EXPECTED_HASH_FILE,
-        expected_hash_record.as_bytes(),
     )?;
     Ok(PreparedBundle {
         chain,
@@ -3109,15 +3125,15 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml,
-        parse_prepared_peer_config, read_runtime_file_bounded, signed_genesis_consensus_metadata,
-        tx_history_mandatory_alias_source, validate_prepared_genesis,
-        validate_runtime_projection_policy,
+        Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, load_peer_overrides, load_prepared_bundle,
+        parse_peer_override_toml, parse_prepared_peer_config, read_runtime_file_bounded,
+        signed_genesis_consensus_metadata, tx_history_mandatory_alias_source,
+        validate_prepared_genesis, validate_runtime_projection_policy,
     };
     use crate::{RunArgs, localnet::LocalnetOptions};
-    use iroha_crypto::{Algorithm, Hash, KeyPair, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         parameter::{
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
@@ -3338,6 +3354,17 @@ mod tests {
                 .get("file")
                 .and_then(toml::Value::as_str),
             Some("/genesis/genesis.signed.nrt")
+        );
+        assert!(
+            !table_at("genesis").contains_key("expected_hash"),
+            "the projected validator must not retain an inline trust root"
+        );
+        assert_eq!(
+            table_at("genesis")
+                .get("expected_hash_file")
+                .and_then(toml::Value::as_str),
+            Some(GENESIS_EXPECTED_HASH_RUNTIME_TARGET),
+            "the mounted checked identity file must be the sole validator trust-root source"
         );
         assert!(!table_at("genesis").contains_key("manifest_json"));
         assert_eq!(
@@ -3644,9 +3671,32 @@ mod tests {
         );
         fs::write(&public_path, original_public).expect("restore public-key fixture");
         let original_hash = fs::read(&hash_path).expect("read hash fixture");
+        let original_network_id = String::from_utf8(original_hash.clone())
+            .expect("prepared network identity is UTF-8")
+            .strip_suffix('\n')
+            .expect("prepared network identity has one final newline")
+            .parse::<NetworkId>()
+            .expect("prepared network identity parses");
         fs::write(
             &hash_path,
-            format!("{}\n", Hash::new(b"different prepared genesis body")),
+            format!("{}\n", original_network_id.into_genesis_hash()),
+        )
+        .expect("write retired raw genesis hash");
+        let raw_hash_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
+            .expect_err("a raw genesis hash must not be accepted as the shared identity file");
+        assert!(
+            format!("{raw_hash_error:#}").contains("checked genesis network identity"),
+            "unexpected raw-hash rejection: {raw_hash_error:#}"
+        );
+        fs::write(&hash_path, &original_hash).expect("restore checked network identity fixture");
+        fs::write(
+            &hash_path,
+            format!(
+                "{}\n",
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                    b"different prepared genesis body"
+                )))
+            ),
         )
         .expect("write mismatched hash");
         let hash_error = load_test_prepared_bundle(&config_dir, &projection_root, count)
@@ -3800,8 +3850,11 @@ mod tests {
         .expect("write resultless fixture manifest");
         fs::write(&public_path, format!("{}\n", genesis_key.public_key()))
             .expect("write resultless fixture public key");
-        fs::write(&hash_path, format!("{}\n", signed.hash()))
-            .expect("write resultless fixture hash");
+        fs::write(
+            &hash_path,
+            format!("{}\n", NetworkId::from_genesis_hash(signed.hash())),
+        )
+        .expect("write resultless fixture hash");
         let resultless = signed.canonical_resultless_proposal();
         assert_eq!(
             resultless.hash(),
