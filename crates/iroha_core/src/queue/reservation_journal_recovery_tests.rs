@@ -1534,7 +1534,8 @@ fn journal_rejects_reparse_point_file_when_platform_allows_fixture() {
     let path = dir.path().join("journal-reparse");
     match symlink_file(&target, &path) {
         Ok(()) => {
-            let metadata = fs::symlink_metadata(&path).expect("reparse metadata");
+            let metadata =
+                secure_file_metadata::from_path(&path).expect("reparse metadata");
             assert!(journal_file_is_reparse_point(&metadata));
             assert!(LaneQueueReservationJournal::open(&path, u64::MAX).is_err());
         }
