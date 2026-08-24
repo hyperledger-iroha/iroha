@@ -352,19 +352,6 @@ fn sm2_distid_arg(distid: Option<&str>) -> String {
         .map(str::to_owned)
         .unwrap_or_else(Sm2PublicKey::default_distid)
 }
-trait IntoSm2Result {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError>;
-}
-impl IntoSm2Result for Sm2PrivateKey {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        Ok(self)
-    }
-}
-impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
-    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
-        self
-    }
-}
 fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PrivateKey> {
     if bytes.len() != SM2_PRIVATE_KEY_LENGTH {
         return Err(PyValueError::new_err(format!(
@@ -5854,6 +5841,18 @@ mod tests {
         );
         let envelope_json = envelope.to_json().expect("envelope JSON");
         Python::attach(|py| {
+            let envelope_dict = envelope.as_dict(py).expect("envelope dict");
+            let network_id = envelope_dict
+                .bind(py)
+                .get_item("network_id")
+                .expect("read envelope network_id")
+                .expect("envelope network_id is present")
+                .extract::<String>()
+                .expect("envelope network_id is a string");
+            assert_eq!(
+                network_id,
+                canonical_network_id_literal(&envelope.network_id)
+            );
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
             let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
                 .expect("exact envelope JSON roundtrip");
@@ -11730,10 +11729,7 @@ impl SignedTransactionEnvelope {
     /// Return a Python dict summarising the envelope contents.
     fn as_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
-        dict.set_item(
-            "network_id",
-            canonical_network_id_literal(&self.network_id)?,
-        )?;
+        dict.set_item("network_id", canonical_network_id_literal(&self.network_id))?;
         dict.set_item("authority", &self.authority)?;
         dict.set_item(
             "signed_transaction",
@@ -11774,7 +11770,7 @@ impl SignedTransactionEnvelope {
         let mut map = norito::json::Map::new();
         map.insert(
             "network_id".into(),
-            norito::json::Value::String(canonical_network_id_literal(&self.network_id)?),
+            norito::json::Value::String(canonical_network_id_literal(&self.network_id)),
         );
         map.insert(
             "authority".into(),
@@ -12577,9 +12573,7 @@ fn generate_sm2_keypair_py(
     distid: Option<&str>,
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let distid = sm2_distid_arg(distid);
-    let mut rng = OsRng06;
-    let private = Sm2PrivateKey::random(distid, &mut rng)
-        .into_sm2_result()
+    let private = Sm2PrivateKey::try_random_from_os(distid)
         .map_err(|err| PyValueError::new_err(format!("failed to generate SM2 key pair: {err}")))?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();
