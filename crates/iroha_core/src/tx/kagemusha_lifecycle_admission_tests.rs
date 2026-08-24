@@ -159,12 +159,15 @@ fn kagemusha_v4_lifecycle_proof_attachments_fail_closed_at_stateful_admission() 
     let error =
         StateBlock::validate_stateful_admission(accepted.as_ref(), &mut state_transaction, None)
             .expect_err("proof attachments must not enter the privileged lifecycle corridor");
-    assert!(
-        error
-            .to_string()
-            .contains("must not carry proof attachments"),
-        "unexpected rejection: {error}"
-    );
+    match error {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+            assert!(
+                reason.contains("must not carry proof attachments"),
+                "unexpected rejection: {reason}"
+            );
+        }
+        other => panic!("expected NotPermitted rejection, got {other:?}"),
+    }
 }
 
 #[test]
@@ -210,10 +213,13 @@ fn exact_kagemusha_lifecycle_rejects_one_threshold_weight_signer_at_stateful_adm
     let error =
         StateBlock::validate_stateful_admission(accepted.as_ref(), &mut state_transaction, None)
             .expect_err("Kagemusha lifecycle admission requires two distinct signers");
-    assert!(
-        error
-            .to_string()
-            .contains("requires at least 2 verified distinct governance signers"),
-        "unexpected rejection: {error}"
-    );
+    match error {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+            assert!(
+                reason.contains("requires at least 2 verified distinct governance signers"),
+                "unexpected rejection: {reason}"
+            );
+        }
+        other => panic!("expected NotPermitted rejection, got {other:?}"),
+    }
 }

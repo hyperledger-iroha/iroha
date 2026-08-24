@@ -430,12 +430,12 @@ mod tests {
         let redeem_start = source
             .find("impl Execute for RedeemKagemushaRecursiveV4")
             .expect("V4 redemption executor");
-        let tests_start = redeem_start
+        let activation_include = redeem_start
             + source[redeem_start..]
-                .find("#[cfg(test)]")
-                .expect("offline executor test module");
+                .find(r#"include!("offline/kagemusha_activation.rs");"#)
+                .expect("Kagemusha activation implementation include");
         let topup = &source[topup_start..redeem_start];
-        let redeem = &source[redeem_start..tests_start];
+        let redeem = &source[redeem_start..activation_include];
         for (name, executor) in [("top-up", topup), ("redemption", redeem)] {
             assert!(
                 !executor.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
@@ -501,10 +501,10 @@ mod tests {
         let redeem_execute_start = source
             .find("impl Execute for RedeemKagemushaRecursiveV4")
             .expect("redemption executor");
-        let tests_start = redeem_execute_start
+        let activation_include = redeem_execute_start
             + source[redeem_execute_start..]
-                .find("#[cfg(test)]")
-                .expect("offline executor test module");
+                .find(r#"include!("offline/kagemusha_activation.rs");"#)
+                .expect("Kagemusha activation implementation include");
         assert_ordered(
             "top-up executor",
             &source[topup_execute_start..redeem_execute_start],
@@ -517,7 +517,7 @@ mod tests {
         );
         assert_ordered(
             "redemption executor",
-            &source[redeem_execute_start..tests_start],
+            &source[redeem_execute_start..activation_include],
             &[
                 "validate_authorization_at",
                 "kagemusha_release_lifecycle::redemption_policy",
@@ -563,7 +563,7 @@ mod tests {
             .find("validate_offline_attestation_policy_transition_from_state")
             .expect("activation anti-rollback policy transition validation");
         let first_mutation = body
-            .find("state_transaction.world.smart_contract_state.insert")
+            .find(".insert(release_key, release_record_bytes)")
             .expect("activation state publication");
         let promotion_consumption_commit = body
             .find("commit_v4_promotion_binding")
